@@ -1,0 +1,5 @@
+target/
+logs/
+**/*.rs.bk
+*.exe
+*.pdb

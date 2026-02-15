@@ -1,0 +1,194 @@
+use crate::app::{App, CurrentScreen};
+use ratatui::{
+    layout::{Constraint, Direction, Layout, Rect},
+    style::{Color, Modifier, Style},
+    text::{Line, Span},
+    widgets::{Block, Borders, Clear, List, ListItem, Paragraph, Wrap},
+    Frame,
+};
+use std::sync::atomic::Ordering;
+
+pub fn render(f: &mut Frame, app: &mut App) {
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints(
+            [
+                Constraint::Min(0),
+                Constraint::Length(3),
+                Constraint::Length(1),
+            ]
+            .as_ref(),
+        )
+        .split(f.area());
+
+    let main_area = chunks[0];
+    let status_area = chunks[1];
+    let help_area = chunks[2];
+
+    match app.current_screen {
+        CurrentScreen::Home => render_home(f, app, main_area),
+        CurrentScreen::ServerList => render_server_list(f, app, main_area),
+        CurrentScreen::TagList => render_tag_list(f, app, main_area),
+        CurrentScreen::Loading => {
+            // Render the last screen in the background if it makes sense,
+            // but for now let's just show the popup.
+            render_loading_popup(f, app, main_area);
+        }
+        CurrentScreen::Exiting => {}
+    }
+
+    render_status_bar(f, app, status_area);
+    render_help(f, app, help_area);
+}
+
+fn render_help(f: &mut Frame, app: &App, area: ratatui::layout::Rect) {
+    let msg = match app.current_screen {
+        CurrentScreen::Home => "Enter: Connect | Esc: Quit | Type hostname",
+        CurrentScreen::ServerList => "↑/↓: Nav | Enter: Tags | Esc: Back | q: Quit",
+        CurrentScreen::TagList => "↑/↓: Nav | Esc: Back | q: Quit",
+        CurrentScreen::Loading => "Please wait...",
+        CurrentScreen::Exiting => "Exiting...",
+    };
+
+    let span = Span::styled(msg, Style::default().fg(Color::DarkGray));
+    f.render_widget(Paragraph::new(span), area);
+}
+
+fn render_home(f: &mut Frame, app: &App, area: ratatui::layout::Rect) {
+    let display_text = format!("> {}_", app.host_input);
+    let input = Paragraph::new(display_text)
+        .style(Style::default().fg(Color::Yellow))
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title(" Step 1: Connect to Host ")
+                .border_style(Style::default().fg(Color::Cyan)),
+        );
+
+    // Create a centered layout
+    let vertical_chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Percentage(40),
+            Constraint::Length(3),
+            Constraint::Percentage(40),
+        ])
+        .split(area);
+
+    let horizontal_chunks = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([
+            Constraint::Percentage(20),
+            Constraint::Percentage(60),
+            Constraint::Percentage(20),
+        ])
+        .split(vertical_chunks[1]);
+
+    f.render_widget(input, horizontal_chunks[1]);
+}
+
+fn render_server_list(f: &mut Frame, app: &mut App, area: ratatui::layout::Rect) {
+    let items: Vec<ListItem> = app
+        .servers
+        .iter()
+        .map(|s| ListItem::new(Line::from(vec![Span::raw(s)])))
+        .collect();
+
+    let list = List::new(items)
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title(" Step 2: Select OPC Server "),
+        )
+        .highlight_style(
+            Style::default()
+                .add_modifier(Modifier::BOLD)
+                .bg(Color::Blue)
+                .fg(Color::White),
+        )
+        .highlight_symbol(">> ");
+
+    f.render_stateful_widget(list, area, &mut app.list_state);
+}
+
+fn render_tag_list(f: &mut Frame, app: &mut App, area: ratatui::layout::Rect) {
+    let items: Vec<ListItem> = app
+        .tags
+        .iter()
+        .map(|t| ListItem::new(Line::from(vec![Span::raw(t)])))
+        .collect();
+
+    let list = List::new(items)
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title(" Step 3: Browse Tags "),
+        )
+        .highlight_style(Style::default().bg(Color::Green).fg(Color::Black))
+        .highlight_symbol(" * ");
+
+    f.render_stateful_widget(list, area, &mut app.list_state);
+}
+
+fn render_status_bar(f: &mut Frame, app: &App, area: Rect) {
+    let history_count = 3; // Show last 3 messages
+    let start = if app.messages.len() > history_count {
+        app.messages.len() - history_count
+    } else {
+        0
+    };
+
+    let display_messages: Vec<Line> = app.messages[start..]
+        .iter()
+        .map(|m| {
+            Line::from(vec![
+                Span::styled("- ", Style::default().fg(Color::DarkGray)),
+                Span::raw(m),
+            ])
+        })
+        .collect();
+
+    let paragraph = Paragraph::new(display_messages)
+        .block(Block::default().borders(Borders::ALL).title(" Status Log "))
+        .wrap(Wrap { trim: true });
+    f.render_widget(paragraph, area);
+}
+
+fn render_loading_popup(f: &mut Frame, app: &App, area: Rect) {
+    let progress = app.browse_progress.load(Ordering::Relaxed);
+    let msg = if progress > 0 {
+        format!("Browsing OPC tags... ({} found so far)", progress)
+    } else {
+        "Communicating with OPC Server...".to_string()
+    };
+
+    let block = Block::default()
+        .title(" Loading ")
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::Yellow));
+
+    let area = centered_rect(60, 20, area);
+    f.render_widget(Clear, area); // This clears the background
+    f.render_widget(Paragraph::new(msg).block(block), area);
+}
+
+/// helper function to create a centered rect using up certain percentage of the available rect `r`
+fn centered_rect(percent_x: u16, percent_y: u16, r: Rect) -> Rect {
+    let popup_layout = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Percentage((100 - percent_y) / 2),
+            Constraint::Percentage(percent_y),
+            Constraint::Percentage((100 - percent_y) / 2),
+        ])
+        .split(r);
+
+    Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([
+            Constraint::Percentage((100 - percent_x) / 2),
+            Constraint::Percentage(percent_x),
+            Constraint::Percentage((100 - percent_x) / 2),
+        ])
+        .split(popup_layout[1])[1]
+}

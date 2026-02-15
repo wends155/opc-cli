@@ -1,0 +1,38 @@
+[package]
+name = "opc-cli"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+# TUI
+ratatui = "0.29.0"
+crossterm = "0.28.1"
+
+# Async
+tokio = { version = "1.43.0", features = ["full"] }
+async-trait = "0.1.86"
+
+# OPC & Windows
+opc_da = "0.3.1"
+windows = { version = "0.61.3", features = [
+    "Win32_System_Com",
+    "Win32_System_Ole",
+    "Win32_Security",
+    "Win32_Foundation",
+] }
+opc_da_bindings = "0.3.1"
+
+# Error Handling
+anyhow = "1.0.95"
+thiserror = "2.0.11"
+
+# Logging
+tracing = "0.1.41"
+tracing-subscriber = { version = "0.3.19", features = ["env-filter"] }
+tracing-appender = "0.2.3"
+
+# CLI (for args)
+clap = { version = "4.5.28", features = ["derive"] }
+
+[dev-dependencies]
+mockall = "0.13.1"
