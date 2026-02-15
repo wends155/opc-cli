@@ -29,6 +29,7 @@ pub struct App {
     pub list_state: ListState,
     pub browse_progress: Arc<AtomicUsize>,
     pub browse_result_rx: Option<oneshot::Receiver<Result<Vec<String>>>>,
+    pub fetch_result_rx: Option<oneshot::Receiver<Result<Vec<String>>>>,
 }
 
 impl App {
@@ -44,6 +45,7 @@ impl App {
             list_state: ListState::default(),
             browse_progress: Arc::new(AtomicUsize::new(0)),
             browse_result_rx: None,
+            fetch_result_rx: None,
         }
     }
 
@@ -55,42 +57,72 @@ impl App {
     }
 
     // Actions
-    pub async fn fetch_servers(&mut self) {
+    pub fn start_fetch_servers(&mut self) {
         let host = self.host_input.clone();
         self.current_screen = CurrentScreen::Loading;
         self.add_message(format!("Connecting to {}...", host));
 
-        let result = tokio::time::timeout(
-            std::time::Duration::from_secs(OPC_TIMEOUT_SECS),
-            self.opc_provider.list_servers(&host),
-        )
-        .await;
+        let provider = Arc::clone(&self.opc_provider);
+        let (tx, rx) = oneshot::channel();
 
-        match result {
-            Ok(Ok(servers)) => {
-                self.servers = servers;
-                self.current_screen = CurrentScreen::ServerList;
-                if self.servers.is_empty() {
-                    self.selected_index = None;
-                    self.list_state.select(None);
-                } else {
-                    self.selected_index = Some(0);
-                    self.list_state.select(Some(0));
+        tokio::spawn(async move {
+            let result = tokio::time::timeout(
+                std::time::Duration::from_secs(OPC_TIMEOUT_SECS),
+                provider.list_servers(&host),
+            )
+            .await;
+
+            let final_result = match result {
+                Ok(inner) => inner,
+                Err(_) => {
+                    tracing::error!("Server listing timed out ({}s)", OPC_TIMEOUT_SECS);
+                    Err(anyhow::anyhow!("Connection timed out ({}s)", OPC_TIMEOUT_SECS))
                 }
-                self.add_message(format!("Found {} servers on {}", self.servers.len(), host));
-            }
-            Ok(Err(e)) => {
-                self.current_screen = CurrentScreen::Home;
-                tracing::error!(error = %e, "Failed to fetch servers");
-                self.add_message(format!("Error fetching servers: {}", e));
-            }
-            Err(_) => {
-                self.current_screen = CurrentScreen::Home;
-                tracing::error!("Server listing timed out ({}s)", OPC_TIMEOUT_SECS);
-                self.add_message(format!(
-                    "Connection timed out ({}s) while listing servers",
-                    OPC_TIMEOUT_SECS
-                ));
+            };
+
+            let _ = tx.send(final_result);
+        });
+
+        self.fetch_result_rx = Some(rx);
+    }
+
+    pub fn poll_fetch_result(&mut self) {
+        if let Some(rx) = &mut self.fetch_result_rx {
+            match rx.try_recv() {
+                Ok(Ok(servers)) => {
+                    self.servers = servers;
+                    self.current_screen = CurrentScreen::ServerList;
+                    if self.servers.is_empty() {
+                        self.selected_index = None;
+                        self.list_state.select(None);
+                    } else {
+                        self.selected_index = Some(0);
+                        self.list_state.select(Some(0));
+                    }
+                    self.add_message(format!(
+                        "Found {} servers on {}",
+                        self.servers.len(),
+                        self.host_input
+                    ));
+                    self.fetch_result_rx = None;
+                }
+                Ok(Err(e)) => {
+                    self.current_screen = CurrentScreen::Home;
+                    tracing::error!(error = %e, "Failed to fetch servers");
+                    self.add_message(format!("Error fetching servers: {}", e));
+                    self.fetch_result_rx = None;
+                }
+                Err(oneshot::error::TryRecvError::Empty) => {
+                    // Still running
+                }
+                Err(oneshot::error::TryRecvError::Closed) => {
+                    self.current_screen = CurrentScreen::Home;
+                    tracing::error!(
+                        "Server listing background task terminated unexpectedly (sender dropped)"
+                    );
+                    self.add_message("Server listing task terminated unexpectedly".into());
+                    self.fetch_result_rx = None;
+                }
             }
         }
     }
@@ -242,38 +274,86 @@ mod tests {
     use crate::traits::MockOpcProvider;
     use mockall::predicate::*;
 
-    #[tokio::test]
-    async fn test_fetch_servers_success() {
-        let mut mock = MockOpcProvider::new();
-        mock.expect_list_servers()
-            .with(eq("localhost"))
-            .times(1)
-            .returning(|_| Ok(vec!["Server1".into(), "Server2".into()]));
-
+    #[test]
+    fn test_poll_fetch_result_success() {
+        let (tx, rx) = oneshot::channel();
+        let mock = MockOpcProvider::new();
         let mut app = App::new(Arc::new(mock));
-        app.fetch_servers().await;
+        app.current_screen = CurrentScreen::Loading;
+        app.fetch_result_rx = Some(rx);
 
+        tx.send(Ok(vec!["Server1".into(), "Server2".into()]))
+            .unwrap();
+        app.poll_fetch_result();
+
+        assert_eq!(app.current_screen, CurrentScreen::ServerList);
         assert_eq!(app.servers.len(), 2);
-        assert_eq!(app.servers[0], "Server1");
-        assert!(matches!(app.current_screen, CurrentScreen::ServerList));
+        assert_eq!(app.selected_index, Some(0));
+        assert!(app.fetch_result_rx.is_none());
+        assert!(app.messages.last().unwrap().contains("Found 2 servers"));
+    }
+
+    #[test]
+    fn test_poll_fetch_result_error() {
+        let (tx, rx) = oneshot::channel();
+        let mock = MockOpcProvider::new();
+        let mut app = App::new(Arc::new(mock));
+        app.current_screen = CurrentScreen::Loading;
+        app.fetch_result_rx = Some(rx);
+
+        tx.send(Err(anyhow::anyhow!("Connection failed")))
+            .unwrap();
+        app.poll_fetch_result();
+
+        assert_eq!(app.current_screen, CurrentScreen::Home);
+        assert!(app.fetch_result_rx.is_none());
+        assert!(app.messages.last().unwrap().contains("Error"));
+    }
+
+    #[test]
+    fn test_poll_fetch_result_empty_servers() {
+        let (tx, rx) = oneshot::channel();
+        let mock = MockOpcProvider::new();
+        let mut app = App::new(Arc::new(mock));
+        app.current_screen = CurrentScreen::Loading;
+        app.fetch_result_rx = Some(rx);
+
+        tx.send(Ok(vec![])).unwrap();
+        app.poll_fetch_result();
+
+        assert_eq!(app.current_screen, CurrentScreen::ServerList);
+        assert!(app.servers.is_empty());
+        assert_eq!(app.selected_index, None);
+        assert!(app.messages.last().unwrap().contains("Found 0 servers"));
+    }
+
+    #[test]
+    fn test_poll_fetch_result_closed() {
+        let (tx, rx) = oneshot::channel::<Result<Vec<String>>>();
+        let mock = MockOpcProvider::new();
+        let mut app = App::new(Arc::new(mock));
+        app.current_screen = CurrentScreen::Loading;
+        app.fetch_result_rx = Some(rx);
+
+        // Drop the sender
+        drop(tx);
+        app.poll_fetch_result();
+
+        assert_eq!(app.current_screen, CurrentScreen::Home);
+        assert!(app.messages.last().unwrap().contains("terminated unexpectedly"));
     }
 
     #[tokio::test]
-    async fn test_fetch_servers_failure() {
+    async fn test_start_fetch_servers_sets_loading() {
         let mut mock = MockOpcProvider::new();
         mock.expect_list_servers()
-            .returning(|_| Err(anyhow::anyhow!("Connection failed")));
+            .returning(|_| Ok(vec!["S1".into()]));
 
         let mut app = App::new(Arc::new(mock));
-        app.fetch_servers().await;
+        app.start_fetch_servers();
 
-        assert_eq!(app.servers.len(), 0);
-        assert!(!app.messages.is_empty());
-        assert!(app
-            .messages
-            .last()
-            .unwrap()
-            .contains("Error fetching servers"));
+        assert_eq!(app.current_screen, CurrentScreen::Loading);
+        assert!(app.fetch_result_rx.is_some());
     }
 
     #[test]
@@ -290,6 +370,7 @@ mod tests {
             list_state: ListState::default(),
             browse_progress: Arc::new(AtomicUsize::new(0)),
             browse_result_rx: None,
+            fetch_result_rx: None,
         };
         app.list_state.select(Some(0));
 
@@ -320,6 +401,7 @@ mod tests {
             list_state: ListState::default(),
             browse_progress: Arc::new(AtomicUsize::new(0)),
             browse_result_rx: None,
+            fetch_result_rx: None,
         };
         app.list_state.select(Some(0));
 
@@ -350,6 +432,7 @@ mod tests {
             list_state: ListState::default(),
             browse_progress: Arc::new(AtomicUsize::new(0)),
             browse_result_rx: None,
+            fetch_result_rx: None,
         };
         app.list_state.select(Some(0));
 
@@ -377,6 +460,7 @@ mod tests {
             list_state: ListState::default(),
             browse_progress: Arc::new(AtomicUsize::new(0)),
             browse_result_rx: None,
+            fetch_result_rx: None,
         };
         app.list_state.select(Some(0));
 
@@ -395,36 +479,38 @@ mod tests {
 
     #[tokio::test]
     async fn test_loading_transition() {
-        let mut mock = MockOpcProvider::new();
-        mock.expect_list_servers()
-            .returning(|_| Ok(vec!["Server1".into()]));
-
+        let mock = MockOpcProvider::new();
         let mut app = App::new(Arc::new(mock));
-        app.fetch_servers().await;
-        assert_eq!(app.current_screen, CurrentScreen::ServerList);
+        app.start_fetch_servers();
+        assert_eq!(app.current_screen, CurrentScreen::Loading);
         assert!(app.messages.iter().any(|m| m.contains("Connecting to")));
     }
 
     #[tokio::test]
     async fn test_tui_navigation_flow() {
-        let mut mock = MockOpcProvider::new();
-        mock.expect_list_servers()
-            .returning(|_| Ok(vec!["Server1".into()]));
-
+        let (tx, rx) = oneshot::channel();
+        let mock = MockOpcProvider::new();
         let mut app = App::new(Arc::new(mock));
 
         // 1. Initial State: Home
         assert!(matches!(app.current_screen, CurrentScreen::Home));
         assert_eq!(app.host_input, "localhost");
 
-        // 2. Simulate User hitting Enter to fetch servers
-        app.fetch_servers().await;
+        // 2. Start fetch
+        app.start_fetch_servers();
+        assert_eq!(app.current_screen, CurrentScreen::Loading);
+        app.fetch_result_rx = Some(rx);
+
+        // 3. Complete fetch
+        tx.send(Ok(vec!["Server1".into()])).unwrap();
+        app.poll_fetch_result();
+        
         assert!(matches!(app.current_screen, CurrentScreen::ServerList));
         assert_eq!(app.servers.len(), 1);
         assert_eq!(app.selected_index, Some(0));
         assert_eq!(app.list_state.selected(), Some(0));
 
-        // 3. User goes back to Home
+        // 4. User goes back to Home
         app.go_back();
         assert!(matches!(app.current_screen, CurrentScreen::Home));
         assert!(app.servers.is_empty());
@@ -520,33 +606,20 @@ mod tests {
         assert!(app.browse_result_rx.is_none());
     }
 
-    #[tokio::test]
-    async fn test_fetch_servers_empty_list() {
-        let mut mock = MockOpcProvider::new();
-        mock.expect_list_servers().returning(|_| Ok(vec![]));
-
+    #[test]
+    fn test_poll_fetch_result_timeout() {
+        let (tx, rx) = oneshot::channel();
+        let mock = MockOpcProvider::new();
         let mut app = App::new(Arc::new(mock));
-        app.fetch_servers().await;
+        app.current_screen = CurrentScreen::Loading;
+        app.fetch_result_rx = Some(rx);
 
-        assert_eq!(app.current_screen, CurrentScreen::ServerList);
-        assert!(app.servers.is_empty());
-        assert_eq!(app.selected_index, None);
-        assert!(app.messages.last().unwrap().contains("Found 0 servers"));
-    }
-
-    #[tokio::test]
-    async fn test_fetch_servers_error_preserves_context() {
-        let mut mock = MockOpcProvider::new();
-        mock.expect_list_servers()
-            .returning(|_| Err(anyhow::anyhow!("RPC server is unavailable")));
-
-        let mut app = App::new(Arc::new(mock));
-        app.fetch_servers().await;
+        tx.send(Err(anyhow::anyhow!("Connection timed out (30s)")))
+            .unwrap();
+        app.poll_fetch_result();
 
         assert_eq!(app.current_screen, CurrentScreen::Home);
-        let last_msg = app.messages.last().unwrap();
-        assert!(last_msg.contains("Error fetching servers"));
-        assert!(last_msg.contains("RPC server is unavailable")); // Context preserved
+        assert!(app.messages.last().unwrap().contains("timed out"));
     }
 
     #[test]

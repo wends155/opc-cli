@@ -25,11 +25,6 @@ async fn main() -> Result<()> {
 
     tracing_subscriber::registry()
         .with(fmt::layer().with_writer(non_blocking).with_filter(filter))
-        .with(
-            fmt::layer()
-                .with_writer(io::stdout)
-                .with_filter(EnvFilter::new("info")),
-        )
         .init();
 
     tracing::info!("Starting OPC CLI");
@@ -71,7 +66,7 @@ async fn main() -> Result<()> {
     }
 
     if let Err(err) = res {
-        println!("{:?}", err);
+        tracing::error!(error = ?err, "Application error");
     }
 
     Ok(())
@@ -88,13 +83,14 @@ async fn run_app<B: ratatui::backend::Backend>(
 
     loop {
         // Poll background task progress
+        app.poll_fetch_result();
         app.poll_browse_result();
 
         terminal.draw(|f| ui::render(f, app))?;
 
         if event::poll(Duration::from_millis(100))? {
             if let Event::Key(key) = event::read()? {
-                handle_key_event(app, key).await;
+                handle_key_event(app, key);
             }
         }
 
@@ -104,7 +100,7 @@ async fn run_app<B: ratatui::backend::Backend>(
     }
 }
 
-async fn handle_key_event(app: &mut App, key: event::KeyEvent) {
+fn handle_key_event(app: &mut App, key: event::KeyEvent) {
     if key.kind != event::KeyEventKind::Press {
         return;
     }
@@ -112,7 +108,7 @@ async fn handle_key_event(app: &mut App, key: event::KeyEvent) {
     match app.current_screen {
         CurrentScreen::Home => match key.code {
             KeyCode::Enter => {
-                app.fetch_servers().await;
+                app.start_fetch_servers();
             }
             KeyCode::Char(c) => {
                 app.host_input.push(c);
@@ -161,8 +157,8 @@ mod tests {
     use crate::traits::MockOpcProvider;
     use crossterm::event::{KeyEvent, KeyEventKind, KeyEventState, KeyModifiers};
 
-    #[tokio::test]
-    async fn test_handle_key_event_press_release() {
+    #[test]
+    fn test_handle_key_event_press_release() {
         let mock = MockOpcProvider::new();
         let mut app = App::new(Arc::new(mock));
 
@@ -173,7 +169,7 @@ mod tests {
             kind: KeyEventKind::Press,
             state: KeyEventState::empty(),
         };
-        handle_key_event(&mut app, press_a).await;
+        handle_key_event(&mut app, press_a);
         assert_eq!(app.host_input, "localhosta");
 
         // 2. Simulate Release 'b' (should be ignored)
@@ -183,12 +179,12 @@ mod tests {
             kind: KeyEventKind::Release,
             state: KeyEventState::empty(),
         };
-        handle_key_event(&mut app, release_b).await;
+        handle_key_event(&mut app, release_b);
         assert_eq!(app.host_input, "localhosta"); // Still 'a', 'b' ignored
     }
 
-    #[tokio::test]
-    async fn test_quit_logic_on_all_screens() {
+    #[test]
+    fn test_quit_logic_on_all_screens() {
         let mock = MockOpcProvider::new();
         let mut app = App::new(Arc::new(mock));
 
@@ -208,21 +204,21 @@ mod tests {
 
         // 1. Home Screen: Esc quits, 'q' does NOT quit (it's input)
         app.current_screen = CurrentScreen::Home;
-        handle_key_event(&mut app, quit_q).await;
+        handle_key_event(&mut app, quit_q);
         assert_eq!(app.current_screen, CurrentScreen::Home);
         assert!(app.host_input.ends_with('q'));
 
-        handle_key_event(&mut app, esc).await;
+        handle_key_event(&mut app, esc);
         assert_eq!(app.current_screen, CurrentScreen::Exiting);
 
         // 2. Server List: 'q' quits
         app.current_screen = CurrentScreen::ServerList;
-        handle_key_event(&mut app, quit_q).await;
+        handle_key_event(&mut app, quit_q);
         assert_eq!(app.current_screen, CurrentScreen::Exiting);
 
         // 3. Tag List: 'q' quits
         app.current_screen = CurrentScreen::TagList;
-        handle_key_event(&mut app, quit_q).await;
+        handle_key_event(&mut app, quit_q);
         assert_eq!(app.current_screen, CurrentScreen::Exiting);
     }
 }
