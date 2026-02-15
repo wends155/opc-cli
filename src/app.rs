@@ -76,7 +76,10 @@ impl App {
                 Ok(inner) => inner,
                 Err(_) => {
                     tracing::error!("Server listing timed out ({}s)", OPC_TIMEOUT_SECS);
-                    Err(anyhow::anyhow!("Connection timed out ({}s)", OPC_TIMEOUT_SECS))
+                    Err(anyhow::anyhow!(
+                        "Connection timed out ({}s)",
+                        OPC_TIMEOUT_SECS
+                    ))
                 }
             };
 
@@ -301,8 +304,7 @@ mod tests {
         app.current_screen = CurrentScreen::Loading;
         app.fetch_result_rx = Some(rx);
 
-        tx.send(Err(anyhow::anyhow!("Connection failed")))
-            .unwrap();
+        tx.send(Err(anyhow::anyhow!("Connection failed"))).unwrap();
         app.poll_fetch_result();
 
         assert_eq!(app.current_screen, CurrentScreen::Home);
@@ -340,7 +342,11 @@ mod tests {
         app.poll_fetch_result();
 
         assert_eq!(app.current_screen, CurrentScreen::Home);
-        assert!(app.messages.last().unwrap().contains("terminated unexpectedly"));
+        assert!(app
+            .messages
+            .last()
+            .unwrap()
+            .contains("terminated unexpectedly"));
     }
 
     #[tokio::test]
@@ -504,7 +510,7 @@ mod tests {
         // 3. Complete fetch
         tx.send(Ok(vec!["Server1".into()])).unwrap();
         app.poll_fetch_result();
-        
+
         assert!(matches!(app.current_screen, CurrentScreen::ServerList));
         assert_eq!(app.servers.len(), 1);
         assert_eq!(app.selected_index, Some(0));

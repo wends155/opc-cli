@@ -99,6 +99,7 @@ graph LR
     *   `rust-mcp-server_cargo-test`
     *   `rust-mcp-server_cargo-check`
     *   `rust-mcp-server_cargo-add` / `rust-mcp-server_cargo-remove`
+    *   **Verification Script**: `scripts/verify.ps1` (Automates fmt/clippy/test with stable environment)
 2.  **Project Navigation**: Use file search and indexing tools to map the project structure before proposing changes.
 3.  **Documentation First**: Before using a library or API, attempt to read its local documentation or headers.
 
@@ -116,10 +117,9 @@ graph LR
 **Rule:** NEVER finish a task without verification.
 1.  **Zero-Exit Requirement**: Implementations must pass:
     ```powershell
-    cargo fmt -- --check
-    cargo clippy -- -D warnings
-    cargo test
+    .\scripts\verify.ps1
     ```
+    (Or manually: cargo fmt, clippy, test)
 2.  **Logging**: Verification failures must be logged to `./logs/test.log` (if applicable) or generally captured in the conversation.
 
 ---

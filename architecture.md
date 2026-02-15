@@ -33,7 +33,10 @@
 The browse implementation handles both flat and hierarchical OPC DA namespaces:
 1. `query_organization()` detects namespace type (flat vs hierarchical).
 2. **Flat:** Enumerate all `OPC_LEAF` items at root.
-3. **Hierarchical:** Recursive depth-first walk using `change_browse_position(DOWN/UP)` + `browse_opc_item_ids(OPC_BRANCH | OPC_LEAF)` + `get_item_id()` for fully-qualified IDs.
+3. **Hierarchical:** Recursive depth-first walk:
+   - **Branches first:** Enumerate `OPC_BRANCH` items, navigate down via `change_browse_position(DOWN/UP)`, and recurse.
+   - **Leaves second (soft-fail):** Enumerate `OPC_LEAF` items at current position; failures are logged and skipped.
+   - **Fully-qualified IDs:** `get_item_id()` converts browse names to item IDs; falls back to browse name if conversion fails.
 4. **Dual safety:** `max_tags` hard cap (500) + 30s timeout to prevent runaway enumeration.
 5. **Non-blocking:** Browse runs as a background `tokio::spawn` task; progress reported via `Arc<AtomicUsize>` to the Loading screen.
 
@@ -122,6 +125,21 @@ The project uses a dual build system for flexibility:
 2.  **scripts/package.ps1**: A PowerShell script for Windows environments without `make`.
     - Usage: `powershell -File ./scripts/package.ps1 <task>`
     - Supported tasks: `debug`, `release`, `test`, `package`.
+
+## Testing Strategy
+
+The project prioritizes a **Test-Driven Architecture** where the UI and business logic are decoupled from the underlying Windows COM/OPC dependencies.
+
+### 1. Unit Testing (Mock-Based)
+*   **Mechanism**: Uses the `mockall` crate to provide a `MockOpcProvider` during tests.
+*   **Decoupling**: By abstracting OPC interactions behind the `OpcProvider` trait, the TUI and state transition logic can be verified on any platform (Linux/macOS/Windows) without a physical OPC server.
+*   **Coverage**:
+    *   **UI Logic (`src/app.rs`)**: Extensive tests for state transitions (e.g., `Home` -> `Loading` -> `ServerList`), navigation (next/prev wrapping), message ring-buffer logic, and background task result polling.
+    *   **Input Handling (`src/main.rs`)**: Verification of key event processing across different screens, ensuring global shortcuts (Esc/Quit) behave consistently.
+
+### 2. Integration & Manual Testing
+*   **OPC Implementation (`src/opc_impl.rs`)**: Due to its direct reliance on the Windows `opc_da` crate and COM/DCOM registry, this layer is primarily verified through manual end-to-end testing against real OPC servers (e.g., Matrikon, Kepware, or local simulation servers).
+*   **Async Boundaries**: Background task spawning and `tokio` timeouts are tested in `src/app.rs` using `#[tokio::test]`.
 
 ## Design Principles
 1.  **Testability First**: The UI should be verifiable without a running OPC server via mocks.

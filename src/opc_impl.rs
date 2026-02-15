@@ -29,7 +29,7 @@ pub fn friendly_com_hint(err: &anyhow::Error) -> Option<&'static str> {
     } else if msg.contains("0x80080005") {
         Some("Server process failed to start — check if it is installed and running")
     } else if msg.contains("0x800706F4") {
-        Some("RPC communication error — server DCOM registration may be corrupted")
+        Some("COM marshalling error — try restarting the OPC server")
     } else if msg.contains("0x80040154") {
         Some("Server is not registered on this machine")
     } else {
@@ -78,44 +78,9 @@ fn browse_recursive(
         return Ok(());
     }
 
-    let leaf_enum = server
-        .browse_opc_item_ids(OPC_LEAF, None::<&str>, 0, 0)
-        .map_err(|e| {
-            tracing::warn!(error = ?e, depth, "browse_opc_item_ids(LEAF) failed");
-            e
-        })
-        .context("Failed to browse leaves at current position")?;
-
-    let leaf_iter = StringIterator::new(leaf_enum);
-    for leaf_res in leaf_iter {
-        if tags.len() >= max_tags {
-            break;
-        }
-        let browse_name = leaf_res.map_err(|e| anyhow::anyhow!("Leaf iteration error: {:?}", e))?;
-
-        // Convert browse name to fully-qualified item ID
-        let tag = match server.get_item_id(&browse_name) {
-            Ok(item_id) => {
-                tracing::trace!(browse_name = %browse_name, item_id = %item_id, "Discovered tag");
-                item_id
-            }
-            Err(e) => {
-                // Fallback: use browse name if get_item_id fails
-                tracing::warn!(
-                    browse_name = %browse_name,
-                    error = ?e,
-                    "get_item_id failed, using browse name as fallback"
-                );
-                browse_name
-            }
-        };
-        tags.push(tag);
-        progress.fetch_add(1, Ordering::Relaxed);
-    }
-
-    // 2. Enumerate branches and recurse into each
+    // 1. Enumerate branches and recurse into each FIRST
     let branch_enum = server
-        .browse_opc_item_ids(OPC_BRANCH, None::<&str>, 0, 0)
+        .browse_opc_item_ids(OPC_BRANCH, Some(""), 0, 0)
         .map_err(|e| {
             tracing::warn!(error = ?e, depth, "browse_opc_item_ids(BRANCH) failed");
             e
@@ -161,6 +126,47 @@ fn browse_recursive(
         recurse_result?;
     }
 
+    // 2. Enumerate leaves at current position (soft-fail: log and skip)
+    match server.browse_opc_item_ids(OPC_LEAF, Some(""), 0, 0) {
+        Ok(leaf_enum) => {
+            let leaf_iter = StringIterator::new(leaf_enum);
+            for leaf_res in leaf_iter {
+                if tags.len() >= max_tags {
+                    break;
+                }
+                let browse_name = match leaf_res {
+                    Ok(name) => name,
+                    Err(e) => {
+                        tracing::warn!(error = ?e, "Leaf iteration error, skipping");
+                        continue;
+                    }
+                };
+
+                // Convert browse name to fully-qualified item ID
+                let tag = match server.get_item_id(&browse_name) {
+                    Ok(item_id) => {
+                        tracing::trace!(browse_name = %browse_name, item_id = %item_id, "Discovered tag");
+                        item_id
+                    }
+                    Err(e) => {
+                        // Fallback: use browse name if get_item_id fails
+                        tracing::warn!(
+                            browse_name = %browse_name,
+                            error = ?e,
+                            "get_item_id failed, using browse name as fallback"
+                        );
+                        browse_name
+                    }
+                };
+                tags.push(tag);
+                progress.fetch_add(1, Ordering::Relaxed);
+            }
+        }
+        Err(e) => {
+            tracing::warn!(error = ?e, depth, "browse_opc_item_ids(LEAF) failed, skipping leaves");
+        }
+    }
+
     Ok(())
 }
 
@@ -195,6 +201,14 @@ impl OpcProvider for OpcDaWrapper {
                             // They should be identical in memory
                             let win_guid: windows::core::GUID =
                                 unsafe { std::mem::transmute_copy(&guid) };
+
+                            // Skip null GUIDs — ghost COM registrations
+                            let null_guid = windows::core::GUID::zeroed();
+                            if win_guid == null_guid {
+                                tracing::trace!("Skipping null GUID");
+                                continue;
+                            }
+
                             match guid_to_progid(&win_guid) {
                                 Ok(progid) => {
                                     if !progid.is_empty() {
@@ -272,7 +286,7 @@ impl OpcProvider for OpcDaWrapper {
                 );
                 let client = Client;
                 let opc_server = client
-                    .create_server(clsid, opc_da::def::ClassContext::LocalServer)
+                    .create_server(clsid, opc_da::def::ClassContext::All)
                     .map_err(|e| {
                         tracing::error!(error = ?e, server = %server_name, "create_server failed");
                         e
@@ -309,7 +323,7 @@ impl OpcProvider for OpcDaWrapper {
                     // Flat namespace: browse leaves directly at root
                     tracing::debug!("Using flat browse strategy");
                     let enum_string = opc_server
-                        .browse_opc_item_ids(OPC_LEAF, None::<&str>, 0, 0)
+                        .browse_opc_item_ids(OPC_LEAF, Some(""), 0, 0)
                         .context("Failed to browse tags (flat)")?;
                     let string_iter = StringIterator::new(enum_string);
                     for tag_res in string_iter {
@@ -345,5 +359,46 @@ impl OpcProvider for OpcDaWrapper {
         })
         .await
         .context("Task join error")?
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_friendly_com_hint_known_codes() {
+        let err = anyhow::anyhow!("COM error 0x800706F4");
+        assert_eq!(
+            friendly_com_hint(&err),
+            Some("COM marshalling error — try restarting the OPC server")
+        );
+
+        let err = anyhow::anyhow!("COM error 0x80040154");
+        assert_eq!(
+            friendly_com_hint(&err),
+            Some("Server is not registered on this machine")
+        );
+    }
+
+    #[test]
+    fn test_friendly_com_hint_unknown_code() {
+        let err = anyhow::anyhow!("Some other error");
+        assert_eq!(friendly_com_hint(&err), None);
+    }
+
+    #[test]
+    fn test_null_guid_is_skipped() {
+        let null = windows::core::GUID::zeroed();
+        let also_null = windows::core::GUID::from_values(0, 0, 0, [0; 8]);
+        assert_eq!(null, also_null);
+
+        let valid = windows::core::GUID::from_values(
+            0xF8582CF2,
+            0x88FB,
+            0x11D0,
+            [0xB8, 0x50, 0x00, 0xC0, 0xF0, 0x10, 0x43, 0x05],
+        );
+        assert_ne!(null, valid);
     }
 }

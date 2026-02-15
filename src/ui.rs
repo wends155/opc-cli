@@ -131,22 +131,16 @@ fn render_tag_list(f: &mut Frame, app: &mut App, area: ratatui::layout::Rect) {
 }
 
 fn render_status_bar(f: &mut Frame, app: &App, area: Rect) {
-    let history_count = 3; // Show last 3 messages
-    let start = if app.messages.len() > history_count {
-        app.messages.len() - history_count
-    } else {
-        0
-    };
-
-    let display_messages: Vec<Line> = app.messages[start..]
-        .iter()
+    let display_messages: Vec<Line> = app
+        .messages
+        .last()
         .map(|m| {
-            Line::from(vec![
+            vec![Line::from(vec![
                 Span::styled("- ", Style::default().fg(Color::DarkGray)),
                 Span::raw(m),
-            ])
+            ])]
         })
-        .collect();
+        .unwrap_or_default();
 
     let paragraph = Paragraph::new(display_messages)
         .block(Block::default().borders(Borders::ALL).title(" Status Log "))
