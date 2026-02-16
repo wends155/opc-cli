@@ -137,6 +137,14 @@ Through enriched observability, we identified the root causes of server connecti
 
 - **Outcome**: 37 tests passed. Hierarchical browsing restored. Confirmed stable operations against `ABB.AC800MC`.
 
+### [2026-02-16] Documentation Overhaul (opc-da-client)
+- **Request**: Improve README documentation for the library on crates.io.
+- **Action**:
+    - Expanded `opc-da-client/README.md` with comprehensive features, installation guide, and copy-pasteable usage examples.
+    - Verified link consistency with `architecture.md`.
+    - Pushed changes to the remote repository.
+- **Outcome**: The library is now ready for publishing with professional-grade documentation.
+
 ## Final Project Handover (2026-02-16)
 
 The project has reached its target state:

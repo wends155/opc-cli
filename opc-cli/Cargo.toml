@@ -1,6 +1,6 @@
 [package]
 name = "opc-cli"
-version = "0.0.1"
+version = "0.0.2"
 edition = "2024"
 description = "Modern TUI client for OPC DA servers on Windows"
 license = "MIT"
@@ -10,7 +10,7 @@ keywords = ["opc", "cli", "tui", "windows"]
 categories = ["command-line-utilities", "network-programming"]
 
 [dependencies]
-opc-da-client = { path = "../opc-da-client", version = "0.0.1" }
+opc-da-client = { path = "../opc-da-client", version = "0.0.2" }
 ratatui = "0.29.0"
 crossterm = "0.28.1"
 tokio = { version = "1.43.0", features = ["full"] }
