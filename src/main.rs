@@ -85,6 +85,7 @@ async fn run_app<B: ratatui::backend::Backend>(
         // Poll background task progress
         app.poll_fetch_result();
         app.poll_browse_result();
+        app.poll_read_result();
 
         terminal.draw(|f| ui::render(f, app))?;
 
@@ -134,6 +135,17 @@ fn handle_key_event(app: &mut App, key: event::KeyEvent) {
             _ => {}
         },
         CurrentScreen::TagList => match key.code {
+            KeyCode::Esc => app.go_back(),
+            KeyCode::Down => app.select_next(),
+            KeyCode::Up => app.select_prev(),
+            KeyCode::Char(' ') => app.toggle_tag_selection(),
+            KeyCode::Enter => app.start_read_values(),
+            KeyCode::Char('q') | KeyCode::Char('Q') => {
+                app.current_screen = CurrentScreen::Exiting;
+            }
+            _ => {}
+        },
+        CurrentScreen::TagValues => match key.code {
             KeyCode::Esc => app.go_back(),
             KeyCode::Down => app.select_next(),
             KeyCode::Up => app.select_prev(),

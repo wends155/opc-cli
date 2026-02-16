@@ -29,6 +29,7 @@ pub fn render(f: &mut Frame, app: &mut App) {
         CurrentScreen::Home => render_home(f, app, main_area),
         CurrentScreen::ServerList => render_server_list(f, app, main_area),
         CurrentScreen::TagList => render_tag_list(f, app, main_area),
+        CurrentScreen::TagValues => render_tag_values(f, app, main_area),
         CurrentScreen::Loading => {
             // Render the last screen in the background if it makes sense,
             // but for now let's just show the popup.
@@ -45,7 +46,10 @@ fn render_help(f: &mut Frame, app: &App, area: ratatui::layout::Rect) {
     let msg = match app.current_screen {
         CurrentScreen::Home => "Enter: Connect | Esc: Quit | Type hostname",
         CurrentScreen::ServerList => "↑/↓: Nav | Enter: Tags | Esc: Back | q: Quit",
-        CurrentScreen::TagList => "↑/↓: Nav | Esc: Back | q: Quit",
+        CurrentScreen::TagList => {
+            "↑/↓: Nav | Space: Select | Enter: Read Values | Esc: Back | q: Quit"
+        }
+        CurrentScreen::TagValues => "↑/↓: Nav | Esc: Back | q: Quit",
         CurrentScreen::Loading => "Please wait...",
         CurrentScreen::Exiting => "Exiting...",
     };
@@ -115,7 +119,15 @@ fn render_tag_list(f: &mut Frame, app: &mut App, area: ratatui::layout::Rect) {
     let items: Vec<ListItem> = app
         .tags
         .iter()
-        .map(|t| ListItem::new(Line::from(vec![Span::raw(t)])))
+        .enumerate()
+        .map(|(idx, t)| {
+            let checkbox = if app.selected_tags.get(idx).copied().unwrap_or(false) {
+                "[✓] "
+            } else {
+                "[ ] "
+            };
+            ListItem::new(Line::from(vec![Span::raw(checkbox), Span::raw(t)]))
+        })
         .collect();
 
     let list = List::new(items)
@@ -130,6 +142,47 @@ fn render_tag_list(f: &mut Frame, app: &mut App, area: ratatui::layout::Rect) {
     f.render_stateful_widget(list, area, &mut app.list_state);
 }
 
+fn render_tag_values(f: &mut Frame, app: &mut App, area: ratatui::layout::Rect) {
+    use ratatui::widgets::{Row, Table};
+
+    let header = Row::new(vec!["Tag ID", "Value", "Quality", "Timestamp"]).style(
+        Style::default()
+            .fg(Color::Yellow)
+            .add_modifier(Modifier::BOLD),
+    );
+
+    let rows: Vec<Row> = app
+        .tag_values
+        .iter()
+        .map(|tv| {
+            Row::new(vec![
+                tv.tag_id.clone(),
+                tv.value.clone(),
+                tv.quality.clone(),
+                tv.timestamp.clone(),
+            ])
+        })
+        .collect();
+
+    let widths = [
+        Constraint::Percentage(40),
+        Constraint::Percentage(20),
+        Constraint::Percentage(15),
+        Constraint::Percentage(25),
+    ];
+
+    let table = Table::new(rows, widths)
+        .header(header)
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title(" Step 4: Tag Values "),
+        )
+        .highlight_style(Style::default().bg(Color::Blue).fg(Color::White))
+        .highlight_symbol(">> ");
+
+    f.render_stateful_widget(table, area, &mut app.list_state);
+}
 fn render_status_bar(f: &mut Frame, app: &App, area: Rect) {
     let display_messages: Vec<Line> = app
         .messages

@@ -1,17 +1,25 @@
+use crate::app::TagValue;
 use crate::traits::OpcProvider;
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 use opc_da::client::v2::Client;
-use opc_da::client::{BrowseServerAddressSpaceTrait, ClientTrait, StringIterator};
-use opc_da_bindings::{OPC_BRANCH, OPC_BROWSE_DOWN, OPC_BROWSE_UP, OPC_LEAF, OPC_NS_FLAT};
+use opc_da::client::{
+    BrowseServerAddressSpaceTrait, ClientTrait, ItemMgtTrait, ServerTrait, StringIterator,
+    SyncIoTrait,
+};
+use opc_da_bindings::{
+    tagOPCITEMDEF, OPC_BRANCH, OPC_BROWSE_DOWN, OPC_BROWSE_UP, OPC_DS_DEVICE, OPC_LEAF, OPC_NS_FLAT,
+};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
 use windows::core::PCWSTR;
+use windows::Win32::Foundation::FILETIME;
 use windows::Win32::System::Com::{
     CLSIDFromProgID, CoInitializeEx, CoTaskMemFree, CoUninitialize, ProgIDFromCLSID,
     COINIT_MULTITHREADED,
 };
+use windows::Win32::System::Variant::VARIANT;
 
 pub struct OpcDaWrapper;
 
@@ -70,6 +78,53 @@ fn guid_to_progid(guid: &windows::core::GUID) -> Result<String> {
 
         Ok(result)
     }
+}
+
+/// Convert OPC DA VARIANT to a displayable string.
+fn variant_to_string(variant: &VARIANT) -> String {
+    unsafe {
+        // Access the discriminant to get the VT type
+        let vt = variant.Anonymous.Anonymous.vt;
+        match vt as u32 {
+            0 => "Empty".to_string(),                                       // VT_EMPTY
+            1 => "Null".to_string(),                                        // VT_NULL
+            2 => format!("{}", variant.Anonymous.Anonymous.Anonymous.iVal), // VT_I2
+            3 => format!("{}", variant.Anonymous.Anonymous.Anonymous.lVal), // VT_I4
+            4 => format!("{:.2}", variant.Anonymous.Anonymous.Anonymous.fltVal), // VT_R4
+            5 => format!("{:.2}", variant.Anonymous.Anonymous.Anonymous.dblVal), // VT_R8
+            8 => {
+                // VT_BSTR - string
+                let bstr = variant.Anonymous.Anonymous.Anonymous.bstrVal;
+                if bstr.is_empty() {
+                    "\"\"".to_string()
+                } else {
+                    format!("\"{}\"", bstr.to_string())
+                }
+            }
+            11 => format!("{}", variant.Anonymous.Anonymous.Anonymous.boolVal.0 != 0), // VT_BOOL
+            _ => format!("(VT {})", vt),
+        }
+    }
+}
+
+/// Map OPC quality code to a human-readable label.
+fn quality_to_string(quality: u16) -> String {
+    let quality_bits = quality & 0xC0; // Top 2 bits define Good/Bad/Uncertain
+    match quality_bits {
+        0xC0 => "Good".to_string(),
+        0x00 => "Bad".to_string(),
+        0x40 => "Uncertain".to_string(),
+        _ => format!("Unknown(0x{:04X})", quality),
+    }
+}
+
+/// Convert FILETIME to a human-readable string.
+fn filetime_to_string(ft: &FILETIME) -> String {
+    if ft.dwHighDateTime == 0 && ft.dwLowDateTime == 0 {
+        return "N/A".to_string();
+    }
+    // Simple format: just show the raw FILETIME for now
+    format!("{:08X}{:08X}", ft.dwHighDateTime, ft.dwLowDateTime)
 }
 
 /// Recursively browse the OPC DA hierarchical address space depth-first.
@@ -396,6 +451,149 @@ impl OpcProvider for OpcDaWrapper {
                     "Phase complete"
                 );
                 Ok(tags)
+            })();
+
+            if com_init.is_ok() {
+                unsafe {
+                    CoUninitialize();
+                }
+            }
+            result
+        })
+        .await
+        .context("Task join error")?
+    }
+
+    async fn read_tag_values(&self, server: &str, tag_ids: Vec<String>) -> Result<Vec<TagValue>> {
+        let server_name = server.to_string();
+        tokio::task::spawn_blocking(move || {
+            // Ensure COM is initialized for this thread pool thread (MTA)
+            let com_init = unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) };
+
+            let result = (|| {
+                tracing::info!(
+                    server = %server_name,
+                    tag_count = tag_ids.len(),
+                    "Reading tag values"
+                );
+
+                // 1. Resolve ProgID to CLSID
+                let clsid_raw = unsafe {
+                    let server_wide: Vec<u16> = server_name
+                        .encode_utf16()
+                        .chain(std::iter::once(0))
+                        .collect();
+                    CLSIDFromProgID(PCWSTR(server_wide.as_ptr())).with_context(|| {
+                        format!("Failed to resolve ProgID '{}' to CLSID", server_name)
+                    })?
+                };
+                let clsid = unsafe { std::mem::transmute_copy(&clsid_raw) };
+
+                // 2. Create server instance
+                let client = Client;
+                let opc_server = client
+                    .create_server(clsid, opc_da::def::ClassContext::All)
+                    .with_context(|| {
+                        format!("Failed to create OPC server instance for '{}'", server_name)
+                    })?;
+
+                // 3. Add a group for reading
+                let mut revised_update_rate = 0u32;
+                let mut server_handle = 0u32;
+                let group = opc_server
+                    .add_group(
+                        "opc-cli-read",
+                        true, // active
+                        0,    // client handle
+                        1000, // update rate (ms)
+                        0,    // locale_id
+                        0,    // time_bias
+                        0.0,  // percent_deadband
+                        &mut revised_update_rate,
+                        &mut server_handle,
+                    )
+                    .context("Failed to add OPC group")?;
+
+                // 4. Build item definitions
+                let item_defs: Vec<tagOPCITEMDEF> = tag_ids
+                    .iter()
+                    .enumerate()
+                    .map(|(idx, tag_id)| {
+                        let item_id_wide: Vec<u16> =
+                            tag_id.encode_utf16().chain(std::iter::once(0)).collect();
+                        tagOPCITEMDEF {
+                            szAccessPath: windows::core::PWSTR::null(),
+                            szItemID: windows::core::PWSTR(item_id_wide.as_ptr() as *mut _),
+                            bActive: windows::Win32::Foundation::TRUE,
+                            hClient: idx as u32,
+                            dwBlobSize: 0,
+                            pBlob: std::ptr::null_mut(),
+                            vtRequestedDataType: 0, // VT_EMPTY = use server's native type
+                            wReserved: 0,
+                        }
+                    })
+                    .collect();
+
+                // SAFETY: item_defs contains POD-like structs with pointers to UTF-16 data
+                // that lives in tag_ids (which is owned by this closure). The pointers
+                // are only used during the add_items call.
+                let (results, errors) = group
+                    .add_items(&item_defs)
+                    .context("Failed to add items to group")?;
+
+                // 5. Collect server handles (skip errors)
+                let mut server_handles = Vec::new();
+                let mut valid_indices = Vec::new();
+                for (idx, (_item_result, error)) in results.iter().zip(errors.iter()).enumerate() {
+                    if error.is_ok() {
+                        server_handles.push(results[idx].hServer);
+                        valid_indices.push(idx);
+                    } else {
+                        tracing::warn!(
+                            tag = %tag_ids[idx],
+                            error = ?error,
+                            "Failed to add item, skipping"
+                        );
+                    }
+                }
+
+                if server_handles.is_empty() {
+                    return Err(anyhow::anyhow!("No valid items to read"));
+                }
+
+                // 6. Perform SyncIO read
+                let (item_states, read_errors) = group
+                    .read(OPC_DS_DEVICE, &server_handles)
+                    .context("Failed to read tag values")?;
+
+                // 7. Build TagValue results
+                let mut tag_values = Vec::new();
+                for (i, idx) in valid_indices.iter().enumerate() {
+                    let state = &item_states[i];
+                    let read_error = &read_errors[i];
+
+                    let value_str = if read_error.is_ok() {
+                        variant_to_string(&state.vDataValue)
+                    } else {
+                        format!("Error: {:?}", read_error)
+                    };
+
+                    let quality_str = quality_to_string(state.wQuality);
+                    let timestamp_str = filetime_to_string(&state.ftTimeStamp);
+
+                    tag_values.push(TagValue {
+                        tag_id: tag_ids[*idx].clone(),
+                        value: value_str,
+                        quality: quality_str,
+                        timestamp: timestamp_str,
+                    });
+                }
+
+                // 8. Cleanup: remove group
+                let _ = opc_server.remove_group(server_handle, true);
+
+                tracing::info!(count = tag_values.len(), "Read tag values successfully");
+                Ok(tag_values)
             })();
 
             if com_init.is_ok() {

@@ -1,3 +1,4 @@
+use crate::app::TagValue;
 use anyhow::Result;
 use async_trait::async_trait;
 #[cfg(test)]
@@ -22,4 +23,10 @@ pub trait OpcProvider: Send + Sync {
         max_tags: usize,
         progress: Arc<AtomicUsize>,
     ) -> Result<Vec<String>>;
+
+    /// Read current values for the given tag item IDs.
+    ///
+    /// Creates an OPC Group, adds the items, performs a SyncIO read,
+    /// and returns the results as `TagValue` structs.
+    async fn read_tag_values(&self, server: &str, tag_ids: Vec<String>) -> Result<Vec<TagValue>>;
 }

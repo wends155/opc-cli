@@ -9,12 +9,22 @@ use tokio::sync::oneshot;
 /// Default timeout for OPC operations (server listing and tag browsing).
 const OPC_TIMEOUT_SECS: u64 = 30;
 
+/// A single tag's read result for display.
+#[derive(Debug, Clone)]
+pub struct TagValue {
+    pub tag_id: String,
+    pub value: String,
+    pub quality: String,
+    pub timestamp: String,
+}
+
 #[derive(Debug, PartialEq, Clone, Copy)]
 pub enum CurrentScreen {
     Home,
     Loading,
     ServerList,
     TagList,
+    TagValues,
     Exiting,
 }
 
@@ -30,6 +40,9 @@ pub struct App {
     pub browse_progress: Arc<AtomicUsize>,
     pub browse_result_rx: Option<oneshot::Receiver<Result<Vec<String>>>>,
     pub fetch_result_rx: Option<oneshot::Receiver<Result<Vec<String>>>>,
+    pub selected_tags: Vec<bool>,
+    pub tag_values: Vec<TagValue>,
+    pub read_result_rx: Option<oneshot::Receiver<Result<Vec<TagValue>>>>,
 }
 
 impl App {
@@ -46,6 +59,9 @@ impl App {
             browse_progress: Arc::new(AtomicUsize::new(0)),
             browse_result_rx: None,
             fetch_result_rx: None,
+            selected_tags: Vec::new(),
+            tag_values: Vec::new(),
+            read_result_rx: None,
         }
     }
 
@@ -134,6 +150,7 @@ impl App {
         let count = match self.current_screen {
             CurrentScreen::ServerList => self.servers.len(),
             CurrentScreen::TagList => self.tags.len(),
+            CurrentScreen::TagValues => self.tag_values.len(),
             _ => 0,
         };
 
@@ -220,6 +237,7 @@ impl App {
             match rx.try_recv() {
                 Ok(Ok(tags)) => {
                     self.tags = tags;
+                    self.selected_tags = vec![false; self.tags.len()];
                     self.current_screen = CurrentScreen::TagList;
                     if self.tags.is_empty() {
                         self.selected_index = None;
@@ -257,6 +275,130 @@ impl App {
         }
     }
 
+    /// Toggle tag selection at the current selected index.
+    pub fn toggle_tag_selection(&mut self) {
+        if self.current_screen != CurrentScreen::TagList {
+            return;
+        }
+        if let Some(idx) = self.selected_index {
+            if idx < self.selected_tags.len() {
+                self.selected_tags[idx] = !self.selected_tags[idx];
+            }
+        }
+    }
+
+    /// Start reading values for selected tags.
+    pub fn start_read_values(&mut self) {
+        if self.current_screen != CurrentScreen::TagList {
+            return;
+        }
+
+        // Gather selected tag IDs
+        let selected_tag_ids: Vec<String> = self
+            .tags
+            .iter()
+            .enumerate()
+            .filter_map(|(idx, tag_id)| {
+                if self.selected_tags.get(idx).copied().unwrap_or(false) {
+                    Some(tag_id.clone())
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        if selected_tag_ids.is_empty() {
+            self.add_message("No tags selected. Press Space to select tags.".into());
+            return;
+        }
+
+        let server = match self.selected_index.and_then(|_| {
+            self.servers
+                .iter()
+                .find(|s| self.tags.iter().any(|t| t.contains(s)))
+        }) {
+            Some(s) => s.clone(),
+            None => {
+                // Fallback: get from the currently browsed server
+                match self.servers.first() {
+                    Some(s) => s.clone(),
+                    None => {
+                        self.add_message("No server available for reading".into());
+                        return;
+                    }
+                }
+            }
+        };
+
+        self.current_screen = CurrentScreen::Loading;
+        self.add_message(format!("Reading {} tag values...", selected_tag_ids.len()));
+
+        let provider = Arc::clone(&self.opc_provider);
+        let (tx, rx) = oneshot::channel();
+
+        tokio::spawn(async move {
+            let result = tokio::time::timeout(
+                std::time::Duration::from_secs(OPC_TIMEOUT_SECS),
+                provider.read_tag_values(&server, selected_tag_ids),
+            )
+            .await;
+
+            let final_result = match result {
+                Ok(inner) => inner,
+                Err(_) => {
+                    tracing::error!("Read tag values timed out ({}s)", OPC_TIMEOUT_SECS);
+                    Err(anyhow::anyhow!("Read timed out ({}s)", OPC_TIMEOUT_SECS))
+                }
+            };
+
+            let _ = tx.send(final_result);
+        });
+
+        self.read_result_rx = Some(rx);
+    }
+
+    pub fn poll_read_result(&mut self) {
+        if let Some(rx) = &mut self.read_result_rx {
+            match rx.try_recv() {
+                Ok(Ok(values)) => {
+                    self.tag_values = values;
+                    self.current_screen = CurrentScreen::TagValues;
+                    if self.tag_values.is_empty() {
+                        self.selected_index = None;
+                        self.list_state.select(None);
+                    } else {
+                        self.selected_index = Some(0);
+                        self.list_state.select(Some(0));
+                    }
+                    self.add_message(format!("Read {} tag values", self.tag_values.len()));
+                    self.read_result_rx = None;
+                }
+                Ok(Err(e)) => {
+                    self.current_screen = CurrentScreen::TagList;
+                    tracing::error!(error = %e, error_chain = ?e, "Read tag values failed");
+                    let hint = opc_impl::friendly_com_hint(&e);
+                    let msg = match hint {
+                        Some(h) => format!("Error reading values: {} ({})", h, e),
+                        None => format!("Error reading values: {:#}", e),
+                    };
+                    self.add_message(msg);
+                    self.read_result_rx = None;
+                }
+                Err(oneshot::error::TryRecvError::Empty) => {
+                    // Still running
+                }
+                Err(oneshot::error::TryRecvError::Closed) => {
+                    self.current_screen = CurrentScreen::TagList;
+                    tracing::error!(
+                        "Read values background task terminated unexpectedly (sender dropped)"
+                    );
+                    self.add_message("Read task terminated unexpectedly".into());
+                    self.read_result_rx = None;
+                }
+            }
+        }
+    }
+
     pub fn go_back(&mut self) {
         match self.current_screen {
             CurrentScreen::ServerList => {
@@ -272,6 +414,18 @@ impl App {
                 if !self.servers.is_empty() {
                     self.selected_index = Some(0); // Simple fallback for now
                     self.list_state.select(Some(0));
+                }
+            }
+            CurrentScreen::TagValues => {
+                self.current_screen = CurrentScreen::TagList;
+                self.tag_values.clear();
+                // Restore selection to tags list
+                if !self.tags.is_empty() {
+                    self.selected_index = Some(0);
+                    self.list_state.select(Some(0));
+                } else {
+                    self.selected_index = None;
+                    self.list_state.select(None);
                 }
             }
             _ => {}
@@ -675,4 +829,134 @@ mod tests {
 
         assert_eq!(app.current_screen, CurrentScreen::ServerList);
     }
-}
+
+    #[test]
+    fn test_toggle_tag_selection() {
+        let mock = MockOpcProvider::new();
+        let mut app = App::new(Arc::new(mock));
+        app.current_screen = CurrentScreen::TagList;
+        app.tags = vec!["Tag1".into(), "Tag2".into()];
+        app.selected_tags = vec![false, false];
+        app.selected_index = Some(1);
+
+        app.toggle_tag_selection();
+        assert_eq!(app.selected_tags, vec![false, true]);
+
+        app.toggle_tag_selection();
+        assert_eq!(app.selected_tags, vec![false, false]);
+    }
+
+    #[test]
+    fn test_start_read_values_no_selection() {
+        let mock = MockOpcProvider::new();
+        let mut app = App::new(Arc::new(mock));
+        app.current_screen = CurrentScreen::TagList;
+        app.tags = vec!["Tag1".into()];
+        app.selected_tags = vec![false];
+
+        app.start_read_values();
+
+        assert_eq!(app.current_screen, CurrentScreen::TagList);
+        assert!(app.messages.last().unwrap().contains("No tags selected"));
+        assert!(app.read_result_rx.is_none());
+    }
+
+    #[test]
+    fn test_start_read_values_wrong_screen() {
+        let mock = MockOpcProvider::new();
+        let mut app = App::new(Arc::new(mock));
+        app.current_screen = CurrentScreen::ServerList;
+
+        app.start_read_values();
+
+        assert_eq!(app.current_screen, CurrentScreen::ServerList);
+        assert!(app.read_result_rx.is_none());
+    }
+
+    #[test]
+    fn test_poll_read_result_success() {
+        let (tx, rx) = oneshot::channel();
+        let mock = MockOpcProvider::new();
+        let mut app = App::new(Arc::new(mock));
+        app.current_screen = CurrentScreen::Loading;
+        app.read_result_rx = Some(rx);
+
+        let values = vec![TagValue {
+            tag_id: "Tag1".into(),
+            value: "123".into(),
+            quality: "Good".into(),
+            timestamp: "Today".into(),
+        }];
+
+        tx.send(Ok(values)).unwrap();
+        app.poll_read_result();
+
+        assert_eq!(app.current_screen, CurrentScreen::TagValues);
+        assert_eq!(app.tag_values.len(), 1);
+        assert_eq!(app.tag_values[0].value, "123");
+        assert!(app.read_result_rx.is_none());
+    }
+
+    #[test]
+    fn test_poll_read_result_error() {
+        let (tx, rx) = oneshot::channel();
+        let mock = MockOpcProvider::new();
+        let mut app = App::new(Arc::new(mock));
+        app.current_screen = CurrentScreen::Loading;
+        app.read_result_rx = Some(rx);
+
+        tx.send(Err(anyhow::anyhow!("Read failed"))).unwrap();
+        app.poll_read_result();
+
+        assert_eq!(app.current_screen, CurrentScreen::TagList);
+        assert!(app.read_result_rx.is_none());
+        assert!(app.messages.last().unwrap().contains("Error reading values"));
+    }
+
+    #[test]
+    fn test_go_back_from_tag_values() {
+        let mock = MockOpcProvider::new();
+        let mut app = App::new(Arc::new(mock));
+        app.current_screen = CurrentScreen::TagValues;
+        app.tags = vec!["Tag1".into()];
+        app.tag_values = vec![TagValue {
+            tag_id: "Tag1".into(),
+            value: "100".into(),
+            quality: "Good".into(),
+            timestamp: "".into(),
+        }];
+
+        app.go_back();
+
+        assert_eq!(app.current_screen, CurrentScreen::TagList);
+        assert!(app.tag_values.is_empty());
+        assert_eq!(app.tags.len(), 1); // Tags preserved
+    }
+
+    #[test]
+    fn test_select_next_on_tag_values() {
+        let mock = MockOpcProvider::new();
+        let mut app = App::new(Arc::new(mock));
+        app.current_screen = CurrentScreen::TagValues;
+        app.tag_values = vec![
+            TagValue {
+                tag_id: "T1".into(),
+                value: "V1".into(),
+                quality: "Q".into(),
+                timestamp: "T".into(),
+            },
+            TagValue {
+                tag_id: "T2".into(),
+                value: "V2".into(),
+                quality: "Q".into(),
+                timestamp: "T".into(),
+            },
+        ];
+        app.selected_index = Some(0);
+
+        app.select_next();
+        assert_eq!(app.selected_index, Some(1));
+
+        app.select_next(); // Should stay at 1
+        assert_eq!(app.selected_index, Some(1));
+    }}
