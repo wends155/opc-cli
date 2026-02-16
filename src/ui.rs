@@ -45,11 +45,17 @@ pub fn render(f: &mut Frame, app: &mut App) {
 fn render_help(f: &mut Frame, app: &App, area: ratatui::layout::Rect) {
     let msg = match app.current_screen {
         CurrentScreen::Home => "Enter: Connect | Esc: Quit | Type hostname",
-        CurrentScreen::ServerList => "↑/↓: Nav | Enter: Tags | Esc: Back | q: Quit",
-        CurrentScreen::TagList => {
-            "↑/↓: Nav | Space: Select | Enter: Read Values | Esc: Back | q: Quit"
+        CurrentScreen::ServerList => {
+            "↑/↓: Nav | PgDn/PgUp: Page | Enter: Tags | Esc: Back | q: Quit"
         }
-        CurrentScreen::TagValues => "↑/↓: Nav | Esc: Back | q: Quit",
+        CurrentScreen::TagList => {
+            if app.search_mode {
+                "Type: Search | Tab: Next | Space: Select | Enter: Read | Esc: Cancel"
+            } else {
+                "↑/↓: Nav | PgDn/PgUp: Page | Space: Select | s: Search | Enter: Read | Esc: Back | q: Quit"
+            }
+        }
+        CurrentScreen::TagValues => "↑/↓: Nav | PgDn/PgUp: Page | Esc: Back | q: Quit",
         CurrentScreen::Loading => "Please wait...",
         CurrentScreen::Exiting => "Exiting...",
     };
@@ -116,6 +122,30 @@ fn render_server_list(f: &mut Frame, app: &mut App, area: ratatui::layout::Rect)
 }
 
 fn render_tag_list(f: &mut Frame, app: &mut App, area: ratatui::layout::Rect) {
+    let list_chunks = if app.search_mode {
+        Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([Constraint::Length(3), Constraint::Min(0)])
+            .split(area)
+    } else {
+        Layout::default()
+            .constraints([Constraint::Min(0)])
+            .split(area)
+    };
+
+    if app.search_mode {
+        let search_text = format!("Search: {}_", app.search_query);
+        let search_bar = Paragraph::new(search_text)
+            .style(Style::default().fg(Color::Yellow))
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .title(" Search Tags (Substring Match) ")
+                    .border_style(Style::default().fg(Color::Yellow)),
+            );
+        f.render_widget(search_bar, list_chunks[0]);
+    }
+
     let items: Vec<ListItem> = app
         .tags
         .iter()
@@ -126,20 +156,42 @@ fn render_tag_list(f: &mut Frame, app: &mut App, area: ratatui::layout::Rect) {
             } else {
                 "[ ] "
             };
-            ListItem::new(Line::from(vec![Span::raw(checkbox), Span::raw(t)]))
+
+            let is_match = app.search_mode && app.search_matches.contains(&idx);
+            let style = if is_match {
+                Style::default().fg(Color::Yellow)
+            } else {
+                Style::default()
+            };
+
+            ListItem::new(Line::from(vec![
+                Span::raw(checkbox),
+                Span::styled(t, style),
+            ]))
         })
         .collect();
 
-    let list = List::new(items)
-        .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .title(" Step 3: Browse Tags "),
+    let title = if app.search_mode {
+        format!(
+            " Step 3: Browse Tags ({}/{} matches) ",
+            app.search_matches.len(),
+            app.tags.len()
         )
+    } else {
+        " Step 3: Browse Tags ".to_string()
+    };
+
+    let list = List::new(items)
+        .block(Block::default().borders(Borders::ALL).title(title))
         .highlight_style(Style::default().bg(Color::Green).fg(Color::Black))
         .highlight_symbol(" * ");
 
-    f.render_stateful_widget(list, area, &mut app.list_state);
+    let list_area = if app.search_mode {
+        list_chunks[1]
+    } else {
+        list_chunks[0]
+    };
+    f.render_stateful_widget(list, list_area, &mut app.list_state);
 }
 
 fn render_tag_values(f: &mut Frame, app: &mut App, area: ratatui::layout::Rect) {

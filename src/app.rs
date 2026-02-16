@@ -9,6 +9,9 @@ use tokio::sync::oneshot;
 /// Default timeout for OPC operations (server listing and tag browsing).
 const OPC_TIMEOUT_SECS: u64 = 30;
 
+/// Maximum tags to retrieve when browsing an OPC server namespace.
+const MAX_BROWSE_TAGS: usize = 5000;
+
 /// A single tag's read result for display.
 #[derive(Debug, Clone)]
 pub struct TagValue {
@@ -50,6 +53,14 @@ pub struct App {
     pub refresh_tag_ids: Vec<String>,
     /// Tracks when the last successful read completed.
     pub last_read_time: Option<std::time::Instant>,
+    /// Whether the tag list is in search/filter mode.
+    pub search_mode: bool,
+    /// Current search query string.
+    pub search_query: String,
+    /// Indices into `self.tags` that match the current query.
+    pub search_matches: Vec<usize>,
+    /// Current position within `search_matches` (cycles).
+    pub search_match_index: usize,
 }
 
 impl App {
@@ -73,6 +84,10 @@ impl App {
             refresh_server: None,
             refresh_tag_ids: Vec::new(),
             last_read_time: None,
+            search_mode: false,
+            search_query: String::new(),
+            search_matches: Vec::new(),
+            search_match_index: 0,
         }
     }
 
@@ -191,6 +206,55 @@ impl App {
         }
     }
 
+    /// Jump forward by PAGE_SIZE items (clamped to end of list).
+    pub fn page_down(&mut self) {
+        let count = match self.current_screen {
+            CurrentScreen::ServerList => self.servers.len(),
+            CurrentScreen::TagList => self.tags.len(),
+            CurrentScreen::TagValues => self.tag_values.len(),
+            _ => 0,
+        };
+
+        if count == 0 {
+            return;
+        }
+
+        let page_size = 20;
+        if let Some(idx) = self.selected_index {
+            let new_idx = (idx + page_size).min(count - 1);
+            self.selected_index = Some(new_idx);
+            self.list_state.select(Some(new_idx));
+            if self.current_screen == CurrentScreen::TagValues {
+                self.table_state.select(Some(new_idx));
+            }
+        } else {
+            self.selected_index = Some(0);
+            self.list_state.select(Some(0));
+            if self.current_screen == CurrentScreen::TagValues {
+                self.table_state.select(Some(0));
+            }
+        }
+    }
+
+    /// Jump backward by PAGE_SIZE items (clamped to start of list).
+    pub fn page_up(&mut self) {
+        let page_size = 20;
+        if let Some(idx) = self.selected_index {
+            let new_idx = idx.saturating_sub(page_size);
+            self.selected_index = Some(new_idx);
+            self.list_state.select(Some(new_idx));
+            if self.current_screen == CurrentScreen::TagValues {
+                self.table_state.select(Some(new_idx));
+            }
+        } else {
+            self.selected_index = Some(0);
+            self.list_state.select(Some(0));
+            if self.current_screen == CurrentScreen::TagValues {
+                self.table_state.select(Some(0));
+            }
+        }
+    }
+
     pub fn start_browse_tags(&mut self) {
         if self.current_screen != CurrentScreen::ServerList {
             return;
@@ -217,7 +281,7 @@ impl App {
         tokio::spawn(async move {
             let result = tokio::time::timeout(
                 std::time::Duration::from_secs(OPC_TIMEOUT_SECS),
-                provider.browse_tags(&server, 500, progress),
+                provider.browse_tags(&server, MAX_BROWSE_TAGS, progress),
             )
             .await;
 
@@ -464,6 +528,84 @@ impl App {
         self.read_result_rx = Some(rx);
     }
 
+    /// Enter search mode, clearing any previous query.
+    pub fn enter_search_mode(&mut self) {
+        if self.current_screen != CurrentScreen::TagList {
+            return;
+        }
+        self.search_mode = true;
+        self.search_query.clear();
+        self.search_matches.clear();
+        self.search_match_index = 0;
+    }
+
+    /// Exit search mode, keeping cursor position.
+    pub fn exit_search_mode(&mut self) {
+        self.search_mode = false;
+        // Keep Query string so user sees what they searched for if they enter again?
+        // Actually, the plan said "clear any previous query" on enter, so it's fine.
+    }
+
+    /// Update the search query and recompute matches.
+    pub fn update_search_query(&mut self, c: char) {
+        self.search_query.push(c);
+        self.recompute_search_matches();
+    }
+
+    /// Delete last character from search query and recompute.
+    pub fn search_backspace(&mut self) {
+        self.search_query.pop();
+        self.recompute_search_matches();
+    }
+
+    fn recompute_search_matches(&mut self) {
+        let query = self.search_query.to_lowercase();
+        self.search_matches = self
+            .tags
+            .iter()
+            .enumerate()
+            .filter_map(|(idx, tag)| {
+                if tag.to_lowercase().contains(&query) {
+                    Some(idx)
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        self.search_match_index = 0;
+        if let Some(&first_match) = self.search_matches.first() {
+            self.selected_index = Some(first_match);
+            self.list_state.select(Some(first_match));
+        }
+    }
+
+    /// Jump to the next search match.
+    pub fn next_search_match(&mut self) {
+        if self.search_matches.is_empty() {
+            return;
+        }
+        self.search_match_index = (self.search_match_index + 1) % self.search_matches.len();
+        let next_idx = self.search_matches[self.search_match_index];
+        self.selected_index = Some(next_idx);
+        self.list_state.select(Some(next_idx));
+    }
+
+    /// Jump to the previous search match.
+    pub fn prev_search_match(&mut self) {
+        if self.search_matches.is_empty() {
+            return;
+        }
+        if self.search_match_index == 0 {
+            self.search_match_index = self.search_matches.len() - 1;
+        } else {
+            self.search_match_index -= 1;
+        }
+        let prev_idx = self.search_matches[self.search_match_index];
+        self.selected_index = Some(prev_idx);
+        self.list_state.select(Some(prev_idx));
+    }
+
     pub fn go_back(&mut self) {
         match self.current_screen {
             CurrentScreen::ServerList => {
@@ -637,7 +779,7 @@ mod tests {
     async fn test_enter_selected_server_navigation() {
         let mut mock = MockOpcProvider::new();
         mock.expect_browse_tags()
-            .with(eq("S1"), eq(500), always())
+            .with(eq("S1"), eq(MAX_BROWSE_TAGS), always())
             .returning(|_, _, _| Ok(vec!["T1".into()]));
 
         let mut app = App::new(Arc::new(mock));
@@ -997,5 +1139,79 @@ mod tests {
 
         app.select_next(); // Should stay at 1
         assert_eq!(app.selected_index, Some(1));
+    }
+
+    #[test]
+    fn test_page_down_basic() {
+        let mock = MockOpcProvider::new();
+        let mut app = App::new(Arc::new(mock));
+        app.current_screen = CurrentScreen::TagList;
+        app.tags = (0..50).map(|i| format!("T{}", i)).collect();
+        app.selected_index = Some(0);
+
+        app.page_down();
+        assert_eq!(app.selected_index, Some(20));
+
+        app.page_down();
+        assert_eq!(app.selected_index, Some(40));
+
+        app.page_down(); // Should clamp to 49
+        assert_eq!(app.selected_index, Some(49));
+    }
+
+    #[test]
+    fn test_page_up_basic() {
+        let mock = MockOpcProvider::new();
+        let mut app = App::new(Arc::new(mock));
+        app.current_screen = CurrentScreen::TagList;
+        app.tags = (0..50).map(|i| format!("T{}", i)).collect();
+        app.selected_index = Some(49);
+
+        app.page_up();
+        assert_eq!(app.selected_index, Some(29));
+
+        app.page_up();
+        assert_eq!(app.selected_index, Some(9));
+
+        app.page_up(); // Should clamp to 0
+        assert_eq!(app.selected_index, Some(0));
+    }
+
+    #[test]
+    fn test_search_basic_matching() {
+        let mock = MockOpcProvider::new();
+        let mut app = App::new(Arc::new(mock));
+        app.current_screen = CurrentScreen::TagList;
+        app.tags = vec![
+            "System.Cpu".into(),
+            "System.Mem".into(),
+            "User.Data".into(),
+            "User.Settings".into(),
+        ];
+        app.selected_tags = vec![false; 4];
+
+        app.enter_search_mode();
+        assert!(app.search_mode);
+
+        app.update_search_query('s');
+        app.update_search_query('y');
+        app.update_search_query('s'); // Query: "sys"
+
+        assert_eq!(app.search_matches.len(), 2);
+        assert_eq!(app.search_matches[0], 0); // System.Cpu
+        assert_eq!(app.search_matches[1], 1); // System.Mem
+        assert_eq!(app.selected_index, Some(0));
+
+        app.next_search_match();
+        assert_eq!(app.selected_index, Some(1));
+
+        app.next_search_match(); // Should wrap
+        assert_eq!(app.selected_index, Some(0));
+
+        app.search_backspace(); // Query: "sy"
+        assert_eq!(app.search_matches.len(), 2);
+
+        app.exit_search_mode();
+        assert!(!app.search_mode);
     }
 }

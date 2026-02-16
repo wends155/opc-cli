@@ -39,7 +39,7 @@ The browse implementation handles both flat and hierarchical OPC DA namespaces:
    - **Fully-qualified IDs:** `get_item_id()` converts browse names to item IDs; falls back to browse name if conversion fails.
    - **Iterator bug workaround:** `E_POINTER` (0x80004003) errors from the upstream `opc_da` crate's `StringIterator` are filtered and downgraded to `trace!` level (see [OPC-BUG-001](#opc-bug-001-stringiterator-e_pointer-flood)).
 4. **Triple safety guards:**
-   - `max_tags` hard cap (default 500) to prevent unbounded collection.
+   - `max_tags` hard cap (default 5000) to prevent unbounded collection.
    - `MAX_DEPTH` (50) to guard against infinite recursion in malformed namespaces.
    - 30-second `tokio` timeout to abort runaway server enumeration.
 5. **Non-blocking:** Browse runs as a background `tokio::spawn_blocking` task; progress reported via `Arc<AtomicUsize>` to the Loading screen.

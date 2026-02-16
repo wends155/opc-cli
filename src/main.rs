@@ -125,6 +125,8 @@ fn handle_key_event(app: &mut App, key: event::KeyEvent) {
         },
         CurrentScreen::ServerList => match key.code {
             KeyCode::Esc => app.go_back(),
+            KeyCode::PageDown => app.page_down(),
+            KeyCode::PageUp => app.page_up(),
             KeyCode::Down => app.select_next(),
             KeyCode::Up => app.select_prev(),
             KeyCode::Enter => {
@@ -135,19 +137,42 @@ fn handle_key_event(app: &mut App, key: event::KeyEvent) {
             }
             _ => {}
         },
-        CurrentScreen::TagList => match key.code {
-            KeyCode::Esc => app.go_back(),
-            KeyCode::Down => app.select_next(),
-            KeyCode::Up => app.select_prev(),
-            KeyCode::Char(' ') => app.toggle_tag_selection(),
-            KeyCode::Enter => app.start_read_values(),
-            KeyCode::Char('q') | KeyCode::Char('Q') => {
-                app.current_screen = CurrentScreen::Exiting;
+        CurrentScreen::TagList => {
+            if app.search_mode {
+                match key.code {
+                    KeyCode::Esc => app.exit_search_mode(),
+                    KeyCode::Backspace => app.search_backspace(),
+                    KeyCode::Tab => app.next_search_match(),
+                    KeyCode::BackTab => app.prev_search_match(),
+                    KeyCode::Char(' ') => app.toggle_tag_selection(),
+                    KeyCode::Enter => {
+                        app.exit_search_mode();
+                        app.start_read_values();
+                    }
+                    KeyCode::Char(c) => app.update_search_query(c),
+                    _ => {}
+                }
+            } else {
+                match key.code {
+                    KeyCode::Esc => app.go_back(),
+                    KeyCode::PageDown => app.page_down(),
+                    KeyCode::PageUp => app.page_up(),
+                    KeyCode::Down => app.select_next(),
+                    KeyCode::Up => app.select_prev(),
+                    KeyCode::Char(' ') => app.toggle_tag_selection(),
+                    KeyCode::Char('s') | KeyCode::Char('S') => app.enter_search_mode(),
+                    KeyCode::Enter => app.start_read_values(),
+                    KeyCode::Char('q') | KeyCode::Char('Q') => {
+                        app.current_screen = CurrentScreen::Exiting;
+                    }
+                    _ => {}
+                }
             }
-            _ => {}
-        },
+        }
         CurrentScreen::TagValues => match key.code {
             KeyCode::Esc => app.go_back(),
+            KeyCode::PageDown => app.page_down(),
+            KeyCode::PageUp => app.page_up(),
             KeyCode::Down => app.select_next(),
             KeyCode::Up => app.select_prev(),
             KeyCode::Char('q') | KeyCode::Char('Q') => {
