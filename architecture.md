@@ -33,12 +33,16 @@
 The browse implementation handles both flat and hierarchical OPC DA namespaces:
 1. `query_organization()` detects namespace type (flat vs hierarchical).
 2. **Flat:** Enumerate all `OPC_LEAF` items at root.
-3. **Hierarchical:** Recursive depth-first walk:
-   - **Branches first:** Enumerate `OPC_BRANCH` items, navigate down via `change_browse_position(DOWN/UP)`, and recurse.
+3. **Hierarchical:** Recursive depth-first walk via `browse_recursive()`:
+   - **Branches first:** Enumerate `OPC_BRANCH` items, navigate down via `change_browse_position(DOWN)`, recurse, then always navigate back `UP` — even if recursion fails — to prevent position corruption.
    - **Leaves second (soft-fail):** Enumerate `OPC_LEAF` items at current position; failures are logged and skipped.
    - **Fully-qualified IDs:** `get_item_id()` converts browse names to item IDs; falls back to browse name if conversion fails.
-4. **Dual safety:** `max_tags` hard cap (500) + 30s timeout to prevent runaway enumeration.
-5. **Non-blocking:** Browse runs as a background `tokio::spawn` task; progress reported via `Arc<AtomicUsize>` to the Loading screen.
+   - **Iterator bug workaround:** `E_POINTER` (0x80004003) errors from the upstream `opc_da` crate's `StringIterator` are filtered and downgraded to `trace!` level (see [OPC-BUG-001](#opc-bug-001-stringiterator-e_pointer-flood)).
+4. **Triple safety guards:**
+   - `max_tags` hard cap (default 500) to prevent unbounded collection.
+   - `MAX_DEPTH` (50) to guard against infinite recursion in malformed namespaces.
+   - 30-second `tokio` timeout to abort runaway server enumeration.
+5. **Non-blocking:** Browse runs as a background `tokio::spawn_blocking` task; progress reported via `Arc<AtomicUsize>` to the Loading screen.
 
 ### 4. Observability
 *   **Crate**: `tracing`, `tracing-subscriber`, `tracing-appender`
@@ -140,6 +144,33 @@ The project prioritizes a **Test-Driven Architecture** where the UI and business
 ### 2. Integration & Manual Testing
 *   **OPC Implementation (`src/opc_impl.rs`)**: Due to its direct reliance on the Windows `opc_da` crate and COM/DCOM registry, this layer is primarily verified through manual end-to-end testing against real OPC servers (e.g., Matrikon, Kepware, or local simulation servers).
 *   **Async Boundaries**: Background task spawning and `tokio` timeouts are tested in `src/app.rs` using `#[tokio::test]`.
+## Known Upstream Bugs
+
+> [!WARNING]
+> These bugs exist in third-party dependencies and cannot be fixed directly. Workarounds are implemented in this project.
+
+### OPC-BUG-001: `StringIterator` E_POINTER Flood
+
+| Field | Value |
+| :--- | :--- |
+| **Crate** | `opc_da` |
+| **Version** | `0.3.1` |
+| **Severity** | Medium (log flood, no data loss) |
+| **HRESULT** | `0x80004003` (`E_POINTER`) |
+| **Workaround** | `is_known_iterator_bug()` in `opc_impl.rs` |
+
+**Root Cause:**
+The `StringIterator` in [`opc_da::client::iterator`](https://docs.rs/opc_da/0.3.1/src/opc_da/client/iterator.rs.html#69) initializes its internal cache with 16 `PWSTR::null()` entries and sets `index: 0`. The refill condition (`index == cache.len()`) only triggers at index 16. This means the first 16 calls to `next()` read null pointers, producing `E_POINTER` errors via `RemotePointer::try_into()`.
+
+**How to Reproduce:**
+1. Connect to any OPC DA server with a hierarchical namespace.
+2. Browse tags (Enter on a server in the Server List).
+3. Observe `logs/opc-cli.log` — without the workaround, each `browse_opc_item_ids` call produces exactly 16 `E_POINTER` warnings before real data flows.
+
+**Workaround Applied:**
+In `src/opc_impl.rs`, the helper `is_known_iterator_bug()` detects `E_POINTER` (0x80004003) and downgrades the log level from `warn!` to `trace!`. This eliminates the log flood while preserving genuine errors at `warn!` level.
+
+**Upstream Status:** No fix submitted. The crate appears lightly maintained ([Ronbb/rust_opc](https://github.com/Ronbb/rust_opc)).
 
 ## Design Principles
 1.  **Testability First**: The UI should be verifiable without a running OPC server via mocks.

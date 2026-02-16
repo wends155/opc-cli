@@ -32,9 +32,18 @@ pub fn friendly_com_hint(err: &anyhow::Error) -> Option<&'static str> {
         Some("COM marshalling error — try restarting the OPC server")
     } else if msg.contains("0x80040154") {
         Some("Server is not registered on this machine")
+    } else if msg.contains("0x80004003") {
+        Some("Invalid pointer — likely a known issue with the OPC DA crate's iterator initialization")
     } else {
         None
     }
+}
+
+/// Returns `true` for E_POINTER errors that are known to be caused by
+/// the `opc_da` crate's `StringIterator` initialization bug (index starts
+/// at 0 with null-pointer cache, producing 16 phantom errors per iterator).
+fn is_known_iterator_bug(err: &windows::core::Error) -> bool {
+    err.code().0 as u32 == 0x80004003 // E_POINTER
 }
 
 /// Helper to convert GUID to ProgID using Windows API
@@ -92,7 +101,11 @@ fn browse_recursive(
         .filter_map(|r| match r {
             Ok(name) => Some(name),
             Err(e) => {
-                tracing::warn!(error = ?e, "Branch iteration error, skipping");
+                if is_known_iterator_bug(&e) {
+                    tracing::trace!(error = ?e, "Branch iteration: known crate bug, skipping");
+                } else {
+                    tracing::warn!(error = ?e, "Branch iteration error, skipping");
+                }
                 None
             }
         })
@@ -137,7 +150,11 @@ fn browse_recursive(
                 let browse_name = match leaf_res {
                     Ok(name) => name,
                     Err(e) => {
-                        tracing::warn!(error = ?e, "Leaf iteration error, skipping");
+                        if is_known_iterator_bug(&e) {
+                            tracing::trace!(error = ?e, "Leaf iteration: known crate bug, skipping");
+                        } else {
+                            tracing::warn!(error = ?e, "Leaf iteration error, skipping");
+                        }
                         continue;
                     }
                 };

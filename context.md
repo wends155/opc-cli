@@ -61,6 +61,16 @@ Through enriched observability, we identified the root causes of server connecti
 *   Refactored `opc_impl.rs` leaf iteration to match branch iteration (skip on error).
 *   Enforced standard filter pattern `Some("")` for all browse calls to prevent marshaling errors.
 *   Updated `GEMINI.md` to mandate `scripts/verify.ps1` as the primary quality gate.
+*   Updated `GEMINI.md` to mandate `scripts/verify.ps1` as the primary quality gate.
+
+### 2026-02-16: Upstream Bug Mitigation & Log Cleanliness
+**Decision**: Implement workaround for `opc_da` crate `StringIterator` bug (`E_POINTER` flood) and formalize "Triple Safety" browsing.
+**Reasoning**: Users were seeing hundreds of "Invalid pointer" warnings per browse operation, drowning out legitimate errors. The upstream crate initializes iterators with null pointers in the cache.
+**Changes**:
+*   Implemented `is_known_iterator_bug()` to detect and downgrade specific `E_POINTER` (0x80004003) errors to `TRACE`.
+*   Updated `friendly_com_hint` to identify this specific issue for users.
+*   Documented **OPC-BUG-001** in `architecture.md`.
+*   Verified clean logs via `audit_report_v2.md`.
 
 ### Recursive Summarization (TARS)
 *   **Context Update**: Architecture now tolerates intermittent COM iterator errors. Quality gates are automated via PowerShell scripts to ensure consistent environment across PRs.
