@@ -144,6 +144,7 @@ The project has reached its target state:
 2.  **Standards Met**: Both library and CLI follow the strict documentation and error handling standards defined in `GEMINI.md`.
 3.  **Stability**: Full test coverage (including mock providers and doctests) ensures reliability across future backend swaps.
 4.  **Polish**: Root metadata (`README.md`, `LICENSE`, crate descriptions) is finalized.
+5.  **Versioning**: Project tagged as `v0.0.1` on the `main` branch.
 
 **Artifacts**:
 - `opc-da-client/architecture.md`: Detailed design of the library.

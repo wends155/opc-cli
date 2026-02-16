@@ -3,6 +3,11 @@ name = "opc-da-client"
 version = "0.0.1"
 edition = "2024"
 description = "Backend-agnostic OPC DA client library with async trait-based API"
+license = "MIT"
+repository = "https://github.com/wends155/opc-cli"
+readme = "README.md"
+keywords = ["opc", "opc-da", "windows", "automation", "scada"]
+categories = ["api-bindings", "network-programming"]
 
 [features]
 default = ["opc-da-backend"]
