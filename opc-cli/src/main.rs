@@ -1,19 +1,17 @@
 mod app;
-mod opc_impl;
-mod traits;
 mod ui;
 
 use crate::app::{App, CurrentScreen};
-use crate::opc_impl::OpcDaWrapper;
 use anyhow::{Context, Result};
 use crossterm::{
     event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode},
     execute,
-    terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
+    terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
 };
-use ratatui::{backend::CrosstermBackend, Terminal};
+use opc_da_client::OpcDaWrapper;
+use ratatui::{Terminal, backend::CrosstermBackend};
 use std::{io, sync::Arc, time::Duration};
-use tracing_subscriber::{fmt, prelude::*, EnvFilter};
+use tracing_subscriber::{EnvFilter, fmt, prelude::*};
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -90,10 +88,10 @@ async fn run_app<B: ratatui::backend::Backend>(
 
         terminal.draw(|f| ui::render(f, app))?;
 
-        if event::poll(Duration::from_millis(100))? {
-            if let Event::Key(key) = event::read()? {
-                handle_key_event(app, key);
-            }
+        if event::poll(Duration::from_millis(100))?
+            && let Event::Key(key) = event::read()?
+        {
+            handle_key_event(app, key);
         }
 
         if let CurrentScreen::Exiting = app.current_screen {
@@ -192,8 +190,8 @@ fn handle_key_event(app: &mut App, key: event::KeyEvent) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::traits::MockOpcProvider;
     use crossterm::event::{KeyEvent, KeyEventKind, KeyEventState, KeyModifiers};
+    use opc_da_client::MockOpcProvider;
 
     #[test]
     fn test_handle_key_event_press_release() {

@@ -1,9 +1,8 @@
-use crate::opc_impl;
-use crate::traits::OpcProvider;
 use anyhow::Result;
+use opc_da_client::{OpcProvider, TagValue, friendly_com_hint};
 use ratatui::widgets::{ListState, TableState}; // Added TableState
-use std::sync::atomic::AtomicUsize;
 use std::sync::Arc;
+use std::sync::atomic::AtomicUsize;
 use tokio::sync::oneshot;
 
 /// Default timeout for OPC operations (server listing and tag browsing).
@@ -11,15 +10,6 @@ const OPC_TIMEOUT_SECS: u64 = 300;
 
 /// Maximum tags to retrieve when browsing an OPC server namespace.
 const MAX_BROWSE_TAGS: usize = 10000;
-
-/// A single tag's read result for display.
-#[derive(Debug, Clone)]
-pub struct TagValue {
-    pub tag_id: String,
-    pub value: String,
-    pub quality: String,
-    pub timestamp: String,
-}
 
 #[derive(Debug, PartialEq, Clone, Copy)]
 pub enum CurrentScreen {
@@ -197,12 +187,12 @@ impl App {
     }
 
     pub fn select_prev(&mut self) {
-        if let Some(idx) = self.selected_index {
-            if idx > 0 {
-                let new_idx = idx - 1;
-                self.selected_index = Some(new_idx);
-                self.list_state.select(Some(new_idx));
-            }
+        if let Some(idx) = self.selected_index
+            && idx > 0
+        {
+            let new_idx = idx - 1;
+            self.selected_index = Some(new_idx);
+            self.list_state.select(Some(new_idx));
         }
     }
 
@@ -348,7 +338,7 @@ impl App {
                 Ok(Err(e)) => {
                     self.current_screen = CurrentScreen::ServerList;
                     tracing::error!(error = %e, error_chain = ?e, "Browse tags failed");
-                    let hint = opc_impl::friendly_com_hint(&e);
+                    let hint = friendly_com_hint(&e);
                     let msg = match hint {
                         Some(h) => format!("Error: {} ({})", h, e),
                         None => format!("Error: {:#}", e),
@@ -376,10 +366,10 @@ impl App {
         if self.current_screen != CurrentScreen::TagList {
             return;
         }
-        if let Some(idx) = self.selected_index {
-            if idx < self.selected_tags.len() {
-                self.selected_tags[idx] = !self.selected_tags[idx];
-            }
+        if let Some(idx) = self.selected_index
+            && idx < self.selected_tags.len()
+        {
+            self.selected_tags[idx] = !self.selected_tags[idx];
         }
     }
 
@@ -477,7 +467,7 @@ impl App {
                 Ok(Err(e)) => {
                     self.current_screen = CurrentScreen::TagList;
                     tracing::error!(error = %e, error_chain = ?e, "Read tag values failed");
-                    let hint = opc_impl::friendly_com_hint(&e);
+                    let hint = friendly_com_hint(&e);
                     let msg = match hint {
                         Some(h) => format!("Error reading values: {} ({})", h, e),
                         None => format!("Error reading values: {:#}", e),
@@ -667,8 +657,8 @@ impl App {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::traits::MockOpcProvider;
     use mockall::predicate::*;
+    use opc_da_client::MockOpcProvider;
 
     #[test]
     fn test_poll_fetch_result_success() {
@@ -735,11 +725,12 @@ mod tests {
         app.poll_fetch_result();
 
         assert_eq!(app.current_screen, CurrentScreen::Home);
-        assert!(app
-            .messages
-            .last()
-            .unwrap()
-            .contains("terminated unexpectedly"));
+        assert!(
+            app.messages
+                .last()
+                .unwrap()
+                .contains("terminated unexpectedly")
+        );
     }
 
     #[tokio::test]
@@ -1107,11 +1098,12 @@ mod tests {
 
         assert_eq!(app.current_screen, CurrentScreen::TagList);
         assert!(app.read_result_rx.is_none());
-        assert!(app
-            .messages
-            .last()
-            .unwrap()
-            .contains("Error reading values"));
+        assert!(
+            app.messages
+                .last()
+                .unwrap()
+                .contains("Error reading values")
+        );
     }
 
     #[test]

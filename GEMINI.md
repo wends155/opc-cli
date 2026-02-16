@@ -59,9 +59,9 @@ graph LR
 
 #### Execution Standards
 1.  **Zero-Exit Requirement**: No implementation is considered complete until all automated checks return exit code `0`:
-    *   Formatting: `cargo fmt -- --check`
-    *   Linting: `cargo clippy -- -D warnings`
-    *   Testing: `cargo test`
+    *   Formatting: `cargo fmt --all -- --check`
+    *   Linting: `cargo clippy --workspace -- -D warnings`
+    *   Testing: `cargo test --workspace`
 2.  **Git Checkpoints**: Mandatory atomic commits before and after functional blocks to ensure reversibility.
 3.  **Hand-off Protocol**: The Architect provides the blueprint. The Builder implements without deviation. If a plan seems flawed, the Builder requests a re-audit.
 
@@ -100,14 +100,16 @@ graph LR
     *   `rust-mcp-server_cargo-check`
     *   `rust-mcp-server_cargo-add` / `rust-mcp-server_cargo-remove`
     *   **Verification Script**: `scripts/verify.ps1` (Automates fmt/clippy/test with stable environment)
-2.  **Project Navigation**: Use file search and indexing tools to map the project structure before proposing changes.
+2.  **Project Navigation**: The project is a Cargo workspace with two members:
+    *   `opc-da-client`: Backend-agnostic library crate.
+    *   `opc-cli`: TUI binary crate depending on the library.
 3.  **Documentation First**: Before using a library or API, attempt to read its local documentation or headers.
 4.  **Log Access**: Log files are in `logs/` with daily rotation. Always discover the active log via:
     ```powershell
     Get-ChildItem logs -File | Sort-Object LastWriteTime -Descending | Select-Object -First 1
     ```
     ⚠️ NEVER hardcode dates into log filenames.
-5.  **Upstream Monitoring**: Periodically check `opc_da` crate ([Ronbb/rust_opc](https://github.com/Ronbb/rust_opc)) for fixes to known bugs documented in `architecture.md § Known Upstream Bugs`.
+5.  **Upstream Monitoring**: Periodically check `opc_da` crate ([Ronbb/rust_opc](https://github.com/Ronbb/rust_opc)) for fixes to known bugs documented in `opc-da-client/architecture.md § Known Upstream Bugs`.
 
 ---
 

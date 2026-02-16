@@ -1,0 +1,31 @@
+[package]
+name = "opc-da-client"
+version = "0.1.0"
+edition = "2024"
+description = "Backend-agnostic OPC DA client library with async trait-based API"
+
+[features]
+default = ["opc-da-backend"]
+opc-da-backend = ["dep:opc_da", "dep:opc_da_bindings"]
+test-support = ["dep:mockall"]
+
+[dependencies]
+# Core (always included)
+anyhow = "1.0.95"
+async-trait = "0.1.86"
+chrono = "0.4.43"
+tokio = { version = "1.43.0", features = ["rt", "sync"] }
+tracing = "0.1.41"
+windows = { version = "0.61.3", features = [
+    "Win32_System_Com",
+    "Win32_System_Ole",
+    "Win32_Security",
+    "Win32_Foundation",
+] }
+
+# Backend: opc_da (optional, default-on)
+opc_da = { version = "0.3.1", optional = true }
+opc_da_bindings = { version = "0.3.1", optional = true }
+
+# Test support: mock provider (optional)
+mockall = { version = "0.13.1", optional = true }

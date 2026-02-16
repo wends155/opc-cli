@@ -1,0 +1,57 @@
+use anyhow::Result;
+use async_trait::async_trait;
+use std::sync::Arc;
+use std::sync::atomic::AtomicUsize;
+
+#[cfg(feature = "test-support")]
+use mockall::automock;
+
+/// A single tag's read result.
+///
+/// Returned by [`OpcProvider::read_tag_values`].
+#[derive(Debug, Clone)]
+pub struct TagValue {
+    /// The fully qualified tag identifier (e.g., `"Channel1.Device1.Tag1"`).
+    pub tag_id: String,
+    /// The current value as a display string.
+    pub value: String,
+    /// OPC quality indicator (e.g., `"Good"`, `"Bad"`, or `"Uncertain"`).
+    pub quality: String,
+    /// Timestamp of the last value change, formatted as a local time string.
+    pub timestamp: String,
+}
+
+/// Async trait for OPC DA operations.
+///
+/// This is the stable public API. Backend implementations provide
+/// the actual COM/DCOM interaction.
+#[cfg_attr(feature = "test-support", automock)]
+#[async_trait]
+pub trait OpcProvider: Send + Sync {
+    /// List available OPC DA servers on the given host.
+    ///
+    /// # Errors
+    /// Returns `Err` if COM initialization fails or the server registry
+    /// cannot be enumerated.
+    async fn list_servers(&self, host: &str) -> Result<Vec<String>>;
+
+    /// Browse tags recursively, pushing discoveries to `tags_sink`.
+    ///
+    /// # Errors
+    /// Returns `Err` if the server connection fails, the ProgID cannot be
+    /// resolved, or the namespace walk encounters an unrecoverable error.
+    async fn browse_tags(
+        &self,
+        server: &str,
+        max_tags: usize,
+        progress: Arc<AtomicUsize>,
+        tags_sink: Arc<std::sync::Mutex<Vec<String>>>,
+    ) -> Result<Vec<String>>;
+
+    /// Read current values for the given tag IDs.
+    ///
+    /// # Errors
+    /// Returns `Err` if the server connection fails, no items can be added
+    /// to the OPC group, or the synchronous read operation fails.
+    async fn read_tag_values(&self, server: &str, tag_ids: Vec<String>) -> Result<Vec<TagValue>>;
+}

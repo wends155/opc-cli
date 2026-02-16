@@ -1,5 +1,15 @@
 # 🧠 Project Context: opc-cli
 
+### [2026-02-16] Library Extraction & Workspace Restructuring
+- **Request**: Extract OPC DA interaction code into a standalone, backend-agnostic library.
+- **Action**: 
+    - Converted project to a Cargo workspace.
+    - Created `opc-da-client` library crate with a trait-based API (`OpcProvider`).
+    - Implemented `opc-da-backend` and `test-support` (Mock) features for the library.
+    - Decoupled `opc-cli` binary from direct COM/OPC dependencies.
+    - Updated documentation (`GEMINI.md`, `architecture.md`) to reflect the new architecture.
+- **Outcome**: Improved maintainability and testability. The library can now be reused by other projects or have its backend replaced without affecting the CLI.
+
 ### [2026-02-16] Tag Values UI Improvements & Timestamp Reform
 - **Request**: Adjust Tag ID column width and format timestamps to local time.
 - **Action**: 
@@ -124,4 +134,18 @@ Through enriched observability, we identified the root causes of server connecti
     - **Bug Fix**: Restored correct `if-flat / else-hierarchical` branching in `opc_impl.rs`.
     - **Scale**: Increased `MAX_BROWSE_TAGS` to **10,000**.
     - **Audit**: Confirmed system health via `log_audit_report.md` (no recent errors).
+
 - **Outcome**: 37 tests passed. Hierarchical browsing restored. Confirmed stable operations against `ABB.AC800MC`.
+
+## Final Project Handover (2026-02-16)
+
+The project has reached its target state:
+1.  **Decoupling Complete**: The OPC DA logic is now isolated in `opc-da-client` with a stable, async-trait based API.
+2.  **Standards Met**: Both library and CLI follow the strict documentation and error handling standards defined in `GEMINI.md`.
+3.  **Stability**: Full test coverage (including mock providers and doctests) ensures reliability across future backend swaps.
+4.  **Polish**: Root metadata (`README.md`, `LICENSE`, crate descriptions) is finalized.
+
+**Artifacts**:
+- `opc-da-client/architecture.md`: Detailed design of the library.
+- `README.md`: Workspace overview and user controls.
+- `walkthrough.md`: Historical record of the extraction and refactoring process.

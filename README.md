@@ -1,47 +1,50 @@
-# opc-cli
+# OPC DA Client CLI
 
-A high-performance Terminal User Interface (TUI) for OPC DA interaction, built with Rust.
-
-## 🚀 Quick Start
-
-### Prerequisites
-- Windows OS (Required for OPC DA/COM interaction)
-- Rust (2024 Edition)
-- PowerShell or GNU Make
-
-### Building
-
-**Using Make:**
-```powershell
-make debug    # Fast build
-make release  # Optimized build
-```
-
-**Using PowerShell:**
-```powershell
-./scripts/package.ps1 debug
-./scripts/package.ps1 release
-```
-
-### Testing
-```powershell
-make test
-# OR
-./scripts/package.ps1 test
-```
-
-### Packaging for Deployment
-To create a deployment bundle (EXE + PDB + metadata):
-```powershell
-make package
-# OR
-./scripts/package.ps1 package
-```
-This generates `opc-cli-dist.zip` and the `dist/` folder.
+A modern, asynchronous TUI (Terminal User Interface) client for browsing and reading OPC DA (Data Access) servers on Windows.
 
 ## 🏗️ Architecture
-See [architecture.md](architecture.md) for a deep dive into the design patterns and components.
 
-## 📝 Documentation
-- [Walkthrough](.gemini/antigravity/brain/0c437b09-0259-476f-b95b-1ac7669aaa3b/walkthrough.md): Achievement summary and validation proof.
-- [Context](context.md): Project history and key decisions.
+The project is structured as a Cargo workspace with two main components:
+
+- **`opc-cli`**: The TUI application built with `ratatui`.
+- **`opc-da-client`**: A backend-agnostic library that abstracts OPC DA communication through an async trait.
+
+See **[architecture.md](file:///c:/Users/WSALIGAN/code/opc-cli/opc-da-client/architecture.md)** for detailed design information.
+
+## ✨ Features
+
+- **Asynchronous Data Access**: Non-blocking IO for all OPC operations.
+- **Hierarchical Browsing**: Recursive exploration of complex server namespaces.
+- **Real-time Monitoring**: Live tag value updates with auto-refresh.
+- **Search & Filter**: Quickly find tags in large namespaces.
+- **Rich Error Hints**: Human-readable explanations for cryptic Windows COM/DCOM errors.
+- **Mockable Backend**: Built-in support for unit testing without a live OPC server.
+
+## 🚀 Getting Started
+
+### Prerequisites
+
+- **Windows OS**: This application uses Windows COM/DCOM.
+- **OPC Core Components**: Must be installed on the system to resolve OPC ProgIDs.
+
+### Running
+
+Execute the TUI from the project root:
+
+```powershell
+cargo run --bin opc-cli
+```
+
+## ⌨️ Controls
+
+- `Enter`: Navigate forward / Confirm input.
+- `Esc`: Navigate back.
+- `Space`: Toggle tag selection.
+- `s`: Enter search/filter mode (Tag List).
+- `↑/↓`: Navigate lists.
+- `PgUp/PgDn`: Page through lists.
+- `q`: Quit application.
+
+## 📄 License
+
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
