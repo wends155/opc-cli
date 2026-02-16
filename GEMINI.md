@@ -102,6 +102,12 @@ graph LR
     *   **Verification Script**: `scripts/verify.ps1` (Automates fmt/clippy/test with stable environment)
 2.  **Project Navigation**: Use file search and indexing tools to map the project structure before proposing changes.
 3.  **Documentation First**: Before using a library or API, attempt to read its local documentation or headers.
+4.  **Log Access**: Log files are in `logs/` with daily rotation. Always discover the active log via:
+    ```powershell
+    Get-ChildItem logs -File | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+    ```
+    ⚠️ NEVER hardcode dates into log filenames.
+5.  **Upstream Monitoring**: Periodically check `opc_da` crate ([Ronbb/rust_opc](https://github.com/Ronbb/rust_opc)) for fixes to known bugs documented in `architecture.md § Known Upstream Bugs`.
 
 ---
 
