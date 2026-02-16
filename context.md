@@ -72,7 +72,18 @@ Through enriched observability, we identified the root causes of server connecti
 *   Documented **OPC-BUG-001** in `architecture.md`.
 *   Verified clean logs via `audit_report_v2.md`.
 
-### Recursive Summarization (TARS)
-*   **Context Update**: Architecture now tolerates intermittent COM iterator errors. Quality gates are automated via PowerShell scripts to ensure consistent environment across PRs.
-*   **Pruned**: Redundant manual `cargo` check instructions in `GEMINI.md` have been replaced by the verification script reference.
-*   **New Constraints**: All browse-related COM calls MUST provide an empty string filter (`Some("")`) rather than `None`.
+
+### 2026-02-16: Enhanced Diagnostics & DCOM Troubleshooting
+**Decision**: Implement granular phase logging and expanded DCOM error hints.
+**Reasoning**: Audit logs showed a 30s hang in server connection for `SchneiderElectric`, but didn't pinpoint the exact COM phase or root cause.
+**Changes**:
+*   Modified `browse_tags` in `opc_impl.rs` to use "Phase Envelope" logging (Started/Complete) for CLSID resolution, server creation, and namespace querying.
+*   Enriched `create_server` failure logs with activation-specific timing and DCOM hints.
+*   Expanded `friendly_com_hint` with `0x80070005` (Access Denied) and `0x800706BA` (RPC Server Unavailable).
+*   Enriched `app.rs` timeout logging to explicitly reference phase details in logs.
+
+### Project Context Compression (TARS)
+*   **Feature**: Enhanced Diagnostics Logging & DCOM Troubleshooting.
+*   **Changes**: Granular phase logging, expanded DCOM HRESULT hints, enriched timeout reporting.
+*   **New Constraints**: None.
+*   **Pruned**: Initial audit logs for the SchneiderElectric hang are now superseded by the diagnostic implementation.

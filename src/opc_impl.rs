@@ -28,6 +28,10 @@ pub fn friendly_com_hint(err: &anyhow::Error) -> Option<&'static str> {
         Some("Server license does not permit OPC client connections")
     } else if msg.contains("0x80080005") {
         Some("Server process failed to start — check if it is installed and running")
+    } else if msg.contains("0x80070005") {
+        Some("Access denied — DCOM launch/activation permissions not configured for this user")
+    } else if msg.contains("0x800706BA") {
+        Some("RPC server unavailable — the target host may be offline or blocking RPC")
     } else if msg.contains("0x800706F4") {
         Some("COM marshalling error — try restarting the OPC server")
     } else if msg.contains("0x80040154") {
@@ -276,7 +280,7 @@ impl OpcProvider for OpcDaWrapper {
 
                 // 1. Resolve ProgID to CLSID
                 let t0 = Instant::now();
-                tracing::debug!("Resolving ProgID '{}' to CLSID...", server_name);
+                tracing::info!(server = %server_name, phase = "resolve_clsid", "Phase started");
                 let clsid_raw = unsafe {
                     let server_wide: Vec<u16> = server_name
                         .encode_utf16()
@@ -289,7 +293,8 @@ impl OpcProvider for OpcDaWrapper {
                 tracing::info!(
                     elapsed_ms = t0.elapsed().as_millis(),
                     server = %server_name,
-                    "CLSIDFromProgID complete"
+                    phase = "resolve_clsid",
+                    "Phase complete"
                 );
 
                 // Convert windows::core::GUID to opc_da GUID
@@ -297,15 +302,26 @@ impl OpcProvider for OpcDaWrapper {
 
                 // 2. Create server instance
                 let t1 = Instant::now();
-                tracing::debug!(
-                    "Creating OPC server instance (LocalServer) for GUID {:?}...",
-                    clsid
+                tracing::info!(
+                    server = %server_name,
+                    phase = "create_server",
+                    clsid = ?clsid,
+                    "Phase started"
                 );
                 let client = Client;
                 let opc_server = client
                     .create_server(clsid, opc_da::def::ClassContext::All)
                     .map_err(|e| {
-                        tracing::error!(error = ?e, server = %server_name, "create_server failed");
+                        let hint = friendly_com_hint(&anyhow::anyhow!("{:?}", e))
+                            .unwrap_or("Check DCOM configuration and server status");
+                        tracing::error!(
+                            error = ?e,
+                            server = %server_name,
+                            phase = "create_server",
+                            elapsed_ms = t1.elapsed().as_millis(),
+                            hint,
+                            "create_server failed"
+                        );
                         e
                     })
                     .with_context(|| {
@@ -314,15 +330,22 @@ impl OpcProvider for OpcDaWrapper {
                 tracing::info!(
                     elapsed_ms = t1.elapsed().as_millis(),
                     server = %server_name,
-                    "create_server complete"
+                    phase = "create_server",
+                    "Phase complete"
                 );
 
                 // 3. Detect namespace organization
                 let t2 = Instant::now();
+                tracing::info!(server = %server_name, phase = "query_organization", "Phase started");
                 let org = opc_server
                     .query_organization()
                     .map_err(|e| {
-                        tracing::warn!(error = ?e, server = %server_name, "query_organization failed");
+                        tracing::warn!(
+                            error = ?e,
+                            server = %server_name,
+                            phase = "query_organization",
+                            "query_organization failed"
+                        );
                         e
                     })
                     .context("Failed to query namespace organization")?;
@@ -330,11 +353,18 @@ impl OpcProvider for OpcDaWrapper {
                     elapsed_ms = t2.elapsed().as_millis(),
                     organization = ?org,
                     server = %server_name,
-                    "query_organization complete"
+                    phase = "query_organization",
+                    "Phase complete"
                 );
 
                 let mut tags = Vec::new();
                 let t3 = Instant::now();
+                tracing::info!(
+                    server = %server_name,
+                    phase = "enumerate_tags",
+                    organization = ?org,
+                    "Phase started"
+                );
 
                 if org == OPC_NS_FLAT {
                     // Flat namespace: browse leaves directly at root
@@ -362,7 +392,8 @@ impl OpcProvider for OpcDaWrapper {
                     elapsed_ms = t3.elapsed().as_millis(),
                     count = tags.len(),
                     server = %server_name,
-                    "Tag enumeration complete"
+                    phase = "enumerate_tags",
+                    "Phase complete"
                 );
                 Ok(tags)
             })();
@@ -396,6 +427,14 @@ mod tests {
             friendly_com_hint(&err),
             Some("Server is not registered on this machine")
         );
+
+        let err = anyhow::anyhow!("COM error 0x80070005");
+        assert!(friendly_com_hint(&err).unwrap().contains("Access denied"));
+
+        let err = anyhow::anyhow!("COM error 0x800706BA");
+        assert!(friendly_com_hint(&err)
+            .unwrap()
+            .contains("RPC server unavailable"));
     }
 
     #[test]

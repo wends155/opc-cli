@@ -196,8 +196,16 @@ impl App {
             let final_result = match result {
                 Ok(inner) => inner,
                 Err(_) => {
-                    tracing::error!(server = %server, "Browse tags timed out after {}s", OPC_TIMEOUT_SECS);
-                    Err(anyhow::anyhow!("Browse timed out ({}s)", OPC_TIMEOUT_SECS))
+                    tracing::error!(
+                        server = %server,
+                        timeout_secs = OPC_TIMEOUT_SECS,
+                        "Browse tags timed out — server may be hung during DCOM activation or browse walk"
+                    );
+                    Err(anyhow::anyhow!(
+                        "Browse timed out ({}s) for '{}' — check logs for phase details",
+                        OPC_TIMEOUT_SECS,
+                        server
+                    ))
                 }
             };
 
