@@ -145,6 +145,14 @@ Through enriched observability, we identified the root causes of server connecti
     - Pushed changes to the remote repository.
 - **Outcome**: The library is now ready for publishing with professional-grade documentation.
 
+### [2026-02-16] Release v0.0.2
+- **Request**: Tag version to v0.0.2.
+- **Action**:
+    - Bumped `opc-da-client` and `opc-cli` to version `0.0.2`.
+    - Updated `Cargo.lock`.
+    - Created git tag `v0.0.2` and pushed to remote.
+- **Outcome**: Version `v0.0.2` is now live on the repository.
+
 ## Final Project Handover (2026-02-16)
 
 The project has reached its target state:
