@@ -165,10 +165,10 @@ fn render_tag_values(f: &mut Frame, app: &mut App, area: ratatui::layout::Rect) 
         .collect();
 
     let widths = [
-        Constraint::Percentage(40),
-        Constraint::Percentage(20),
+        Constraint::Percentage(45),
         Constraint::Percentage(15),
-        Constraint::Percentage(25),
+        Constraint::Percentage(10),
+        Constraint::Percentage(30),
     ];
 
     let table = Table::new(rows, widths)

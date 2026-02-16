@@ -44,6 +44,12 @@ pub struct App {
     pub selected_tags: Vec<bool>,
     pub tag_values: Vec<TagValue>,
     pub read_result_rx: Option<oneshot::Receiver<Result<Vec<TagValue>>>>,
+    /// Context for auto-refresh: server used for the last read.
+    pub refresh_server: Option<String>,
+    /// Context for auto-refresh: tag IDs from the last read.
+    pub refresh_tag_ids: Vec<String>,
+    /// Tracks when the last successful read completed.
+    pub last_read_time: Option<std::time::Instant>,
 }
 
 impl App {
@@ -64,6 +70,9 @@ impl App {
             selected_tags: Vec::new(),
             tag_values: Vec::new(),
             read_result_rx: None,
+            refresh_server: None,
+            refresh_tag_ids: Vec::new(),
+            last_read_time: None,
         }
     }
 
@@ -332,6 +341,10 @@ impl App {
             }
         };
 
+        // Store context for auto-refresh
+        self.refresh_server = Some(server.clone());
+        self.refresh_tag_ids = selected_tag_ids.clone();
+
         self.current_screen = CurrentScreen::Loading;
         self.add_message(format!("Reading {} tag values...", selected_tag_ids.len()));
 
@@ -373,6 +386,7 @@ impl App {
                         self.list_state.select(Some(0));
                     }
                     self.add_message(format!("Read {} tag values", self.tag_values.len()));
+                    self.last_read_time = Some(std::time::Instant::now());
                     self.read_result_rx = None;
                 }
                 Ok(Err(e)) => {
@@ -401,6 +415,55 @@ impl App {
         }
     }
 
+    pub fn maybe_auto_refresh(&mut self) {
+        if self.current_screen != CurrentScreen::TagValues {
+            return;
+        }
+        if self.read_result_rx.is_some() {
+            return; // Read already in-flight
+        }
+        let elapsed = match self.last_read_time {
+            Some(t) => t.elapsed(),
+            None => return,
+        };
+        if elapsed < std::time::Duration::from_secs(1) {
+            return;
+        }
+
+        let server_name = match &self.refresh_server {
+            Some(s) => s.clone(),
+            None => return,
+        };
+        let tag_ids = self.refresh_tag_ids.clone();
+        if tag_ids.is_empty() {
+            return;
+        }
+
+        tracing::debug!(tag_count = tag_ids.len(), "Auto-refreshing tag values");
+        let provider = Arc::clone(&self.opc_provider);
+        let (tx, rx) = oneshot::channel();
+
+        tokio::spawn(async move {
+            let result = tokio::time::timeout(
+                std::time::Duration::from_secs(OPC_TIMEOUT_SECS),
+                provider.read_tag_values(&server_name, tag_ids),
+            )
+            .await;
+
+            let final_result = match result {
+                Ok(inner) => inner,
+                Err(_) => {
+                    tracing::error!("Auto-refresh timed out ({}s)", OPC_TIMEOUT_SECS);
+                    Err(anyhow::anyhow!("Auto-refresh timed out"))
+                }
+            };
+
+            let _ = tx.send(final_result);
+        });
+
+        self.read_result_rx = Some(rx);
+    }
+
     pub fn go_back(&mut self) {
         match self.current_screen {
             CurrentScreen::ServerList => {
@@ -421,6 +484,9 @@ impl App {
             CurrentScreen::TagValues => {
                 self.current_screen = CurrentScreen::TagList;
                 self.tag_values.clear();
+                self.refresh_server = None;
+                self.refresh_tag_ids.clear();
+                self.last_read_time = None;
                 // Restore selection to tags list
                 if !self.tags.is_empty() {
                     self.selected_index = Some(0);
@@ -529,23 +595,10 @@ mod tests {
     #[test]
     fn test_server_navigation() {
         let mock = MockOpcProvider::new();
-        let mut app = App {
-            host_input: "localhost".into(),
-            servers: vec!["S1".into(), "S2".into()],
-            selected_index: Some(0),
-            tags: vec![],
-            current_screen: CurrentScreen::ServerList,
-            opc_provider: Arc::new(mock),
-            messages: vec![],
-            list_state: ListState::default(),
-            browse_progress: Arc::new(AtomicUsize::new(0)),
-            browse_result_rx: None,
-            fetch_result_rx: None,
-            selected_tags: vec![],
-            tag_values: vec![],
-            read_result_rx: None,
-            table_state: TableState::default(),
-        };
+        let mut app = App::new(Arc::new(mock));
+        app.servers = vec!["S1".into(), "S2".into()];
+        app.selected_index = Some(0);
+        app.current_screen = CurrentScreen::ServerList;
         app.list_state.select(Some(0));
 
         app.select_next();
@@ -564,23 +617,11 @@ mod tests {
     #[test]
     fn test_tag_navigation_logic() {
         let mock = MockOpcProvider::new();
-        let mut app = App {
-            host_input: "localhost".into(),
-            servers: vec!["S1".into()],
-            selected_index: Some(0),
-            tags: vec!["T1".into(), "T2".into()],
-            current_screen: CurrentScreen::TagList,
-            opc_provider: Arc::new(mock),
-            messages: vec![],
-            list_state: ListState::default(),
-            browse_progress: Arc::new(AtomicUsize::new(0)),
-            browse_result_rx: None,
-            fetch_result_rx: None,
-            selected_tags: vec![],
-            tag_values: vec![],
-            read_result_rx: None,
-            table_state: TableState::default(),
-        };
+        let mut app = App::new(Arc::new(mock));
+        app.servers = vec!["S1".into()];
+        app.selected_index = Some(0);
+        app.tags = vec!["T1".into(), "T2".into()];
+        app.current_screen = CurrentScreen::TagList;
         app.list_state.select(Some(0));
 
         // Test boundary check against tags (2), not servers (1)
@@ -599,23 +640,10 @@ mod tests {
             .with(eq("S1"), eq(500), always())
             .returning(|_, _, _| Ok(vec!["T1".into()]));
 
-        let mut app = App {
-            host_input: "localhost".into(),
-            servers: vec!["S1".into()],
-            selected_index: Some(0),
-            tags: vec![],
-            current_screen: CurrentScreen::ServerList,
-            opc_provider: Arc::new(mock),
-            messages: vec![],
-            list_state: ListState::default(),
-            browse_progress: Arc::new(AtomicUsize::new(0)),
-            browse_result_rx: None,
-            fetch_result_rx: None,
-            selected_tags: vec![],
-            tag_values: vec![],
-            read_result_rx: None,
-            table_state: TableState::default(),
-        };
+        let mut app = App::new(Arc::new(mock));
+        app.servers = vec!["S1".into()];
+        app.selected_index = Some(0);
+        app.current_screen = CurrentScreen::ServerList;
         app.list_state.select(Some(0));
 
         app.start_browse_tags();
@@ -631,23 +659,11 @@ mod tests {
     #[test]
     fn test_go_back_navigation() {
         let mock = MockOpcProvider::new();
-        let mut app = App {
-            host_input: "localhost".into(),
-            servers: vec!["S1".into()],
-            selected_index: Some(0),
-            tags: vec!["T1".into()],
-            current_screen: CurrentScreen::TagList,
-            opc_provider: Arc::new(mock),
-            messages: vec![],
-            list_state: ListState::default(),
-            browse_progress: Arc::new(AtomicUsize::new(0)),
-            browse_result_rx: None,
-            fetch_result_rx: None,
-            selected_tags: vec![],
-            tag_values: vec![],
-            read_result_rx: None,
-            table_state: TableState::default(),
-        };
+        let mut app = App::new(Arc::new(mock));
+        app.servers = vec!["S1".into()];
+        app.selected_index = Some(0);
+        app.tags = vec!["T1".into()];
+        app.current_screen = CurrentScreen::TagList;
         app.list_state.select(Some(0));
 
         // TagList -> ServerList

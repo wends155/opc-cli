@@ -119,13 +119,25 @@ fn quality_to_string(quality: u16) -> String {
     }
 }
 
-/// Convert FILETIME to a human-readable string.
+/// Convert FILETIME to a human-readable local time string.
+///
+/// Windows FILETIME is 100-nanosecond intervals since 1601-01-01 UTC.
+/// Unix epoch is 1970-01-01 UTC. The offset is 11,644,473,600 seconds.
 fn filetime_to_string(ft: &FILETIME) -> String {
     if ft.dwHighDateTime == 0 && ft.dwLowDateTime == 0 {
         return "N/A".to_string();
     }
-    // Simple format: just show the raw FILETIME for now
-    format!("{:08X}{:08X}", ft.dwHighDateTime, ft.dwLowDateTime)
+    let intervals = ((ft.dwHighDateTime as u64) << 32) | (ft.dwLowDateTime as u64);
+    let unix_secs = (intervals / 10_000_000).saturating_sub(11_644_473_600);
+    let nanos = ((intervals % 10_000_000) * 100) as u32;
+
+    match chrono::DateTime::from_timestamp(unix_secs as i64, nanos) {
+        Some(utc) => utc
+            .with_timezone(&chrono::Local)
+            .format("%Y-%m-%d %H:%M:%S")
+            .to_string(),
+        None => "Invalid".to_string(),
+    }
 }
 
 /// Recursively browse the OPC DA hierarchical address space depth-first.
@@ -665,5 +677,35 @@ mod tests {
             [0xB8, 0x50, 0x00, 0xC0, 0xF0, 0x10, 0x43, 0x05],
         );
         assert_ne!(null, valid);
+    }
+
+    #[test]
+    fn test_filetime_to_string_zero() {
+        let ft = FILETIME {
+            dwHighDateTime: 0,
+            dwLowDateTime: 0,
+        };
+        assert_eq!(filetime_to_string(&ft), "N/A");
+    }
+
+    #[test]
+    fn test_filetime_to_string_nonzero() {
+        // 0x01DC9EF1A3BDF80 = a real FILETIME from the OPC server (approx Feb 16 2026)
+        let ft = FILETIME {
+            dwHighDateTime: 0x01DC9EF1,
+            dwLowDateTime: 0xA3BDF80,
+        };
+        let result = filetime_to_string(&ft);
+        // Should produce a valid date string, not hex
+        assert!(
+            result.contains("-"),
+            "Expected date format, got: {}",
+            result
+        );
+        assert!(
+            !result.contains("X"),
+            "Should not be hex format: {}",
+            result
+        );
     }
 }

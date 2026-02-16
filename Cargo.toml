@@ -33,6 +33,7 @@ tracing-appender-localtime = "0.2.4"
 
 # CLI (for args)
 clap = { version = "4.5.28", features = ["derive"] }
+chrono = "0.4.43"
 
 [dev-dependencies]
 mockall = "0.13.1"

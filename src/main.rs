@@ -86,6 +86,7 @@ async fn run_app<B: ratatui::backend::Backend>(
         app.poll_fetch_result();
         app.poll_browse_result();
         app.poll_read_result();
+        app.maybe_auto_refresh();
 
         terminal.draw(|f| ui::render(f, app))?;
 

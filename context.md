@@ -1,5 +1,16 @@
 # 🧠 Project Context: opc-cli
 
+### [2026-02-16] Tag Values UI Improvements & Timestamp Reform
+- **Request**: Adjust Tag ID column width and format timestamps to local time.
+- **Action**: 
+    - Added `chrono` dependency.
+    - Updated `src/ui.rs` column constraints: Tag ID (45%), Value (15%), Quality (10%), Timestamp (30%).
+    - Implemented `FILETIME` -> Local Time conversion in `src/opc_impl.rs`.
+    - Added 3 new unit tests in `src/opc_impl.rs`.
+- **Outcome**: 34 tests passed. Tag ID paths no longer truncated. Timestamps are human-readable.
+
+---
+
 ## History & Decisions
 
 ### 2026-02-14: Migration to Rust
