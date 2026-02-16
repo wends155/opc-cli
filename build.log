@@ -1,0 +1,18 @@
+    Checking opc-cli v0.1.0 (C:\Users\WSALIGAN\code\opc-cli)
+error[E0507]: cannot move out of dereference of `ManuallyDrop<VARIANT_0_0>`
+  --> src\opc_impl.rs:98:28
+   |
+98 |                 let bstr = variant.Anonymous.Anonymous.Anonymous.bstrVal;
+   |                            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ move occurs because value has type `ManuallyDrop<BSTR>`, which does not implement the `Copy` trait
+   |
+help: consider borrowing here
+   |
+98 |                 let bstr = &variant.Anonymous.Anonymous.Anonymous.bstrVal;
+   |                            +
+help: consider cloning the value if the performance cost is acceptable
+   |
+98 |                 let bstr = variant.Anonymous.Anonymous.Anonymous.bstrVal.clone();
+   |                                                                         ++++++++
+
+For more information about this error, try `rustc --explain E0507`.
+error: could not compile `opc-cli` (bin "opc-cli") due to 1 previous error

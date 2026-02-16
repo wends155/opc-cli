@@ -86,4 +86,12 @@ Through enriched observability, we identified the root causes of server connecti
 *   **Feature**: Enhanced Diagnostics Logging & DCOM Troubleshooting.
 *   **Changes**: Granular phase logging, expanded DCOM HRESULT hints, enriched timeout reporting.
 *   **New Constraints**: None.
-*   **Pruned**: Initial audit logs for the SchneiderElectric hang are now superseded by the diagnostic implementation.
+### Build Environment: Portable MSVC
+🛑 **Mistake to Prevent**: Using double-escaped backslashes (`\\`) in `.cargo/config.toml` basic strings. TOML interprets `\\` as two literal backslashes. Use **literal strings** (single quotes) for Windows paths: `linker = 'C:\path\to\link.exe'`.
+
+🛑 **Mistake to Prevent**: Assuming `[target.x86_64-pc-windows-msvc] linker = "..."` applies to build scripts. It does **not** — proc-macros and build scripts compile for the host triple via the `cc` crate, which discovers `link.exe` through `PATH`, `vswhere`, or registry. Always ensure `$env:PATH` includes the MSVC bin directory (handled by `scripts/verify.ps1`).
+
+**Portable MSVC Paths** (for reference):
+- Linker: `C:\bin\portable-msvc\msvc\VC\Tools\MSVC\14.50.35717\bin\Hostx64\x64\link.exe`
+- Libs: `...\lib\x64` + `Windows Kits\10\Lib\10.0.26100.0\{ucrt,um}\x64`
+- Includes: `...\include` + `Windows Kits\10\Include\10.0.26100.0\{ucrt,um,shared}`

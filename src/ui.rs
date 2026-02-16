@@ -178,10 +178,11 @@ fn render_tag_values(f: &mut Frame, app: &mut App, area: ratatui::layout::Rect) 
                 .borders(Borders::ALL)
                 .title(" Step 4: Tag Values "),
         )
-        .highlight_style(Style::default().bg(Color::Blue).fg(Color::White))
+        //.highlight_style(Style::default().bg(Color::Blue).fg(Color::White)) // Deprecated
+        .row_highlight_style(Style::default().bg(Color::Blue).fg(Color::White))
         .highlight_symbol(">> ");
 
-    f.render_stateful_widget(table, area, &mut app.list_state);
+    f.render_stateful_widget(table, area, &mut app.table_state);
 }
 fn render_status_bar(f: &mut Frame, app: &App, area: Rect) {
     let display_messages: Vec<Line> = app

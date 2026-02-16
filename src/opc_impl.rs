@@ -84,8 +84,9 @@ fn guid_to_progid(guid: &windows::core::GUID) -> Result<String> {
 fn variant_to_string(variant: &VARIANT) -> String {
     unsafe {
         // Access the discriminant to get the VT type
+        // Access the discriminant to get the VT type
         let vt = variant.Anonymous.Anonymous.vt;
-        match vt as u32 {
+        match vt.0 {
             0 => "Empty".to_string(),                                       // VT_EMPTY
             1 => "Null".to_string(),                                        // VT_NULL
             2 => format!("{}", variant.Anonymous.Anonymous.Anonymous.iVal), // VT_I2
@@ -94,15 +95,15 @@ fn variant_to_string(variant: &VARIANT) -> String {
             5 => format!("{:.2}", variant.Anonymous.Anonymous.Anonymous.dblVal), // VT_R8
             8 => {
                 // VT_BSTR - string
-                let bstr = variant.Anonymous.Anonymous.Anonymous.bstrVal;
+                let bstr = &variant.Anonymous.Anonymous.Anonymous.bstrVal;
                 if bstr.is_empty() {
                     "\"\"".to_string()
                 } else {
-                    format!("\"{}\"", bstr.to_string())
+                    format!("\"{}\"", &**bstr)
                 }
             }
             11 => format!("{}", variant.Anonymous.Anonymous.Anonymous.boolVal.0 != 0), // VT_BOOL
-            _ => format!("(VT {})", vt),
+            _ => format!("(VT {:?})", vt),
         }
     }
 }
@@ -544,13 +545,19 @@ impl OpcProvider for OpcDaWrapper {
                 // 5. Collect server handles (skip errors)
                 let mut server_handles = Vec::new();
                 let mut valid_indices = Vec::new();
-                for (idx, (_item_result, error)) in results.iter().zip(errors.iter()).enumerate() {
+
+                let results_slice = results.as_slice();
+                let errors_slice = errors.as_slice();
+
+                for (idx, (_item_result, error)) in
+                    results_slice.iter().zip(errors_slice.iter()).enumerate()
+                {
                     if error.is_ok() {
-                        server_handles.push(results[idx].hServer);
+                        server_handles.push(_item_result.hServer);
                         valid_indices.push(idx);
                     } else {
                         tracing::warn!(
-                            tag = %tag_ids[idx],
+                            tag = %&tag_ids[idx],
                             error = ?error,
                             "Failed to add item, skipping"
                         );
@@ -568,9 +575,13 @@ impl OpcProvider for OpcDaWrapper {
 
                 // 7. Build TagValue results
                 let mut tag_values = Vec::new();
+
+                let item_states_slice = item_states.as_slice();
+                let read_errors_slice = read_errors.as_slice();
+
                 for (i, idx) in valid_indices.iter().enumerate() {
-                    let state = &item_states[i];
-                    let read_error = &read_errors[i];
+                    let state = &item_states_slice[i];
+                    let read_error = &read_errors_slice[i];
 
                     let value_str = if read_error.is_ok() {
                         variant_to_string(&state.vDataValue)

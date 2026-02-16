@@ -1,7 +1,7 @@
 use crate::opc_impl;
 use crate::traits::OpcProvider;
 use anyhow::Result;
-use ratatui::widgets::ListState;
+use ratatui::widgets::{ListState, TableState}; // Added TableState
 use std::sync::atomic::AtomicUsize;
 use std::sync::Arc;
 use tokio::sync::oneshot;
@@ -37,6 +37,7 @@ pub struct App {
     pub opc_provider: Arc<dyn OpcProvider>,
     pub messages: Vec<String>,
     pub list_state: ListState,
+    pub table_state: TableState, // New field
     pub browse_progress: Arc<AtomicUsize>,
     pub browse_result_rx: Option<oneshot::Receiver<Result<Vec<String>>>>,
     pub fetch_result_rx: Option<oneshot::Receiver<Result<Vec<String>>>>,
@@ -56,6 +57,7 @@ impl App {
             opc_provider,
             messages: Vec::new(),
             list_state: ListState::default(),
+            table_state: TableState::default(), // Initialize
             browse_progress: Arc::new(AtomicUsize::new(0)),
             browse_result_rx: None,
             fetch_result_rx: None,
@@ -315,7 +317,7 @@ impl App {
         let server = match self.selected_index.and_then(|_| {
             self.servers
                 .iter()
-                .find(|s| self.tags.iter().any(|t| t.contains(s)))
+                .find(|s| self.tags.iter().any(|t| t.contains(*s)))
         }) {
             Some(s) => s.clone(),
             None => {
@@ -539,6 +541,10 @@ mod tests {
             browse_progress: Arc::new(AtomicUsize::new(0)),
             browse_result_rx: None,
             fetch_result_rx: None,
+            selected_tags: vec![],
+            tag_values: vec![],
+            read_result_rx: None,
+            table_state: TableState::default(),
         };
         app.list_state.select(Some(0));
 
@@ -570,6 +576,10 @@ mod tests {
             browse_progress: Arc::new(AtomicUsize::new(0)),
             browse_result_rx: None,
             fetch_result_rx: None,
+            selected_tags: vec![],
+            tag_values: vec![],
+            read_result_rx: None,
+            table_state: TableState::default(),
         };
         app.list_state.select(Some(0));
 
@@ -601,6 +611,10 @@ mod tests {
             browse_progress: Arc::new(AtomicUsize::new(0)),
             browse_result_rx: None,
             fetch_result_rx: None,
+            selected_tags: vec![],
+            tag_values: vec![],
+            read_result_rx: None,
+            table_state: TableState::default(),
         };
         app.list_state.select(Some(0));
 
@@ -629,6 +643,10 @@ mod tests {
             browse_progress: Arc::new(AtomicUsize::new(0)),
             browse_result_rx: None,
             fetch_result_rx: None,
+            selected_tags: vec![],
+            tag_values: vec![],
+            read_result_rx: None,
+            table_state: TableState::default(),
         };
         app.list_state.select(Some(0));
 
@@ -910,7 +928,11 @@ mod tests {
 
         assert_eq!(app.current_screen, CurrentScreen::TagList);
         assert!(app.read_result_rx.is_none());
-        assert!(app.messages.last().unwrap().contains("Error reading values"));
+        assert!(app
+            .messages
+            .last()
+            .unwrap()
+            .contains("Error reading values"));
     }
 
     #[test]
@@ -959,4 +981,5 @@ mod tests {
 
         app.select_next(); // Should stay at 1
         assert_eq!(app.selected_index, Some(1));
-    }}
+    }
+}
