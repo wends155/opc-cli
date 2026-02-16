@@ -7,10 +7,10 @@ use std::sync::Arc;
 use tokio::sync::oneshot;
 
 /// Default timeout for OPC operations (server listing and tag browsing).
-const OPC_TIMEOUT_SECS: u64 = 30;
+const OPC_TIMEOUT_SECS: u64 = 300;
 
 /// Maximum tags to retrieve when browsing an OPC server namespace.
-const MAX_BROWSE_TAGS: usize = 5000;
+const MAX_BROWSE_TAGS: usize = 10000;
 
 /// A single tag's read result for display.
 #[derive(Debug, Clone)]
@@ -276,28 +276,49 @@ impl App {
 
         let provider = Arc::clone(&self.opc_provider);
         let progress = Arc::clone(&self.browse_progress);
+        let tags_sink = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let sink_for_task = Arc::clone(&tags_sink);
+
         let (tx, rx) = oneshot::channel();
 
         tokio::spawn(async move {
+            let timeout_duration = std::time::Duration::from_secs(OPC_TIMEOUT_SECS);
             let result = tokio::time::timeout(
-                std::time::Duration::from_secs(OPC_TIMEOUT_SECS),
-                provider.browse_tags(&server, MAX_BROWSE_TAGS, progress),
+                timeout_duration,
+                provider.browse_tags(&server, MAX_BROWSE_TAGS, progress, sink_for_task),
             )
             .await;
 
             let final_result = match result {
                 Ok(inner) => inner,
                 Err(_) => {
-                    tracing::error!(
-                        server = %server,
-                        timeout_secs = OPC_TIMEOUT_SECS,
-                        "Browse tags timed out — server may be hung during DCOM activation or browse walk"
-                    );
-                    Err(anyhow::anyhow!(
-                        "Browse timed out ({}s) for '{}' — check logs for phase details",
-                        OPC_TIMEOUT_SECS,
-                        server
-                    ))
+                    // Timeout occurred. Harvest partial results from sink.
+                    let partial_tags = if let Ok(sink) = tags_sink.lock() {
+                        sink.clone()
+                    } else {
+                        Vec::new()
+                    };
+
+                    if !partial_tags.is_empty() {
+                        tracing::warn!(
+                            server = %server,
+                            count = partial_tags.len(),
+                            timeout_secs = OPC_TIMEOUT_SECS,
+                            "Browse tags timed out; returning partial results"
+                        );
+                        Ok(partial_tags)
+                    } else {
+                        tracing::error!(
+                            server = %server,
+                            timeout_secs = OPC_TIMEOUT_SECS,
+                            "Browse tags timed out with zero tags found"
+                        );
+                        Err(anyhow::anyhow!(
+                            "Browse timed out ({}s) for '{}' with no tags found",
+                            OPC_TIMEOUT_SECS,
+                            server
+                        ))
+                    }
                 }
             };
 
@@ -779,8 +800,8 @@ mod tests {
     async fn test_enter_selected_server_navigation() {
         let mut mock = MockOpcProvider::new();
         mock.expect_browse_tags()
-            .with(eq("S1"), eq(MAX_BROWSE_TAGS), always())
-            .returning(|_, _, _| Ok(vec!["T1".into()]));
+            .with(eq("S1"), eq(MAX_BROWSE_TAGS), always(), always())
+            .returning(|_, _, _, _| Ok(vec!["T1".into()]));
 
         let mut app = App::new(Arc::new(mock));
         app.servers = vec!["S1".into()];

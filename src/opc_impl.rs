@@ -149,6 +149,7 @@ fn browse_recursive(
     tags: &mut Vec<String>,
     max_tags: usize,
     progress: &Arc<AtomicUsize>,
+    tags_sink: &Arc<std::sync::Mutex<Vec<String>>>,
     depth: usize,
 ) -> Result<()> {
     const MAX_DEPTH: usize = 50; // Safety guard against infinite recursion
@@ -196,7 +197,8 @@ fn browse_recursive(
         }
 
         // Recurse
-        let recurse_result = browse_recursive(server, tags, max_tags, progress, depth + 1);
+        let recurse_result =
+            browse_recursive(server, tags, max_tags, progress, tags_sink, depth + 1);
 
         // Always navigate back up, even if recursion failed
         if let Err(e) = server.change_browse_position(OPC_BROWSE_UP, "") {
@@ -247,7 +249,10 @@ fn browse_recursive(
                         browse_name
                     }
                 };
-                tags.push(tag);
+                tags.push(tag.clone());
+                if let Ok(mut sink) = tags_sink.lock() {
+                    sink.push(tag);
+                }
                 progress.fetch_add(1, Ordering::Relaxed);
             }
         }
@@ -337,6 +342,7 @@ impl OpcProvider for OpcDaWrapper {
         server: &str,
         max_tags: usize,
         progress: Arc<AtomicUsize>,
+        tags_sink: Arc<std::sync::Mutex<Vec<String>>>,
     ) -> Result<Vec<String>> {
         let server_name = server.to_string();
         tokio::task::spawn_blocking(move || {
@@ -447,13 +453,16 @@ impl OpcProvider for OpcDaWrapper {
                         }
                         let tag =
                             tag_res.map_err(|e| anyhow::anyhow!("Tag iteration error: {:?}", e))?;
-                        tags.push(tag);
+                        tags.push(tag.clone());
+                        if let Ok(mut sink) = tags_sink.lock() {
+                            sink.push(tag);
+                        }
                         progress.fetch_add(1, Ordering::Relaxed);
                     }
                 } else {
                     // Hierarchical namespace: recursive depth-first walk
                     tracing::debug!("Using hierarchical browse strategy");
-                    browse_recursive(&opc_server, &mut tags, max_tags, &progress, 0)?;
+                    browse_recursive(&opc_server, &mut tags, max_tags, &progress, &tags_sink, 0)?;
                 }
 
                 tracing::info!(

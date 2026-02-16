@@ -25,10 +25,16 @@
 ### 3. OPC / COM Interaction
 *   **Crate**: `opc_da` (Primary), `windows` (Fallback/Low-level)
 *   **Responsibility**: Communicating with Local/Remote OPC Servers.
-*   **Abstraction**: `trait OpcProvider`
+*   **Abstraction**: `trait OpcProvider` (defined in `src/traits.rs`)
     *   Decouples the UI from the specific OPC implementation.
     *   Enables **Testability** via `mockall` (allowing UI development on non-Windows/dev machines).
-    
+    *   **Methods:**
+        | Method | Purpose |
+        | :--- | :--- |
+        | `list_servers(host)` | Enumerate OPC DA servers from the registry |
+        | `browse_tags(server, max_tags, progress, tags_sink)` | Recursively walk the tag namespace; pushes to a shared sink for partial-result harvesting on timeout |
+        | `read_tag_values(server, tag_ids)` | SyncIO read of selected tags, returning value/quality/timestamp |
+
 #### Browse Strategy
 The browse implementation handles both flat and hierarchical OPC DA namespaces:
 1. `query_organization()` detects namespace type (flat vs hierarchical).
@@ -38,11 +44,24 @@ The browse implementation handles both flat and hierarchical OPC DA namespaces:
    - **Leaves second (soft-fail):** Enumerate `OPC_LEAF` items at current position; failures are logged and skipped.
    - **Fully-qualified IDs:** `get_item_id()` converts browse names to item IDs; falls back to browse name if conversion fails.
    - **Iterator bug workaround:** `E_POINTER` (0x80004003) errors from the upstream `opc_da` crate's `StringIterator` are filtered and downgraded to `trace!` level (see [OPC-BUG-001](#opc-bug-001-stringiterator-e_pointer-flood)).
-4. **Triple safety guards:**
-   - `max_tags` hard cap (default 5000) to prevent unbounded collection.
+4. **Safety guards:**
+   - `max_tags` hard cap (default 10000) to prevent unbounded collection.
    - `MAX_DEPTH` (50) to guard against infinite recursion in malformed namespaces.
-   - 30-second `tokio` timeout to abort runaway server enumeration.
+   - **300-second timeout** with graceful partial result harvesting. If tags are discovered before the timeout, the application displays the partial list with a warning instead of an error.
+   - A shared `tags_sink` (`Arc<Mutex<Vec<String>>>`) allows the main thread to harvest tags mid-browse on timeout.
 5. **Non-blocking:** Browse runs as a background `tokio::spawn_blocking` task; progress reported via `Arc<AtomicUsize>` to the Loading screen.
+
+#### TUI Interaction Features
+| Feature | Key(s) | Screens | Behavior |
+| :--- | :--- | :--- | :--- |
+| Navigation | `↑` / `↓` | All lists | Move selection by 1 item |
+| Fast Scroll | `PageUp` / `PageDown` | ServerList, TagList, TagValues | Jump by 20 items (clamped) |
+| Tag Search | `s` | TagList | Enter modal substring search |
+| Search Cycle | `Tab` / `Shift+Tab` | TagList (search mode) | Jump between matches |
+| Toggle Select | `Space` | TagList | Check/uncheck tag for reading |
+| Read Values | `Enter` | TagList | Read selected tags from server |
+| Back | `Esc` | All | Navigate to previous screen |
+
 
 ### 4. Observability
 *   **Crate**: `tracing`, `tracing-subscriber`, `tracing-appender`
@@ -85,7 +104,17 @@ stateDiagram-v2
 
     state "Tag List" as TagList {
         [*] --> NavigatingTags
+        NavigatingTags --> SearchMode : S Key
+        SearchMode --> NavigatingTags : Esc Key
+        NavigatingTags --> ReadingValues : Enter Key
         NavigatingTags --> ServerList : Esc Key
+    }
+
+    TagList --> TagValues : Success (Values Read)
+
+    state "Tag Values" as TagValues {
+        [*] --> ViewingValues
+        ViewingValues --> TagList : Esc Key
     }
 
     Home --> [*] : Esc Key (Quit)
@@ -137,9 +166,10 @@ The project prioritizes a **Test-Driven Architecture** where the UI and business
 ### 1. Unit Testing (Mock-Based)
 *   **Mechanism**: Uses the `mockall` crate to provide a `MockOpcProvider` during tests.
 *   **Decoupling**: By abstracting OPC interactions behind the `OpcProvider` trait, the TUI and state transition logic can be verified on any platform (Linux/macOS/Windows) without a physical OPC server.
-*   **Coverage**:
-    *   **UI Logic (`src/app.rs`)**: Extensive tests for state transitions (e.g., `Home` -> `Loading` -> `ServerList`), navigation (next/prev wrapping), message ring-buffer logic, and background task result polling.
-    *   **Input Handling (`src/main.rs`)**: Verification of key event processing across different screens, ensuring global shortcuts (Esc/Quit) behave consistently.
+*   **Coverage** (37 tests as of 2026-02-16):
+    *   **UI Logic (`src/app.rs`)**: State transitions, navigation (next/prev/paging), search, tag selection, message ring-buffer, graceful timeout handling, and background task result polling.
+    *   **Input Handling (`src/main.rs`)**: Key event processing across all screens, including search mode keys.
+    *   **OPC Helpers (`src/opc_impl.rs`)**: HRESULT hint mapping, GUID filtering, FILETIME conversion.
 
 ### 2. Integration & Manual Testing
 *   **OPC Implementation (`src/opc_impl.rs`)**: Due to its direct reliance on the Windows `opc_da` crate and COM/DCOM registry, this layer is primarily verified through manual end-to-end testing against real OPC servers (e.g., Matrikon, Kepware, or local simulation servers).

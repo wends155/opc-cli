@@ -22,6 +22,7 @@ pub trait OpcProvider: Send + Sync {
         server: &str,
         max_tags: usize,
         progress: Arc<AtomicUsize>,
+        tags_sink: Arc<std::sync::Mutex<Vec<String>>>,
     ) -> Result<Vec<String>>;
 
     /// Read current values for the given tag item IDs.

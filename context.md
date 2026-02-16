@@ -9,6 +9,17 @@
     - Added 3 new unit tests in `src/opc_impl.rs`.
 - **Outcome**: 34 tests passed. Tag ID paths no longer truncated. Timestamps are human-readable.
 
+### [2026-02-16] Tag Browser Navigation & Search
+- **Request**: Raise max tags to 5000, add Page Up/Down, add search feature.
+- **Action**:
+    - Raised `MAX_BROWSE_TAGS` from 500 to 5000.
+    - Implemented `page_down`/`page_up` (20-item jumps) for fast scrolling.
+    - Added inline search (`s`) with substrings, result cycling (`Tab`), and Spacebar toggle.
+    - Updated `ui.rs` with search bar and match highlighting.
+    - Added 4 new unit tests for navigation and search.
+- **Outcome**: 37 tests passed. Large namespaces are now easily navigable and searchable.
+- **Graceful Timeout**: Increased timeout to 300s (5 minutes) and implemented partial results harvesting on timeout.
+
 ---
 
 ## History & Decisions
@@ -106,3 +117,11 @@ Through enriched observability, we identified the root causes of server connecti
 - Linker: `C:\bin\portable-msvc\msvc\VC\Tools\MSVC\14.50.35717\bin\Hostx64\x64\link.exe`
 - Libs: `...\lib\x64` + `Windows Kits\10\Lib\10.0.26100.0\{ucrt,um}\x64`
 - Includes: `...\include` + `Windows Kits\10\Include\10.0.26100.0\{ucrt,um,shared}`
+
+### [2026-02-16] Zero Tags Fix & Scale Improvements
+- **Request**: Fix "0 tags" regression, increase tag limit, and audit logs.
+- **Action**:
+    - **Bug Fix**: Restored correct `if-flat / else-hierarchical` branching in `opc_impl.rs`.
+    - **Scale**: Increased `MAX_BROWSE_TAGS` to **10,000**.
+    - **Audit**: Confirmed system health via `log_audit_report.md` (no recent errors).
+- **Outcome**: 37 tests passed. Hierarchical browsing restored. Confirmed stable operations against `ABB.AC800MC`.
