@@ -31,3 +31,6 @@
 **/*.rs.bk
 check_*.txt
 test_*.txt
+
+# Project Governance (Local Only)
+GEMINI.md
