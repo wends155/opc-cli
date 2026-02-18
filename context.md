@@ -1,5 +1,15 @@
 # 🧠 Project Context: opc-cli
 
+### [2026-02-18] Documentation Alignment (opc-da-client)
+- **Request**: Create `spec.md` and update `architecture.md` for the library crate.
+- **Action**:
+    - Created `opc-da-client/spec.md` as the Behavioral Source of Truth.
+    - Rewrote `opc-da-client/architecture.md` to follow the 11-section mandatory template from `GEMINI.md`.
+    - Added Mermaid architecture diagram to `architecture.md`.
+    - Integrated library-specific toolchain and observability details.
+- **Outcome**: Fixed the documentation debt for the library. Both workspace crates now comply with the project-wide governance rules in `GEMINI.md`.
+
+
 ### [2026-02-16] Library Extraction & Workspace Restructuring
 - **Request**: Extract OPC DA interaction code into a standalone, backend-agnostic library.
 - **Action**: 

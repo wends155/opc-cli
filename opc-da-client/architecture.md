@@ -1,38 +1,225 @@
 # Architecture: opc-da-client
 
-## Overview
-`opc-da-client` is a backend-agnostic Rust library for interacting with OPC DA (Data Access) servers. It provides an async, trait-based API that abstracts away the complexities of Windows COM/DCOM and the underlying OPC implementation.
+## 1. Project Overview
 
-## Core Design
-The library follows a layered architecture to ensure stability for consumers while allowing flexibility for backend implementations.
+| Field | Value |
+| :--- | :--- |
+| **Crate** | `opc-da-client` |
+| **Version** | `0.0.2` |
+| **Purpose** | Backend-agnostic Rust library for interacting with OPC DA (Data Access) servers |
+| **Spec** | [spec.md](file:///c:/Users/WSALIGAN/code/opc-cli/opc-da-client/spec.md) |
 
-### Stable Public API
-- **`OpcProvider` Trait**: The primary interface for all OPC operations (listing servers, browsing tags, reading values).
-- **`TagValue` Struct**: A standard data structure for representing tag read results.
-- **`friendly_com_hint()`**: A utility to map cryptic COM HRESULTs to human-readable strings.
+The library provides an async, trait-based API that abstracts away the complexities of Windows COM/DCOM and the underlying OPC implementation. It follows a layered architecture: a **stable public API** (trait + data types) and **feature-gated backend implementations** that can be swapped without affecting consumer code.
 
-### Backend Architecture
-Backend implementations are gated behind feature flags. This allows replacing the underlying OPC stack (e.g., swapping the `opc_da` crate for direct `windows-rs` calls) without affecting consumer code.
+---
 
-- **`opc-da-backend` (Default)**: Uses the `opc_da` crate.
-- **`test-support`**: Provides a `MockOpcProvider` using the `mockall` crate for independent testability of consumers.
+## 2. Language & Runtime
 
-## COM Threading Model
-OPC DA relies on Windows COM, which requires per-thread initialization. 
+| Aspect | Value |
+| :--- | :--- |
+| Language | Rust (2024 Edition) |
+| Async Runtime | `tokio` (features: `rt`, `sync`) |
+| Platform | **Windows-only** — COM/DCOM is a Windows technology |
+| Trait Async | `async-trait` crate |
+
+---
+
+## 3. Project Layout
+
+```
+opc-da-client/
+├── Cargo.toml              # Crate manifest with feature flags
+├── README.md               # Crate documentation for crates.io
+├── architecture.md         # This file — Technical Source of Truth
+├── spec.md                 # Behavioral contracts — Behavioral Source of Truth
+└── src/
+    ├── lib.rs              # Crate root: module declarations, public re-exports
+    ├── provider.rs         # OpcProvider trait + TagValue struct
+    ├── helpers.rs          # COM utilities: friendly_com_hint, variant/quality/time converters
+    └── backend/
+        ├── mod.rs          # Backend module gate (feature-conditional)
+        └── opc_da.rs       # OpcDaWrapper: concrete OpcProvider using opc_da crate
+```
+
+---
+
+## 4. Toolchain
+
+All commands are run from the **workspace root** (`opc-cli/`).
+
+| Tool | Command |
+| :--- | :--- |
+| Formatter | `cargo fmt --all -- --check` |
+| Linter | `cargo clippy --workspace -- -D warnings` |
+| Tests | `cargo test --workspace` |
+| Verification Script | `powershell -File scripts/verify.ps1` |
+| Documentation | `cargo doc --no-deps --package opc-da-client` |
+
+The verification script ([verify.ps1](file:///c:/Users/WSALIGAN/code/opc-cli/scripts/verify.ps1)) runs all three gates sequentially and prepends the portable MSVC toolchain to `PATH`.
+
+---
+
+## 5. Error Handling Strategy
+
+| Pattern | Details |
+| :--- | :--- |
+| Return type | `anyhow::Result<T>` for all fallible functions |
+| Context wrapping | `.context()` / `.with_context()` at every propagation layer |
+| Logging before propagation | `map_err(\|e\| { tracing::error!(...); e })` **before** `.context()` to preserve raw HRESULTs in logs |
+| User-facing hints | `friendly_com_hint()` maps known HRESULT codes to actionable strings |
+| Prohibited | `unwrap()`, `expect()`, and raw panics in production code |
+
+---
+
+## 6. Observability & Logging
+
+| Aspect | Details |
+| :--- | :--- |
+| Framework | `tracing` crate |
+| Output | File-based (TUI captures stdout/stderr) — see parent `opc-cli` for subscriber setup |
+| Timing | `std::time::Instant` wrapping major COM calls (`create_server`, `query_organization`, `browse`); `elapsed_ms` logged on success |
+| Noise filter | `E_POINTER` (`0x80004003`) errors from `StringIterator` are downgraded to `trace!` level via `is_known_iterator_bug()` |
+
+### Log Level Usage
+
+| Level | Usage |
+| :--- | :--- |
+| `error!` | COM failures, browse position corruption |
+| `warn!` | Skipped branches/leaves, max depth reached |
+| `info!` | High-level milestones (server connected, browse complete) |
+| `debug!` | Internal state, GUID resolution details |
+| `trace!` | Known upstream bugs, iterator noise |
+
+---
+
+## 7. Testing Strategy
+
+### Unit Tests
+- **Location**: Co-located `#[cfg(test)] mod tests` in `helpers.rs`.
+- **Coverage**: `friendly_com_hint` mappings, `filetime_to_string` edge cases.
+
+### Mock-Based Tests
+- **Mechanism**: `mockall` crate, gated behind `test-support` feature.
+- **Export**: `MockOpcProvider` — allows downstream consumers (`opc-cli`) to test UI and state logic without a live OPC server on any OS.
+
+### Doc Tests
+- `friendly_com_hint()` has a runnable doctest example in `helpers.rs`.
+
+### Integration / Manual
+- Tested against real OPC servers (Matrikon, ABB, Kepware) on Windows.
+- See [spec.md § Required Test Coverage](file:///c:/Users/WSALIGAN/code/opc-cli/opc-da-client/spec.md) for the full checklist.
+
+---
+
+## 8. Documentation Conventions
+
+| Convention | Standard |
+| :--- | :--- |
+| Public items | Rustdoc `///` with `# Errors` section on all fallible functions |
+| Module-level | `//!` at the top of each file |
+| Tool | `cargo doc --no-deps` |
+| Examples | Runnable doctests for stable public API functions |
+
+---
+
+## 9. Dependencies & External Systems
+
+### Core Dependencies (always included)
+
+| Crate | Version | Purpose |
+| :--- | :--- | :--- |
+| `anyhow` | 1.0.95 | Error handling with context chains |
+| `async-trait` | 0.1.86 | Async methods in traits |
+| `chrono` | 0.4.43 | FILETIME → local time conversion |
+| `tokio` | 1.43.0 | Async runtime (`rt`, `sync` features) |
+| `tracing` | 0.1.41 | Structured logging |
+| `windows` | 0.61.3 | Win32 COM/DCOM/Foundation/Variant APIs |
+
+### Backend: `opc-da-backend` (default feature)
+
+| Crate | Version | Purpose |
+| :--- | :--- | :--- |
+| `opc_da` | 0.3.1 | OPC DA client API (COM wrapper) |
+| `opc_da_bindings` | 0.3.1 | Raw OPC DA type bindings |
+
+### Test Support: `test-support` (optional feature)
+
+| Crate | Version | Purpose |
+| :--- | :--- | :--- |
+| `mockall` | 0.13.1 | Auto-generate `MockOpcProvider` |
+
+---
+
+## 10. Architecture Diagrams
+
+### Layered Architecture
+
+```mermaid
+graph TD
+    subgraph "Public API (Stable)"
+        Trait["trait OpcProvider"]
+        TagValue["struct TagValue"]
+        Hint["fn friendly_com_hint()"]
+    end
+
+    subgraph "Backend (Feature-Gated)"
+        Wrapper["OpcDaWrapper"]
+        Browse["browse_recursive()"]
+    end
+
+    subgraph "Upstream Dependencies"
+        OpcDa["opc_da crate v0.3.1"]
+        WinCOM["Windows COM/DCOM"]
+    end
+
+    Trait --> Wrapper
+    Wrapper --> Browse
+    Wrapper --> OpcDa
+    OpcDa --> WinCOM
+    Wrapper -.-> Hint
+```
+
+### COM Threading Model
+
+OPC DA relies on Windows COM, which requires per-thread initialization.
 The `OpcDaWrapper` implementation handles this by:
 1. Using `tokio::task::spawn_blocking` to move COM work to a dedicated thread pool.
 2. Initializing COM (`CoInitializeEx` with `COINIT_MULTITHREADED`) at the start of each task.
-3. Uninitializing COM (`CoUninitialize`) before the task returns to the pool.
+3. Uninitializing COM (`CoUninitialize`) before the task returns to the pool — **regardless of success or failure**.
 
-## Browse Strategy
-The library handles both flat and hierarchical OPC namespaces:
-- **Flat Namespaces**: Leaves are enumerated directly from the root.
-- **Hierarchical Namespaces**: A recursive depth-first walk is performed using `change_browse_position`.
-- **Safety**: A maximum recursion depth (default 50) prevents infinite loops in circular namespaces.
+### Browse Strategy
 
-## Known Upstream Bugs & Workarounds
-- **OPC-BUG-001 (E_POINTER Flood)**: The `opc_da` crate's `StringIterator` has a known bug where it produces 16 phantom `E_POINTER` errors per iterator. The library detects and silences these specific errors in logs to avoid spam.
-- **DCOM Filter**: The `Client` implementation intentionally does not filter for `CATID_OPCDAServer10` or `20` to avoid missing servers with incomplete registry metadata.
+The library handles both flat and hierarchical OPC DA namespaces:
 
-## Platform Constraints
-This library is **Windows-only** as it depends on Windows COM/DCOM for OPC DA interaction.
+1. `query_organization()` detects namespace type (flat vs hierarchical).
+2. **Flat:** Enumerate all `OPC_LEAF` items at root.
+3. **Hierarchical:** Recursive depth-first walk via `browse_recursive()`:
+   - **Branches first:** Enumerate `OPC_BRANCH` items, navigate down via `change_browse_position(DOWN)`, recurse, then **always** navigate back `UP` — even if recursion fails — to prevent position corruption.
+   - **Leaves second (soft-fail):** Enumerate `OPC_LEAF` items at current position; failures are logged and skipped.
+   - **Fully-qualified IDs:** `get_item_id()` converts browse names to item IDs; falls back to browse name if conversion fails.
+   - **Iterator bug workaround:** `E_POINTER` errors from `StringIterator` are filtered to `trace!` level (see [OPC-BUG-001](#opc-bug-001)).
+4. **Safety guards:**
+   - `max_tags` hard cap (default 10,000) to prevent unbounded collection.
+   - `MAX_DEPTH` (50) to guard against infinite recursion in malformed namespaces.
+   - A shared `tags_sink` (`Arc<Mutex<Vec<String>>>`) allows the caller to harvest tags mid-browse on timeout.
+   - `progress` (`Arc<AtomicUsize>`) reports discovered tag count in real-time.
+
+---
+
+## 11. Known Constraints & Bugs
+
+### Platform Constraint
+
+This library is **Windows-only** as it depends on Windows COM/DCOM for OPC DA interaction. It cannot be compiled or executed on Linux or macOS.
+
+### OPC-BUG-001
+
+**E_POINTER Flood from `StringIterator`**
+
+The `opc_da` crate's `StringIterator` has a known bug where it produces 16 phantom `E_POINTER` (`0x80004003`) errors per iterator instance (index starts at 0 with null-pointer cache).
+
+**Workaround:** `is_known_iterator_bug()` detects these specific errors and the library downgrades them to `trace!` log level. `friendly_com_hint()` also maps this HRESULT to an explanatory message for end users.
+
+### DCOM Filter Omission (Intentional)
+
+The `Client` implementation intentionally does **not** filter for `CATID_OPCDAServer10` or `CATID_OPCDAServer20` to avoid missing servers with incomplete registry metadata. This may result in non-OPC-DA GUIDs appearing in enumeration, which are filtered out by the `guid_to_progid` conversion step.
