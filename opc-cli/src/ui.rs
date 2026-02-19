@@ -30,6 +30,11 @@ pub fn render(f: &mut Frame, app: &mut App) {
         CurrentScreen::ServerList => render_server_list(f, app, main_area),
         CurrentScreen::TagList => render_tag_list(f, app, main_area),
         CurrentScreen::TagValues => render_tag_values(f, app, main_area),
+        CurrentScreen::WriteInput => {
+            // Render TagValues in the background, then overlay the input popup
+            render_tag_values(f, app, main_area);
+            render_write_input(f, app, main_area);
+        }
         CurrentScreen::Loading => {
             // Render the last screen in the background if it makes sense,
             // but for now let's just show the popup.
@@ -55,7 +60,8 @@ fn render_help(f: &mut Frame, app: &App, area: ratatui::layout::Rect) {
                 "↑/↓: Nav | PgDn/PgUp: Page | Space: Select | s: Search | Enter: Read | Esc: Back | q: Quit"
             }
         }
-        CurrentScreen::TagValues => "↑/↓: Nav | PgDn/PgUp: Page | Esc: Back | q: Quit",
+        CurrentScreen::TagValues => "↑/↓: Nav | PgDn/PgUp: Page | w: Write | Esc: Back | q: Quit",
+        CurrentScreen::WriteInput => "Enter: Submit | Esc: Cancel | Type value",
         CurrentScreen::Loading => "Please wait...",
         CurrentScreen::Exiting => "Exiting...",
     };
@@ -239,19 +245,40 @@ fn render_tag_values(f: &mut Frame, app: &mut App, area: ratatui::layout::Rect) 
 fn render_status_bar(f: &mut Frame, app: &App, area: Rect) {
     let display_messages: Vec<Line> = app
         .messages
-        .last()
+        .iter()
+        .rev()
+        .take(2)
+        .rev()
         .map(|m| {
-            vec![Line::from(vec![
+            Line::from(vec![
                 Span::styled("- ", Style::default().fg(Color::DarkGray)),
                 Span::raw(m),
-            ])]
+            ])
         })
-        .unwrap_or_default();
+        .collect();
 
     let paragraph = Paragraph::new(display_messages)
         .block(Block::default().borders(Borders::ALL).title(" Status Log "))
         .wrap(Wrap { trim: true });
     f.render_widget(paragraph, area);
+}
+
+fn render_write_input(f: &mut Frame, app: &App, area: Rect) {
+    let tag_id = app.write_tag_id.as_deref().unwrap_or("Unknown");
+    let display_text = format!("Tag: {}\nValue: {}_", tag_id, app.write_value_input);
+
+    let popup_block = Block::default()
+        .title(" Write Tag Value ")
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::Yellow));
+
+    let input = Paragraph::new(display_text)
+        .block(popup_block)
+        .wrap(Wrap { trim: true });
+
+    let area = centered_rect(60, 30, area);
+    f.render_widget(Clear, area);
+    f.render_widget(input, area);
 }
 
 fn render_loading_popup(f: &mut Frame, app: &App, area: Rect) {

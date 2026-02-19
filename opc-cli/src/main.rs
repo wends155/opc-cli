@@ -84,6 +84,7 @@ async fn run_app<B: ratatui::backend::Backend>(
         app.poll_fetch_result();
         app.poll_browse_result();
         app.poll_read_result();
+        app.poll_write_result();
         app.maybe_auto_refresh();
 
         terminal.draw(|f| ui::render(f, app))?;
@@ -173,8 +174,18 @@ fn handle_key_event(app: &mut App, key: event::KeyEvent) {
             KeyCode::PageUp => app.page_up(),
             KeyCode::Down => app.select_next(),
             KeyCode::Up => app.select_prev(),
+            KeyCode::Char('w') | KeyCode::Char('W') => app.enter_write_mode(),
             KeyCode::Char('q') | KeyCode::Char('Q') => {
                 app.current_screen = CurrentScreen::Exiting;
+            }
+            _ => {}
+        },
+        CurrentScreen::WriteInput => match key.code {
+            KeyCode::Enter => app.start_write_value(),
+            KeyCode::Esc => app.go_back(),
+            KeyCode::Char(c) => app.write_value_input.push(c),
+            KeyCode::Backspace => {
+                app.write_value_input.pop();
             }
             _ => {}
         },

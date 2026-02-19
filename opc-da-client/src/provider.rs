@@ -21,6 +21,30 @@ pub struct TagValue {
     pub timestamp: String,
 }
 
+/// Typed value to write to an OPC DA tag.
+#[derive(Debug, Clone, PartialEq)]
+pub enum OpcValue {
+    /// String value (VT_BSTR) — server may coerce to target type.
+    String(String),
+    /// 32-bit integer (VT_I4).
+    Int(i32),
+    /// 64-bit float (VT_R8).
+    Float(f64),
+    /// Boolean (VT_BOOL).
+    Bool(bool),
+}
+
+/// Result of a single write operation.
+#[derive(Debug, Clone, PartialEq)]
+pub struct WriteResult {
+    /// The tag that was written to.
+    pub tag_id: String,
+    /// Whether the write succeeded.
+    pub success: bool,
+    /// Error message if the write failed, `None` on success.
+    pub error: Option<String>,
+}
+
 /// Async trait for OPC DA operations.
 ///
 /// This is the stable public API. Backend implementations provide
@@ -54,4 +78,16 @@ pub trait OpcProvider: Send + Sync {
     /// Returns `Err` if the server connection fails, no items can be added
     /// to the OPC group, or the synchronous read operation fails.
     async fn read_tag_values(&self, server: &str, tag_ids: Vec<String>) -> Result<Vec<TagValue>>;
+
+    /// Write a value to a single OPC DA tag.
+    ///
+    /// # Errors
+    /// Returns `Err` if the server connection fails, the tag cannot be added
+    /// to the OPC group, or the synchronous write operation fails.
+    async fn write_tag_value(
+        &self,
+        server: &str,
+        tag_id: &str,
+        value: OpcValue,
+    ) -> Result<WriteResult>;
 }

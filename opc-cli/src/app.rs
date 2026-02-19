@@ -1,5 +1,5 @@
 use anyhow::Result;
-use opc_da_client::{OpcProvider, TagValue, friendly_com_hint};
+use opc_da_client::{OpcProvider, OpcValue, TagValue, WriteResult, friendly_com_hint};
 use ratatui::widgets::{ListState, TableState}; // Added TableState
 use std::sync::Arc;
 use std::sync::atomic::AtomicUsize;
@@ -18,6 +18,7 @@ pub enum CurrentScreen {
     ServerList,
     TagList,
     TagValues,
+    WriteInput,
     Exiting,
 }
 
@@ -51,6 +52,15 @@ pub struct App {
     pub search_matches: Vec<usize>,
     /// Current position within `search_matches` (cycles).
     pub search_match_index: usize,
+
+    /// The tag currently being edited for writing.
+    pub write_tag_id: Option<String>,
+    /// User-entered value string for writing.
+    pub write_value_input: String,
+    /// Receiver for background write result.
+    pub write_result_rx: Option<oneshot::Receiver<Result<WriteResult>>>,
+    /// The server ProgID that was used for the current tag browse.
+    pub browsed_server: Option<String>,
 }
 
 impl App {
@@ -78,6 +88,11 @@ impl App {
             search_query: String::new(),
             search_matches: Vec::new(),
             search_match_index: 0,
+
+            write_tag_id: None,
+            write_value_input: String::new(),
+            write_result_rx: None,
+            browsed_server: None,
         }
     }
 
@@ -179,6 +194,9 @@ impl App {
                 let new_idx = idx + 1;
                 self.selected_index = Some(new_idx);
                 self.list_state.select(Some(new_idx));
+                if self.current_screen == CurrentScreen::TagValues {
+                    self.table_state.select(Some(new_idx));
+                }
             }
         } else {
             self.selected_index = Some(0);
@@ -193,6 +211,9 @@ impl App {
             let new_idx = idx - 1;
             self.selected_index = Some(new_idx);
             self.list_state.select(Some(new_idx));
+            if self.current_screen == CurrentScreen::TagValues {
+                self.table_state.select(Some(new_idx));
+            }
         }
     }
 
@@ -259,6 +280,8 @@ impl App {
             Some(s) => s.clone(),
             None => return,
         };
+
+        self.browsed_server = Some(server.clone());
 
         self.current_screen = CurrentScreen::Loading;
         self.browse_progress = Arc::new(AtomicUsize::new(0));
@@ -370,6 +393,11 @@ impl App {
             && idx < self.selected_tags.len()
         {
             self.selected_tags[idx] = !self.selected_tags[idx];
+            tracing::debug!(
+                tag = %self.tags[idx],
+                selected = self.selected_tags[idx],
+                "toggle_tag_selection"
+            );
         }
     }
 
@@ -394,25 +422,16 @@ impl App {
             .collect();
 
         if selected_tag_ids.is_empty() {
+            tracing::debug!("start_read_values: no tags selected");
             self.add_message("No tags selected. Press Space to select tags.".into());
             return;
         }
 
-        let server = match self.selected_index.and_then(|_| {
-            self.servers
-                .iter()
-                .find(|s| self.tags.iter().any(|t| t.contains(*s)))
-        }) {
+        let server = match &self.browsed_server {
             Some(s) => s.clone(),
             None => {
-                // Fallback: get from the currently browsed server
-                match self.servers.first() {
-                    Some(s) => s.clone(),
-                    None => {
-                        self.add_message("No server available for reading".into());
-                        return;
-                    }
-                }
+                self.add_message("No server context — please browse tags first".into());
+                return;
             }
         };
 
@@ -420,6 +439,12 @@ impl App {
         self.refresh_server = Some(server.clone());
         self.refresh_tag_ids = selected_tag_ids.clone();
 
+        tracing::info!(
+            server = %server,
+            count = selected_tag_ids.len(),
+            tags = ?selected_tag_ids,
+            "start_read_values: sending tags to backend"
+        );
         self.current_screen = CurrentScreen::Loading;
         self.add_message(format!("Reading {} tag values...", selected_tag_ids.len()));
 
@@ -455,12 +480,34 @@ impl App {
                     self.current_screen = CurrentScreen::TagValues;
                     if self.tag_values.is_empty() {
                         self.selected_index = None;
-                        self.list_state.select(None);
+                        self.table_state.select(None);
+                    } else if let Some(idx) = self.selected_index {
+                        // Preserve cursor position, clamping to new list bounds
+                        let clamped = idx.min(self.tag_values.len() - 1);
+                        self.selected_index = Some(clamped);
+                        self.table_state.select(Some(clamped));
                     } else {
                         self.selected_index = Some(0);
-                        self.list_state.select(Some(0));
+                        self.table_state.select(Some(0));
                     }
-                    self.add_message(format!("Read {} tag values", self.tag_values.len()));
+
+                    // Check for per-item errors and push single summary to status log
+                    let error_count = self
+                        .tag_values
+                        .iter()
+                        .filter(|tv| tv.value == "Error")
+                        .count();
+
+                    if error_count > 0 {
+                        self.add_message(format!(
+                            "Read {} tag values (⚠ {} errors)",
+                            self.tag_values.len(),
+                            error_count
+                        ));
+                    } else {
+                        self.add_message(format!("Read {} tag values", self.tag_values.len()));
+                    }
+
                     self.last_read_time = Some(std::time::Instant::now());
                     self.read_result_rx = None;
                 }
@@ -485,6 +532,127 @@ impl App {
                     );
                     self.add_message("Read task terminated unexpectedly".into());
                     self.read_result_rx = None;
+                }
+            }
+        }
+    }
+
+    /// Enter write mode for a tag.
+    ///
+    /// Triggered from TagValues. If only one tag is displayed, it is auto-selected.
+    /// If multiple are displayed, the currently highlighted row is used.
+    pub fn enter_write_mode(&mut self) {
+        if self.current_screen != CurrentScreen::TagValues {
+            return;
+        }
+
+        let tag_id = if self.tag_values.len() == 1 {
+            // Auto-select the only tag
+            Some(self.tag_values[0].tag_id.clone())
+        } else if let Some(idx) = self.table_state.selected() {
+            // Use the highlighted row
+            self.tag_values.get(idx).map(|tv| tv.tag_id.clone())
+        } else {
+            None
+        };
+
+        if let Some(id) = tag_id {
+            tracing::debug!(tag_id = %id, "enter_write_mode: entering write mode for tag");
+            self.write_tag_id = Some(id);
+            self.write_value_input.clear();
+            self.current_screen = CurrentScreen::WriteInput;
+        } else {
+            tracing::debug!("enter_write_mode: no tag selected");
+            self.add_message("No tag selected to write.".into());
+        }
+    }
+
+    /// Start writing a value to the selected tag.
+    pub fn start_write_value(&mut self) {
+        let tag_id = match &self.write_tag_id {
+            Some(t) => t.clone(),
+            None => return,
+        };
+        let value_str = self.write_value_input.trim().to_string();
+        if value_str.is_empty() {
+            self.add_message("Value cannot be empty.".into());
+            return;
+        }
+
+        // Parse the value string into OpcValue (try int -> float -> bool -> string)
+        let opc_value = parse_opc_value(&value_str);
+
+        tracing::info!(tag = %tag_id, value = %value_str, parsed_type = ?opc_value, "start_write_value: initiating write");
+
+        let server = match &self.refresh_server {
+            Some(s) => s.clone(),
+            None => {
+                self.add_message("No server context for write.".into());
+                return;
+            }
+        };
+
+        self.current_screen = CurrentScreen::Loading;
+        self.add_message(format!("Writing '{}' to {}...", value_str, tag_id));
+
+        let provider = Arc::clone(&self.opc_provider);
+        let (tx, rx) = oneshot::channel();
+
+        // Use a consistent timeout
+        const OPC_TIMEOUT_SECS: u64 = 10;
+
+        tokio::spawn(async move {
+            let result = tokio::time::timeout(
+                std::time::Duration::from_secs(OPC_TIMEOUT_SECS),
+                provider.write_tag_value(&server, &tag_id, opc_value),
+            )
+            .await;
+
+            let final_result = match result {
+                Ok(inner) => inner,
+                Err(_) => {
+                    tracing::error!("Write tag value timed out ({}s)", OPC_TIMEOUT_SECS);
+                    Err(anyhow::anyhow!("Write timed out ({}s)", OPC_TIMEOUT_SECS))
+                }
+            };
+            let _ = tx.send(final_result);
+        });
+
+        self.write_result_rx = Some(rx);
+    }
+
+    /// Poll for the result of the background write operation.
+    pub fn poll_write_result(&mut self) {
+        if let Some(rx) = &mut self.write_result_rx {
+            match rx.try_recv() {
+                Ok(Ok(result)) => {
+                    if result.success {
+                        tracing::info!(tag = %result.tag_id, "poll_write_result: write succeeded");
+                        self.add_message(format!("✓ Write to '{}' succeeded", result.tag_id));
+                    } else {
+                        let err_msg = result.error.unwrap_or_default();
+                        self.add_message(format!(
+                            "✗ Write to '{}' failed: {}",
+                            result.tag_id, err_msg
+                        ));
+                    }
+                    self.current_screen = CurrentScreen::TagValues;
+                    self.write_result_rx = None;
+                    // Trigger a refresh to show the new value
+                    self.start_read_values();
+                }
+                Ok(Err(e)) => {
+                    tracing::error!(error = %e, "Write tag values failed");
+                    self.add_message(format!("Write error: {:#}", e));
+                    self.current_screen = CurrentScreen::TagValues;
+                    self.write_result_rx = None;
+                }
+                Err(oneshot::error::TryRecvError::Empty) => {}
+                Err(oneshot::error::TryRecvError::Closed) => {
+                    self.current_screen = CurrentScreen::TagValues;
+                    tracing::error!("Write background task terminated unexpectedly");
+                    self.add_message("Write task terminated unexpectedly".into());
+                    self.write_result_rx = None;
                 }
             }
         }
@@ -649,9 +817,36 @@ impl App {
                     self.list_state.select(None);
                 }
             }
+            CurrentScreen::WriteInput => {
+                self.current_screen = CurrentScreen::TagValues;
+                self.write_tag_id = None;
+                self.write_value_input.clear();
+            }
             _ => {}
         }
     }
+}
+
+/// Helper to parse a user string into a typed [`OpcValue`].
+fn parse_opc_value(s: &str) -> OpcValue {
+    // Try integer first
+    if let Ok(i) = s.parse::<i32>() {
+        return OpcValue::Int(i);
+    }
+    // Then float
+    if let Ok(f) = s.parse::<f64>() {
+        return OpcValue::Float(f);
+    }
+    // Then boolean
+    match s.to_lowercase().as_str() {
+        "true" | "1" => return OpcValue::Bool(true),
+        "false" | "0" => return OpcValue::Bool(false),
+        _ => {}
+    }
+    // Default to string
+    let result = OpcValue::String(s.to_string());
+    tracing::debug!(input = %s, parsed = ?result, "parse_opc_value: detected type");
+    result
 }
 
 #[cfg(test)]
@@ -1059,6 +1254,43 @@ mod tests {
 
         assert_eq!(app.current_screen, CurrentScreen::ServerList);
         assert!(app.read_result_rx.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_start_read_values_success() {
+        use mockall::predicate::eq;
+        let mut mock = MockOpcProvider::new();
+        mock.expect_read_tag_values()
+            .with(eq("TestServer"), eq(vec!["Tag1".to_string()]))
+            .returning(|_, _| Ok(vec![]));
+
+        let mut app = App::new(Arc::new(mock));
+        app.current_screen = CurrentScreen::TagList;
+        app.tags = vec!["Tag1".into()];
+        app.selected_tags = vec![true];
+        app.browsed_server = Some("TestServer".into());
+
+        app.start_read_values();
+
+        assert_eq!(app.current_screen, CurrentScreen::Loading);
+        assert!(app.read_result_rx.is_some());
+        assert_eq!(app.refresh_server, Some("TestServer".into()));
+    }
+
+    #[test]
+    fn test_start_read_values_no_browsed_server() {
+        let mock = MockOpcProvider::new();
+        let mut app = App::new(Arc::new(mock));
+        app.current_screen = CurrentScreen::TagList;
+        app.tags = vec!["Tag1".into()];
+        app.selected_tags = vec![true];
+        app.browsed_server = None; // Simulate missing context
+
+        app.start_read_values();
+
+        assert_eq!(app.current_screen, CurrentScreen::TagList); // Should not transition
+        assert!(app.read_result_rx.is_none());
+        assert!(app.messages.last().unwrap().contains("No server context"));
     }
 
     #[test]

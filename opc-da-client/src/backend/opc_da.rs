@@ -1,8 +1,8 @@
 use crate::helpers::{
     filetime_to_string, friendly_com_hint, guid_to_progid, is_known_iterator_bug,
-    quality_to_string, variant_to_string,
+    opc_value_to_variant, quality_to_string, variant_to_string,
 };
-use crate::provider::{OpcProvider, TagValue};
+use crate::provider::{OpcProvider, OpcValue, TagValue, WriteResult};
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 use opc_da::client::v2::Client;
@@ -116,8 +116,22 @@ fn browse_recursive(
             };
 
             let tag = match server.get_item_id(&browse_name) {
-                Ok(item_id) => item_id,
-                Err(_) => browse_name,
+                Ok(item_id) => {
+                    tracing::debug!(
+                        browse_name = %browse_name,
+                        item_id = %item_id,
+                        "get_item_id resolved"
+                    );
+                    item_id
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        browse_name = %browse_name,
+                        error = ?e,
+                        "get_item_id failed, using browse name as fallback"
+                    );
+                    browse_name
+                }
             };
             tags.push(tag.clone());
             if let Ok(mut sink) = tags_sink.lock() {
@@ -255,22 +269,25 @@ impl OpcProvider for OpcDaWrapper {
                     &mut server_handle,
                 )?;
 
-                let item_defs: Vec<tagOPCITEMDEF> = tag_ids
+                // SAFETY: item_id_wides must outlive item_defs because
+                // tagOPCITEMDEF.szItemID holds a raw pointer into each Vec.
+                let item_id_wides: Vec<Vec<u16>> = tag_ids
+                    .iter()
+                    .map(|tag_id| tag_id.encode_utf16().chain(std::iter::once(0)).collect())
+                    .collect();
+
+                let item_defs: Vec<tagOPCITEMDEF> = item_id_wides
                     .iter()
                     .enumerate()
-                    .map(|(idx, tag_id)| {
-                        let item_id_wide: Vec<u16> =
-                            tag_id.encode_utf16().chain(std::iter::once(0)).collect();
-                        tagOPCITEMDEF {
-                            szAccessPath: windows::core::PWSTR::null(),
-                            szItemID: windows::core::PWSTR(item_id_wide.as_ptr() as *mut _),
-                            bActive: windows::Win32::Foundation::TRUE,
-                            hClient: idx as u32,
-                            dwBlobSize: 0,
-                            pBlob: std::ptr::null_mut(),
-                            vtRequestedDataType: 0,
-                            wReserved: 0,
-                        }
+                    .map(|(idx, wide)| tagOPCITEMDEF {
+                        szAccessPath: windows::core::PWSTR::null(),
+                        szItemID: windows::core::PWSTR(wide.as_ptr() as *mut _),
+                        bActive: windows::Win32::Foundation::TRUE,
+                        hClient: idx as u32,
+                        dwBlobSize: 0,
+                        pBlob: std::ptr::null_mut(),
+                        vtRequestedDataType: 0,
+                        wReserved: 0,
                     })
                     .collect();
 
@@ -278,15 +295,21 @@ impl OpcProvider for OpcDaWrapper {
                 let mut server_handles = Vec::new();
                 let mut valid_indices = Vec::new();
 
-                for (idx, (_item_result, error)) in results
+                for (idx, (item_result, error)) in results
                     .as_slice()
                     .iter()
                     .zip(errors.as_slice().iter())
                     .enumerate()
                 {
                     if error.is_ok() {
-                        server_handles.push(_item_result.hServer);
+                        server_handles.push(item_result.hServer);
                         valid_indices.push(idx);
+                    } else {
+                        tracing::warn!(
+                            tag = %tag_ids[idx],
+                            error = ?error,
+                            "read_tag_values: add_items rejected tag"
+                        );
                     }
                 }
 
@@ -302,22 +325,140 @@ impl OpcProvider for OpcDaWrapper {
                 for (i, idx) in valid_indices.iter().enumerate() {
                     let state = &item_states_slice[i];
                     let read_error = &read_errors_slice[i];
-                    let value_str = if read_error.is_ok() {
-                        variant_to_string(&state.vDataValue)
+
+                    let (value_str, quality_str) = if read_error.is_ok() {
+                        (
+                            variant_to_string(&state.vDataValue),
+                            quality_to_string(state.wQuality),
+                        )
                     } else {
-                        format!("Error: {:?}", read_error)
+                        let hint = friendly_com_hint(&anyhow::anyhow!("{:?}", read_error));
+                        let full_msg = hint.unwrap_or("Unknown OPC error");
+
+                        tracing::warn!(
+                            tag = %tag_ids[*idx],
+                            error = ?read_error,
+                            hint = %full_msg,
+                            "read_tag_values: per-item read error"
+                        );
+
+                        ("Error".to_string(), format!("Bad — {}", full_msg))
                     };
 
                     tag_values.push(TagValue {
                         tag_id: tag_ids[*idx].clone(),
                         value: value_str,
-                        quality: quality_to_string(state.wQuality),
+                        quality: quality_str,
                         timestamp: filetime_to_string(&state.ftTimeStamp),
                     });
                 }
 
                 let _ = opc_server.remove_group(server_handle, true);
                 Ok(tag_values)
+            })();
+            if com_init.is_ok() {
+                unsafe {
+                    CoUninitialize();
+                }
+            }
+            result
+        })
+        .await?
+    }
+
+    async fn write_tag_value(
+        &self,
+        server: &str,
+        tag_id: &str,
+        value: OpcValue,
+    ) -> Result<WriteResult> {
+        let server_name = server.to_string();
+        let tag = tag_id.to_string();
+        tokio::task::spawn_blocking(move || {
+            let com_init = unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) };
+            let result = (|| {
+                let clsid_raw = unsafe {
+                    let server_wide: Vec<u16> = server_name
+                        .encode_utf16()
+                        .chain(std::iter::once(0))
+                        .collect();
+                    CLSIDFromProgID(PCWSTR(server_wide.as_ptr()))
+                        .context("ProgID to CLSID failed")?
+                };
+                let clsid = unsafe { std::mem::transmute_copy(&clsid_raw) };
+
+                let client = Client;
+                let opc_server = client.create_server(clsid, opc_da::def::ClassContext::All)?;
+
+                let mut revised_update_rate = 0u32;
+                let mut server_handle = 0u32;
+                let group = opc_server.add_group(
+                    "opc-da-client-write",
+                    true,
+                    0,
+                    1000,
+                    0,
+                    0,
+                    0.0,
+                    &mut revised_update_rate,
+                    &mut server_handle,
+                )?;
+
+                // SAFETY: item_id_wide must outlive item_def because
+                // tagOPCITEMDEF.szItemID holds a raw pointer into the Vec.
+                let item_id_wide: Vec<u16> = tag.encode_utf16().chain(std::iter::once(0)).collect();
+                let item_def = tagOPCITEMDEF {
+                    szAccessPath: windows::core::PWSTR::null(),
+                    szItemID: windows::core::PWSTR(item_id_wide.as_ptr() as *mut _),
+                    bActive: windows::Win32::Foundation::TRUE,
+                    hClient: 0,
+                    dwBlobSize: 0,
+                    pBlob: std::ptr::null_mut(),
+                    vtRequestedDataType: 0,
+                    wReserved: 0,
+                };
+
+                let (results, errors) = group.add_items(&[item_def])?;
+                let item_res = &results.as_slice()[0];
+                let item_err = &errors.as_slice()[0];
+
+                if let Err(e) = item_err.ok() {
+                tracing::warn!(server = %server_name, tag = %tag, error = ?e, "write_tag_value: failed to add tag to group");
+                return Ok(WriteResult {
+                    tag_id: tag,
+                        success: false,
+                        error: Some(format!("Failed to add tag to group: {:?}", e)),
+                    });
+                }
+
+                let variant = opc_value_to_variant(&value);
+                let write_errors = group.write(&[item_res.hServer], &[variant])?;
+                let write_error = &write_errors.as_slice()[0];
+
+                let write_result = if write_error.is_ok() {
+                tracing::info!(server = %server_name, tag = %tag, "write_tag_value: write completed successfully");
+                WriteResult {
+                    tag_id: tag,
+                    success: true,
+                        error: None,
+                    }
+                } else {
+                let hint =
+                    friendly_com_hint(&anyhow::anyhow!("{:?}", write_error)).unwrap_or("");
+                tracing::error!(server = %server_name, tag = %tag, error = ?write_error, hint = %hint, "write_tag_value: server rejected write");
+                WriteResult {
+                    tag_id: tag,
+                    success: false,
+                        error: Some(if hint.is_empty() {
+                            format!("{:?}", write_error)
+                        } else {
+                            format!("{:?} ({})", write_error, hint)
+                        }),
+                    }
+                };
+
+                let _ = opc_server.remove_group(server_handle, true);
+                Ok(write_result)
             })();
             if com_init.is_ok() {
                 unsafe {

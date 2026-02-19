@@ -14,7 +14,7 @@ mod backend;
 
 // Stable public API
 pub use helpers::friendly_com_hint;
-pub use provider::{OpcProvider, TagValue};
+pub use provider::{OpcProvider, OpcValue, TagValue, WriteResult};
 
 // Backend re-exports (conditional)
 #[cfg(feature = "opc-da-backend")]

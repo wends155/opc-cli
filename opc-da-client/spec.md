@@ -22,6 +22,7 @@ All methods use `#[async_trait]`.
 | `list_servers` | `async fn list_servers(&self, host: &str) -> Result<Vec<String>>` | Enumerate OPC DA servers available on `host`. |
 | `browse_tags` | `async fn browse_tags(&self, server: &str, max_tags: usize, progress: Arc<AtomicUsize>, tags_sink: Arc<Mutex<Vec<String>>>) -> Result<Vec<String>>` | Recursively discover tags on `server`, pushing each to `tags_sink` as found. |
 | `read_tag_values` | `async fn read_tag_values(&self, server: &str, tag_ids: Vec<String>) -> Result<Vec<TagValue>>` | Read current value, quality, and timestamp for the given tag IDs. |
+| `write_tag_value` | `async fn write_tag_value(&self, server: &str, tag_id: &str, value: OpcValue) -> Result<WriteResult>` | Write a typed value to a single tag on `server`. |
 
 **Error Conditions:**
 
@@ -35,6 +36,9 @@ All methods use `#[async_trait]`.
 | `read_tag_values` | ProgID resolution failure | Same as `browse_tags`. |
 | `read_tag_values` | No valid items | None of the requested `tag_ids` could be added to the OPC group. |
 | `read_tag_values` | Sync read failure | Server-side read error on all items. |
+| `write_tag_value` | ProgID resolution failure | Same as `browse_tags`. |
+| `write_tag_value` | Item add failure | The `tag_id` could not be added to the OPC group. |
+| `write_tag_value` | Sync write failure | Server-side write error (e.g., read-only tag). |
 
 **Invariants:**
 
@@ -44,6 +48,8 @@ All methods use `#[async_trait]`.
 *   `browse_tags` pushes tags to `tags_sink` incrementally; on timeout the caller can harvest partial results.
 *   `browse_tags` updates `progress` atomically for each discovered tag.
 *   `read_tag_values` returns a `TagValue` entry only for items that were successfully added to the OPC group; silently skips failed items.
+*   `write_tag_value` returns `Ok(WriteResult)` in all non-fatal cases; per-tag success/error is reported inside `WriteResult`.
+
 
 ---
 
@@ -59,6 +65,36 @@ All methods use `#[async_trait]`.
 | `timestamp` | `String` | Yes | Last-change timestamp as local time. | Format `YYYY-MM-DD HH:MM:SS`, or `"N/A"` / `"Invalid"`. |
 
 **Derives:** `Debug`, `Clone`.
+
+---
+
+##### `enum OpcValue`
+
+**Purpose:** Typed representation of a value to be written to an OPC DA tag.
+
+| Variant | Data Type | Description | COM VT Type |
+| :--- | :--- | :--- | :--- |
+| `String(String)` | `String` | Raw string value. | `VT_BSTR` |
+| `Int(i32)` | `i32` | 32-bit signed integer. | `VT_I4` |
+| `Float(f64)` | `f64` | 64-bit float. | `VT_R8` |
+| `Bool(bool)` | `bool` | Boolean value. | `VT_BOOL` |
+
+**Derives:** `Debug`, `Clone`, `PartialEq`.
+
+---
+
+##### `struct WriteResult`
+
+**Purpose:** Canonical representation of an OPC DA tag write result.
+
+| Field | Type | Required | Description |
+| :--- | :--- | :--- | :--- |
+| `tag_id` | `String` | Yes | The tag identifier that was written to. |
+| `success` | `bool` | Yes | Whether the write operation succeeded. |
+| `error` | `Option<String>` | No | Error message or hint if `success` is `false`. |
+
+**Derives:** `Debug`, `Clone`, `PartialEq`.
+
 
 ---
 
@@ -96,6 +132,8 @@ All methods use `#[async_trait]`.
 | `0x800706F4` | COM marshalling error — try restarting the OPC server |
 | `0x80040154` | Server is not registered on this machine |
 | `0x80004003` | Invalid pointer — likely a known issue with the OPC DA crate's iterator initialization |
+| `0xC0040004` | Server rejected write — the item may be read-only (OPC_E_BADRIGHTS) |
+
 
 **Invariants:**
 *   Pure function — no side effects, no I/O, no panics.
@@ -112,6 +150,8 @@ All methods use `#[async_trait]`.
 | `variant_to_string` | `fn(variant: &VARIANT) -> String` | Formats a COM VARIANT as a display string. |
 | `quality_to_string` | `fn(quality: u16) -> String` | Maps OPC quality bitmask to `"Good"` / `"Bad"` / `"Uncertain"`. |
 | `filetime_to_string` | `fn(ft: &FILETIME) -> String` | Converts Win32 FILETIME to local `YYYY-MM-DD HH:MM:SS` string. |
+| `opc_value_to_variant` | `fn(value: &OpcValue) -> VARIANT` | Converts an `OpcValue` to a COM `VARIANT`. |
+
 
 ---
 
@@ -192,6 +232,7 @@ Defined in § 1.1. See table above.
 | Namespace detection | `Server.query_organization()` |
 | Tag browsing | `Server.browse_opc_item_ids()`, `Server.change_browse_position()`, `Server.get_item_id()` |
 | Tag reading | `Server.add_group()`, group `.add_items()`, group `.read()`, `Server.remove_group()` |
+| Tag writing | `Server.add_group()`, group `.add_items()`, group `.write()`, `Server.remove_group()` |
 | String iteration | `StringIterator::new()` |
 
 **Error Handling at Boundary:**
@@ -250,3 +291,7 @@ Defined in § 1.1. See table above.
 - [ ] `browse_tags` populates `tags_sink` incrementally (observable via progress counter).
 - [ ] `read_tag_values` returns correct value/quality/timestamp for known tags.
 - [ ] `read_tag_values` gracefully handles tags that fail `add_items`.
+- [ ] `write_tag_value` returns success for a valid write to a simulation tag.
+- [ ] `write_tag_value` returns error (with hint) when writing to a read-only tag.
+- [ ] `opc_value_to_variant` correctly converts all `OpcValue` variants.
+
