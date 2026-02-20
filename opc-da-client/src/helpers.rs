@@ -62,6 +62,9 @@ pub(crate) fn is_known_iterator_bug(err: &windows::core::Error) -> bool {
 
 /// Helper to convert GUID to ProgID using Windows API
 pub(crate) fn guid_to_progid(guid: &windows::core::GUID) -> anyhow::Result<String> {
+    // SAFETY: `ProgIDFromCLSID` is a Win32 FFI call that allocates a PWSTR
+    // via the COM allocator. We read it and free it with `CoTaskMemFree`
+    // before returning — the pointer is not used after free.
     unsafe {
         let progid = ProgIDFromCLSID(guid).context("Failed to get ProgID from CLSID")?;
 
@@ -83,6 +86,9 @@ pub(crate) fn guid_to_progid(guid: &windows::core::GUID) -> anyhow::Result<Strin
 
 /// Convert OPC DA VARIANT to a displayable string.
 pub(crate) fn variant_to_string(variant: &VARIANT) -> String {
+    // SAFETY: Accessing the VARIANT union fields. The caller guarantees
+    // the VARIANT was produced by COM (e.g., from `group.read()`), so the
+    // `vt` discriminant correctly identifies which union arm is active.
     unsafe {
         let vt = variant.Anonymous.Anonymous.vt;
         let base_type = vt.0 & 0x0FFF; // strip VT_ARRAY (0x2000) / VT_BYREF (0x4000)
@@ -147,12 +153,12 @@ pub(crate) fn variant_to_string(variant: &VARIANT) -> String {
             19 => format!("{}", variant.Anonymous.Anonymous.Anonymous.ulVal),          // VT_UI4
             20 => {
                 // VT_I8: read 8 bytes as i64 via pointer cast
-                let p = &variant.Anonymous.Anonymous.Anonymous as *const _ as *const i64;
+                let p = (&raw const variant.Anonymous.Anonymous.Anonymous).cast::<i64>();
                 format!("{}", *p)
             }
             21 => {
                 // VT_UI8: read 8 bytes as u64 via pointer cast
-                let p = &variant.Anonymous.Anonymous.Anonymous as *const _ as *const u64;
+                let p = (&raw const variant.Anonymous.Anonymous.Anonymous).cast::<u64>();
                 format!("{}", *p)
             }
             _ => format!("(VT {:?})", vt),
@@ -187,11 +193,11 @@ pub(crate) fn quality_to_string(quality: u16) -> String {
 }
 
 /// Convert FILETIME to a human-readable local time string.
-pub(crate) fn filetime_to_string(ft: &FILETIME) -> String {
+pub(crate) fn filetime_to_string(ft: FILETIME) -> String {
     if ft.dwHighDateTime == 0 && ft.dwLowDateTime == 0 {
         return "N/A".to_string();
     }
-    let intervals = ((ft.dwHighDateTime as u64) << 32) | (ft.dwLowDateTime as u64);
+    let intervals = (u64::from(ft.dwHighDateTime) << 32) | u64::from(ft.dwLowDateTime);
     let unix_secs = (intervals / 10_000_000).saturating_sub(11_644_473_600);
     let nanos = ((intervals % 10_000_000) * 100) as u32;
 
@@ -207,6 +213,9 @@ pub(crate) fn filetime_to_string(ft: &FILETIME) -> String {
 /// Convert an [`OpcValue`] into a COM [`VARIANT`] for writing.
 pub(crate) fn opc_value_to_variant(value: &OpcValue) -> VARIANT {
     let mut variant = VARIANT::default();
+    // SAFETY: We set the `vt` discriminant and the corresponding union
+    // field atomically. The VARIANT is returned by value, so no aliasing.
+    // `ManuallyDrop` on BSTR prevents double-free — COM owns cleanup.
     unsafe {
         match value {
             OpcValue::String(s) => {
@@ -287,7 +296,7 @@ mod tests {
             dwHighDateTime: 0,
             dwLowDateTime: 0,
         };
-        assert_eq!(filetime_to_string(&ft), "N/A");
+        assert_eq!(filetime_to_string(ft), "N/A");
     }
 
     #[test]
@@ -296,7 +305,7 @@ mod tests {
             dwHighDateTime: 0x01DC9EF1,
             dwLowDateTime: 0xA3BDF80,
         };
-        let result = filetime_to_string(&ft);
+        let result = filetime_to_string(ft);
         assert!(result.contains("-"));
     }
     #[test]
@@ -441,5 +450,92 @@ mod tests {
     fn test_is_known_iterator_bug_no_match() {
         let err = windows::core::Error::from_hresult(windows::core::HRESULT(0x80070005u32 as i32));
         assert!(!is_known_iterator_bug(&err));
+    }
+
+    #[test]
+    fn test_variant_to_string_null() {
+        use std::mem::ManuallyDrop;
+        use windows::Win32::System::Variant::{
+            VARIANT, VARIANT_0, VARIANT_0_0, VARIANT_0_0_0, VT_NULL,
+        };
+
+        let inner = VARIANT_0_0_0 { llVal: 0 };
+        let middle = VARIANT_0_0 {
+            vt: VT_NULL,
+            wReserved1: 0,
+            wReserved2: 0,
+            wReserved3: 0,
+            Anonymous: inner,
+        };
+        let outer = VARIANT_0 {
+            Anonymous: ManuallyDrop::new(middle),
+        };
+        let v = VARIANT { Anonymous: outer };
+        assert_eq!(variant_to_string(&v), "Null");
+    }
+
+    #[test]
+    fn test_variant_to_string_i2_and_r4() {
+        use std::mem::ManuallyDrop;
+        use windows::Win32::System::Variant::{
+            VARIANT, VARIANT_0, VARIANT_0_0, VARIANT_0_0_0, VT_I2, VT_R4,
+        };
+
+        // VT_I2
+        let inner = VARIANT_0_0_0 { iVal: -42 };
+        let middle = VARIANT_0_0 {
+            vt: VT_I2,
+            wReserved1: 0,
+            wReserved2: 0,
+            wReserved3: 0,
+            Anonymous: inner,
+        };
+        let outer = VARIANT_0 {
+            Anonymous: ManuallyDrop::new(middle),
+        };
+        let v = VARIANT { Anonymous: outer };
+        assert_eq!(variant_to_string(&v), "-42");
+
+        // VT_R4
+        let inner = VARIANT_0_0_0 { fltVal: 1.5 };
+        let middle = VARIANT_0_0 {
+            vt: VT_R4,
+            wReserved1: 0,
+            wReserved2: 0,
+            wReserved3: 0,
+            Anonymous: inner,
+        };
+        let outer = VARIANT_0 {
+            Anonymous: ManuallyDrop::new(middle),
+        };
+        let v = VARIANT { Anonymous: outer };
+        assert_eq!(variant_to_string(&v), "1.50");
+    }
+
+    #[test]
+    fn test_variant_to_string_unknown_vt() {
+        use std::mem::ManuallyDrop;
+        use windows::Win32::System::Variant::{
+            VARENUM, VARIANT, VARIANT_0, VARIANT_0_0, VARIANT_0_0_0,
+        };
+
+        let inner = VARIANT_0_0_0 { llVal: 0 };
+        let middle = VARIANT_0_0 {
+            vt: VARENUM(999),
+            wReserved1: 0,
+            wReserved2: 0,
+            wReserved3: 0,
+            Anonymous: inner,
+        };
+        let outer = VARIANT_0 {
+            Anonymous: ManuallyDrop::new(middle),
+        };
+        let v = VARIANT { Anonymous: outer };
+        let result = variant_to_string(&v);
+        assert!(
+            result.starts_with("(VT "),
+            "Expected '(VT ...)' but got: {}",
+            result
+        );
     }
 }

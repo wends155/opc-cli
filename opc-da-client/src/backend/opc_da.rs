@@ -28,8 +28,8 @@ pub struct OpcDaWrapper;
 
 impl OpcDaWrapper {
     /// Creates a new `OpcDaWrapper`.
-    pub fn new() -> Self {
-        OpcDaWrapper
+    pub const fn new() -> Self {
+        Self
     }
 }
 
@@ -157,6 +157,10 @@ impl OpcProvider for OpcDaWrapper {
 
                 let mut servers = Vec::new();
                 for guid in guid_iter.flatten() {
+                    // SAFETY: `opc_da::GUID` and `windows::core::GUID` have
+                    // identical memory layout (128-bit, 4-2-2-8 fields).
+                    // `transmute_copy` is used because the crates define
+                    // distinct types with the same ABI.
                     let win_guid: windows::core::GUID = unsafe { std::mem::transmute_copy(&guid) };
                     if win_guid == windows::core::GUID::zeroed() {
                         continue;
@@ -173,6 +177,8 @@ impl OpcProvider for OpcDaWrapper {
                 Ok(servers)
             })();
             if com_init.is_ok() {
+                // SAFETY: Paired with the `CoInitializeEx` above; only called
+                // when `com_init.is_ok()` to avoid double-uninit.
                 unsafe {
                     CoUninitialize();
                 }
@@ -191,14 +197,21 @@ impl OpcProvider for OpcDaWrapper {
     ) -> Result<Vec<String>> {
         let server_name = server.to_string();
         tokio::task::spawn_blocking(move || {
+            // SAFETY: COM is initialized per-thread (MTA). This block runs
+            // inside `spawn_blocking`, ensuring a dedicated OS thread.
+            // `CoUninitialize` is called unconditionally before returning.
             let com_init = unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) };
             let result = (|| {
+                // SAFETY: `server_wide` is null-terminated and lives until
+                // the end of this scope, so the PCWSTR pointer is valid for
+                // the duration of the `CLSIDFromProgID` call.
                 let clsid_raw = unsafe {
                     let server_wide: Vec<u16> = server_name.encode_utf16().chain(std::iter::once(0)).collect();
                     CLSIDFromProgID(PCWSTR(server_wide.as_ptr())).with_context(|| {
                         format!("Failed to resolve ProgID '{}' to CLSID", server_name)
                     })?
                 };
+                // SAFETY: Identical ABI; see `list_servers` for details.
                 let clsid = unsafe { std::mem::transmute_copy(&clsid_raw) };
 
                 let client = Client;
@@ -242,6 +255,7 @@ impl OpcProvider for OpcDaWrapper {
         tokio::task::spawn_blocking(move || {
             let com_init = unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) };
             let result = (|| {
+                // SAFETY: `server_wide` null-termination and scope management.
                 let clsid_raw = unsafe {
                     let server_wide: Vec<u16> = server_name
                         .encode_utf16()
@@ -250,6 +264,7 @@ impl OpcProvider for OpcDaWrapper {
                     CLSIDFromProgID(PCWSTR(server_wide.as_ptr()))
                         .context("ProgID to CLSID failed")?
                 };
+                // SAFETY: Identical ABI.
                 let clsid = unsafe { std::mem::transmute_copy(&clsid_raw) };
 
                 let client = Client;
@@ -281,7 +296,7 @@ impl OpcProvider for OpcDaWrapper {
                     .enumerate()
                     .map(|(idx, wide)| tagOPCITEMDEF {
                         szAccessPath: windows::core::PWSTR::null(),
-                        szItemID: windows::core::PWSTR(wide.as_ptr() as *mut _),
+                        szItemID: windows::core::PWSTR(wide.as_ptr().cast_mut()),
                         bActive: windows::Win32::Foundation::TRUE,
                         hClient: idx as u32,
                         dwBlobSize: 0,
@@ -349,7 +364,7 @@ impl OpcProvider for OpcDaWrapper {
                         tag_id: tag_ids[*idx].clone(),
                         value: value_str,
                         quality: quality_str,
-                        timestamp: filetime_to_string(&state.ftTimeStamp),
+                        timestamp: filetime_to_string(state.ftTimeStamp),
                     });
                 }
 
@@ -357,6 +372,7 @@ impl OpcProvider for OpcDaWrapper {
                 Ok(tag_values)
             })();
             if com_init.is_ok() {
+                // SAFETY: Paired with the `CoInitializeEx` above.
                 unsafe {
                     CoUninitialize();
                 }
@@ -377,6 +393,7 @@ impl OpcProvider for OpcDaWrapper {
         tokio::task::spawn_blocking(move || {
             let com_init = unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) };
             let result = (|| {
+                // SAFETY: `server_wide` null-termination and scope management.
                 let clsid_raw = unsafe {
                     let server_wide: Vec<u16> = server_name
                         .encode_utf16()
@@ -385,6 +402,7 @@ impl OpcProvider for OpcDaWrapper {
                     CLSIDFromProgID(PCWSTR(server_wide.as_ptr()))
                         .context("ProgID to CLSID failed")?
                 };
+                // SAFETY: Identical ABI.
                 let clsid = unsafe { std::mem::transmute_copy(&clsid_raw) };
 
                 let client = Client;
@@ -406,10 +424,10 @@ impl OpcProvider for OpcDaWrapper {
 
                 // SAFETY: item_id_wide must outlive item_def because
                 // tagOPCITEMDEF.szItemID holds a raw pointer into the Vec.
-                let item_id_wide: Vec<u16> = tag.encode_utf16().chain(std::iter::once(0)).collect();
+                let mut item_id_wide: Vec<u16> = tag.encode_utf16().chain(std::iter::once(0)).collect();
                 let item_def = tagOPCITEMDEF {
                     szAccessPath: windows::core::PWSTR::null(),
-                    szItemID: windows::core::PWSTR(item_id_wide.as_ptr() as *mut _),
+                    szItemID: windows::core::PWSTR(item_id_wide.as_mut_ptr()),
                     bActive: windows::Win32::Foundation::TRUE,
                     hClient: 0,
                     dwBlobSize: 0,
@@ -423,9 +441,9 @@ impl OpcProvider for OpcDaWrapper {
                 let item_err = &errors.as_slice()[0];
 
                 if let Err(e) = item_err.ok() {
-                tracing::warn!(server = %server_name, tag = %tag, error = ?e, "write_tag_value: failed to add tag to group");
-                return Ok(WriteResult {
-                    tag_id: tag,
+                    tracing::warn!(server = %server_name, tag = %tag, error = ?e, "write_tag_value: failed to add tag to group");
+                    return Ok(WriteResult {
+                        tag_id: tag,
                         success: false,
                         error: Some(format!("Failed to add tag to group: {:?}", e)),
                     });
@@ -436,19 +454,19 @@ impl OpcProvider for OpcDaWrapper {
                 let write_error = &write_errors.as_slice()[0];
 
                 let write_result = if write_error.is_ok() {
-                tracing::info!(server = %server_name, tag = %tag, "write_tag_value: write completed successfully");
-                WriteResult {
-                    tag_id: tag,
-                    success: true,
+                    tracing::info!(server = %server_name, tag = %tag, "write_tag_value: write completed successfully");
+                    WriteResult {
+                        tag_id: tag,
+                        success: true,
                         error: None,
                     }
                 } else {
-                let hint =
-                    friendly_com_hint(&anyhow::anyhow!("{:?}", write_error)).unwrap_or("");
-                tracing::error!(server = %server_name, tag = %tag, error = ?write_error, hint = %hint, "write_tag_value: server rejected write");
-                WriteResult {
-                    tag_id: tag,
-                    success: false,
+                    let hint =
+                        friendly_com_hint(&anyhow::anyhow!("{:?}", write_error)).unwrap_or("");
+                    tracing::error!(server = %server_name, tag = %tag, error = ?write_error, hint = %hint, "write_tag_value: server rejected write");
+                    WriteResult {
+                        tag_id: tag,
+                        success: false,
                         error: Some(if hint.is_empty() {
                             format!("{:?}", write_error)
                         } else {

@@ -9,7 +9,7 @@ use mockall::automock;
 /// A single tag's read result.
 ///
 /// Returned by [`OpcProvider::read_tag_values`].
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TagValue {
     /// The fully qualified tag identifier (e.g., `"Channel1.Device1.Tag1"`).
     pub tag_id: String,
@@ -35,7 +35,7 @@ pub enum OpcValue {
 }
 
 /// Result of a single write operation.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WriteResult {
     /// The tag that was written to.
     pub tag_id: String,

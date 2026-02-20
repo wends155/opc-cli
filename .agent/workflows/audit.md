@@ -13,6 +13,7 @@ It enforces the **Reflect** and **Summarize** phases of the TARS protocol.
 - The original implementation plan is available for cross-reference.
 - Read `GEMINI.md` for rules and guidelines.
 - Read `architecture.md` (if present) for project-specific design and toolchain.
+- Read `coding_standard.md` (if present) for language-specific coding standards (e.g., Rust).
 - Read `context.md` (if present) for historical decisions.
 - Confirm you are operating as the **Architect** (high-reasoning model).
 
@@ -63,6 +64,15 @@ Systematically verify the implementation against project standards:
 - [ ] Variable/function names are clear and descriptive
 - [ ] Complex logic has explanatory comments
 
+#### 2f. Coding Standards Compliance *(if `coding_standard.md` exists)*
+- [ ] Error handling follows the documented patterns (e.g., `thiserror` / `anyhow`, no `.unwrap()` in production)
+- [ ] Async code follows documented best practices (timeouts, structured concurrency)
+- [ ] Clippy configuration matches the strictness level defined in the standard
+- [ ] Documentation meets the standard's requirements (all public APIs documented with `# Errors`, `# Panics`, `# Examples`)
+- [ ] No prohibited patterns are present (refer to Quick Reference table)
+- [ ] Memory/ownership practices follow the documented guidelines
+- [ ] Tests meet the standard's coverage and style requirements (property-based, mocks, doc-tests)
+
 ### 3. Verification Gate
 
 Re-run the project's standard verification pipeline and confirm zero-exit:
@@ -76,6 +86,7 @@ Re-run the project's standard verification pipeline and confirm zero-exit:
 > [!IMPORTANT]
 > Do NOT invent commands. Source them from `architecture.md` § Toolchain.
 > If `architecture.md` is absent, inspect build/config files to determine correct commands.
+> For Rust projects, also verify that clippy lint levels match `coding_standard.md` § 5.2.
 
 ### 4. Findings Report
 
