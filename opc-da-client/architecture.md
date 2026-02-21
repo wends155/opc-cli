@@ -34,6 +34,7 @@ opc-da-client/
 ├── spec.md                 # Behavioral contracts — Behavioral Source of Truth
 └── src/
     ├── lib.rs              # Crate root: module declarations, public re-exports
+    ├── com_guard.rs        # RAII guard for COM init/teardown (ComGuard)
     ├── provider.rs         # OpcProvider trait + TagValue struct
     ├── helpers.rs          # COM utilities: friendly_com_hint, variant/quality/time converters
     └── backend/
@@ -52,7 +53,7 @@ All commands are run from the **workspace root** (`opc-cli/`).
 | Formatter | `cargo fmt --all -- --check` |
 | Linter | `cargo clippy --workspace -- -D warnings` |
 | Tests | `cargo test --workspace` |
-| Verification Script | `powershell -File scripts/verify.ps1` |
+| Verification Script | `pwsh -File scripts/verify.ps1` |
 | Documentation | `cargo doc --no-deps --package opc-da-client` |
 
 The verification script ([verify.ps1](file:///c:/Users/WSALIGAN/code/opc-cli/scripts/verify.ps1)) runs all three gates sequentially and prepends the portable MSVC toolchain to `PATH`.
@@ -96,14 +97,15 @@ The verification script ([verify.ps1](file:///c:/Users/WSALIGAN/code/opc-cli/scr
 
 ### Unit Tests
 - **Location**: Co-located `#[cfg(test)] mod tests` in `helpers.rs`.
-- **Coverage**: `friendly_com_hint` mappings, `filetime_to_string` edge cases.
+- **Coverage**: `friendly_com_hint` mappings, `filetime_to_string` edge cases, `is_known_iterator_bug`, `opc_value_to_variant`, `variant_to_string` roundtrips (including `VT_CY`).
 
 ### Mock-Based Tests
 - **Mechanism**: `mockall` crate, gated behind `test-support` feature.
 - **Export**: `MockOpcProvider` — allows downstream consumers (`opc-cli`) to test UI and state logic without a live OPC server on any OS.
 
 ### Doc Tests
-- `friendly_com_hint()` has a runnable doctest example in `helpers.rs`.
+- `friendly_com_hint()` — runnable doctest in `helpers.rs`.
+- `ComGuard::new()` — `no_run` compile-check doctest in `com_guard.rs`.
 
 ### Integration / Manual
 - Tested against real OPC servers (Matrikon, ABB, Kepware) on Windows.
@@ -159,6 +161,7 @@ graph TD
     subgraph "Public API (Stable)"
         Trait["trait OpcProvider"]
         TagValue["struct TagValue"]
+        Guard["struct ComGuard"]
         Hint["fn friendly_com_hint()"]
     end
 
@@ -174,6 +177,7 @@ graph TD
 
     Trait --> Wrapper
     Wrapper --> Browse
+    Wrapper --> Guard
     Wrapper --> OpcDa
     OpcDa --> WinCOM
     Wrapper -.-> Hint
@@ -182,10 +186,10 @@ graph TD
 ### COM Threading Model
 
 OPC DA relies on Windows COM, which requires per-thread initialization.
-The `OpcDaWrapper` implementation handles this by:
+The `OpcDaWrapper` implementation handles this via the `ComGuard` RAII pattern:
 1. Using `tokio::task::spawn_blocking` to move COM work to a dedicated thread pool.
-2. Initializing COM (`CoInitializeEx` with `COINIT_MULTITHREADED`) at the start of each task.
-3. Uninitializing COM (`CoUninitialize`) before the task returns to the pool — **regardless of success or failure**.
+2. Creating a `ComGuard` (`ComGuard::new()`) at the start of each blocking task to initialize COM in MTA mode.
+3. `ComGuard`'s `Drop` impl calls `CoUninitialize` automatically when the task completes — **regardless of success or failure**.
 
 ### Browse Strategy
 

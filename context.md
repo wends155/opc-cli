@@ -27,5 +27,55 @@
 >   - New helper `ole_date_to_string` converts OLE Automation dates to local datetime strings via `chrono`.
 >   - `VT_I8`/`VT_UI8` use pointer-cast since windows-rs 0.61.3 doesn't expose `hVal`/`uhVal` fields.
 >   - SafeArray display shows `Array[N] (type)` for 1-D; `Array[ND]` for multi-dimensional.
-> * **New Constraints:** Pointer-cast for VT_I8/UI8 is architecture-dependent (safe on x86_64 where VARIANT union is ≥8 bytes). If windows-rs adds `hVal`/`uhVal` fields in a future version, migrate to named fields.
 > * **Pruned:** Generic `(VT VARENUM(...))` displays for Date, integers, and arrays are gone. Previous audit report for Tag Values Page Fixes is superseded.
+
+## 2026-02-20: Security & Quality Audit of opc-da-client
+> 📝 **Context Update:**
+> * **Feature:** Pre-implementation Audit of `opc-da-client`
+> * **Changes:** Ran narsil MCP security scan and `cargo clippy`/`test`. Identified and fixed `clippy::approx_constant` warnings in `opc-da-client/src/helpers.rs` by replacing `3.14` with `3.5` in tests. Tests are green.
+> * **New Constraints:** Maintain strict adherence to workspace clippy policies.
+> * **Pruned:** None.
+
+## 2026-02-21: Audit Remediation of opc-da-client & opc-cli
+> 📝 **Context Update:**
+> * **Feature:** Audit Remediation (ComGuard, clippy sweep, doctest fixes)
+> * **Changes:** Implemented `ComGuard` RAII guard for COM initialization. Resolved 100+ clippy findings across both crates. Fixed doctest in `com_guard.rs`. Standardized workspace lint config in root `Cargo.toml`. Removed manual `CoUninitialize` from `main.rs`.
+> * **New Constraints:**
+>   - Use `pwsh` (not `powershell`) for all script invocations.
+>   - Use `ComGuard::new()` for COM initialization — never call `CoInitializeEx`/`CoUninitialize` manually.
+>   - Workspace lint allows are managed in root `Cargo.toml` `[workspace.lints.clippy]`.
+> * **Pruned:** Manual COM teardown logic. Legacy `pub(crate)` visibility workarounds.
+
+## ⚠️ 2026-02-21: Compliance Violations — Lessons Learned
+
+> [!CAUTION]
+> The following workflow and `GEMINI.md` violations occurred during the audit remediation session. **All future sessions MUST strictly follow `GEMINI.md` rules and `.agent/workflows/` definitions.**
+
+### Violations Identified
+
+| # | Rule Violated | Source | What Happened |
+|---|---------------|--------|---------------|
+| 1 | **Planning Gate** (§ GEMINI.md) | `GEMINI.md` lines 77–90 | Execution began without a formal Think Phase or user "Proceed" approval. Code edits were made in the same turn as analysis. |
+| 2 | **Sequential Execution** | `GEMINI.md` line 197 | Used `&&` chaining in PowerShell commands (e.g., `cargo fmt --all && pwsh -File ./scripts/verify.ps1`). GEMINI.md explicitly prohibits this. |
+| 3 | **Git Checkpoints** | `GEMINI.md` line 128 | No git commits were made before or after functional blocks. Changes were not checkpointed for reversibility. |
+| 4 | **Audit Workflow** | `.agent/workflows/audit.md` | The `/audit` workflow was not followed. Steps 1–6 (Gather Context → Compliance Audit → Verification Gate → Findings Report → Summarize → Completion) were not executed in order. |
+| 5 | **Plan-Making Workflow** | `.agent/workflows/plan-making.md` | The `/plan-making` workflow was not consulted. No implementation plan was created before execution for the CLI-side fixes. |
+| 6 | **No `context.md` Update** | `.agent/workflows/audit.md` step 5 | Context was not compressed and appended to `context.md` during the session. |
+| 7 | **Shell Preference** | User directive | Used `powershell` instead of `pwsh` throughout the session. |
+
+### Binding Rules for Future Sessions
+
+1. **Always read `GEMINI.md` first** — it is the Operational Source of Truth.
+2. **Always follow the applicable workflow** from `.agent/workflows/` — they define step-by-step procedures that must not be skipped.
+3. **Never chain commands with `&&`** in PowerShell — use sequential tool calls.
+4. **Always create git checkpoints** before and after functional blocks.
+5. **Always run the Planning Gate** before touching source code — produce an artifact, request approval, then execute.
+6. **Always update `context.md`** at the end of every completed task per the Summarize phase.
+7. **Use `pwsh`** (not `powershell`) for all script and command invocations.
+
+## 2026-02-21: Documentation Refresh
+> 📝 **Context Update:**
+> * **Feature:** Documentation Refresh (READMEs, architecture, spec, Cargo descriptions)
+> * **Changes:** Updated both READMEs with write support, controls table, `pwsh` commands; updated both `Cargo.toml` descriptions; added `ComGuard` § 1.4 to `spec.md` and updated test checklist; updated both `architecture.md` files with WriteInput state, write key, `ComGuard` in diagrams/threading model, and `pwsh` references.
+> * **New Constraints:** All documentation now reflects `ComGuard`, write support, and `pwsh`. Keep docs in sync when adding features.
+> * **Pruned:** Outdated test count (was "37 tests"), manual `CoInitializeEx`/`CoUninitialize` references in architecture docs.

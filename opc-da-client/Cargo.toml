@@ -2,12 +2,16 @@
 name = "opc-da-client"
 version = "0.0.2"
 edition = "2024"
-description = "Backend-agnostic OPC DA client library with async trait-based API"
+rust-version = "1.93.1"
+description = "Backend-agnostic OPC DA client library for Rust — async, trait-based, with RAII COM guard"
 license = "MIT"
 repository = "https://github.com/wends155/opc-cli"
 readme = "README.md"
 keywords = ["opc", "opc-da", "windows", "automation", "scada"]
 categories = ["api-bindings", "network-programming"]
+
+[lints]
+workspace = true
 
 [features]
 default = ["opc-da-backend"]

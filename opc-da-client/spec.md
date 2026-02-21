@@ -171,11 +171,11 @@ All methods use `#[async_trait]`.
 | `new()` | `fn new() -> Self` | Constructs a new wrapper. |
 | `default()` | `fn default() -> Self` | Same as `new()`. |
 
-Implements `OpcProvider` for all three trait methods.
+Implements `OpcProvider` for all four trait methods.
 
 **Invariants:**
 *   All COM work runs on a dedicated blocking thread via `tokio::task::spawn_blocking`.
-*   COM is initialized (`CoInitializeEx` MTA) at the start and uninitialized (`CoUninitialize`) at the end of **every** blocking task, regardless of success or failure.
+*   COM is initialized via `ComGuard::new()` at the start of every blocking task; teardown is automatic on drop.
 *   GUID filtering: zeroed GUIDs are skipped during server enumeration.
 *   Server list is sorted and deduplicated before returning.
 
@@ -201,6 +201,36 @@ fn browse_recursive(
 5.  Converts browse names to fully-qualified item IDs via `get_item_id()`; falls back to browse name on failure.
 6.  `E_POINTER` errors from `StringIterator` are filtered to `trace!` level.
 7.  Each discovered tag is pushed to both `tags` and `tags_sink`, and `progress` is incremented.
+
+---
+
+### 1.4 `com_guard` — RAII COM Initialization
+
+**Purpose:** Provide a drop guard that ensures `CoUninitialize` is called exactly once per successful `CoInitializeEx`, even on early returns or panics.
+
+#### Public API
+
+##### `struct ComGuard`
+
+| Method | Signature | Description |
+| :--- | :--- | :--- |
+| `new()` | `fn new() -> anyhow::Result<Self>` | Initialize COM in Multi-Threaded Apartment (MTA) mode. Returns `Ok` on success or if already initialized (`S_FALSE`). |
+
+**Drop behavior:** Calls `CoUninitialize` only if `CoInitializeEx` returned `Ok`.
+
+**Error Conditions:**
+
+| Error | Meaning |
+| :--- | :--- |
+| Fatal HRESULT from `CoInitializeEx` | Windows COM subsystem is unavailable or misconfigured. |
+
+**Invariants:**
+*   Must be used on the **same thread** that called `new()`.
+*   `S_FALSE` (already initialized) is treated as success — the guard will still call `CoUninitialize` on drop.
+*   The guard is **not** `Send` or `Sync` — it must remain on the thread that created it.
+
+**Required Test Coverage:**
+- [x] Doctest: `ComGuard::new()?` compiles in a `no_run` example.
 
 ---
 
@@ -264,6 +294,13 @@ Defined in § 1.1. See table above.
 - [x] `friendly_com_hint` returns `None` for unknown errors.
 - [x] `filetime_to_string` returns `"N/A"` for zero FILETIME.
 - [x] `filetime_to_string` produces valid date string for non-zero FILETIME.
+- [x] `is_known_iterator_bug` returns `true` for `E_POINTER` code.
+- [x] `is_known_iterator_bug` returns `false` for other error codes.
+- [x] `opc_value_to_variant` correctly converts `Int` variant.
+- [x] `variant_to_string` roundtrips through `VT_I4` and `VT_R4`.
+- [x] `variant_to_string` handles `VT_EMPTY` and `VT_NULL`.
+- [x] `variant_to_string` handles `VT_CY` (currency).
+- [x] `variant_to_string` returns `(VT ...)` for unknown variant types.
 
 ### Unit Tests (recommended additions)
 
@@ -271,9 +308,6 @@ Defined in § 1.1. See table above.
 - [ ] `quality_to_string` returns `"Bad"` for `0x00`.
 - [ ] `quality_to_string` returns `"Uncertain"` for `0x40`.
 - [ ] `quality_to_string` returns `"Unknown(…)"` for unrecognized bitmask.
-- [ ] `is_known_iterator_bug` returns `true` for `E_POINTER` code.
-- [ ] `is_known_iterator_bug` returns `false` for other error codes.
-- [ ] `variant_to_string` handles `VT_EMPTY`, `VT_NULL`, `VT_I2`, `VT_I4`, `VT_R4`, `VT_R8`, `VT_BSTR`, `VT_BOOL`, and unknown VT types.
 
 ### Mock-Based Tests (in `opc-cli`)
 
@@ -281,6 +315,11 @@ Defined in § 1.1. See table above.
 - [x] `MockOpcProvider` returns expected browse results.
 - [x] `MockOpcProvider` returns expected tag values.
 - [x] `MockOpcProvider` simulates error conditions for UI error handling.
+
+### Doc Tests
+
+- [x] `friendly_com_hint` — runnable doctest in `helpers.rs`.
+- [x] `ComGuard` — `no_run` compile-check doctest in `com_guard.rs`.
 
 ### Integration / Manual Tests
 

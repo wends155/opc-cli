@@ -1,3 +1,4 @@
+#![allow(unsafe_code, unreachable_pub)]
 //! # opc-da-client
 //!
 //! Backend-agnostic OPC DA client library.
@@ -6,6 +7,7 @@
 //! - `opc-da-backend` (default): Uses the `opc_da` crate for COM interaction
 //! - `test-support`: Enables `MockOpcProvider` via `mockall`
 
+mod com_guard;
 mod helpers;
 mod provider;
 
@@ -13,6 +15,7 @@ mod provider;
 mod backend;
 
 // Stable public API
+pub use com_guard::ComGuard;
 pub use helpers::friendly_com_hint;
 pub use provider::{OpcProvider, OpcValue, TagValue, WriteResult};
 

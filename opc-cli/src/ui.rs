@@ -71,7 +71,7 @@ fn render_help(f: &mut Frame, app: &App, area: ratatui::layout::Rect) {
 }
 
 fn render_home(f: &mut Frame, app: &App, area: ratatui::layout::Rect) {
-    let display_text = format!("> {}_", app.host_input);
+    let display_text = format!("> {input}_", input = app.host_input);
     let input = Paragraph::new(display_text)
         .style(Style::default().fg(Color::Yellow))
         .block(
@@ -140,7 +140,7 @@ fn render_tag_list(f: &mut Frame, app: &mut App, area: ratatui::layout::Rect) {
     };
 
     if app.search_mode {
-        let search_text = format!("Search: {}_", app.search_query);
+        let search_text = format!("Search: {query}_", query = app.search_query);
         let search_bar = Paragraph::new(search_text)
             .style(Style::default().fg(Color::Yellow))
             .block(
@@ -265,7 +265,10 @@ fn render_status_bar(f: &mut Frame, app: &App, area: Rect) {
 
 fn render_write_input(f: &mut Frame, app: &App, area: Rect) {
     let tag_id = app.write_tag_id.as_deref().unwrap_or("Unknown");
-    let display_text = format!("Tag: {}\nValue: {}_", tag_id, app.write_value_input);
+    let display_text = format!(
+        "Tag: {tag_id}\nValue: {input}_",
+        input = app.write_value_input
+    );
 
     let popup_block = Block::default()
         .title(" Write Tag Value ")
@@ -284,7 +287,7 @@ fn render_write_input(f: &mut Frame, app: &App, area: Rect) {
 fn render_loading_popup(f: &mut Frame, app: &App, area: Rect) {
     let progress = app.browse_progress.load(Ordering::Relaxed);
     let msg = if progress > 0 {
-        format!("Browsing OPC tags... ({} found so far)", progress)
+        format!("Browsing OPC tags... ({progress} found so far)")
     } else {
         "Communicating with OPC Server...".to_string()
     };

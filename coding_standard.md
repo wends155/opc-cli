@@ -67,37 +67,58 @@ imports_granularity = "Crate"
 group_imports = "StdExternalCrate"
 ```
 
-### 5.2 Clippy Configuration (Strictest)
+### 5.2 Clippy Configuration
 
-Configure via attributes in `lib.rs` / `main.rs` (or a workspace `Cargo.toml` `[lints]` table):
+Use the workspace-level `[lints]` table (Rust 1.74+) for consistent configuration
+across all crates. The default `clippy::all` group already covers correctness and
+common-style lints — that is **sufficient as the baseline**. Layer `pedantic` as
+**warnings** for guidance, and cherry-pick high-value individual lints.
 
-```rust
-// lib.rs / main.rs — strictest lint configuration
-#![deny(clippy::all)]
-#![deny(clippy::pedantic)]
-#![deny(clippy::nursery)]
-#![deny(clippy::cargo)]
-#![deny(clippy::missing_docs_in_private_items)]
-#![deny(clippy::missing_errors_doc)]
-#![deny(clippy::missing_panics_doc)]
-```
-
-Or, **preferably**, use the workspace-level `[lints]` table (Rust 1.74+):
+> [!TIP]
+> Avoid blanket `deny` on `nursery` (lints are unstable and may change between
+> releases) or `cargo` (situational, better handled per-project). Promote
+> individual lints to `deny` only when the team has validated they don't produce
+> false positives in the codebase.
 
 ```toml
 # Cargo.toml (workspace root)
 [workspace.lints.clippy]
-all                           = "deny"
-pedantic                      = "deny"
-nursery                       = "deny"
-cargo                         = "deny"
-missing_docs_in_private_items = "deny"
-missing_errors_doc            = "deny"
-missing_panics_doc            = "deny"
+# ── Baseline (default) ────────────────────────────────────────
+all = "deny"                          # correctness + common style
+
+# ── Guidance ──────────────────────────────────────────────────
+pedantic = "warn"                     # stricter style — warn, don't block
+
+# ── Cherry-picked high-value lints (deny) ─────────────────────
+missing_errors_doc       = "deny"     # every Result-returning fn must document errors
+missing_panics_doc       = "deny"     # every potentially-panicking fn must document it
+undocumented_unsafe_blocks = "deny"   # enforce // SAFETY: comments
+cast_possible_truncation = "deny"     # catch lossy integer casts
+large_futures            = "deny"     # prevent accidentally huge futures on the stack
+
+# ── Useful pedantic lints relaxed to allow (override as needed) ─
+module_name_repetitions  = "allow"    # common in domain-driven designs
+must_use_candidate       = "allow"    # too noisy for general use
+
+[workspace.lints.rust]
+unsafe_code              = "warn"     # highlight unsafe usage without hard-blocking
 
 [lints]
 workspace = true
 ```
+
+#### Recommended Per-Project Additions
+
+Enable these when they apply to your project:
+
+| Lint | Level | When to enable |
+| :--- | :--- | :--- |
+| `clippy::nursery` | `warn` | Opt-in for experimental early warnings |
+| `clippy::cargo` | `warn` | When publishing crates to crates.io |
+| `clippy::missing_docs_in_private_items` | `warn` | For library-heavy projects needing internal docs |
+| `clippy::unwrap_used` | `deny` | For production services (not tests) |
+| `clippy::expect_used` | `warn` | Pair with `unwrap_used` for stricter error handling |
+| `clippy::indexing_slicing` | `warn` | For safety-critical code avoiding panics |
 
 ---
 
@@ -248,10 +269,12 @@ impl DataProcessor {
 ### 6.4 Type System & API Design
 
 - **Newtype pattern**: Wrap primitive types to add semantic meaning and prevent misuse.
-- **Builder pattern**: Use for structs with many optional fields (prefer `bon` or `typed-builder` crates).
+- **Builder pattern**: Use for structs with many optional fields (see § 6.6.1 for full guidance).
+- **Typestate pattern**: Encode valid state transitions in the type system (see § 6.6.2).
 - **`#[must_use]`**: Apply to functions whose return value should not be silently discarded.
 - **`#[non_exhaustive]`**: Apply to public enums and structs that may grow.
 - **Sealed traits**: Use the sealed-trait pattern for traits not intended for external implementation.
+- See § 6.6 for the complete design patterns reference and selection guide.
 
 ```rust
 /// A validated, non-empty project name.
@@ -311,6 +334,418 @@ pub fn weighted_average(
     // ...
 }
 ```
+
+---
+
+### 6.6 Design Patterns & Best Practices
+
+Rust's type system enables patterns that catch entire categories of bugs at compile time.
+This section codifies the patterns we use most, with guidance on when and why to apply each.
+
+#### 6.6.1 Builder Pattern
+
+Use when constructing structs with many fields — especially when some are optional, have
+defaults, or require validation. Prefer crate-based derive macros for boilerplate-free builders.
+
+> [!TIP]
+> Prefer the [`bon`](https://docs.rs/bon) or [`typed-builder`](https://docs.rs/typed-builder)
+> crates. Fall back to a manual builder only when you need custom validation logic during construction.
+
+**Derive approach (recommended):**
+
+```rust
+use bon::Builder;
+
+/// Configuration for a data processing pipeline.
+#[derive(Debug, Builder)]
+pub struct PipelineConfig {
+    /// Source connection string (required).
+    source: String,
+    /// Target connection string (required).
+    target: String,
+    /// Maximum records per batch.
+    #[builder(default = 1000)]
+    batch_size: usize,
+    /// Enable compression on the wire.
+    #[builder(default)]
+    compress: bool,
+    /// Optional timeout override.
+    #[builder(default)]
+    timeout: Option<Duration>,
+}
+
+// Usage — compile error if required fields are missing:
+let config = PipelineConfig::builder()
+    .source("postgres://localhost/src".into())
+    .target("postgres://localhost/dst".into())
+    .batch_size(5000)
+    .build();
+```
+
+**Manual builder (when validation is needed):**
+
+```rust
+/// Builder for [`PipelineConfig`] with validation.
+pub struct PipelineConfigBuilder {
+    source: Option<String>,
+    target: Option<String>,
+    batch_size: usize,
+}
+
+impl PipelineConfigBuilder {
+    pub fn new() -> Self {
+        Self {
+            source: None,
+            target: None,
+            batch_size: 1000,
+        }
+    }
+
+    pub fn source(mut self, source: impl Into<String>) -> Self {
+        self.source = Some(source.into());
+        self
+    }
+
+    pub fn target(mut self, target: impl Into<String>) -> Self {
+        self.target = Some(target.into());
+        self
+    }
+
+    pub fn batch_size(mut self, size: usize) -> Self {
+        self.batch_size = size;
+        self
+    }
+
+    /// Consume the builder and produce a validated [`PipelineConfig`].
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ValidationError`] if required fields are missing.
+    pub fn build(self) -> Result<PipelineConfig, ValidationError> {
+        let source = self.source.ok_or(ValidationError::MissingField("source"))?;
+        let target = self.target.ok_or(ValidationError::MissingField("target"))?;
+
+        if self.batch_size == 0 {
+            return Err(ValidationError::InvalidValue("batch_size must be > 0"));
+        }
+
+        Ok(PipelineConfig {
+            source,
+            target,
+            batch_size: self.batch_size,
+            compress: false,
+            timeout: None,
+        })
+    }
+}
+```
+
+---
+
+#### 6.6.2 Typestate Pattern
+
+Encode protocol steps or lifecycle phases into the type system so that **invalid state
+transitions are compile-time errors**. Each state is a zero-sized type used as a generic
+parameter — no runtime cost.
+
+```rust
+use std::marker::PhantomData;
+
+// ── State markers (zero-sized) ──────────────────────────────
+pub struct Disconnected;
+pub struct Connected;
+pub struct Authenticated;
+
+/// A database connection whose available operations depend on its state `S`.
+pub struct Connection<S> {
+    addr: String,
+    _state: PhantomData<S>,
+}
+
+// ── Methods available only in Disconnected state ────────────
+impl Connection<Disconnected> {
+    pub fn new(addr: impl Into<String>) -> Self {
+        Self {
+            addr: addr.into(),
+            _state: PhantomData,
+        }
+    }
+
+    /// Open a TCP connection. Transitions to `Connected`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ConnectionError::Tcp`] if the handshake fails.
+    pub fn connect(self) -> Result<Connection<Connected>, ConnectionError> {
+        // ... perform TCP handshake ...
+        Ok(Connection {
+            addr: self.addr,
+            _state: PhantomData,
+        })
+    }
+}
+
+// ── Methods available only in Connected state ───────────────
+impl Connection<Connected> {
+    /// Authenticate with credentials. Transitions to `Authenticated`.
+    pub fn authenticate(
+        self,
+        creds: &Credentials,
+    ) -> Result<Connection<Authenticated>, ConnectionError> {
+        // ... perform auth ...
+        Ok(Connection {
+            addr: self.addr,
+            _state: PhantomData,
+        })
+    }
+}
+
+// ── Methods available only in Authenticated state ───────────
+impl Connection<Authenticated> {
+    /// Execute a query — only available after authentication.
+    pub fn query(&self, sql: &str) -> Result<ResultSet, QueryError> {
+        // ... run query ...
+        todo!()
+    }
+}
+```
+
+> [!IMPORTANT]
+> Calling `.query()` on a `Connection<Connected>` (unauthenticated) is a **compile error**.
+> The state machine is enforced entirely by the compiler with zero runtime overhead.
+
+**When to use:**
+- Protocol handshakes (connect → auth → ready).
+- Build pipelines (configure → validate → execute).
+- File I/O (open → write → flush → close).
+
+---
+
+#### 6.6.3 RAII & Drop Guards
+
+Use Rust's `Drop` trait to guarantee resource cleanup runs automatically when a value
+goes out of scope — even on early returns or panics. This replaces `try/finally` blocks
+from other languages.
+
+```rust
+/// A transaction guard that automatically rolls back unless explicitly committed.
+pub struct TransactionGuard<'a> {
+    conn: &'a mut Connection<Authenticated>,
+    committed: bool,
+}
+
+impl<'a> TransactionGuard<'a> {
+    /// Begin a new transaction.
+    pub fn begin(conn: &'a mut Connection<Authenticated>) -> Result<Self, QueryError> {
+        conn.execute("BEGIN")?;
+        Ok(Self {
+            conn,
+            committed: false,
+        })
+    }
+
+    /// Execute a statement within this transaction.
+    pub fn execute(&mut self, sql: &str) -> Result<(), QueryError> {
+        self.conn.execute(sql)
+    }
+
+    /// Commit the transaction. Prevents rollback on drop.
+    pub fn commit(mut self) -> Result<(), QueryError> {
+        self.conn.execute("COMMIT")?;
+        self.committed = true;
+        Ok(())
+    }
+}
+
+impl Drop for TransactionGuard<'_> {
+    fn drop(&mut self) {
+        if !self.committed {
+            // Best-effort rollback — log but don't panic.
+            if let Err(e) = self.conn.execute("ROLLBACK") {
+                tracing::error!(error = %e, "failed to rollback transaction on drop");
+            }
+        }
+    }
+}
+```
+
+**Common RAII use cases:**
+
+| Resource | Guard / Type | Cleanup Action |
+|:---|:---|:---|
+| Database transaction | `TransactionGuard` | Rollback on drop |
+| Temp file / directory | `tempfile::TempDir` | Delete on drop |
+| Mutex lock | `MutexGuard` | Release on drop |
+| Timer / span | `tracing::span::Entered` | Record elapsed on drop |
+| File lock | `fs2::FileLock` | Release on drop |
+
+> [!TIP]
+> For ad-hoc guards without a dedicated struct, use the
+> [`scopeguard`](https://docs.rs/scopeguard) crate:
+> ```rust
+> use scopeguard::defer;
+> defer! { cleanup_temp_files(); }
+> ```
+
+---
+
+#### 6.6.4 Extension Traits
+
+Add domain-specific methods to types you don't own (e.g., `std`, `serde_json`) without
+violating the orphan rule. Define a trait, implement it for the foreign type, and re-export it.
+
+```rust
+/// Extends [`Result`] with contextual error wrapping.
+pub trait ResultExt<T, E> {
+    /// Wrap the error with additional context.
+    fn context(self, msg: &'static str) -> Result<T, ContextError<E>>;
+}
+
+impl<T, E: std::error::Error> ResultExt<T, E> for Result<T, E> {
+    fn context(self, msg: &'static str) -> Result<T, ContextError<E>> {
+        self.map_err(|e| ContextError {
+            context: msg,
+            source: e,
+        })
+    }
+}
+
+/// Extends `&str` with data-engineering helpers.
+pub trait StrExt {
+    /// Return `None` if the string is empty or whitespace-only.
+    fn non_blank(&self) -> Option<&str>;
+}
+
+impl StrExt for str {
+    fn non_blank(&self) -> Option<&str> {
+        let trimmed = self.trim();
+        if trimmed.is_empty() { None } else { Some(trimmed) }
+    }
+}
+```
+
+**Rules:**
+- Name the trait `<Type>Ext` (e.g., `StrExt`, `ResultExt`, `IteratorExt`).
+- Keep extension traits in a dedicated `ext` module.
+- Re-export from the crate prelude if they're used widely.
+
+---
+
+#### 6.6.5 Interior Mutability
+
+Use interior mutability when you need to mutate data behind a shared reference (`&T`).
+Choose the narrowest primitive that satisfies your requirements:
+
+| Type | Thread-safe? | Checked at | Use when |
+|:---|:---|:---|:---|
+| `Cell<T>` | ❌ | Compile time | `T: Copy`, single thread, simple swap/replace |
+| `RefCell<T>` | ❌ | Runtime | Single thread, need `&mut T` borrows |
+| `Mutex<T>` | ✅ | Runtime | Multi-thread, exclusive write access |
+| `RwLock<T>` | ✅ | Runtime | Multi-thread, many readers / rare writers |
+| `OnceLock<T>` | ✅ | Runtime | Write-once lazy initialization |
+| `Atomic*` | ✅ | Lock-free | Counters, flags, simple numeric state |
+
+> [!CAUTION]
+> Prefer `OnceLock` (std) or `once_cell::sync::Lazy` over hand-rolled `Mutex<Option<T>>`
+> for lazy initialization. It's safer and more readable.
+
+```rust
+use std::sync::OnceLock;
+
+/// Application-wide configuration, initialized once at startup.
+static CONFIG: OnceLock<AppConfig> = OnceLock::new();
+
+pub fn init_config(config: AppConfig) {
+    CONFIG.set(config).expect("config already initialized");
+}
+
+/// Get the global config. Panics if [`init_config`] was not called.
+pub fn config() -> &'static AppConfig {
+    CONFIG.get().expect("config not initialized — call init_config() first")
+}
+```
+
+---
+
+#### 6.6.6 Enum Dispatch vs Trait Objects
+
+Choose between compile-time (`enum`) and runtime (`dyn Trait`) polymorphism based on
+whether the set of variants is **closed** or **open**.
+
+| Criterion | Enum dispatch | Trait objects (`dyn Trait`) |
+|:---|:---|:---|
+| Variant set | Closed (known at compile time) | Open (extensible by consumers) |
+| Performance | Monomorphized, inlineable | Vtable indirection |
+| Pattern matching | ✅ Exhaustive `match` | ❌ Not available |
+| Object safety needed? | No | Yes |
+| Binary size | Larger (monomorphization) | Smaller |
+
+**Enum dispatch (closed set, preferred when possible):**
+
+```rust
+/// All supported data formats — known at compile time.
+#[non_exhaustive]
+pub enum DataFormat {
+    Csv(CsvHandler),
+    Json(JsonHandler),
+    Parquet(ParquetHandler),
+}
+
+impl DataFormat {
+    /// Read records from `reader` in this format.
+    pub fn read(&self, reader: &mut dyn Read) -> Result<Vec<Record>, FormatError> {
+        match self {
+            Self::Csv(h) => h.read(reader),
+            Self::Json(h) => h.read(reader),
+            Self::Parquet(h) => h.read(reader),
+        }
+    }
+}
+```
+
+**Trait objects (open set, plugin-style extensibility):**
+
+```rust
+/// A data source that can be implemented by consumers.
+pub trait DataSource: Send + Sync {
+    /// Read all records from this source.
+    fn read_all(&self) -> Result<Vec<Record>, SourceError>;
+
+    /// Human-readable name for logging.
+    fn name(&self) -> &str;
+}
+
+/// Accept any data source — open for extension.
+pub fn ingest(sources: &[Box<dyn DataSource>]) -> Result<(), IngestError> {
+    for source in sources {
+        tracing::info!(source = source.name(), "ingesting");
+        let records = source.read_all()?;
+        store(records)?;
+    }
+    Ok(())
+}
+```
+
+> [!TIP]
+> When the set is closed but you're tempted by traits for ergonomics, consider the
+> [`enum_dispatch`](https://docs.rs/enum_dispatch) crate — it auto-generates the
+> `match` arms and gives you trait syntax with enum performance.
+
+---
+
+#### 6.6.7 Pattern Selection Guide
+
+| Problem | Recommended Pattern | Ref |
+|:---|:---|:---|
+| Many optional constructor fields | Builder | § 6.6.1 |
+| Compile-time state machine enforcement | Typestate | § 6.6.2 |
+| Guaranteed resource cleanup | RAII / Drop Guard | § 6.6.3 |
+| Add methods to types you don't own | Extension Trait | § 6.6.4 |
+| Mutation behind `&T` | Interior Mutability | § 6.6.5 |
+| Known, closed set of behaviors | Enum Dispatch | § 6.6.6 |
+| Open, extensible set of behaviors | Trait Objects (`dyn`) | § 6.6.6 |
+| Prevent primitive type misuse | Newtype | § 6.4 |
+| Restrict external trait implementations | Sealed Trait | § 6.4 |
 
 ---
 
@@ -382,7 +817,7 @@ proptest! {
 
 ### 7.3 Testing Checklist
 
-- [ ] Every public function has at least one happy-path and one error-path test.
+- [ ] Every function has at least one happy-path and one error-path test.
 - [ ] Async functions are tested with `#[tokio::test]`.
 - [ ] Edge cases (empty input, max values, unicode) are covered.
 - [ ] Property-based tests exist for complex transformations.
@@ -578,6 +1013,11 @@ jobs:
 | Magic numbers | Named constants or enums |
 | Wildcard imports `use foo::*` | Explicit imports or re-exports |
 | Mutable globals | `OnceLock`, DI, or runtime config |
+| Boolean flags for state tracking | Typestate pattern (§ 6.6.2) |
+| Manual resource cleanup calls | RAII / Drop guard (§ 6.6.3) |
+| `struct` with 10+ constructor args | Builder pattern (§ 6.6.1) |
+| Wrapper structs for one method | Extension trait (§ 6.6.4) |
+| `Mutex<Option<T>>` for lazy init | `OnceLock` or `LazyLock` (§ 6.6.5) |
 
 ---
 

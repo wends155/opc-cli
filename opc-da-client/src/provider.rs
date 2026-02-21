@@ -24,13 +24,13 @@ pub struct TagValue {
 /// Typed value to write to an OPC DA tag.
 #[derive(Debug, Clone, PartialEq)]
 pub enum OpcValue {
-    /// String value (VT_BSTR) — server may coerce to target type.
+    /// String value (`VT_BSTR`) — server may coerce to target type.
     String(String),
-    /// 32-bit integer (VT_I4).
+    /// 32-bit integer (`VT_I4`).
     Int(i32),
-    /// 64-bit float (VT_R8).
+    /// 64-bit float (`VT_R8`).
     Float(f64),
-    /// Boolean (VT_BOOL).
+    /// Boolean (`VT_BOOL`).
     Bool(bool),
 }
 
@@ -62,7 +62,7 @@ pub trait OpcProvider: Send + Sync {
     /// Browse tags recursively, pushing discoveries to `tags_sink`.
     ///
     /// # Errors
-    /// Returns `Err` if the server connection fails, the ProgID cannot be
+    /// Returns `Err` if the server connection fails, the `ProgID` cannot be
     /// resolved, or the namespace walk encounters an unrecoverable error.
     async fn browse_tags(
         &self,

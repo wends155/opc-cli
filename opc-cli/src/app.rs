@@ -11,7 +11,7 @@ const OPC_TIMEOUT_SECS: u64 = 300;
 /// Maximum tags to retrieve when browsing an OPC server namespace.
 const MAX_BROWSE_TAGS: usize = 10000;
 
-#[derive(Debug, PartialEq, Clone, Copy)]
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
 pub enum CurrentScreen {
     Home,
     Loading,
@@ -22,6 +22,10 @@ pub enum CurrentScreen {
     Exiting,
 }
 
+/// Main application state for the OPC DA Client TUI.
+///
+/// Manages the current screen, loaded servers and tags, search state,
+/// and terminal interaction through `ratatui`.
 pub struct App {
     pub host_input: String,
     pub servers: Vec<String>,
@@ -59,11 +63,12 @@ pub struct App {
     pub write_value_input: String,
     /// Receiver for background write result.
     pub write_result_rx: Option<oneshot::Receiver<Result<WriteResult>>>,
-    /// The server ProgID that was used for the current tag browse.
+    /// The server `ProgID` that was used for the current tag browse.
     pub browsed_server: Option<String>,
 }
 
 impl App {
+    /// Create a new `App` instance with the given OPC provider.
     pub fn new(opc_provider: Arc<dyn OpcProvider>) -> Self {
         Self {
             host_input: "localhost".into(),
@@ -107,7 +112,7 @@ impl App {
     pub fn start_fetch_servers(&mut self) {
         let host = self.host_input.clone();
         self.current_screen = CurrentScreen::Loading;
-        self.add_message(format!("Connecting to {}...", host));
+        self.add_message(format!("Connecting to {host}..."));
 
         let provider = Arc::clone(&self.opc_provider);
         let (tx, rx) = oneshot::channel();
@@ -119,16 +124,12 @@ impl App {
             )
             .await;
 
-            let final_result = match result {
-                Ok(inner) => inner,
-                Err(_) => {
-                    tracing::error!("Server listing timed out ({}s)", OPC_TIMEOUT_SECS);
-                    Err(anyhow::anyhow!(
-                        "Connection timed out ({}s)",
-                        OPC_TIMEOUT_SECS
-                    ))
-                }
-            };
+            let final_result = result.unwrap_or_else(|_| {
+                tracing::error!("Server listing timed out ({OPC_TIMEOUT_SECS}s)");
+                Err(anyhow::anyhow!(
+                    "Connection timed out ({OPC_TIMEOUT_SECS}s)"
+                ))
+            });
 
             let _ = tx.send(final_result);
         });
@@ -159,7 +160,7 @@ impl App {
                 Ok(Err(e)) => {
                     self.current_screen = CurrentScreen::Home;
                     tracing::error!(error = %e, "Failed to fetch servers");
-                    self.add_message(format!("Error fetching servers: {}", e));
+                    self.add_message(format!("Error fetching servers: {e}"));
                     self.fetch_result_rx = None;
                 }
                 Err(oneshot::error::TryRecvError::Empty) => {
@@ -271,9 +272,8 @@ impl App {
             return;
         }
 
-        let idx = match self.selected_index {
-            Some(i) => i,
-            None => return,
+        let Some(idx) = self.selected_index else {
+            return;
         };
 
         let server = match self.servers.get(idx) {
@@ -285,7 +285,7 @@ impl App {
 
         self.current_screen = CurrentScreen::Loading;
         self.browse_progress = Arc::new(AtomicUsize::new(0));
-        self.add_message(format!("Browsing tags for {}...", server));
+        self.add_message(format!("Browsing tags on {server}..."));
 
         let provider = Arc::clone(&self.opc_provider);
         let progress = Arc::clone(&self.browse_progress);
@@ -327,9 +327,7 @@ impl App {
                             "Browse tags timed out with zero tags found"
                         );
                         Err(anyhow::anyhow!(
-                            "Browse timed out ({}s) for '{}' with no tags found",
-                            OPC_TIMEOUT_SECS,
-                            server
+                            "Browse timed out ({OPC_TIMEOUT_SECS}s) for '{server}' with no tags found"
                         ))
                     }
                 }
@@ -391,10 +389,11 @@ impl App {
         }
         if let Some(idx) = self.selected_index
             && idx < self.selected_tags.len()
+            && let Some(tag) = self.tags.get(idx)
         {
             self.selected_tags[idx] = !self.selected_tags[idx];
             tracing::debug!(
-                tag = %self.tags[idx],
+                tag = %tag,
                 selected = self.selected_tags[idx],
                 "toggle_tag_selection"
             );
@@ -437,7 +436,7 @@ impl App {
 
         // Store context for auto-refresh
         self.refresh_server = Some(server.clone());
-        self.refresh_tag_ids = selected_tag_ids.clone();
+        self.refresh_tag_ids.clone_from(&selected_tag_ids);
 
         tracing::info!(
             server = %server,
@@ -461,8 +460,8 @@ impl App {
             let final_result = match result {
                 Ok(inner) => inner,
                 Err(_) => {
-                    tracing::error!("Read tag values timed out ({}s)", OPC_TIMEOUT_SECS);
-                    Err(anyhow::anyhow!("Read timed out ({}s)", OPC_TIMEOUT_SECS))
+                    tracing::error!("Read tag values timed out ({OPC_TIMEOUT_SECS}s)");
+                    Err(anyhow::anyhow!("Read timed out ({OPC_TIMEOUT_SECS}s)"))
                 }
             };
 
@@ -593,17 +592,17 @@ impl App {
         };
 
         self.current_screen = CurrentScreen::Loading;
-        self.add_message(format!("Writing '{}' to {}...", value_str, tag_id));
+        self.add_message(format!("Writing '{value_str}' to {tag_id}..."));
 
         let provider = Arc::clone(&self.opc_provider);
         let (tx, rx) = oneshot::channel();
 
         // Use a consistent timeout
-        const OPC_TIMEOUT_SECS: u64 = 10;
+        const OPC_TIMEOUT_SECS_WRITE: u64 = 10;
 
         tokio::spawn(async move {
             let result = tokio::time::timeout(
-                std::time::Duration::from_secs(OPC_TIMEOUT_SECS),
+                std::time::Duration::from_secs(OPC_TIMEOUT_SECS_WRITE),
                 provider.write_tag_value(&server, &tag_id, opc_value),
             )
             .await;
@@ -611,8 +610,10 @@ impl App {
             let final_result = match result {
                 Ok(inner) => inner,
                 Err(_) => {
-                    tracing::error!("Write tag value timed out ({}s)", OPC_TIMEOUT_SECS);
-                    Err(anyhow::anyhow!("Write timed out ({}s)", OPC_TIMEOUT_SECS))
+                    tracing::error!("Write tag value timed out ({OPC_TIMEOUT_SECS_WRITE}s)");
+                    Err(anyhow::anyhow!(
+                        "Write timed out ({OPC_TIMEOUT_SECS_WRITE}s)"
+                    ))
                 }
             };
             let _ = tx.send(final_result);
@@ -643,7 +644,7 @@ impl App {
                 }
                 Ok(Err(e)) => {
                     tracing::error!(error = %e, "Write tag values failed");
-                    self.add_message(format!("Write error: {:#}", e));
+                    self.add_message(format!("Browse error: {e:#}"));
                     self.current_screen = CurrentScreen::TagValues;
                     self.write_result_rx = None;
                 }
@@ -696,8 +697,10 @@ impl App {
             let final_result = match result {
                 Ok(inner) => inner,
                 Err(_) => {
-                    tracing::error!("Auto-refresh timed out ({}s)", OPC_TIMEOUT_SECS);
-                    Err(anyhow::anyhow!("Auto-refresh timed out"))
+                    tracing::error!("Auto-refresh timed out ({OPC_TIMEOUT_SECS}s)");
+                    Err(anyhow::anyhow!(
+                        "Auto-refresh timed out ({OPC_TIMEOUT_SECS}s)"
+                    ))
                 }
             };
 
@@ -765,9 +768,10 @@ impl App {
             return;
         }
         self.search_match_index = (self.search_match_index + 1) % self.search_matches.len();
-        let next_idx = self.search_matches[self.search_match_index];
-        self.selected_index = Some(next_idx);
-        self.list_state.select(Some(next_idx));
+        if let Some(&next_idx) = self.search_matches.get(self.search_match_index) {
+            self.selected_index = Some(next_idx);
+            self.list_state.select(Some(next_idx));
+        }
     }
 
     /// Jump to the previous search match.
@@ -780,9 +784,10 @@ impl App {
         } else {
             self.search_match_index -= 1;
         }
-        let prev_idx = self.search_matches[self.search_match_index];
-        self.selected_index = Some(prev_idx);
-        self.list_state.select(Some(prev_idx));
+        if let Some(&prev_idx) = self.search_matches.get(self.search_match_index) {
+            self.selected_index = Some(prev_idx);
+            self.list_state.select(Some(prev_idx));
+        }
     }
 
     pub fn go_back(&mut self) {

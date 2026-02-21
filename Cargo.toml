@@ -1,3 +1,28 @@
 [workspace]
 members = ["opc-da-client", "opc-cli"]
 resolver = "2"
+
+[workspace.lints.clippy]
+all = { level = "deny", priority = -1 }
+pedantic = { level = "warn", priority = -2 }
+cargo = { level = "warn", priority = -1 }
+nursery = { level = "warn", priority = -1 }
+undocumented_unsafe_blocks = "deny"
+# Individual lint overrides
+must_use_candidate = "allow"
+missing_errors_doc = "allow"
+module_name_repetitions  = "allow"
+multiple_crate_versions = "allow"
+redundant_feature_names = "allow"
+single_match_else = "allow"
+option_if_let_else = "allow"
+if_not_else = "allow"
+missing_const_for_fn = "allow"
+items_after_statements = "allow"
+doc_markdown = "allow"
+uninlined_format_args = "allow"
+
+[workspace.lints.rust]
+unsafe_code = "allow"
+unreachable_pub = "allow"
+unused_imports = "warn"

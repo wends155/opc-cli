@@ -1,9 +1,10 @@
 use anyhow::Context;
+use opc_da::client::ClientTrait;
 use windows::Win32::Foundation::{FILETIME, VARIANT_BOOL};
-use windows::Win32::System::Com::{CoTaskMemFree, ProgIDFromCLSID};
+use windows::Win32::System::Com::{CLSIDFromProgID, CoTaskMemFree, ProgIDFromCLSID};
 use windows::Win32::System::Ole::{SafeArrayGetDim, SafeArrayGetLBound, SafeArrayGetUBound};
 use windows::Win32::System::Variant::{VARIANT, VT_BOOL, VT_BSTR, VT_I4, VT_R8};
-use windows::core::BSTR;
+use windows::core::{BSTR, PCWSTR};
 
 use crate::provider::OpcValue;
 
@@ -22,8 +23,13 @@ use crate::provider::OpcValue;
 /// let unknown = anyhow::anyhow!("Something else");
 /// assert_eq!(friendly_com_hint(&unknown), None);
 /// ```
-pub fn friendly_com_hint(err: &anyhow::Error) -> Option<&'static str> {
-    let msg = format!("{:?}", err);
+///
+/// # Errors
+///
+/// This function never returns `Err`, but it documents common error codes
+/// that might be passed in.
+pub fn friendly_com_hint(error: &anyhow::Error) -> Option<&'static str> {
+    let msg = format!("{error:?}");
     if msg.contains("0x80040112") {
         Some("Server license does not permit OPC client connections")
     } else if msg.contains("0x80080005") {
@@ -53,15 +59,16 @@ pub fn friendly_com_hint(err: &anyhow::Error) -> Option<&'static str> {
     }
 }
 
-/// Returns `true` for E_POINTER errors that are known to be caused by
+/// Returns `true` for `E_POINTER` errors that are known to be caused by
 /// the `opc_da` crate's `StringIterator` initialization bug (index starts
 /// at 0 with null-pointer cache, producing 16 phantom errors per iterator).
-pub(crate) fn is_known_iterator_bug(err: &windows::core::Error) -> bool {
-    err.code().0 as u32 == 0x80004003 // E_POINTER
+#[allow(clippy::cast_sign_loss)]
+pub const fn is_known_iterator_bug(err: &windows::core::Error) -> bool {
+    err.code().0 as u32 == 0x8000_4003 // E_POINTER
 }
 
-/// Helper to convert GUID to ProgID using Windows API
-pub(crate) fn guid_to_progid(guid: &windows::core::GUID) -> anyhow::Result<String> {
+/// Helper to convert GUID to `ProgID` using Windows API
+pub fn guid_to_progid(guid: &windows::core::GUID) -> anyhow::Result<String> {
     // SAFETY: `ProgIDFromCLSID` is a Win32 FFI call that allocates a PWSTR
     // via the COM allocator. We read it and free it with `CoTaskMemFree`
     // before returning — the pointer is not used after free.
@@ -73,7 +80,7 @@ pub(crate) fn guid_to_progid(guid: &windows::core::GUID) -> anyhow::Result<Strin
         } else {
             progid
                 .to_string()
-                .map_err(|e| anyhow::anyhow!("Failed into convert PWSTR: {}", e))?
+                .map_err(|e| anyhow::anyhow!("Failed into convert PWSTR: {e}"))?
         };
 
         if !progid.is_null() {
@@ -85,10 +92,10 @@ pub(crate) fn guid_to_progid(guid: &windows::core::GUID) -> anyhow::Result<Strin
 }
 
 /// Convert OPC DA VARIANT to a displayable string.
-pub(crate) fn variant_to_string(variant: &VARIANT) -> String {
-    // SAFETY: Accessing the VARIANT union fields. The caller guarantees
-    // the VARIANT was produced by COM (e.g., from `group.read()`), so the
-    // `vt` discriminant correctly identifies which union arm is active.
+pub fn variant_to_string(variant: &VARIANT) -> String {
+    // SAFETY: Accessing the VARIANT union fields. The caller (OpcDaWrapper)
+    // guarantees the VARIANT was produced by COM (e.g., from `group.read()`),
+    // so the `vt` discriminant correctly identifies which union arm is active.
     unsafe {
         let vt = variant.Anonymous.Anonymous.vt;
         let base_type = vt.0 & 0x0FFF; // strip VT_ARRAY (0x2000) / VT_BYREF (0x4000)
@@ -115,22 +122,28 @@ pub(crate) fn variant_to_string(variant: &VARIANT) -> String {
                     windows::Win32::System::Variant::VARENUM(base_type)
                 );
             }
-            return format!("Array[{}D]", dims);
+            return format!("Array[{dims}D]");
         }
 
         match vt.0 {
-            0 => "Empty".to_string(),                                       // VT_EMPTY
-            1 => "Null".to_string(),                                        // VT_NULL
-            2 => format!("{}", variant.Anonymous.Anonymous.Anonymous.iVal), // VT_I2
-            3 => format!("{}", variant.Anonymous.Anonymous.Anonymous.lVal), // VT_I4
-            4 => format!("{:.2}", variant.Anonymous.Anonymous.Anonymous.fltVal), // VT_R4
-            5 => format!("{:.2}", variant.Anonymous.Anonymous.Anonymous.dblVal), // VT_R8
+            0 => "Empty".to_string(), // VT_EMPTY
+            1 => "Null".to_string(),  // VT_NULL
+            2 => format!("{val}", val = variant.Anonymous.Anonymous.Anonymous.iVal), // VT_I2
+            3 => format!("{val}", val = variant.Anonymous.Anonymous.Anonymous.lVal), // VT_I4
+            4 => format!(
+                "{val:.2}",
+                val = variant.Anonymous.Anonymous.Anonymous.fltVal
+            ), // VT_R4
+            5 => format!(
+                "{val:.2}",
+                val = variant.Anonymous.Anonymous.Anonymous.dblVal
+            ), // VT_R8
             6 => {
                 // VT_CY - currency, 64-bit fixed-point scaled by 10,000
                 let raw = variant.Anonymous.Anonymous.Anonymous.cyVal.int64;
                 let whole = raw / 10_000;
                 let frac = (raw % 10_000).unsigned_abs();
-                format!("{}.{:04}", whole, frac)
+                format!("{whole}.{frac:04}")
             }
             7 => {
                 // VT_DATE - OLE Automation date (f64, day 0 = 1899-12-30)
@@ -146,54 +159,72 @@ pub(crate) fn variant_to_string(variant: &VARIANT) -> String {
                     format!("\"{}\"", &**bstr)
                 }
             }
-            11 => format!("{}", variant.Anonymous.Anonymous.Anonymous.boolVal.0 != 0), // VT_BOOL
-            16 => format!("{}", variant.Anonymous.Anonymous.Anonymous.bVal as i8),     // VT_I1
-            17 => format!("{}", variant.Anonymous.Anonymous.Anonymous.bVal),           // VT_UI1
-            18 => format!("{}", variant.Anonymous.Anonymous.Anonymous.uiVal),          // VT_UI2
-            19 => format!("{}", variant.Anonymous.Anonymous.Anonymous.ulVal),          // VT_UI4
+            11 => format!(
+                "{val}",
+                val = variant.Anonymous.Anonymous.Anonymous.boolVal.0 != 0
+            ), // VT_BOOL
+            16 => {
+                #[allow(clippy::cast_possible_wrap)]
+                let val = variant.Anonymous.Anonymous.Anonymous.bVal as i8;
+                format!("{val}")
+            } // VT_I1
+            17 => format!("{val}", val = variant.Anonymous.Anonymous.Anonymous.bVal), // VT_UI1
+            18 => format!("{val}", val = variant.Anonymous.Anonymous.Anonymous.uiVal), // VT_UI2
+            19 => format!("{val}", val = variant.Anonymous.Anonymous.Anonymous.ulVal), // VT_UI4
             20 => {
                 // VT_I8: read 8 bytes as i64 via pointer cast
                 let p = (&raw const variant.Anonymous.Anonymous.Anonymous).cast::<i64>();
-                format!("{}", *p)
+                // SAFETY: p is a valid pointer to the variant union
+                let val = *p;
+                format!("{val}")
             }
             21 => {
                 // VT_UI8: read 8 bytes as u64 via pointer cast
                 let p = (&raw const variant.Anonymous.Anonymous.Anonymous).cast::<u64>();
-                format!("{}", *p)
+                // SAFETY: p is a valid pointer to the variant union
+                let val = *p;
+                format!("{val}")
             }
-            _ => format!("(VT {:?})", vt),
+            _ => format!("(VT {vt:?})"),
         }
     }
 }
 
 /// Convert an OLE Automation date (f64) to a local datetime string.
 /// OLE date epoch is 1899-12-30; integer part = days, fraction = time-of-day.
+#[allow(
+    clippy::cast_precision_loss,
+    clippy::cast_possible_truncation,
+    clippy::cast_possible_wrap
+)]
 fn ole_date_to_string(ole_date: f64) -> String {
     // OLE epoch: 1899-12-30 00:00:00
     const OLE_EPOCH_DAYS: i64 = 25569; // days from 1899-12-30 to 1970-01-01
     let total_secs = (ole_date - OLE_EPOCH_DAYS as f64) * 86400.0;
-    match chrono::DateTime::from_timestamp(total_secs as i64, 0) {
-        Some(utc) => utc
-            .with_timezone(&chrono::Local)
-            .format("%Y-%m-%d %H:%M:%S")
-            .to_string(),
-        None => format!("{:.6}", ole_date),
-    }
+    chrono::DateTime::from_timestamp(total_secs as i64, 0).map_or_else(
+        || format!("{ole_date:.6}"),
+        |utc| {
+            utc.with_timezone(&chrono::Local)
+                .format("%Y-%m-%d %H:%M:%S")
+                .to_string()
+        },
+    )
 }
 
 /// Map OPC quality code to a human-readable label.
-pub(crate) fn quality_to_string(quality: u16) -> String {
+pub fn quality_to_string(quality: u16) -> String {
     let quality_bits = quality & 0xC0; // Top 2 bits define Good/Bad/Uncertain
     match quality_bits {
         0xC0 => "Good".to_string(),
         0x00 => "Bad".to_string(),
         0x40 => "Uncertain".to_string(),
-        _ => format!("Unknown(0x{:04X})", quality),
+        _ => format!("Unknown(0x{quality:04X})"),
     }
 }
 
 /// Convert FILETIME to a human-readable local time string.
-pub(crate) fn filetime_to_string(ft: FILETIME) -> String {
+#[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
+pub fn filetime_to_string(ft: FILETIME) -> String {
     if ft.dwHighDateTime == 0 && ft.dwLowDateTime == 0 {
         return "N/A".to_string();
     }
@@ -201,21 +232,22 @@ pub(crate) fn filetime_to_string(ft: FILETIME) -> String {
     let unix_secs = (intervals / 10_000_000).saturating_sub(11_644_473_600);
     let nanos = ((intervals % 10_000_000) * 100) as u32;
 
-    match chrono::DateTime::from_timestamp(unix_secs as i64, nanos) {
-        Some(utc) => utc
-            .with_timezone(&chrono::Local)
-            .format("%Y-%m-%d %H:%M:%S")
-            .to_string(),
-        None => "Invalid".to_string(),
-    }
+    chrono::DateTime::from_timestamp(unix_secs as i64, nanos).map_or_else(
+        || "Invalid".to_string(),
+        |utc| {
+            utc.with_timezone(&chrono::Local)
+                .format("%Y-%m-%d %H:%M:%S")
+                .to_string()
+        },
+    )
 }
 
 /// Convert an [`OpcValue`] into a COM [`VARIANT`] for writing.
-pub(crate) fn opc_value_to_variant(value: &OpcValue) -> VARIANT {
+pub fn opc_value_to_variant(value: &OpcValue) -> VARIANT {
     let mut variant = VARIANT::default();
     // SAFETY: We set the `vt` discriminant and the corresponding union
     // field atomically. The VARIANT is returned by value, so no aliasing.
-    // `ManuallyDrop` on BSTR prevents double-free — COM owns cleanup.
+    // `ManuallyDrop` on BSTR prevents double-free — COM takes ownership.
     unsafe {
         match value {
             OpcValue::String(s) => {
@@ -239,6 +271,41 @@ pub(crate) fn opc_value_to_variant(value: &OpcValue) -> VARIANT {
         }
     }
     variant
+}
+
+/// Resolve an OPC DA server `ProgID` to a connected `opc_da` Server instance.
+///
+/// Converts the `ProgID` string to a `CLSID` via the Windows registry,
+/// then creates and returns a connected server handle.
+///
+/// # Errors
+///
+/// Returns `Err` if the `ProgID` cannot be resolved or the server
+/// cannot be instantiated.
+pub fn connect_server(server_name: &str) -> anyhow::Result<opc_da::client::v2::Server> {
+    // SAFETY: `server_wide` is null-terminated and lives until the end
+    // of this scope, so the PCWSTR pointer is valid for the duration of the call.
+    let clsid_raw = unsafe {
+        let server_wide: Vec<u16> = server_name
+            .encode_utf16()
+            .chain(std::iter::once(0))
+            .collect();
+        CLSIDFromProgID(PCWSTR(server_wide.as_ptr()))
+            .with_context(|| format!("Failed to resolve ProgID '{server_name}' to CLSID"))?
+    };
+    // SAFETY: `opc_da::GUID` and `windows::core::GUID` are binary compatible
+    // 128-bit structures with identical field layouts (4-2-2-8 byte segments).
+    let clsid = unsafe { std::mem::transmute_copy(&clsid_raw) };
+
+    let client = opc_da::client::v2::Client;
+    client
+        .create_server(clsid, opc_da::def::ClassContext::All)
+        .map_err(|e| {
+            let hint = friendly_com_hint(&anyhow::anyhow!("{e:?}"))
+                .unwrap_or("Check DCOM configuration and server status");
+            tracing::error!(error = ?e, server = %server_name, hint, "create_server failed");
+            anyhow::anyhow!(e)
+        })
 }
 
 #[cfg(test)]
@@ -319,10 +386,10 @@ mod tests {
 
     #[test]
     fn test_opc_value_to_variant_float() {
-        let v = opc_value_to_variant(&OpcValue::Float(3.14));
+        let v = opc_value_to_variant(&OpcValue::Float(3.5));
         unsafe {
             assert_eq!(v.Anonymous.Anonymous.vt, VT_R8);
-            assert!((v.Anonymous.Anonymous.Anonymous.dblVal - 3.14).abs() < f64::EPSILON);
+            assert!((v.Anonymous.Anonymous.Anonymous.dblVal - 3.5).abs() < f64::EPSILON);
         }
     }
 
@@ -361,8 +428,8 @@ mod tests {
         assert_eq!(variant_to_string(&v), "99");
 
         // Float roundtrip
-        let v = opc_value_to_variant(&OpcValue::Float(3.14));
-        assert_eq!(variant_to_string(&v), "3.14");
+        let v = opc_value_to_variant(&OpcValue::Float(3.5));
+        assert_eq!(variant_to_string(&v), "3.50");
 
         // Bool true roundtrip
         let v = opc_value_to_variant(&OpcValue::Bool(true));

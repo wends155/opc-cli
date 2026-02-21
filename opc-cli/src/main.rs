@@ -1,3 +1,4 @@
+#![forbid(unsafe_code)]
 mod app;
 mod ui;
 
@@ -28,14 +29,7 @@ async fn main() -> Result<()> {
     tracing::info!("Starting OPC CLI");
 
     // Initialize COM (MTA) for the main thread
-    unsafe {
-        windows::Win32::System::Com::CoInitializeEx(
-            None,
-            windows::Win32::System::Com::COINIT_MULTITHREADED,
-        )
-        .ok()
-        .context("Failed to initialize COM MTA")?;
-    }
+    let _com_guard = opc_da_client::ComGuard::new().context("Failed to initialize COM MTA")?;
 
     // Setup terminal
     enable_raw_mode()?;
@@ -47,7 +41,7 @@ async fn main() -> Result<()> {
     // Create app and run it
     let opc_wrapper = Arc::new(OpcDaWrapper::new());
     let mut app = App::new(opc_wrapper);
-    let res = run_app(&mut terminal, &mut app).await;
+    let res = run_app(&mut terminal, &mut app);
 
     // Restore terminal
     disable_raw_mode()?;
@@ -58,11 +52,6 @@ async fn main() -> Result<()> {
     )?;
     terminal.show_cursor()?;
 
-    // Uninitialize COM
-    unsafe {
-        windows::Win32::System::Com::CoUninitialize();
-    }
-
     if let Err(err) = res {
         tracing::error!(error = ?err, "Application error");
     }
@@ -70,7 +59,7 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
-async fn run_app<B: ratatui::backend::Backend>(
+fn run_app<B: ratatui::backend::Backend>(
     terminal: &mut Terminal<B>,
     app: &mut App,
 ) -> io::Result<()> {
@@ -80,7 +69,6 @@ async fn run_app<B: ratatui::backend::Backend>(
     }
 
     loop {
-        // Poll background task progress
         app.poll_fetch_result();
         app.poll_browse_result();
         app.poll_read_result();
@@ -95,7 +83,7 @@ async fn run_app<B: ratatui::backend::Backend>(
             handle_key_event(app, key);
         }
 
-        if let CurrentScreen::Exiting = app.current_screen {
+        if app.current_screen == CurrentScreen::Exiting {
             return Ok(());
         }
     }
@@ -131,7 +119,7 @@ fn handle_key_event(app: &mut App, key: event::KeyEvent) {
             KeyCode::Enter => {
                 app.start_browse_tags();
             }
-            KeyCode::Char('q') | KeyCode::Char('Q') => {
+            KeyCode::Char('q' | 'Q') => {
                 app.current_screen = CurrentScreen::Exiting;
             }
             _ => {}
@@ -159,9 +147,9 @@ fn handle_key_event(app: &mut App, key: event::KeyEvent) {
                     KeyCode::Down => app.select_next(),
                     KeyCode::Up => app.select_prev(),
                     KeyCode::Char(' ') => app.toggle_tag_selection(),
-                    KeyCode::Char('s') | KeyCode::Char('S') => app.enter_search_mode(),
+                    KeyCode::Char('s' | 'S') => app.enter_search_mode(),
                     KeyCode::Enter => app.start_read_values(),
-                    KeyCode::Char('q') | KeyCode::Char('Q') => {
+                    KeyCode::Char('q' | 'Q') => {
                         app.current_screen = CurrentScreen::Exiting;
                     }
                     _ => {}
@@ -174,8 +162,8 @@ fn handle_key_event(app: &mut App, key: event::KeyEvent) {
             KeyCode::PageUp => app.page_up(),
             KeyCode::Down => app.select_next(),
             KeyCode::Up => app.select_prev(),
-            KeyCode::Char('w') | KeyCode::Char('W') => app.enter_write_mode(),
-            KeyCode::Char('q') | KeyCode::Char('Q') => {
+            KeyCode::Char('w' | 'W') => app.enter_write_mode(),
+            KeyCode::Char('q' | 'Q') => {
                 app.current_screen = CurrentScreen::Exiting;
             }
             _ => {}

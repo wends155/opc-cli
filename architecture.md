@@ -24,6 +24,7 @@
 
 *   **Layer**: `opc-da-client` (Stable library crate)
 *   **Responsibility**: Communicating with Local/Remote OPC Servers.
+*   **COM Safety**: `ComGuard` (RAII guard in `opc-da-client/src/com_guard.rs`) ensures `CoUninitialize` is called exactly once per successful `CoInitializeEx`, even on panics.
 *   **Abstraction**: `trait OpcProvider` (defined in `opc-da-client/src/provider.rs`)
     *   Decouples the UI from the specific OPC implementation.
     *   Enables **Testability** via `mockall` (allowing UI development on any OS).
@@ -34,6 +35,7 @@
         | `list_servers(host)` | Enumerate OPC DA servers from the registry |
         | `browse_tags(server, max_tags, progress, tags_sink)` | Recursively walk the tag namespace; pushes to a shared sink for partial-result harvesting on timeout |
         | `read_tag_values(server, tag_ids)` | SyncIO read of selected tags, returning value/quality/timestamp |
+        | `write_tag_value(server, tag_id, value)` | Write a typed value (`OpcValue`) to a single tag |
 
 #### Browse Strategy
 The browse implementation handles both flat and hierarchical OPC DA namespaces:
@@ -61,6 +63,7 @@ The browse implementation handles both flat and hierarchical OPC DA namespaces:
 | Search Cycle | `Tab` / `Shift+Tab` | TagList (search mode) | Jump between matches |
 | Toggle Select | `Space` | TagList | Check/uncheck tag for reading |
 | Read Values | `Enter` | TagList | Read selected tags from server |
+| Write Value | `w` | TagValues | Enter write mode for the selected tag |
 | Back | `Esc` | All | Navigate to previous screen |
 
 
@@ -115,7 +118,16 @@ stateDiagram-v2
 
     state "Tag Values" as TagValues {
         [*] --> ViewingValues
+        ViewingValues --> WriteInput : W Key
         ViewingValues --> TagList : Esc Key
+    }
+
+    state "Write Input" as WriteInput {
+        [*] --> EnteringValue
+        EnteringValue --> Writing : Enter Key
+        Writing --> TagValues : Success (refresh)
+        Writing --> TagValues : Error (show message)
+        EnteringValue --> TagValues : Esc Key
     }
 
     Home --> [*] : Esc Key (Quit)
@@ -158,8 +170,9 @@ The project uses a dual build system for flexibility:
     - `make release`: Optimized production build.
     - `make package`: Packages the release build into a ZIP.
 2.  **scripts/package.ps1**: A PowerShell script for Windows environments without `make`.
-    - Usage: `powershell -File ./scripts/package.ps1 <task>`
+    - Usage: `pwsh -File ./scripts/package.ps1 <task>`
     - Supported tasks: `debug`, `release`, `test`, `package`.
+3.  **Verification Gate**: `pwsh -File scripts/verify.ps1` — runs formatter, linter, and tests sequentially.
 
 ## Testing Strategy
 
@@ -168,10 +181,10 @@ The project prioritizes a **Test-Driven Architecture** where the UI and business
 ### 1. Unit Testing (Mock-Based)
 *   **Mechanism**: Uses the `mockall` crate to provide a `MockOpcProvider` during tests.
 *   **Decoupling**: By abstracting OPC interactions behind the `OpcProvider` trait, the TUI and state transition logic can be verified on any platform (Linux/macOS/Windows) without a physical OPC server.
-*   **Coverage** (37 tests as of 2026-02-16):
+*   **Coverage** (20+ tests as of 2026-02-21):
     *   **UI Logic (`opc-cli/src/app.rs`)**: State transitions, navigation, search, tag selection, message ring-buffer, graceful timeout handling, and background task result polling.
     *   **Input Handling (`opc-cli/src/main.rs`)**: Key event processing across all screens.
-    *   **OPC Logic (`opc-da-client`)**: HRESULT hint mapping, GUID filtering, FILETIME conversion are unit-tested independently of the UI.
+    *   **OPC Logic (`opc-da-client`)**: HRESULT hint mapping, GUID filtering, FILETIME conversion, variant roundtrip, iterator bug detection, and `ComGuard` doctest.
 
 ### 2. Integration & Manual Testing
 *   **OPC Implementation (`src/opc_impl.rs`)**: Due to its direct reliance on the Windows `opc_da` crate and COM/DCOM registry, this layer is primarily verified through manual end-to-end testing against real OPC servers (e.g., Matrikon, Kepware, or local simulation servers).

@@ -2,12 +2,16 @@
 name = "opc-cli"
 version = "0.0.2"
 edition = "2024"
-description = "Modern TUI client for OPC DA servers on Windows"
+rust-version = "1.93.1"
+description = "Interactive TUI for browsing, reading, and writing OPC DA tags on Windows"
 license = "MIT"
 repository = "https://github.com/wends155/opc-cli"
 readme = "../README.md"
 keywords = ["opc", "cli", "tui", "windows"]
 categories = ["command-line-utilities", "network-programming"]
+
+[lints]
+workspace = true
 
 [dependencies]
 opc-da-client = { path = "../opc-da-client", version = "0.0.2" }

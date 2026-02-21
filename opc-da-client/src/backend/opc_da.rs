@@ -15,15 +15,11 @@ use opc_da_bindings::{
 };
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use windows::Win32::System::Com::{
-    CLSIDFromProgID, COINIT_MULTITHREADED, CoInitializeEx, CoUninitialize,
-};
-use windows::core::PCWSTR;
 
-/// Concrete [`OpcProvider`] implementation using the `opc_da` crate.
+/// Concrete [`OpcProvider`] implementation for Windows OPC DA.
 ///
-/// Handles COM threading (MTA) and per-call initialization/teardown
-/// via `tokio::task::spawn_blocking`.
+/// Heavy-weight implementation that uses the `opc_da` crate for
+/// native COM interop.
 pub struct OpcDaWrapper;
 
 impl OpcDaWrapper {
@@ -90,8 +86,7 @@ fn browse_recursive(
         if let Err(e) = server.change_browse_position(OPC_BROWSE_UP, "") {
             tracing::error!(branch = %branch, error = ?e, "Failed to navigate back up!");
             return Err(anyhow::anyhow!(
-                "Browse position corrupted: failed to navigate up from branch '{}'",
-                branch
+                "Browse position corrupted: failed to navigate up from branch '{branch}'"
             ));
         }
         recurse_result?;
@@ -148,8 +143,8 @@ fn browse_recursive(
 impl OpcProvider for OpcDaWrapper {
     async fn list_servers(&self, _host: &str) -> Result<Vec<String>> {
         tokio::task::spawn_blocking(move || {
-            let com_init = unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) };
-            let result = (|| {
+            let _guard = crate::ComGuard::new()?;
+            {
                 let client = Client;
                 let guid_iter = client
                     .get_servers()
@@ -161,6 +156,8 @@ impl OpcProvider for OpcDaWrapper {
                     // identical memory layout (128-bit, 4-2-2-8 fields).
                     // `transmute_copy` is used because the crates define
                     // distinct types with the same ABI.
+                    // SAFETY: `opc_da::GUID` and `windows::core::GUID` are binary compatible
+                    // 128-bit structures with identical field layouts.
                     let win_guid: windows::core::GUID = unsafe { std::mem::transmute_copy(&guid) };
                     if win_guid == windows::core::GUID::zeroed() {
                         continue;
@@ -175,15 +172,7 @@ impl OpcProvider for OpcDaWrapper {
                 servers.sort();
                 servers.dedup();
                 Ok(servers)
-            })();
-            if com_init.is_ok() {
-                // SAFETY: Paired with the `CoInitializeEx` above; only called
-                // when `com_init.is_ok()` to avoid double-uninit.
-                unsafe {
-                    CoUninitialize();
-                }
             }
-            result
         })
         .await?
     }
@@ -199,53 +188,36 @@ impl OpcProvider for OpcDaWrapper {
         tokio::task::spawn_blocking(move || {
             // SAFETY: COM is initialized per-thread (MTA). This block runs
             // inside `spawn_blocking`, ensuring a dedicated OS thread.
-            // `CoUninitialize` is called unconditionally before returning.
-            let com_init = unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) };
-            let result = (|| {
-                // SAFETY: `server_wide` is null-terminated and lives until
-                // the end of this scope, so the PCWSTR pointer is valid for
-                // the duration of the `CLSIDFromProgID` call.
-                let clsid_raw = unsafe {
-                    let server_wide: Vec<u16> = server_name.encode_utf16().chain(std::iter::once(0)).collect();
-                    CLSIDFromProgID(PCWSTR(server_wide.as_ptr())).with_context(|| {
-                        format!("Failed to resolve ProgID '{}' to CLSID", server_name)
-                    })?
-                };
-                // SAFETY: Identical ABI; see `list_servers` for details.
-                let clsid = unsafe { std::mem::transmute_copy(&clsid_raw) };
+            // `ComGuard` handles unconditional `CoUninitialize` on drop.
+            let _guard = crate::ComGuard::new()?;
+            {
+                let opc_server = crate::helpers::connect_server(&server_name)?;
 
-                let client = Client;
-                let opc_server = client
-                    .create_server(clsid, opc_da::def::ClassContext::All)
-                    .map_err(|e| {
-                        let hint = friendly_com_hint(&anyhow::anyhow!("{:?}", e))
-                            .unwrap_or("Check DCOM configuration and server status");
-                        tracing::error!(error = ?e, server = %server_name, hint, "create_server failed");
-                        e
-                    })?;
-
-                let org = opc_server.query_organization().context("Failed to query namespace organization")?;
+                let org = opc_server
+                    .query_organization()
+                    .context("Failed to query namespace organization")?;
                 let mut tags = Vec::new();
 
                 if org == OPC_NS_FLAT {
                     let enum_string = opc_server.browse_opc_item_ids(OPC_LEAF, Some(""), 0, 0)?;
                     let string_iter = StringIterator::new(enum_string);
                     for tag_res in string_iter {
-                        if tags.len() >= max_tags { break; }
-                        let tag = tag_res.map_err(|e| anyhow::anyhow!("Tag iteration error: {:?}", e))?;
+                        if tags.len() >= max_tags {
+                            break;
+                        }
+                        let tag =
+                            tag_res.map_err(|e| anyhow::anyhow!("Tag iteration error: {e:?}"))?;
                         tags.push(tag.clone());
-                        if let Ok(mut sink) = tags_sink.lock() { sink.push(tag); }
+                        if let Ok(mut sink) = tags_sink.lock() {
+                            sink.push(tag);
+                        }
                         progress.fetch_add(1, Ordering::Relaxed);
                     }
                 } else {
                     browse_recursive(&opc_server, &mut tags, max_tags, &progress, &tags_sink, 0)?;
                 }
                 Ok(tags)
-            })();
-            if com_init.is_ok() {
-                unsafe { CoUninitialize(); }
             }
-            result
         })
         .await?
     }
@@ -253,22 +225,10 @@ impl OpcProvider for OpcDaWrapper {
     async fn read_tag_values(&self, server: &str, tag_ids: Vec<String>) -> Result<Vec<TagValue>> {
         let server_name = server.to_string();
         tokio::task::spawn_blocking(move || {
-            let com_init = unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) };
-            let result = (|| {
+            let _guard = crate::ComGuard::new()?;
+            {
                 // SAFETY: `server_wide` null-termination and scope management.
-                let clsid_raw = unsafe {
-                    let server_wide: Vec<u16> = server_name
-                        .encode_utf16()
-                        .chain(std::iter::once(0))
-                        .collect();
-                    CLSIDFromProgID(PCWSTR(server_wide.as_ptr()))
-                        .context("ProgID to CLSID failed")?
-                };
-                // SAFETY: Identical ABI.
-                let clsid = unsafe { std::mem::transmute_copy(&clsid_raw) };
-
-                let client = Client;
-                let opc_server = client.create_server(clsid, opc_da::def::ClassContext::All)?;
+                let opc_server = crate::helpers::connect_server(&server_name)?;
 
                 let mut revised_update_rate = 0u32;
                 let mut server_handle = 0u32;
@@ -298,6 +258,7 @@ impl OpcProvider for OpcDaWrapper {
                         szAccessPath: windows::core::PWSTR::null(),
                         szItemID: windows::core::PWSTR(wide.as_ptr().cast_mut()),
                         bActive: windows::Win32::Foundation::TRUE,
+                        #[allow(clippy::cast_possible_truncation)]
                         hClient: idx as u32,
                         dwBlobSize: 0,
                         pBlob: std::ptr::null_mut(),
@@ -347,7 +308,7 @@ impl OpcProvider for OpcDaWrapper {
                             quality_to_string(state.wQuality),
                         )
                     } else {
-                        let hint = friendly_com_hint(&anyhow::anyhow!("{:?}", read_error));
+                        let hint = friendly_com_hint(&anyhow::anyhow!("{read_error:?}"));
                         let full_msg = hint.unwrap_or("Unknown OPC error");
 
                         tracing::warn!(
@@ -357,7 +318,7 @@ impl OpcProvider for OpcDaWrapper {
                             "read_tag_values: per-item read error"
                         );
 
-                        ("Error".to_string(), format!("Bad — {}", full_msg))
+                        ("Error".to_string(), format!("Bad — {full_msg}"))
                     };
 
                     tag_values.push(TagValue {
@@ -370,14 +331,7 @@ impl OpcProvider for OpcDaWrapper {
 
                 let _ = opc_server.remove_group(server_handle, true);
                 Ok(tag_values)
-            })();
-            if com_init.is_ok() {
-                // SAFETY: Paired with the `CoInitializeEx` above.
-                unsafe {
-                    CoUninitialize();
-                }
             }
-            result
         })
         .await?
     }
@@ -391,22 +345,10 @@ impl OpcProvider for OpcDaWrapper {
         let server_name = server.to_string();
         let tag = tag_id.to_string();
         tokio::task::spawn_blocking(move || {
-            let com_init = unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) };
-            let result = (|| {
+            let _guard = crate::ComGuard::new()?;
+            {
                 // SAFETY: `server_wide` null-termination and scope management.
-                let clsid_raw = unsafe {
-                    let server_wide: Vec<u16> = server_name
-                        .encode_utf16()
-                        .chain(std::iter::once(0))
-                        .collect();
-                    CLSIDFromProgID(PCWSTR(server_wide.as_ptr()))
-                        .context("ProgID to CLSID failed")?
-                };
-                // SAFETY: Identical ABI.
-                let clsid = unsafe { std::mem::transmute_copy(&clsid_raw) };
-
-                let client = Client;
-                let opc_server = client.create_server(clsid, opc_da::def::ClassContext::All)?;
+                let opc_server = crate::helpers::connect_server(&server_name)?;
 
                 let mut revised_update_rate = 0u32;
                 let mut server_handle = 0u32;
@@ -437,21 +379,21 @@ impl OpcProvider for OpcDaWrapper {
                 };
 
                 let (results, errors) = group.add_items(&[item_def])?;
-                let item_res = &results.as_slice()[0];
-                let item_err = &errors.as_slice()[0];
+                let item_res = results.as_slice().first().context("Server returned empty item results")?;
+                let item_err = errors.as_slice().first().context("Server returned empty item errors")?;
 
                 if let Err(e) = item_err.ok() {
                     tracing::warn!(server = %server_name, tag = %tag, error = ?e, "write_tag_value: failed to add tag to group");
                     return Ok(WriteResult {
                         tag_id: tag,
                         success: false,
-                        error: Some(format!("Failed to add tag to group: {:?}", e)),
+                        error: Some(format!("Failed to add tag to group: {e:?}")),
                     });
                 }
 
                 let variant = opc_value_to_variant(&value);
                 let write_errors = group.write(&[item_res.hServer], &[variant])?;
-                let write_error = &write_errors.as_slice()[0];
+                let write_error = write_errors.as_slice().first().context("Server returned empty write errors")?;
 
                 let write_result = if write_error.is_ok() {
                     tracing::info!(server = %server_name, tag = %tag, "write_tag_value: write completed successfully");
@@ -462,28 +404,22 @@ impl OpcProvider for OpcDaWrapper {
                     }
                 } else {
                     let hint =
-                        friendly_com_hint(&anyhow::anyhow!("{:?}", write_error)).unwrap_or("");
+                        friendly_com_hint(&anyhow::anyhow!("{write_error:?}")).unwrap_or("");
                     tracing::error!(server = %server_name, tag = %tag, error = ?write_error, hint = %hint, "write_tag_value: server rejected write");
                     WriteResult {
                         tag_id: tag,
                         success: false,
                         error: Some(if hint.is_empty() {
-                            format!("{:?}", write_error)
+                            format!("{write_error:?}")
                         } else {
-                            format!("{:?} ({})", write_error, hint)
+                            format!("{write_error:?} ({hint})")
                         }),
                     }
                 };
 
                 let _ = opc_server.remove_group(server_handle, true);
                 Ok(write_result)
-            })();
-            if com_init.is_ok() {
-                unsafe {
-                    CoUninitialize();
-                }
             }
-            result
         })
         .await?
     }
