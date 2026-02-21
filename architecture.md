@@ -18,10 +18,6 @@
 *   **Crate**: `opc-da-client`
 *   **Purpose**: Provides a unified, backend-agnostic trait (`OpcProvider`) for OPC DA operations.
 
-### 3. Vendored Backends (Under `vendor/`)
-*   **Crates**: `opc_classic_utils` (unused utilities)
-*   **Purpose**: Legacy utilities extracted from `Ronbb/rust_opc`. The core OPC DA logic and COM bindings are now generated directly inside `opc-da-client/src/bindings/`.
-
 ### 2. Core Logic & Async Runtime
 *   **Crate**: `tokio`
 *   **Responsibility**: Driving the main event loop and handling async tasks (though COM interactions are often thread-bound).

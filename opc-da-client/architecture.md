@@ -42,8 +42,12 @@ opc-da-client/
     │   ├── def.rs          # OPC DA type definitions (GroupState, ServerStatus, etc.)
     │   ├── utils/          # COM memory management (RemoteArray, RemotePointer, etc.)
     │   └── client/         # Client traits, versions (v1/v2/v3), iterator
+    ├── bindings/           # Frozen COM bindings (Phase 3)
+    │   ├── da/             # OPCDA.winmd bindgen output
+    │   └── comn/           # OPCCOMN.winmd bindgen output
     └── backend/
         ├── mod.rs          # Backend module gate (feature-conditional)
+        ├── connector.rs    # ServerConnector trait (Mock & Real COM backend decoupling)
         └── opc_da.rs       # OpcDaWrapper: concrete OpcProvider using opc_da module
 ```
 
@@ -177,11 +181,13 @@ graph TD
         Defs["def.rs"]
         Utils["utils/ (memory)"]
         Bindings["bindings/ (da, comn)"]
+        Connector["connector.rs"]
     end
 
     Trait --> Wrapper
-    Wrapper --> Browse
-    Wrapper --> Guard
+    Wrapper --> Connector
+    Connector --> Browse
+    Connector --> Guard
     Wrapper --> ClientTraits
     ClientTraits --> Defs & Utils
     ClientTraits --> Bindings

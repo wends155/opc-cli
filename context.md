@@ -139,3 +139,14 @@ ew() to return Err on failure (was silently succeeding), added 	racing::debug! o
 > * **Changes:** Built on Phase 2 by freezing windows-bindgen outputs from opc_da_bindings and opc_comn_bindings. Natively incorporated indings.rs as mod bindings; (da and comn) directly into opc-da-client. Removed the windows-bindgen build dependency. Dropped the completely unused opc_classic_utils crate.
 > * **New Constraints:** The OPC DA bindings are now "frozen." If the underlying Windows metadata (OPCDA.winmd) ever needs regeneration, the files stored in opc-da-client/.winmd/ must be manually processed with the windows bindgen CLI.
 > * **Pruned:** The endor/opc_da_bindings/, endor/opc_comn_bindings/, and endor/opc_classic_utils/ directories. Cargo metadata references to generating bindings on-the-fly.
+
+## 2026-02-21: Phase 4 Testability Refactor & SafeArray
+> 📝 **Context Update:**
+> * **Feature:** OPC DA Mocking & SafeArray iteration.
+> * **Changes:**
+>   - Abstracted concrete COM bindings via the `ServerConnector` trait inside `connector.rs`.
+>   - Bound `OpcDaWrapper<C>` to `<C: ServerConnector>`.
+>   - Implemented `MockServerConnector` along with realistic integration test cases in `backend/opc_da.rs`.
+>   - Validated array bounds parsing with `SafeArrayGetElemsize` and `SafeArrayAccessData` inside `variant_to_string` printing full arrays (capped at 20 max items).
+> * **New Constraints:** Mock backend testing can now be used for logic testing without a real COM server. Any new methods on `OpcDaWrapper` should use `self.connector` rather than raw COM instantiation. SafeArrays now return JSON stringified vectors instead of the default `Array[N]`.
+> * **Pruned:** Outdated constraints requiring live Windows COM environment for integration testing bounds.

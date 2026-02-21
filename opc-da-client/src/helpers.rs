@@ -3,7 +3,10 @@ use crate::opc_da::client::ClientTrait;
 use anyhow::Context;
 use windows::Win32::Foundation::{FILETIME, VARIANT_BOOL};
 use windows::Win32::System::Com::{CLSIDFromProgID, CoTaskMemFree, ProgIDFromCLSID};
-use windows::Win32::System::Ole::{SafeArrayGetDim, SafeArrayGetLBound, SafeArrayGetUBound};
+use windows::Win32::System::Ole::{
+    SafeArrayAccessData, SafeArrayGetDim, SafeArrayGetElemsize, SafeArrayGetLBound,
+    SafeArrayGetUBound, SafeArrayUnaccessData,
+};
 use windows::Win32::System::Variant::{VARIANT, VT_BOOL, VT_BSTR, VT_I4, VT_R8};
 use windows::core::{BSTR, PCWSTR};
 
@@ -68,6 +71,16 @@ pub const fn is_known_iterator_bug(err: &windows::core::Error) -> bool {
     err.code().0 as u32 == 0x8000_4003 // E_POINTER
 }
 
+// Verify GUID memory layout assumption for FFI (Workstream C#3)
+const _: () = assert!(
+    std::mem::size_of::<windows::core::GUID>() == 16,
+    "windows::core::GUID must be 16 bytes for COM compatibility"
+);
+const _: () = assert!(
+    std::mem::align_of::<windows::core::GUID>() >= 4,
+    "windows::core::GUID must be at least 4-byte aligned"
+);
+
 /// Helper to convert GUID to `ProgID` using Windows API
 pub fn guid_to_progid(guid: &windows::core::GUID) -> anyhow::Result<String> {
     // SAFETY: `ProgIDFromCLSID` is a Win32 FFI call that allocates a PWSTR
@@ -117,11 +130,39 @@ pub fn variant_to_string(variant: &VARIANT) -> String {
                 let lb = SafeArrayGetLBound(parray, 1).unwrap_or(0);
                 let ub = SafeArrayGetUBound(parray, 1).unwrap_or(-1);
                 let count = (ub - lb + 1).max(0);
-                return format!(
-                    "Array[{}] ({:?})",
-                    count,
-                    windows::Win32::System::Variant::VARENUM(base_type)
-                );
+                let mut elements = Vec::new();
+                let display_count = count.min(20);
+
+                if base_type == windows::Win32::System::Variant::VT_VARIANT.0 {
+                    let mut data_ptr: *mut std::ffi::c_void = std::ptr::null_mut();
+                    if SafeArrayAccessData(parray, &mut data_ptr).is_ok() {
+                        let vars = std::slice::from_raw_parts(data_ptr as *const VARIANT, count as usize);
+                        for i in 0..display_count {
+                            elements.push(variant_to_string(&vars[i as usize]));
+                        }
+                        let _ = SafeArrayUnaccessData(parray);
+                    }
+                } else {
+                    let elem_size = SafeArrayGetElemsize(parray) as usize;
+                    let mut data_ptr: *mut std::ffi::c_void = std::ptr::null_mut();
+                    if SafeArrayAccessData(parray, &mut data_ptr).is_ok() {
+                        for i in 0..display_count {
+                            let mut temp_var = VARIANT::default();
+                            (*temp_var.Anonymous.Anonymous).vt = windows::Win32::System::Variant::VARENUM(base_type);
+                            
+                            let src_ptr = (data_ptr as *const u8).add((i as usize) * elem_size);
+                            let dst_ptr = std::ptr::addr_of_mut!((*temp_var.Anonymous.Anonymous).Anonymous).cast::<u8>();
+                            
+                            std::ptr::copy_nonoverlapping(src_ptr, dst_ptr, elem_size.min(16));
+                            
+                            elements.push(variant_to_string(&temp_var));
+                        }
+                        let _ = SafeArrayUnaccessData(parray);
+                    }
+                }
+                
+                let elided = if count > 20 { ", ..." } else { "" };
+                return format!("[{}{elided}]", elements.join(", "));
             }
             return format!("Array[{dims}D]");
         }
@@ -620,5 +661,35 @@ mod tests {
             "Expected '(VT ...)' but got: {}",
             result
         );
+    }
+    #[test]
+    fn test_variant_to_string_safearray_i4() {
+        use windows::Win32::System::Ole::{SafeArrayCreateVector, SafeArrayAccessData, SafeArrayUnaccessData};
+        use std::mem::ManuallyDrop;
+        use windows::Win32::System::Variant::{VARIANT, VARIANT_0, VARIANT_0_0, VARIANT_0_0_0, VT_I4, VT_ARRAY};
+        use std::ffi::c_void;
+        
+        unsafe {
+            let parray = SafeArrayCreateVector(VT_I4, 0, 3);
+            let mut ptr: *mut c_void = std::ptr::null_mut();
+            SafeArrayAccessData(parray, &mut ptr).unwrap();
+            let slice = std::slice::from_raw_parts_mut(ptr as *mut i32, 3);
+            slice[0] = 10;
+            slice[1] = 20;
+            slice[2] = 30;
+            SafeArrayUnaccessData(parray).unwrap();
+            
+            let mut middle = VARIANT_0_0::default();
+            middle.vt = windows::Win32::System::Variant::VARENUM(VT_I4.0 | VT_ARRAY.0);
+            middle.Anonymous.parray = parray;
+            
+            let v = VARIANT {
+                Anonymous: VARIANT_0 {
+                    Anonymous: ManuallyDrop::new(middle),
+                }
+            };
+            
+            assert_eq!(variant_to_string(&v), "[10, 20, 30]");
+        }
     }
 }

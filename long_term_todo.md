@@ -39,23 +39,23 @@
 
 ## Phase 4 — Testability Refactor (ServerConnector Extraction)
 
-- [ ] C0: Extract `ServerConnector` trait in `opc-da-client/src/backend/connector.rs`
-- [ ] C1: Parameterize `OpcDaWrapper<C: ServerConnector = ComConnector>`
-- [ ] C2: Implement `ComConnector` (moves existing COM logic, zero behavior change)
-- [ ] `cargo check -p opc-da-client`
-- [ ] `cargo test --workspace`
-- [ ] Git commit
+- [x] C0: Extract `ServerConnector` trait in `opc-da-client/src/backend/connector.rs`
+- [x] C1: Parameterize `OpcDaWrapper<C: ServerConnector = ComConnector>`
+- [x] C2: Implement `ComConnector` (moves existing COM logic, zero behavior change)
+- [x] `cargo check -p opc-da-client`
+- [x] `cargo test --workspace`
+- [x] Git commit
 
 ## Future Tests (Post-Refactor)
 
-- [ ] Unit test `StringIterator` — mock `IEnumString` via `#[windows::core::implement]`, verify no phantom `E_POINTER`
-- [ ] Static assert GUID type compatibility (`const_assert_eq!(size_of::<GUID>(), 16)`)
-- [ ] Client trait mock test via `MockServerConnector` (requires Phase 4)
-- [ ] Integration test: `list_servers` via `MockServerConnector` (requires Phase 4)
-- [ ] Integration test: `browse_tags` via `MockServerConnector` (requires Phase 4)
+- [x] Unit test `StringIterator` — mock `IEnumString` via `#[windows::core::implement]`, verify no phantom `E_POINTER`
+- [x] Static assert GUID type compatibility (`const_assert_eq!(size_of::<GUID>(), 16)`)
+- [x] Client trait mock test via `MockServerConnector` (requires Phase 4)
+- [x] Integration test: `list_servers` via `MockServerConnector` (requires Phase 4)
+- [x] Integration test: `browse_tags` via `MockServerConnector` (requires Phase 4)
 
 ## Feature: SafeArray Display
 
-- [ ] Enhance `variant_to_string()` to iterate `SAFEARRAY` elements via `SafeArrayGetElement`
-- [ ] Format as `[val1, val2, ...]` with max-display cap (20 elements + `...`)
-- [ ] Unit tests: 1-D int array, 1-D string array, empty array, multi-dimensional
+- [x] Enhance `variant_to_string()` to iterate `SAFEARRAY` elements via `SafeArrayGetElement` / `SafeArrayAccessData`
+- [x] Format as `[val1, val2, ...]` with max-display cap (20 elements + `...`)
+- [x] Unit tests: 1-D int array, 1-D string array, empty array, multi-dimensional

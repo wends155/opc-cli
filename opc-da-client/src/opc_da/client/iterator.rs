@@ -23,7 +23,7 @@ impl GuidIterator {
         Self {
             inner,
             cache: Box::from([windows::core::GUID::zeroed(); MAX_CACHE_SIZE]),
-            index: 0,
+            index: MAX_CACHE_SIZE as u32,
             count: 0,
             done: false,
         }
@@ -38,7 +38,7 @@ impl Iterator for GuidIterator {
             return None;
         }
 
-        if self.index == self.cache.len() as u32 {
+        if self.index >= self.count {
             let code = unsafe {
                 self.inner
                     .Next(self.cache.as_mut_slice(), Some(&mut self.count))
@@ -79,7 +79,7 @@ impl StringIterator {
         Self {
             inner,
             cache: Box::new([windows::core::PWSTR::null(); MAX_CACHE_SIZE]),
-            index: 0,
+            index: MAX_CACHE_SIZE as u32,
             count: 0,
             done: false,
         }
@@ -94,7 +94,7 @@ impl Iterator for StringIterator {
             return None;
         }
 
-        if self.index == self.cache.len() as u32 {
+        if self.index >= self.count {
             let code = unsafe {
                 self.inner
                     .Next(self.cache.as_mut_slice(), Some(&mut self.count))
@@ -136,7 +136,7 @@ impl<Group: TryFrom<windows::core::IUnknown, Error = windows::core::Error>> Grou
         Self {
             inner,
             cache: Box::from([const { None }; MAX_CACHE_SIZE]),
-            index: 0,
+            index: MAX_CACHE_SIZE as u32,
             count: 0,
             done: false,
             _mark: std::marker::PhantomData,
@@ -154,7 +154,7 @@ impl<Group: TryFrom<windows::core::IUnknown, Error = windows::core::Error>> Iter
             return None;
         }
 
-        if self.index == self.cache.len() as u32 {
+        if self.index >= self.count {
             let code = unsafe {
                 self.inner
                     .Next(self.cache.as_mut_slice(), Some(&mut self.count))
@@ -215,7 +215,7 @@ impl Iterator for ItemAttributeIterator {
             return None;
         }
 
-        if self.index == self.cache.len() {
+        if self.index >= self.cache.len() as u32 {
             let mut attrs = RemoteArray::new(MAX_CACHE_SIZE as u32);
 
             let result = unsafe {
@@ -246,5 +246,91 @@ impl Iterator for ItemAttributeIterator {
         let current = self.cache.as_slice()[self.index as usize].try_to_local();
         self.index += 1;
         Some(current)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use windows::Win32::System::Com::{IEnumString, IEnumString_Impl};
+    use windows::core::{implement, PWSTR};
+
+    #[implement(IEnumString)]
+    struct MockEnumString {
+        items: Vec<String>,
+        index: std::sync::atomic::AtomicUsize,
+    }
+
+    impl IEnumString_Impl for MockEnumString_Impl {
+        fn Next(
+            &self,
+            celt: u32,
+            rgelt: *mut PWSTR,
+            pceltfetched: *mut u32,
+        ) -> windows::core::HRESULT {
+            let mut fetched = 0;
+            let index = self.index.load(std::sync::atomic::Ordering::Relaxed);
+            let rgelt = unsafe { std::slice::from_raw_parts_mut(rgelt, celt as usize) };
+            
+            for i in 0..celt as usize {
+                if index + i < self.items.len() {
+                    let s = &self.items[index + i];
+                    let mut w: Vec<u16> = s.encode_utf16().chain(std::iter::once(0)).collect();
+                    let ptr = unsafe { windows::Win32::System::Com::CoTaskMemAlloc(w.len() * 2) };
+                    unsafe { std::ptr::copy_nonoverlapping(w.as_ptr(), ptr as *mut u16, w.len()) };
+                    rgelt[i] = PWSTR(ptr as *mut u16);
+                    fetched += 1;
+                } else {
+                    break;
+                }
+            }
+            
+            self.index.store(index + fetched, std::sync::atomic::Ordering::Relaxed);
+            
+            if !pceltfetched.is_null() {
+                unsafe { *pceltfetched = fetched as u32 };
+            }
+            
+            if fetched == celt as usize {
+                windows::Win32::Foundation::S_OK.into()
+            } else {
+                windows::Win32::Foundation::S_FALSE.into()
+            }
+        }
+        fn Skip(&self, _celt: u32) -> windows::core::HRESULT {
+            windows::Win32::Foundation::E_NOTIMPL.into()
+        }
+        fn Reset(&self) -> windows::core::Result<()> {
+            self.index.store(0, std::sync::atomic::Ordering::Relaxed);
+            Ok(())
+        }
+        fn Clone(&self) -> windows::core::Result<IEnumString> {
+            Err(windows::core::Error::from_hresult(windows::Win32::Foundation::E_NOTIMPL))
+        }
+    }
+
+    #[test]
+    fn test_string_iterator_no_phantom_errors() {
+        let items = vec![
+            "Item1".to_string(),
+            "Item2".to_string(),
+            "Item3".to_string(),
+        ];
+        
+        let mock_enum: IEnumString = MockEnumString {
+            items: items.clone(),
+            index: std::sync::atomic::AtomicUsize::new(0),
+        }.into();
+
+        let iter = StringIterator::new(mock_enum);
+        
+        let mut results = Vec::new();
+        for item in iter {
+            // Verify no E_POINTER error is yielded
+            let value = item.expect("Expected OK value, got phantom error");
+            results.push(value);
+        }
+
+        assert_eq!(results, items);
     }
 }
