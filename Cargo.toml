@@ -1,5 +1,6 @@
 [workspace]
 members = [
+    "opc-cli",
     "opc-da-client",
 ]
 resolver = "2"
@@ -8,6 +9,9 @@ resolver = "2"
 
 # Shared deps (unified features — superset of upstream + ours)
 thiserror = "2.0"
+anyhow = "1.0.95"
+tokio = { version = "1.43.0", features = ["rt", "sync"] }
+tracing = "0.1.41"
 windows = { version = "0.61.3", features = [
     "Win32_Foundation",
     "Win32_Graphics_Gdi",

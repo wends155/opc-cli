@@ -14,13 +14,13 @@ categories = ["command-line-utilities", "network-programming"]
 workspace = true
 
 [dependencies]
-opc-da-client = { path = "../opc-da-client", version = "0.0.2" }
+opc-da-client = { path = "../opc-da-client" }
 ratatui = "0.29.0"
 crossterm = "0.28.1"
-tokio = { version = "1.43.0", features = ["full"] }
-windows = { version = "0.61.3", features = ["Win32_System_Com"] }
-anyhow = "1.0.95"
-tracing = "0.1.41"
+tokio = { workspace = true, features = ["full"] }
+windows = { workspace = true }
+anyhow = { workspace = true }
+tracing = { workspace = true }
 tracing-subscriber = { version = "0.3.19", features = ["env-filter"] }
 tracing-appender-localtime = "0.2.4"
 clap = { version = "4.5.28", features = ["derive"] }

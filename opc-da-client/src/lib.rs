@@ -29,7 +29,7 @@ pub use provider::{OpcProvider, OpcValue, TagValue, WriteResult};
 
 // Backend re-exports (conditional)
 #[cfg(feature = "opc-da-backend")]
-pub use backend::opc_da::OpcDaWrapper;
+pub use backend::{connector::ComConnector, opc_da::OpcDaWrapper};
 
 // Test support re-export
 #[cfg(feature = "test-support")]

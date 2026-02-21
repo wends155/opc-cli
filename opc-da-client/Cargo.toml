@@ -20,11 +20,11 @@ test-support = ["dep:mockall"]
 
 [dependencies]
 # Core (always included)
-anyhow = "1.0.95"
+anyhow = { workspace = true }
 async-trait = "0.1.86"
 chrono = "0.4.43"
-tokio = { version = "1.43.0", features = ["rt", "sync"] }
-tracing = "0.1.41"
+tokio = { workspace = true }
+tracing = { workspace = true }
 # OS: Windows (required)
 windows = { workspace = true }
 windows-core = { workspace = true }

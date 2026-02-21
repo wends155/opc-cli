@@ -138,7 +138,8 @@ pub fn variant_to_string(variant: &VARIANT) -> String {
                     let mut data_ptr: *mut std::ffi::c_void = std::ptr::null_mut();
                     if SafeArrayAccessData(parray, &raw mut data_ptr).is_ok() {
                         #[allow(clippy::cast_sign_loss)]
-                        let vars = std::slice::from_raw_parts(data_ptr as *const VARIANT, count as usize);
+                        let vars =
+                            std::slice::from_raw_parts(data_ptr as *const VARIANT, count as usize);
                         for i in 0..display_count {
                             #[allow(clippy::cast_sign_loss)]
                             elements.push(variant_to_string(&vars[i as usize]));
