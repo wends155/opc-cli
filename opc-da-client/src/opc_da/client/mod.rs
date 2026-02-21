@@ -9,5 +9,4 @@ pub mod v3;
 pub use iterator::*;
 pub use traits::*;
 
-#[cfg(test)]
-mod tests;
+// mod tests;

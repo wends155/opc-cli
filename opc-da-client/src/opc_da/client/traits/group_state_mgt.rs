@@ -1,4 +1,4 @@
-use crate::{
+use crate::opc_da::{
     def::GroupState,
     utils::{LocalPointer, RemotePointer},
 };
@@ -13,7 +13,7 @@ use crate::{
 /// - Locale ID
 /// - Group handles
 pub trait GroupStateMgtTrait {
-    fn interface(&self) -> windows::core::Result<&opc_da_bindings::IOPCGroupStateMgt>;
+    fn interface(&self) -> windows::core::Result<&crate::bindings::da::IOPCGroupStateMgt>;
 
     /// Gets the current state of the group.
     ///

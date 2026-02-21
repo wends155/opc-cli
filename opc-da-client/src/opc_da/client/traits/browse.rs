@@ -1,6 +1,8 @@
-use opc_da_bindings::{IOPCBrowse, tagOPCBROWSEELEMENT, tagOPCBROWSEFILTER, tagOPCITEMPROPERTIES};
+use crate::bindings::da::{
+    IOPCBrowse, tagOPCBROWSEELEMENT, tagOPCBROWSEFILTER, tagOPCITEMPROPERTIES,
+};
 
-use crate::utils::{LocalPointer, RemoteArray, RemotePointer};
+use crate::opc_da::utils::{LocalPointer, RemoteArray, RemotePointer};
 
 /// Server address space browsing functionality (OPC DA 3.0).
 ///

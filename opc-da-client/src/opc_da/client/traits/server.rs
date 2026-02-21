@@ -1,6 +1,6 @@
 use windows::core::Interface as _;
 
-use crate::{
+use crate::opc_da::{
     client::{GroupIterator, StringIterator},
     utils::{LocalPointer, RemotePointer},
 };
@@ -10,7 +10,7 @@ use crate::{
 /// Provides methods to create and manage groups within an OPC server,
 /// as well as monitor server status and enumerate existing groups.
 pub trait ServerTrait<Group: TryFrom<windows::core::IUnknown, Error = windows::core::Error>> {
-    fn interface(&self) -> windows::core::Result<&opc_da_bindings::IOPCServer>;
+    fn interface(&self) -> windows::core::Result<&crate::bindings::da::IOPCServer>;
 
     /// Adds a new group to the OPC server.
     ///
@@ -56,7 +56,7 @@ pub trait ServerTrait<Group: TryFrom<windows::core::IUnknown, Error = windows::c
                 locale_id,
                 server_handle,
                 revised_percent_deadband,
-                &opc_da_bindings::IOPCItemMgt::IID,
+                &crate::bindings::da::IOPCItemMgt::IID,
                 &mut group,
             )?;
         }
@@ -77,7 +77,7 @@ pub trait ServerTrait<Group: TryFrom<windows::core::IUnknown, Error = windows::c
     /// and group counts
     fn get_status(
         &self,
-    ) -> windows::core::Result<RemotePointer<opc_da_bindings::tagOPCSERVERSTATUS>> {
+    ) -> windows::core::Result<RemotePointer<crate::bindings::da::tagOPCSERVERSTATUS>> {
         let status = unsafe { self.interface()?.GetStatus()? };
         Ok(RemotePointer::from_raw(status))
     }
@@ -103,7 +103,7 @@ pub trait ServerTrait<Group: TryFrom<windows::core::IUnknown, Error = windows::c
     /// Enumerator interface for iterating through groups
     fn create_group_enumerator(
         &self,
-        scope: opc_da_bindings::tagOPCENUMSCOPE,
+        scope: crate::bindings::da::tagOPCENUMSCOPE,
     ) -> windows::core::Result<GroupIterator<Group>> {
         let enumerator = unsafe {
             self.interface()?
@@ -122,7 +122,7 @@ pub trait ServerTrait<Group: TryFrom<windows::core::IUnknown, Error = windows::c
     /// Enumerator interface for iterating through group names
     fn create_group_name_enumerator(
         &self,
-        scope: opc_da_bindings::tagOPCENUMSCOPE,
+        scope: crate::bindings::da::tagOPCENUMSCOPE,
     ) -> windows::core::Result<StringIterator> {
         let enumerator = unsafe {
             self.interface()?

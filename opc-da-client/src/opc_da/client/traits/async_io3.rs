@@ -1,11 +1,11 @@
-use crate::utils::RemoteArray;
+use crate::opc_da::utils::RemoteArray;
 
 /// Asynchronous I/O functionality (OPC DA 3.0).
 ///
 /// Provides methods for enhanced asynchronous read/write operations with
 /// quality and timestamp information.
 pub trait AsyncIo3Trait {
-    fn interface(&self) -> windows::core::Result<&opc_da_bindings::IOPCAsyncIO3>;
+    fn interface(&self) -> windows::core::Result<&crate::bindings::da::IOPCAsyncIO3>;
 
     /// Reads values with maximum age constraint.
     ///
@@ -60,7 +60,7 @@ pub trait AsyncIo3Trait {
     fn write_vqt(
         &self,
         server_handles: &[u32],
-        values: &[opc_da_bindings::tagOPCITEMVQT],
+        values: &[crate::bindings::da::tagOPCITEMVQT],
         transaction_id: u32,
     ) -> windows::core::Result<(u32, RemoteArray<windows::core::HRESULT>)> {
         if server_handles.len() != values.len() {

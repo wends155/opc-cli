@@ -37,9 +37,14 @@ opc-da-client/
     ├── com_guard.rs        # RAII guard for COM init/teardown (ComGuard)
     ├── provider.rs         # OpcProvider trait + TagValue struct
     ├── helpers.rs          # COM utilities: friendly_com_hint, variant/quality/time converters
+    ├── opc_da/             # Merged from vendor/opc_da (Phase 2)
+    │   ├── mod.rs          # Module root with lint allows
+    │   ├── def.rs          # OPC DA type definitions (GroupState, ServerStatus, etc.)
+    │   ├── utils/          # COM memory management (RemoteArray, RemotePointer, etc.)
+    │   └── client/         # Client traits, versions (v1/v2/v3), iterator
     └── backend/
         ├── mod.rs          # Backend module gate (feature-conditional)
-        └── opc_da.rs       # OpcDaWrapper: concrete OpcProvider using opc_da crate
+        └── opc_da.rs       # OpcDaWrapper: concrete OpcProvider using opc_da module
 ```
 
 ---
@@ -139,10 +144,7 @@ The verification script ([verify.ps1](file:///c:/Users/WSALIGAN/code/opc-cli/scr
 
 ### Backend: `opc-da-backend` (default feature)
 
-| Crate | Version | Purpose |
-| :--- | :--- | :--- |
-| `opc_da` | 0.3.1 | OPC DA client API (COM wrapper) |
-| `opc_da_bindings` | 0.3.1 | Raw OPC DA type bindings |
+*No external dependencies. The COM bindings are included natively in `src/bindings/`.*
 
 ### Test Support: `test-support` (optional feature)
 
@@ -170,16 +172,20 @@ graph TD
         Browse["browse_recursive()"]
     end
 
-    subgraph "Upstream Dependencies"
-        OpcDa["opc_da crate v0.3.1"]
-        WinCOM["Windows COM/DCOM"]
+    subgraph "Internal Modules"
+        ClientTraits["client::traits"]
+        Defs["def.rs"]
+        Utils["utils/ (memory)"]
+        Bindings["bindings/ (da, comn)"]
     end
 
     Trait --> Wrapper
     Wrapper --> Browse
     Wrapper --> Guard
-    Wrapper --> OpcDa
-    OpcDa --> WinCOM
+    Wrapper --> ClientTraits
+    ClientTraits --> Defs & Utils
+    ClientTraits --> Bindings
+    Bindings --> WinCOM["Windows COM/DCOM"]
     Wrapper -.-> Hint
 ```
 

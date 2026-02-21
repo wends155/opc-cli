@@ -1,4 +1,4 @@
-use crate::utils::RemoteArray;
+use crate::opc_da::utils::RemoteArray;
 use windows::Win32::System::Variant::VARIANT;
 
 /// Synchronous I/O functionality (OPC DA 3.0).
@@ -6,7 +6,7 @@ use windows::Win32::System::Variant::VARIANT;
 /// Provides enhanced synchronous read/write operations with support for
 /// quality, timestamp, and maximum age constraints.
 pub trait SyncIo2Trait {
-    fn interface(&self) -> windows::core::Result<&opc_da_bindings::IOPCSyncIO2>;
+    fn interface(&self) -> windows::core::Result<&crate::bindings::da::IOPCSyncIO2>;
 
     /// Reads values with maximum age constraint.
     ///
@@ -84,7 +84,7 @@ pub trait SyncIo2Trait {
     fn write_vqt(
         &self,
         server_handles: &[u32],
-        values: &[opc_da_bindings::tagOPCITEMVQT],
+        values: &[crate::bindings::da::tagOPCITEMVQT],
     ) -> windows::core::Result<RemoteArray<windows::core::HRESULT>> {
         if server_handles.len() != values.len() {
             return Err(windows::core::Error::new(

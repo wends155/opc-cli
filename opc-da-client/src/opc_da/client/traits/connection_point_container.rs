@@ -37,7 +37,7 @@ pub trait ConnectionPointContainerTrait {
     fn data_callback_connection_point(
         &self,
     ) -> windows::core::Result<windows::Win32::System::Com::IConnectionPoint> {
-        self.find_connection_point(&opc_da_bindings::IOPCDataCallback::IID)
+        self.find_connection_point(&crate::bindings::da::IOPCDataCallback::IID)
     }
 
     /// Enumerates all available connection points.

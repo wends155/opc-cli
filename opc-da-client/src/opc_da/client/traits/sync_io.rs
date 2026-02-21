@@ -1,4 +1,4 @@
-use crate::utils::RemoteArray;
+use crate::opc_da::utils::RemoteArray;
 use windows::Win32::System::Variant::VARIANT;
 
 /// Synchronous I/O functionality (OPC DA 1.0).
@@ -6,7 +6,7 @@ use windows::Win32::System::Variant::VARIANT;
 /// Provides methods for basic synchronous read/write operations
 /// with direct server communication.
 pub trait SyncIoTrait {
-    fn interface(&self) -> windows::core::Result<&opc_da_bindings::IOPCSyncIO>;
+    fn interface(&self) -> windows::core::Result<&crate::bindings::da::IOPCSyncIO>;
 
     /// Reads values synchronously from items.
     ///
@@ -23,10 +23,10 @@ pub trait SyncIoTrait {
     /// Returns E_INVALIDARG if server_handles is empty
     fn read(
         &self,
-        source: opc_da_bindings::tagOPCDATASOURCE,
+        source: crate::bindings::da::tagOPCDATASOURCE,
         server_handles: &[u32],
     ) -> windows::core::Result<(
-        RemoteArray<opc_da_bindings::tagOPCITEMSTATE>,
+        RemoteArray<crate::bindings::da::tagOPCITEMSTATE>,
         RemoteArray<windows::core::HRESULT>,
     )> {
         if server_handles.is_empty() {

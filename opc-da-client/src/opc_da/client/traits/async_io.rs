@@ -1,13 +1,13 @@
 use windows::Win32::System::Variant::VARIANT;
 
-use crate::utils::RemoteArray;
+use crate::opc_da::utils::RemoteArray;
 
 /// Asynchronous I/O functionality (OPC DA 1.0).
 ///
 /// Provides basic asynchronous read/write operations using connection point callbacks.
 /// This is the original asynchronous interface defined in OPC DA 1.0.
 pub trait AsyncIoTrait {
-    fn interface(&self) -> windows::core::Result<&opc_da_bindings::IOPCAsyncIO>;
+    fn interface(&self) -> windows::core::Result<&crate::bindings::da::IOPCAsyncIO>;
 
     /// Reads values asynchronously from the server.
     ///
@@ -25,7 +25,7 @@ pub trait AsyncIoTrait {
     fn read(
         &self,
         connection: u32,
-        source: opc_da_bindings::tagOPCDATASOURCE,
+        source: crate::bindings::da::tagOPCDATASOURCE,
         server_handles: &[u32],
     ) -> windows::core::Result<(u32, RemoteArray<windows::core::HRESULT>)> {
         if server_handles.is_empty() {
@@ -117,7 +117,7 @@ pub trait AsyncIoTrait {
     fn refresh(
         &self,
         connection: u32,
-        source: opc_da_bindings::tagOPCDATASOURCE,
+        source: crate::bindings::da::tagOPCDATASOURCE,
     ) -> windows::core::Result<u32> {
         unsafe { self.interface()?.Refresh(connection, source) }
     }

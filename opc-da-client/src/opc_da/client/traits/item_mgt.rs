@@ -1,6 +1,6 @@
 use windows::core::Interface as _;
 
-use crate::{client::ItemAttributeIterator, utils::RemoteArray};
+use crate::opc_da::{client::ItemAttributeIterator, utils::RemoteArray};
 
 /// Item management functionality.
 ///
@@ -8,7 +8,7 @@ use crate::{client::ItemAttributeIterator, utils::RemoteArray};
 /// removing, and modifying item properties such as active state, client
 /// handles, and data types.
 pub trait ItemMgtTrait {
-    fn interface(&self) -> windows::core::Result<&opc_da_bindings::IOPCItemMgt>;
+    fn interface(&self) -> windows::core::Result<&crate::bindings::da::IOPCItemMgt>;
 
     /// Adds items to the group.
     ///
@@ -24,9 +24,9 @@ pub trait ItemMgtTrait {
     /// Returns E_INVALIDARG if items array is empty
     fn add_items(
         &self,
-        items: &[opc_da_bindings::tagOPCITEMDEF],
+        items: &[crate::bindings::da::tagOPCITEMDEF],
     ) -> windows::core::Result<(
-        RemoteArray<opc_da_bindings::tagOPCITEMRESULT>,
+        RemoteArray<crate::bindings::da::tagOPCITEMRESULT>,
         RemoteArray<windows::core::HRESULT>,
     )> {
         if items.is_empty() {
@@ -37,6 +37,10 @@ pub trait ItemMgtTrait {
         }
 
         let len = items.len().try_into()?;
+        tracing::debug!(
+            item_count = len,
+            "Adding items to OPC group natively via IOPCItemMgt"
+        );
         let mut results = RemoteArray::new(len);
         let mut errors = RemoteArray::new(len);
 
@@ -64,10 +68,10 @@ pub trait ItemMgtTrait {
     /// - Array of per-item error codes
     fn validate_items(
         &self,
-        items: &[opc_da_bindings::tagOPCITEMDEF],
+        items: &[crate::bindings::da::tagOPCITEMDEF],
         blob_update: bool,
     ) -> windows::core::Result<(
-        RemoteArray<opc_da_bindings::tagOPCITEMRESULT>,
+        RemoteArray<crate::bindings::da::tagOPCITEMRESULT>,
         RemoteArray<windows::core::HRESULT>,
     )> {
         if items.is_empty() {
@@ -116,6 +120,10 @@ pub trait ItemMgtTrait {
         }
 
         let len = server_handles.len().try_into()?;
+        tracing::debug!(
+            item_count = len,
+            "Removing items from OPC group natively via IOPCItemMgt"
+        );
         let mut errors = RemoteArray::new(len);
 
         unsafe {
@@ -264,7 +272,7 @@ pub trait ItemMgtTrait {
     fn create_enumerator(&self) -> windows::core::Result<ItemAttributeIterator> {
         let enumerator = unsafe {
             self.interface()?
-                .CreateEnumerator(&opc_da_bindings::IEnumOPCItemAttributes::IID)?
+                .CreateEnumerator(&crate::bindings::da::IEnumOPCItemAttributes::IID)?
         };
 
         Ok(ItemAttributeIterator::new(enumerator.cast()?))

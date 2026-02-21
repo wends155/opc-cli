@@ -1,4 +1,4 @@
-use crate::utils::RemoteArray;
+use crate::opc_da::utils::RemoteArray;
 
 /// Item deadband management functionality (OPC DA 3.0).
 ///
@@ -6,7 +6,7 @@ use crate::utils::RemoteArray;
 /// control the minimum value change required before the server reports
 /// a data change to the client.
 pub trait ItemDeadbandMgtTrait {
-    fn interface(&self) -> windows::core::Result<&opc_da_bindings::IOPCItemDeadbandMgt>;
+    fn interface(&self) -> windows::core::Result<&crate::bindings::da::IOPCItemDeadbandMgt>;
 
     /// Sets deadband values for specified items.
     ///

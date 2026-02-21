@@ -1,4 +1,4 @@
-use crate::{
+use crate::opc_da::{
     def::ItemAttributes,
     utils::{RemoteArray, RemotePointer, TryToLocal as _},
 };
@@ -188,16 +188,16 @@ impl<Group: TryFrom<windows::core::IUnknown, Error = windows::core::Error>> Iter
     }
 }
 
-// for opc_da_bindings::IEnumOPCItemAttributes
+// for crate::bindings::da::IEnumOPCItemAttributes
 pub struct ItemAttributeIterator {
-    inner: opc_da_bindings::IEnumOPCItemAttributes,
-    cache: RemoteArray<opc_da_bindings::tagOPCITEMATTRIBUTES>,
+    inner: crate::bindings::da::IEnumOPCItemAttributes,
+    cache: RemoteArray<crate::bindings::da::tagOPCITEMATTRIBUTES>,
     index: u32,
     done: bool,
 }
 
 impl ItemAttributeIterator {
-    pub fn new(inner: opc_da_bindings::IEnumOPCItemAttributes) -> Self {
+    pub fn new(inner: crate::bindings::da::IEnumOPCItemAttributes) -> Self {
         Self {
             inner,
             cache: RemoteArray::empty(),

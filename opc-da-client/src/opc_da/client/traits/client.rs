@@ -1,6 +1,6 @@
 use windows_core::Interface as _;
 
-use crate::{
+use crate::opc_da::{
     client::GuidIterator,
     def::{ClassContext, ServerInfo},
     utils::{IntoBridge, ToNative, TryToNative as _},
@@ -17,11 +17,12 @@ pub trait ClientTrait<Server: TryFrom<windows::core::IUnknown, Error = windows::
     ///
     /// A `Result` containing a `GuidIterator` over server GUIDs, or an error if the operation fails.
     fn get_servers(&self) -> windows::core::Result<GuidIterator> {
+        tracing::debug!("Enumerating OPC DA Server classes via COM Component Categories Manager");
         let id = unsafe {
             windows::Win32::System::Com::CLSIDFromProgID(windows::core::w!("OPC.ServerList.1"))?
         };
 
-        let servers: opc_comn_bindings::IOPCServerList = unsafe {
+        let servers: crate::bindings::comn::IOPCServerList = unsafe {
             // TODO: Use CoCreateInstanceEx
             windows::Win32::System::Com::CoCreateInstance(
                 &id,
@@ -58,7 +59,12 @@ pub trait ClientTrait<Server: TryFrom<windows::core::IUnknown, Error = windows::
         class_id: windows::core::GUID,
         class_context: ClassContext,
     ) -> windows::core::Result<Server> {
-        let server: opc_da_bindings::IOPCServer = unsafe {
+        tracing::debug!(
+            ?class_id,
+            ?class_context,
+            "Creating OPC server instance via COM CoCreateInstance"
+        );
+        let server: crate::bindings::da::IOPCServer = unsafe {
             windows::Win32::System::Com::CoCreateInstance(
                 &class_id,
                 None,

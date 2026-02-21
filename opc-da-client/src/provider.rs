@@ -9,6 +9,20 @@ use mockall::automock;
 /// A single tag's read result.
 ///
 /// Returned by [`OpcProvider::read_tag_values`].
+///
+/// # Examples
+///
+/// ```
+/// use opc_da_client::TagValue;
+///
+/// let tv = TagValue {
+///     tag_id: "Simulation.Random.1".to_string(),
+///     value: "42.5".to_string(),
+///     quality: "Good".to_string(),
+///     timestamp: "2026-01-01 00:00:00".to_string(),
+/// };
+/// assert_eq!(tv.tag_id, "Simulation.Random.1");
+/// ```
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TagValue {
     /// The fully qualified tag identifier (e.g., `"Channel1.Device1.Tag1"`).
@@ -22,6 +36,15 @@ pub struct TagValue {
 }
 
 /// Typed value to write to an OPC DA tag.
+///
+/// # Examples
+///
+/// ```
+/// use opc_da_client::OpcValue;
+///
+/// let v = OpcValue::Float(3.14);
+/// assert_eq!(v, OpcValue::Float(3.14));
+/// ```
 #[derive(Debug, Clone, PartialEq)]
 pub enum OpcValue {
     /// String value (`VT_BSTR`) — server may coerce to target type.
@@ -35,6 +58,19 @@ pub enum OpcValue {
 }
 
 /// Result of a single write operation.
+///
+/// # Examples
+///
+/// ```
+/// use opc_da_client::WriteResult;
+///
+/// let wr = WriteResult {
+///     tag_id: "Tag1".to_string(),
+///     success: true,
+///     error: None,
+/// };
+/// assert!(wr.success);
+/// ```
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WriteResult {
     /// The tag that was written to.

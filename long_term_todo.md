@@ -17,31 +17,45 @@
 - [x] Update `architecture.md` workspace diagram
 - [x] Git commit
 
-## Phase 3 — Merge `opc_da_bindings` into `opc-da-client`
+## Phase 3 — Merge `opc_da_bindings` into `opc-da-client` (Freeze Strategy)
 
-- [ ] Create branch `feature/merge-opc-da-bindings`
-- [ ] Copy `vendor/opc_da_bindings/src/` into `opc-da-client/src/bindings/da/`
-- [ ] Copy `vendor/opc_da_bindings/.metadata/` into `opc-da-client/.metadata/da/`
-- [ ] Copy `vendor/opc_da_bindings/build.rs` logic into `opc-da-client/build.rs`
-- [ ] Evaluate merging `opc_comn_bindings` similarly into `opc-da-client/src/bindings/comn/`
-- [ ] Replace `use opc_da_bindings::` with `use crate::bindings::da::` across codebase
-- [ ] Replace `use opc_comn_bindings::` with `use crate::bindings::comn::` (if merged)
-- [ ] Remove `opc_da_bindings` / `opc_comn_bindings` from workspace
-- [ ] Remove `vendor/opc_da_bindings/` and `vendor/opc_comn_bindings/` directories
-- [ ] Add `windows-bindgen` as build-dep of `opc-da-client`
+- [x] Copy `vendor/opc_da_bindings/src/` into `opc-da-client/src/bindings/da/`
+- [x] Copy `vendor/opc_comn_bindings/src/` into `opc-da-client/src/bindings/comn/`
+- [x] Archive `.winmd` files into `opc-da-client/.winmd/` for future re-generation
+- [x] Wire `mod bindings;` in `opc-da-client/src/lib.rs` (behind `opc-da-backend` feature)
+- [x] Replace `use opc_da_bindings::` with `use crate::bindings::da::` across codebase
+- [x] Replace `use opc_comn_bindings::` with `use crate::bindings::comn::` across codebase
+- [x] Remove `opc_da_bindings` / `opc_comn_bindings` from workspace members + deps
+- [x] Drop `windows-bindgen` from `[workspace.dependencies]` (no longer a build-dep)
+- [x] Drop `opc_classic_utils` from workspace (unused by `opc-da-client`)
+- [x] `cargo check -p opc-da-client`
+- [x] `cargo clippy --workspace -- -D warnings`
+- [x] `cargo test --workspace`
+- [x] Remove `vendor/opc_da_bindings/` and `vendor/opc_comn_bindings/` directories
+- [x] Evaluate removing `vendor/` directory if only `opc_classic_utils` remains (keep per GEMINI.md data safety rule)
+- [x] Update `opc-da-client/architecture.md`
+- [x] Update `architecture.md`
+- [x] Git commit
+
+## Phase 4 — Testability Refactor (ServerConnector Extraction)
+
+- [ ] C0: Extract `ServerConnector` trait in `opc-da-client/src/backend/connector.rs`
+- [ ] C1: Parameterize `OpcDaWrapper<C: ServerConnector = ComConnector>`
+- [ ] C2: Implement `ComConnector` (moves existing COM logic, zero behavior change)
 - [ ] `cargo check -p opc-da-client`
-- [ ] `cargo clippy --workspace -- -D warnings`
 - [ ] `cargo test --workspace`
-- [ ] Evaluate removing `vendor/opc_classic_utils/` (merge or drop)
-- [ ] Remove `vendor/` directory if empty
-- [ ] Update `opc-da-client/architecture.md`
-- [ ] Update `architecture.md`
 - [ ] Git commit
 
-## Future Tests (Post-Vendor)
+## Future Tests (Post-Refactor)
 
-- [ ] Unit test `StringIterator` — verify no phantom `E_POINTER` errors
-- [ ] Unit test `Client` trait methods with mock COM
-- [ ] Static assert GUID type compatibility (`windows::core::GUID` unification)
-- [ ] Integration test: list_servers against mock registry
-- [ ] Integration test: browse_tags against mock server
+- [ ] Unit test `StringIterator` — mock `IEnumString` via `#[windows::core::implement]`, verify no phantom `E_POINTER`
+- [ ] Static assert GUID type compatibility (`const_assert_eq!(size_of::<GUID>(), 16)`)
+- [ ] Client trait mock test via `MockServerConnector` (requires Phase 4)
+- [ ] Integration test: `list_servers` via `MockServerConnector` (requires Phase 4)
+- [ ] Integration test: `browse_tags` via `MockServerConnector` (requires Phase 4)
+
+## Feature: SafeArray Display
+
+- [ ] Enhance `variant_to_string()` to iterate `SAFEARRAY` elements via `SafeArrayGetElement`
+- [ ] Format as `[val1, val2, ...]` with max-display cap (20 elements + `...`)
+- [ ] Unit tests: 1-D int array, 1-D string array, empty array, multi-dimensional

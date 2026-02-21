@@ -1,8 +1,9 @@
-use crate::{
-    try_from_native,
-    utils::{IntoBridge, LocalPointer, RemoteArray, ToNative, TryFromNative, TryToNative},
+use crate::opc_da::utils::{
+    IntoBridge, LocalPointer, RemoteArray, ToNative, TryFromNative, TryToNative,
 };
+use crate::try_from_native;
 
+/// Supported OPC DA Specification versions.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Version {
     V1,
@@ -10,6 +11,7 @@ pub enum Version {
     V3,
 }
 
+/// Current state and properties of an active OPC group.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct GroupState {
     pub update_rate: u32,
@@ -22,6 +24,7 @@ pub struct GroupState {
     pub server_handle: u32,
 }
 
+/// Operational status and metadata of the connected server.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ServerStatus {
     pub start_time: std::time::SystemTime,
@@ -36,9 +39,9 @@ pub struct ServerStatus {
     pub vendor_info: String,
 }
 
-impl TryFromNative<opc_da_bindings::tagOPCSERVERSTATUS> for ServerStatus {
+impl TryFromNative<crate::bindings::da::tagOPCSERVERSTATUS> for ServerStatus {
     fn try_from_native(
-        native: &opc_da_bindings::tagOPCSERVERSTATUS,
+        native: &crate::bindings::da::tagOPCSERVERSTATUS,
     ) -> windows::core::Result<Self> {
         Ok(Self {
             start_time: try_from_native!(&native.ftStartTime),
@@ -55,6 +58,7 @@ impl TryFromNative<opc_da_bindings::tagOPCSERVERSTATUS> for ServerStatus {
     }
 }
 
+/// Definition required to add a new item to an OPC group.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct ItemDef {
     pub access_path: String,
@@ -65,6 +69,7 @@ pub struct ItemDef {
     pub blob: Vec<u8>,
 }
 
+/// FFI-safe bridge struct for `ItemDef`.
 pub struct ItemDefBridge {
     pub access_path: LocalPointer<Vec<u16>>,
     pub item_id: LocalPointer<Vec<u16>>,
@@ -87,9 +92,9 @@ impl IntoBridge<ItemDefBridge> for ItemDef {
     }
 }
 
-impl TryToNative<opc_da_bindings::tagOPCITEMDEF> for ItemDefBridge {
-    fn try_to_native(&self) -> windows::core::Result<opc_da_bindings::tagOPCITEMDEF> {
-        Ok(opc_da_bindings::tagOPCITEMDEF {
+impl TryToNative<crate::bindings::da::tagOPCITEMDEF> for ItemDefBridge {
+    fn try_to_native(&self) -> windows::core::Result<crate::bindings::da::tagOPCITEMDEF> {
+        Ok(crate::bindings::da::tagOPCITEMDEF {
             szAccessPath: self.access_path.as_pwstr(),
             szItemID: self.item_id.as_pwstr(),
             bActive: self.active.into(),
@@ -107,6 +112,7 @@ impl TryToNative<opc_da_bindings::tagOPCITEMDEF> for ItemDefBridge {
     }
 }
 
+/// Result properties of an item after being added to a group.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ItemResult {
     pub server_handle: u32,
@@ -115,8 +121,10 @@ pub struct ItemResult {
     pub blob: Vec<u8>,
 }
 
-impl TryFromNative<opc_da_bindings::tagOPCITEMRESULT> for ItemResult {
-    fn try_from_native(native: &opc_da_bindings::tagOPCITEMRESULT) -> windows::core::Result<Self> {
+impl TryFromNative<crate::bindings::da::tagOPCITEMRESULT> for ItemResult {
+    fn try_from_native(
+        native: &crate::bindings::da::tagOPCITEMRESULT,
+    ) -> windows::core::Result<Self> {
         Ok(Self {
             server_handle: native.hServer,
             data_type: native.vtCanonicalDataType,
@@ -128,6 +136,7 @@ impl TryFromNative<opc_da_bindings::tagOPCITEMRESULT> for ItemResult {
     }
 }
 
+/// Current running state of the OPC server.
 #[derive(Debug, Clone, PartialEq)]
 pub enum ServerState {
     Running,
@@ -138,15 +147,17 @@ pub enum ServerState {
     CommunicationFault,
 }
 
-impl TryFromNative<opc_da_bindings::tagOPCSERVERSTATE> for ServerState {
-    fn try_from_native(native: &opc_da_bindings::tagOPCSERVERSTATE) -> windows::core::Result<Self> {
+impl TryFromNative<crate::bindings::da::tagOPCSERVERSTATE> for ServerState {
+    fn try_from_native(
+        native: &crate::bindings::da::tagOPCSERVERSTATE,
+    ) -> windows::core::Result<Self> {
         match *native {
-            opc_da_bindings::OPC_STATUS_RUNNING => Ok(ServerState::Running),
-            opc_da_bindings::OPC_STATUS_FAILED => Ok(ServerState::Failed),
-            opc_da_bindings::OPC_STATUS_NOCONFIG => Ok(ServerState::NoConfig),
-            opc_da_bindings::OPC_STATUS_SUSPENDED => Ok(ServerState::Suspended),
-            opc_da_bindings::OPC_STATUS_TEST => Ok(ServerState::Test),
-            opc_da_bindings::OPC_STATUS_COMM_FAULT => Ok(ServerState::CommunicationFault),
+            crate::bindings::da::OPC_STATUS_RUNNING => Ok(ServerState::Running),
+            crate::bindings::da::OPC_STATUS_FAILED => Ok(ServerState::Failed),
+            crate::bindings::da::OPC_STATUS_NOCONFIG => Ok(ServerState::NoConfig),
+            crate::bindings::da::OPC_STATUS_SUSPENDED => Ok(ServerState::Suspended),
+            crate::bindings::da::OPC_STATUS_TEST => Ok(ServerState::Test),
+            crate::bindings::da::OPC_STATUS_COMM_FAULT => Ok(ServerState::CommunicationFault),
             unknown => Err(windows::core::Error::new(
                 windows::Win32::Foundation::E_INVALIDARG,
                 format!("Unknown server state: {unknown:?}"),
@@ -155,19 +166,20 @@ impl TryFromNative<opc_da_bindings::tagOPCSERVERSTATE> for ServerState {
     }
 }
 
-impl ToNative<opc_da_bindings::tagOPCSERVERSTATE> for ServerState {
-    fn to_native(&self) -> opc_da_bindings::tagOPCSERVERSTATE {
+impl ToNative<crate::bindings::da::tagOPCSERVERSTATE> for ServerState {
+    fn to_native(&self) -> crate::bindings::da::tagOPCSERVERSTATE {
         match self {
-            ServerState::Running => opc_da_bindings::OPC_STATUS_RUNNING,
-            ServerState::Failed => opc_da_bindings::OPC_STATUS_FAILED,
-            ServerState::NoConfig => opc_da_bindings::OPC_STATUS_NOCONFIG,
-            ServerState::Suspended => opc_da_bindings::OPC_STATUS_SUSPENDED,
-            ServerState::Test => opc_da_bindings::OPC_STATUS_TEST,
-            ServerState::CommunicationFault => opc_da_bindings::OPC_STATUS_COMM_FAULT,
+            ServerState::Running => crate::bindings::da::OPC_STATUS_RUNNING,
+            ServerState::Failed => crate::bindings::da::OPC_STATUS_FAILED,
+            ServerState::NoConfig => crate::bindings::da::OPC_STATUS_NOCONFIG,
+            ServerState::Suspended => crate::bindings::da::OPC_STATUS_SUSPENDED,
+            ServerState::Test => crate::bindings::da::OPC_STATUS_TEST,
+            ServerState::CommunicationFault => crate::bindings::da::OPC_STATUS_COMM_FAULT,
         }
     }
 }
 
+/// Scope for enumerating server items or connections.
 #[derive(Debug, Clone, PartialEq)]
 pub enum EnumScope {
     PrivateConnections,
@@ -178,15 +190,17 @@ pub enum EnumScope {
     All,
 }
 
-impl TryFromNative<opc_da_bindings::tagOPCENUMSCOPE> for EnumScope {
-    fn try_from_native(native: &opc_da_bindings::tagOPCENUMSCOPE) -> windows::core::Result<Self> {
+impl TryFromNative<crate::bindings::da::tagOPCENUMSCOPE> for EnumScope {
+    fn try_from_native(
+        native: &crate::bindings::da::tagOPCENUMSCOPE,
+    ) -> windows::core::Result<Self> {
         match *native {
-            opc_da_bindings::OPC_ENUM_PRIVATE_CONNECTIONS => Ok(EnumScope::PrivateConnections),
-            opc_da_bindings::OPC_ENUM_PUBLIC_CONNECTIONS => Ok(EnumScope::PublicConnections),
-            opc_da_bindings::OPC_ENUM_ALL_CONNECTIONS => Ok(EnumScope::AllConnections),
-            opc_da_bindings::OPC_ENUM_PUBLIC => Ok(EnumScope::Public),
-            opc_da_bindings::OPC_ENUM_PRIVATE => Ok(EnumScope::Private),
-            opc_da_bindings::OPC_ENUM_ALL => Ok(EnumScope::All),
+            crate::bindings::da::OPC_ENUM_PRIVATE_CONNECTIONS => Ok(EnumScope::PrivateConnections),
+            crate::bindings::da::OPC_ENUM_PUBLIC_CONNECTIONS => Ok(EnumScope::PublicConnections),
+            crate::bindings::da::OPC_ENUM_ALL_CONNECTIONS => Ok(EnumScope::AllConnections),
+            crate::bindings::da::OPC_ENUM_PUBLIC => Ok(EnumScope::Public),
+            crate::bindings::da::OPC_ENUM_PRIVATE => Ok(EnumScope::Private),
+            crate::bindings::da::OPC_ENUM_ALL => Ok(EnumScope::All),
             unknown => Err(windows::core::Error::new(
                 windows::Win32::Foundation::E_INVALIDARG,
                 format!("Unknown enum scope: {unknown:?}"),
@@ -195,19 +209,20 @@ impl TryFromNative<opc_da_bindings::tagOPCENUMSCOPE> for EnumScope {
     }
 }
 
-impl ToNative<opc_da_bindings::tagOPCENUMSCOPE> for EnumScope {
-    fn to_native(&self) -> opc_da_bindings::tagOPCENUMSCOPE {
+impl ToNative<crate::bindings::da::tagOPCENUMSCOPE> for EnumScope {
+    fn to_native(&self) -> crate::bindings::da::tagOPCENUMSCOPE {
         match self {
-            EnumScope::PrivateConnections => opc_da_bindings::OPC_ENUM_PRIVATE_CONNECTIONS,
-            EnumScope::PublicConnections => opc_da_bindings::OPC_ENUM_PUBLIC_CONNECTIONS,
-            EnumScope::AllConnections => opc_da_bindings::OPC_ENUM_ALL_CONNECTIONS,
-            EnumScope::Public => opc_da_bindings::OPC_ENUM_PUBLIC,
-            EnumScope::Private => opc_da_bindings::OPC_ENUM_PRIVATE,
-            EnumScope::All => opc_da_bindings::OPC_ENUM_ALL,
+            EnumScope::PrivateConnections => crate::bindings::da::OPC_ENUM_PRIVATE_CONNECTIONS,
+            EnumScope::PublicConnections => crate::bindings::da::OPC_ENUM_PUBLIC_CONNECTIONS,
+            EnumScope::AllConnections => crate::bindings::da::OPC_ENUM_ALL_CONNECTIONS,
+            EnumScope::Public => crate::bindings::da::OPC_ENUM_PUBLIC,
+            EnumScope::Private => crate::bindings::da::OPC_ENUM_PRIVATE,
+            EnumScope::All => crate::bindings::da::OPC_ENUM_ALL,
         }
     }
 }
 
+/// Full attribute set of a single OPC item.
 pub struct ItemAttributes {
     pub access_path: String,
     pub item_id: String,
@@ -222,9 +237,9 @@ pub struct ItemAttributes {
     pub eu_info: windows::Win32::System::Variant::VARIANT,
 }
 
-impl TryFromNative<opc_da_bindings::tagOPCITEMATTRIBUTES> for ItemAttributes {
+impl TryFromNative<crate::bindings::da::tagOPCITEMATTRIBUTES> for ItemAttributes {
     fn try_from_native(
-        native: &opc_da_bindings::tagOPCITEMATTRIBUTES,
+        native: &crate::bindings::da::tagOPCITEMATTRIBUTES,
     ) -> windows::core::Result<Self> {
         Ok(Self {
             access_path: try_from_native!(&native.szAccessPath),
@@ -244,18 +259,19 @@ impl TryFromNative<opc_da_bindings::tagOPCITEMATTRIBUTES> for ItemAttributes {
     }
 }
 
+/// Engineering Units (EU) classification type.
 pub enum EuType {
     NoEnum,
     Analog,
     Enumerated,
 }
 
-impl TryFromNative<opc_da_bindings::tagOPCEUTYPE> for EuType {
-    fn try_from_native(native: &opc_da_bindings::tagOPCEUTYPE) -> windows::core::Result<Self> {
+impl TryFromNative<crate::bindings::da::tagOPCEUTYPE> for EuType {
+    fn try_from_native(native: &crate::bindings::da::tagOPCEUTYPE) -> windows::core::Result<Self> {
         match *native {
-            opc_da_bindings::OPC_NOENUM => Ok(EuType::NoEnum),
-            opc_da_bindings::OPC_ANALOG => Ok(EuType::Analog),
-            opc_da_bindings::OPC_ENUMERATED => Ok(EuType::Enumerated),
+            crate::bindings::da::OPC_NOENUM => Ok(EuType::NoEnum),
+            crate::bindings::da::OPC_ANALOG => Ok(EuType::Analog),
+            crate::bindings::da::OPC_ENUMERATED => Ok(EuType::Enumerated),
             unknown => Err(windows::core::Error::new(
                 windows::Win32::Foundation::E_INVALIDARG,
                 format!("Unknown EU type: {unknown:?}"),
@@ -264,6 +280,7 @@ impl TryFromNative<opc_da_bindings::tagOPCEUTYPE> for EuType {
     }
 }
 
+/// Current state of a watched OPC item including value, quality, and time.
 pub struct ItemState {
     pub client_handle: u32,
     pub timestamp: std::time::SystemTime,
@@ -271,8 +288,10 @@ pub struct ItemState {
     pub data_value: windows::Win32::System::Variant::VARIANT,
 }
 
-impl TryFromNative<opc_da_bindings::tagOPCITEMSTATE> for ItemState {
-    fn try_from_native(native: &opc_da_bindings::tagOPCITEMSTATE) -> windows::core::Result<Self> {
+impl TryFromNative<crate::bindings::da::tagOPCITEMSTATE> for ItemState {
+    fn try_from_native(
+        native: &crate::bindings::da::tagOPCITEMSTATE,
+    ) -> windows::core::Result<Self> {
         Ok(Self {
             client_handle: native.hClient,
             timestamp: try_from_native!(&native.ftTimeStamp),
@@ -282,6 +301,7 @@ impl TryFromNative<opc_da_bindings::tagOPCITEMSTATE> for ItemState {
     }
 }
 
+/// Reading source preference (Cache or Device).
 pub enum DataSourceTarget {
     ForceCache,
     ForceDevice,
@@ -298,11 +318,13 @@ impl DataSourceTarget {
     }
 }
 
-impl TryFromNative<opc_da_bindings::tagOPCDATASOURCE> for DataSourceTarget {
-    fn try_from_native(native: &opc_da_bindings::tagOPCDATASOURCE) -> windows::core::Result<Self> {
+impl TryFromNative<crate::bindings::da::tagOPCDATASOURCE> for DataSourceTarget {
+    fn try_from_native(
+        native: &crate::bindings::da::tagOPCDATASOURCE,
+    ) -> windows::core::Result<Self> {
         match *native {
-            opc_da_bindings::OPC_DS_CACHE => Ok(DataSourceTarget::ForceCache),
-            opc_da_bindings::OPC_DS_DEVICE => Ok(DataSourceTarget::ForceDevice),
+            crate::bindings::da::OPC_DS_CACHE => Ok(DataSourceTarget::ForceCache),
+            crate::bindings::da::OPC_DS_DEVICE => Ok(DataSourceTarget::ForceDevice),
             unknown => Err(windows::core::Error::new(
                 windows::Win32::Foundation::E_INVALIDARG,
                 format!("Unknown data source: {unknown:?}"),
@@ -311,11 +333,11 @@ impl TryFromNative<opc_da_bindings::tagOPCDATASOURCE> for DataSourceTarget {
     }
 }
 
-impl TryToNative<opc_da_bindings::tagOPCDATASOURCE> for DataSourceTarget {
-    fn try_to_native(&self) -> windows::core::Result<opc_da_bindings::tagOPCDATASOURCE> {
+impl TryToNative<crate::bindings::da::tagOPCDATASOURCE> for DataSourceTarget {
+    fn try_to_native(&self) -> windows::core::Result<crate::bindings::da::tagOPCDATASOURCE> {
         match self {
-            DataSourceTarget::ForceCache => Ok(opc_da_bindings::OPC_DS_CACHE),
-            DataSourceTarget::ForceDevice => Ok(opc_da_bindings::OPC_DS_DEVICE),
+            DataSourceTarget::ForceCache => Ok(crate::bindings::da::OPC_DS_CACHE),
+            DataSourceTarget::ForceDevice => Ok(crate::bindings::da::OPC_DS_DEVICE),
             DataSourceTarget::WithMaxAge(_) => Err(windows::core::Error::new(
                 windows::Win32::Foundation::E_INVALIDARG,
                 "MaxAge data source requires a value",
@@ -324,6 +346,7 @@ impl TryToNative<opc_da_bindings::tagOPCDATASOURCE> for DataSourceTarget {
     }
 }
 
+/// Full read value result carrying value, quality, and timestamp.
 pub struct ItemValue {
     pub value: windows::Win32::System::Variant::VARIANT,
     pub quality: u16,
@@ -379,6 +402,7 @@ impl
     }
 }
 
+/// Item value struct for writes or partial updates.
 pub struct ItemPartialValue {
     pub value: windows::Win32::System::Variant::VARIANT,
     pub quality: Option<u16>,
@@ -386,9 +410,9 @@ pub struct ItemPartialValue {
 }
 
 // try to native
-impl TryToNative<opc_da_bindings::tagOPCITEMVQT> for ItemPartialValue {
-    fn try_to_native(&self) -> windows::core::Result<opc_da_bindings::tagOPCITEMVQT> {
-        Ok(opc_da_bindings::tagOPCITEMVQT {
+impl TryToNative<crate::bindings::da::tagOPCITEMVQT> for ItemPartialValue {
+    fn try_to_native(&self) -> windows::core::Result<crate::bindings::da::tagOPCITEMVQT> {
+        Ok(crate::bindings::da::tagOPCITEMVQT {
             vDataValue: self.value.clone(),
             bQualitySpecified: self.quality.is_some().into(),
             wQuality: self.quality.unwrap_or_default(),
@@ -404,18 +428,21 @@ impl TryToNative<opc_da_bindings::tagOPCITEMVQT> for ItemPartialValue {
     }
 }
 
+/// Filter type for navigating the namespace (Branch, Leaf, Flat).
 pub enum BrowseType {
     Branch,
     Leaf,
     Flat,
 }
 
-impl TryFromNative<opc_da_bindings::tagOPCBROWSETYPE> for BrowseType {
-    fn try_from_native(native: &opc_da_bindings::tagOPCBROWSETYPE) -> windows::core::Result<Self> {
+impl TryFromNative<crate::bindings::da::tagOPCBROWSETYPE> for BrowseType {
+    fn try_from_native(
+        native: &crate::bindings::da::tagOPCBROWSETYPE,
+    ) -> windows::core::Result<Self> {
         match *native {
-            opc_da_bindings::OPC_BRANCH => Ok(BrowseType::Branch),
-            opc_da_bindings::OPC_LEAF => Ok(BrowseType::Leaf),
-            opc_da_bindings::OPC_FLAT => Ok(BrowseType::Flat),
+            crate::bindings::da::OPC_BRANCH => Ok(BrowseType::Branch),
+            crate::bindings::da::OPC_LEAF => Ok(BrowseType::Leaf),
+            crate::bindings::da::OPC_FLAT => Ok(BrowseType::Flat),
             unknown => Err(windows::core::Error::new(
                 windows::Win32::Foundation::E_INVALIDARG,
                 format!("Unknown browse type: {unknown:?}"),
@@ -424,30 +451,31 @@ impl TryFromNative<opc_da_bindings::tagOPCBROWSETYPE> for BrowseType {
     }
 }
 
-impl ToNative<opc_da_bindings::tagOPCBROWSETYPE> for BrowseType {
-    fn to_native(&self) -> opc_da_bindings::tagOPCBROWSETYPE {
+impl ToNative<crate::bindings::da::tagOPCBROWSETYPE> for BrowseType {
+    fn to_native(&self) -> crate::bindings::da::tagOPCBROWSETYPE {
         match self {
-            BrowseType::Branch => opc_da_bindings::OPC_BRANCH,
-            BrowseType::Leaf => opc_da_bindings::OPC_LEAF,
-            BrowseType::Flat => opc_da_bindings::OPC_FLAT,
+            BrowseType::Branch => crate::bindings::da::OPC_BRANCH,
+            BrowseType::Leaf => crate::bindings::da::OPC_LEAF,
+            BrowseType::Flat => crate::bindings::da::OPC_FLAT,
         }
     }
 }
 
+/// Granular filter for enumeration results.
 pub enum BrowseFilter {
     All,
     Branches,
     Items,
 }
 
-impl TryFromNative<opc_da_bindings::tagOPCBROWSEFILTER> for BrowseFilter {
+impl TryFromNative<crate::bindings::da::tagOPCBROWSEFILTER> for BrowseFilter {
     fn try_from_native(
-        native: &opc_da_bindings::tagOPCBROWSEFILTER,
+        native: &crate::bindings::da::tagOPCBROWSEFILTER,
     ) -> windows::core::Result<Self> {
         match *native {
-            opc_da_bindings::OPC_BROWSE_FILTER_ALL => Ok(BrowseFilter::All),
-            opc_da_bindings::OPC_BROWSE_FILTER_BRANCHES => Ok(BrowseFilter::Branches),
-            opc_da_bindings::OPC_BROWSE_FILTER_ITEMS => Ok(BrowseFilter::Items),
+            crate::bindings::da::OPC_BROWSE_FILTER_ALL => Ok(BrowseFilter::All),
+            crate::bindings::da::OPC_BROWSE_FILTER_BRANCHES => Ok(BrowseFilter::Branches),
+            crate::bindings::da::OPC_BROWSE_FILTER_ITEMS => Ok(BrowseFilter::Items),
             unknown => Err(windows::core::Error::new(
                 windows::Win32::Foundation::E_INVALIDARG,
                 format!("Unknown browse filter: {unknown:?}"),
@@ -456,16 +484,17 @@ impl TryFromNative<opc_da_bindings::tagOPCBROWSEFILTER> for BrowseFilter {
     }
 }
 
-impl ToNative<opc_da_bindings::tagOPCBROWSEFILTER> for BrowseFilter {
-    fn to_native(&self) -> opc_da_bindings::tagOPCBROWSEFILTER {
+impl ToNative<crate::bindings::da::tagOPCBROWSEFILTER> for BrowseFilter {
+    fn to_native(&self) -> crate::bindings::da::tagOPCBROWSEFILTER {
         match self {
-            BrowseFilter::All => opc_da_bindings::OPC_BROWSE_FILTER_ALL,
-            BrowseFilter::Branches => opc_da_bindings::OPC_BROWSE_FILTER_BRANCHES,
-            BrowseFilter::Items => opc_da_bindings::OPC_BROWSE_FILTER_ITEMS,
+            BrowseFilter::All => crate::bindings::da::OPC_BROWSE_FILTER_ALL,
+            BrowseFilter::Branches => crate::bindings::da::OPC_BROWSE_FILTER_BRANCHES,
+            BrowseFilter::Items => crate::bindings::da::OPC_BROWSE_FILTER_ITEMS,
         }
     }
 }
 
+/// Event types dispatched by asynchronous COM callbacks.
 #[derive(Debug, Clone, PartialEq)]
 pub enum DataCallbackEvent {
     DataChange(DataChangeEvent),
@@ -474,6 +503,7 @@ pub enum DataCallbackEvent {
     CancelComplete(CancelCompleteEvent),
 }
 
+/// Payload for data change synchronous/asynchronous callbacks.
 #[derive(Debug, Clone, PartialEq)]
 pub struct DataChangeEvent {
     pub transaction_id: u32,
@@ -487,6 +517,7 @@ pub struct DataChangeEvent {
     pub errors: RemoteArray<windows_core::HRESULT>,
 }
 
+/// Payload for async read completion.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ReadCompleteEvent {
     pub transaction_id: u32,
@@ -500,6 +531,7 @@ pub struct ReadCompleteEvent {
     pub errors: RemoteArray<windows_core::HRESULT>,
 }
 
+/// Payload for async write completion.
 #[derive(Debug, Clone, PartialEq)]
 pub struct WriteCompleteEvent {
     pub transaction_id: u32,
@@ -509,24 +541,26 @@ pub struct WriteCompleteEvent {
     pub errors: RemoteArray<windows_core::HRESULT>,
 }
 
+/// Payload for async cancel completion.
 #[derive(Debug, Clone, PartialEq)]
 pub struct CancelCompleteEvent {
     pub transaction_id: u32,
     pub group_handle: u32,
 }
 
+/// Typology of the server's address space.
 pub enum NamespaceType {
     Flat,
     Hierarchy,
 }
 
-impl TryFromNative<opc_da_bindings::tagOPCNAMESPACETYPE> for NamespaceType {
+impl TryFromNative<crate::bindings::da::tagOPCNAMESPACETYPE> for NamespaceType {
     fn try_from_native(
-        native: &opc_da_bindings::tagOPCNAMESPACETYPE,
+        native: &crate::bindings::da::tagOPCNAMESPACETYPE,
     ) -> windows::core::Result<Self> {
         match *native {
-            opc_da_bindings::OPC_NS_HIERARCHIAL => Ok(NamespaceType::Hierarchy),
-            opc_da_bindings::OPC_NS_FLAT => Ok(NamespaceType::Flat),
+            crate::bindings::da::OPC_NS_HIERARCHIAL => Ok(NamespaceType::Hierarchy),
+            crate::bindings::da::OPC_NS_FLAT => Ok(NamespaceType::Flat),
             unknown => Err(windows::core::Error::new(
                 windows::Win32::Foundation::E_INVALIDARG,
                 format!("Unknown namespace type: {unknown:?}"),
@@ -535,22 +569,24 @@ impl TryFromNative<opc_da_bindings::tagOPCNAMESPACETYPE> for NamespaceType {
     }
 }
 
-impl ToNative<opc_da_bindings::tagOPCNAMESPACETYPE> for NamespaceType {
-    fn to_native(&self) -> opc_da_bindings::tagOPCNAMESPACETYPE {
+impl ToNative<crate::bindings::da::tagOPCNAMESPACETYPE> for NamespaceType {
+    fn to_native(&self) -> crate::bindings::da::tagOPCNAMESPACETYPE {
         match self {
-            NamespaceType::Hierarchy => opc_da_bindings::OPC_NS_HIERARCHIAL,
-            NamespaceType::Flat => opc_da_bindings::OPC_NS_FLAT,
+            NamespaceType::Hierarchy => crate::bindings::da::OPC_NS_HIERARCHIAL,
+            NamespaceType::Flat => crate::bindings::da::OPC_NS_FLAT,
         }
     }
 }
 
 // COSERVERINFO
+/// Information defining how to connect to a remote server.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ServerInfo {
     pub name: String,
     pub auth_info: AuthInfo,
 }
 
+/// FFI-safe bridge for `ServerInfo` (COSERVERINFO).
 pub struct ServerInfoBridge {
     pub name: LocalPointer<Vec<u16>>,
     pub auth_info: AuthInfoBridge,
@@ -576,6 +612,7 @@ impl TryToNative<windows::Win32::System::Com::COSERVERINFO> for ServerInfoBridge
     }
 }
 
+/// Authentication and authorization settings for DCOM.
 #[derive(Debug, Clone, PartialEq)]
 pub struct AuthInfo {
     pub authn_svc: u32,
@@ -587,6 +624,7 @@ pub struct AuthInfo {
     pub capabilities: u32,
 }
 
+/// FFI-safe bridge for `AuthInfo` (COAUTHINFO).
 pub struct AuthInfoBridge {
     pub authn_svc: u32,
     pub authz_svc: u32,
@@ -625,6 +663,7 @@ impl TryToNative<windows::Win32::System::Com::COAUTHINFO> for AuthInfoBridge {
     }
 }
 
+/// DCOM authentication credentials.
 #[derive(Debug, Clone, PartialEq)]
 pub struct AuthIdentity {
     pub user: String,
@@ -633,6 +672,7 @@ pub struct AuthIdentity {
     pub flags: u32,
 }
 
+/// FFI-safe bridge for `AuthIdentity` (COAUTHIDENTITY).
 pub struct AuthIdentityBridge {
     pub user: LocalPointer<Vec<u16>>,
     pub domain: LocalPointer<Vec<u16>>,
@@ -680,6 +720,7 @@ impl TryToNative<windows::Win32::System::Com::COAUTHIDENTITY> for AuthIdentityBr
     }
 }
 
+/// COM instantiation context flags (CLSCTX).
 #[derive(Debug, Clone, PartialEq)]
 pub enum ClassContext {
     All,

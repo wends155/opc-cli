@@ -1,4 +1,4 @@
-use crate::utils::RemoteArray;
+use crate::opc_da::utils::RemoteArray;
 
 /// Asynchronous I/O functionality (OPC DA 2.0).
 ///
@@ -6,7 +6,7 @@ use crate::utils::RemoteArray;
 /// connection point callbacks. This trait extends the functionality of
 /// AsyncIoTrait with improved error handling and control mechanisms.
 pub trait AsyncIo2Trait {
-    fn interface(&self) -> windows::core::Result<&opc_da_bindings::IOPCAsyncIO2>;
+    fn interface(&self) -> windows::core::Result<&crate::bindings::da::IOPCAsyncIO2>;
 
     /// Initiates an asynchronous read operation.
     ///
@@ -87,7 +87,7 @@ pub trait AsyncIo2Trait {
     /// Cancel ID that can be used to cancel the operation
     fn refresh2(
         &self,
-        source: opc_da_bindings::tagOPCDATASOURCE,
+        source: crate::bindings::da::tagOPCDATASOURCE,
         transaction_id: u32,
     ) -> windows::core::Result<u32> {
         unsafe { self.interface()?.Refresh2(source, transaction_id) }

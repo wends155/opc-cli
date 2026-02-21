@@ -1,4 +1,4 @@
-use crate::utils::RemoteArray;
+use crate::opc_da::utils::RemoteArray;
 use windows_core::BOOL;
 
 /// Item sampling management functionality (OPC DA 3.0).
@@ -6,7 +6,7 @@ use windows_core::BOOL;
 /// Provides methods to control sampling rates and buffering behavior
 /// for individual items in an OPC group.
 pub trait ItemSamplingMgtTrait {
-    fn interface(&self) -> windows::core::Result<&opc_da_bindings::IOPCItemSamplingMgt>;
+    fn interface(&self) -> windows::core::Result<&crate::bindings::da::IOPCItemSamplingMgt>;
 
     /// Sets sampling rates for specified items.
     ///

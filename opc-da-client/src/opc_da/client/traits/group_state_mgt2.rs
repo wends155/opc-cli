@@ -4,7 +4,7 @@
 /// determines how often the server sends keep-alive notifications to maintain the
 /// connection state, even when no data has changed.
 pub trait GroupStateMgt2Trait {
-    fn interface(&self) -> windows::core::Result<&opc_da_bindings::IOPCGroupStateMgt2>;
+    fn interface(&self) -> windows::core::Result<&crate::bindings::da::IOPCGroupStateMgt2>;
 
     /// Sets the keep-alive time for the group in milliseconds.
     ///

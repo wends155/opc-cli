@@ -1,3 +1,4 @@
+#![allow(unused_imports)]
 /// OPC DA client trait definitions.
 ///
 /// This module contains all trait definitions for interacting with OPC DA servers.

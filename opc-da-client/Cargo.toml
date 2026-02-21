@@ -15,7 +15,7 @@ workspace = true
 
 [features]
 default = ["opc-da-backend"]
-opc-da-backend = ["dep:opc_da_bindings", "dep:opc_comn_bindings"]
+opc-da-backend = []
 test-support = ["dep:mockall"]
 
 [dependencies]
@@ -27,9 +27,7 @@ tokio = { version = "1.43.0", features = ["rt", "sync"] }
 tracing = "0.1.41"
 # OS: Windows (required)
 windows = { workspace = true }
-
-opc_da_bindings = { workspace = true, optional = true }
-opc_comn_bindings = { workspace = true, optional = true }
+windows-core = { workspace = true }
 
 # Test support: mock provider (optional)
 mockall = { version = "0.13.1", optional = true }

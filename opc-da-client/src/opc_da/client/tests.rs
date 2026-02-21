@@ -1,6 +1,6 @@
 use unified::{Guard, Server};
 
-use crate::utils::LocalPointer;
+use crate::opc_da::utils::LocalPointer;
 
 use super::*;
 
@@ -36,7 +36,7 @@ fn test_client() {
 
     let branch = StringIterator::new(
         server
-            .browse_opc_item_ids(opc_da_bindings::OPC_BRANCH, Some(""), 0, 0)
+            .browse_opc_item_ids(crate::bindings::da::OPC_BRANCH, Some(""), 0, 0)
             .expect("Failed to browse items"),
     )
     .take(1)
@@ -48,12 +48,12 @@ fn test_client() {
     println!("Branch: {:?}", branch);
 
     server
-        .change_browse_position(opc_da_bindings::OPC_BROWSE_TO, &branch)
+        .change_browse_position(crate::bindings::da::OPC_BROWSE_TO, &branch)
         .expect("Failed to change browse position");
 
     let leaf = StringIterator::new(
         server
-            .browse_opc_item_ids(opc_da_bindings::OPC_FLAT, Some(""), 0, 0)
+            .browse_opc_item_ids(crate::bindings::da::OPC_FLAT, Some(""), 0, 0)
             .expect("Failed to browse items"),
     )
     .take(1)
@@ -86,7 +86,7 @@ fn test_client() {
 
     let name = LocalPointer::from(&name);
     let (results, errors) = group
-        .add_items(&[opc_da_bindings::tagOPCITEMDEF {
+        .add_items(&[crate::bindings::da::tagOPCITEMDEF {
             szAccessPath: windows::core::PWSTR::null(),
             szItemID: name.as_pwstr(),
             bActive: true.into(),
@@ -110,7 +110,7 @@ fn test_client() {
         .hServer;
 
     let (states, errors) =
-        SyncIoTrait::read(&group, opc_da_bindings::OPC_DS_CACHE, &[server_handle])
+        SyncIoTrait::read(&group, crate::bindings::da::OPC_DS_CACHE, &[server_handle])
             .expect("Failed to read");
 
     if errors.len() != 1 {

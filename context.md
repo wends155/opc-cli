@@ -103,3 +103,39 @@
 > * **New Constraints:** opc-da-client now holds its own OPC DA logic, but continues to reference vendor/opc_da_bindings and vendor/opc_comn_bindings (Phase 3 remaining).
 > * **Pruned:** The entire vendor/opc_da boundary layer.
 
+
+## 2026-02-21: Audit - Phase 2 opc_da merge compliance
+> 📝 **Context Update:**
+> * **Feature:** Post-merge compliance audit of opc-da-client
+> * **Changes:** Verified all coding_standard.md and GEMINI.md requirements after Phase 2 merge. Zero unwraps in library code, 15 structured tracing calls at consumer layer, 19 unit tests passing, full clippy/fmt/test gates green.
+> * **New Constraints:** The merged opc_da/ module uses #[allow] attributes inherited from upstream. Any code moved to native opc-da-client modules must adopt the strict workspace lint policy. OpcProvider integration tests require a live OPC DA server.
+> * **Pruned:** Phase 2 intermediate build/format/clippy iterations. Audit scan data from Narsil.
+
+
+## 2026-02-21: Audit - Phase 2 opc_da merge compliance
+> 📝 **Context Update:**
+> * **Feature:** Post-merge compliance audit of opc-da-client
+> * **Changes:** Verified all coding_standard.md and GEMINI.md requirements after Phase 2 merge. Zero unwraps in library code, 15 structured tracing calls at consumer layer, 19 unit tests passing, full clippy/fmt/test gates green.
+> * **New Constraints:** The merged opc_da/ module uses #[allow] attributes inherited from upstream. Any code moved to native opc-da-client modules must adopt the strict workspace lint policy. OpcProvider integration tests require a live OPC DA server.
+> * **Pruned:** Phase 2 intermediate build/format/clippy iterations. Audit scan data from Narsil.
+
+
+## 2026-02-21: ComGuard RAII Refactor & Observability Upgrade
+> 📝 **Context Update:**
+> * **Feature:** ComGuard RAII compliance and backend tracing.
+> * **Changes:**
+>   - Rewrote com_guard.rs: added PhantomData<*mut ()> for !Send/!Sync, changed 
+ew() to return Err on failure (was silently succeeding), added 	racing::debug! on init/teardown.
+>   - Added 	racing::info_span! to all 4 OpcProvider methods in ackend/opc_da.rs with structured fields (server, tag_count, etc.).
+>   - emove_group errors now logged instead of silently discarded.
+>   - Removed superfluous inner blocks and deduplicated SAFETY comments.
+>   - Added success-path tracing to connect_server() in helpers.rs.
+> * **New Constraints:** ComGuard is now !Send + !Sync. It can only be created and dropped on the same OS thread. This doesn't affect current spawn_blocking usage.
+> * **Pruned:** The old initialized: bool field pattern and duplicate SAFETY comments.
+
+## 2026-02-21: Phase 3 Bindings Merge
+> 📝 **Context Update:**
+> * **Feature:** Merged generated COM bindings and dropped unused vendor crates.
+> * **Changes:** Built on Phase 2 by freezing windows-bindgen outputs from opc_da_bindings and opc_comn_bindings. Natively incorporated indings.rs as mod bindings; (da and comn) directly into opc-da-client. Removed the windows-bindgen build dependency. Dropped the completely unused opc_classic_utils crate.
+> * **New Constraints:** The OPC DA bindings are now "frozen." If the underlying Windows metadata (OPCDA.winmd) ever needs regeneration, the files stored in opc-da-client/.winmd/ must be manually processed with the windows bindgen CLI.
+> * **Pruned:** The endor/opc_da_bindings/, endor/opc_comn_bindings/, and endor/opc_classic_utils/ directories. Cargo metadata references to generating bindings on-the-fly.

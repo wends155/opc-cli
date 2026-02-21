@@ -19,7 +19,7 @@ use super::{
 pub struct Client;
 
 impl ClientTrait<Server> for Client {
-    const CATALOG_ID: windows::core::GUID = opc_da_bindings::CATID_OPCDAServer30::IID;
+    const CATALOG_ID: windows::core::GUID = crate::bindings::da::CATID_OPCDAServer30::IID;
 }
 
 /// An OPC DA 3.0 server implementation.
@@ -30,11 +30,11 @@ impl ClientTrait<Server> for Client {
 /// - `IOPCBrowse` for browsing the server address space
 /// - `IOPCItemIO` for direct item read/write operations
 pub struct Server {
-    pub(crate) server: opc_da_bindings::IOPCServer,
-    pub(crate) common: opc_comn_bindings::IOPCCommon,
+    pub(crate) server: crate::bindings::da::IOPCServer,
+    pub(crate) common: crate::bindings::comn::IOPCCommon,
     pub(crate) connection_point_container: windows::Win32::System::Com::IConnectionPointContainer,
-    pub(crate) browse: opc_da_bindings::IOPCBrowse,
-    pub(crate) item_io: opc_da_bindings::IOPCItemIO,
+    pub(crate) browse: crate::bindings::da::IOPCBrowse,
+    pub(crate) item_io: crate::bindings::da::IOPCItemIO,
 }
 
 impl TryFrom<windows::core::IUnknown> for Server {
@@ -52,13 +52,13 @@ impl TryFrom<windows::core::IUnknown> for Server {
 }
 
 impl ServerTrait<Group> for Server {
-    fn interface(&self) -> windows::core::Result<&opc_da_bindings::IOPCServer> {
+    fn interface(&self) -> windows::core::Result<&crate::bindings::da::IOPCServer> {
         Ok(&self.server)
     }
 }
 
 impl CommonTrait for Server {
-    fn interface(&self) -> windows::core::Result<&opc_comn_bindings::IOPCCommon> {
+    fn interface(&self) -> windows::core::Result<&crate::bindings::comn::IOPCCommon> {
         Ok(&self.common)
     }
 }
@@ -72,13 +72,13 @@ impl ConnectionPointContainerTrait for Server {
 }
 
 impl BrowseTrait for Server {
-    fn interface(&self) -> windows::core::Result<&opc_da_bindings::IOPCBrowse> {
+    fn interface(&self) -> windows::core::Result<&crate::bindings::da::IOPCBrowse> {
         Ok(&self.browse)
     }
 }
 
 impl ItemIoTrait for Server {
-    fn interface(&self) -> windows::core::Result<&opc_da_bindings::IOPCItemIO> {
+    fn interface(&self) -> windows::core::Result<&crate::bindings::da::IOPCItemIO> {
         Ok(&self.item_io)
     }
 }
@@ -97,15 +97,15 @@ pub type GroupIterator = super::GroupIterator<Group>;
 /// - `IOPCItemDeadbandMgt` for deadband management
 #[derive(Debug)]
 pub struct Group {
-    pub(crate) item_mgt: opc_da_bindings::IOPCItemMgt,
-    pub(crate) group_state_mgt: opc_da_bindings::IOPCGroupStateMgt,
-    pub(crate) group_state_mgt2: opc_da_bindings::IOPCGroupStateMgt2,
-    pub(crate) sync_io: opc_da_bindings::IOPCSyncIO,
-    pub(crate) sync_io2: opc_da_bindings::IOPCSyncIO2,
-    pub(crate) async_io2: opc_da_bindings::IOPCAsyncIO2,
-    pub(crate) async_io3: opc_da_bindings::IOPCAsyncIO3,
-    pub(crate) item_sampling_mgt: Option<opc_da_bindings::IOPCItemSamplingMgt>,
-    pub(crate) item_deadband_mgt: opc_da_bindings::IOPCItemDeadbandMgt,
+    pub(crate) item_mgt: crate::bindings::da::IOPCItemMgt,
+    pub(crate) group_state_mgt: crate::bindings::da::IOPCGroupStateMgt,
+    pub(crate) group_state_mgt2: crate::bindings::da::IOPCGroupStateMgt2,
+    pub(crate) sync_io: crate::bindings::da::IOPCSyncIO,
+    pub(crate) sync_io2: crate::bindings::da::IOPCSyncIO2,
+    pub(crate) async_io2: crate::bindings::da::IOPCAsyncIO2,
+    pub(crate) async_io3: crate::bindings::da::IOPCAsyncIO3,
+    pub(crate) item_sampling_mgt: Option<crate::bindings::da::IOPCItemSamplingMgt>,
+    pub(crate) item_deadband_mgt: crate::bindings::da::IOPCItemDeadbandMgt,
     pub(crate) connection_point_container: windows::Win32::System::Com::IConnectionPointContainer,
 }
 
@@ -129,55 +129,55 @@ impl TryFrom<windows::core::IUnknown> for Group {
 }
 
 impl ItemMgtTrait for Group {
-    fn interface(&self) -> windows::core::Result<&opc_da_bindings::IOPCItemMgt> {
+    fn interface(&self) -> windows::core::Result<&crate::bindings::da::IOPCItemMgt> {
         Ok(&self.item_mgt)
     }
 }
 
 impl GroupStateMgtTrait for Group {
-    fn interface(&self) -> windows::core::Result<&opc_da_bindings::IOPCGroupStateMgt> {
+    fn interface(&self) -> windows::core::Result<&crate::bindings::da::IOPCGroupStateMgt> {
         Ok(&self.group_state_mgt)
     }
 }
 
 impl GroupStateMgt2Trait for Group {
-    fn interface(&self) -> windows::core::Result<&opc_da_bindings::IOPCGroupStateMgt2> {
+    fn interface(&self) -> windows::core::Result<&crate::bindings::da::IOPCGroupStateMgt2> {
         Ok(&self.group_state_mgt2)
     }
 }
 
 impl SyncIoTrait for Group {
-    fn interface(&self) -> windows::core::Result<&opc_da_bindings::IOPCSyncIO> {
+    fn interface(&self) -> windows::core::Result<&crate::bindings::da::IOPCSyncIO> {
         Ok(&self.sync_io)
     }
 }
 
 impl SyncIo2Trait for Group {
-    fn interface(&self) -> windows::core::Result<&opc_da_bindings::IOPCSyncIO2> {
+    fn interface(&self) -> windows::core::Result<&crate::bindings::da::IOPCSyncIO2> {
         Ok(&self.sync_io2)
     }
 }
 
 impl AsyncIo2Trait for Group {
-    fn interface(&self) -> windows::core::Result<&opc_da_bindings::IOPCAsyncIO2> {
+    fn interface(&self) -> windows::core::Result<&crate::bindings::da::IOPCAsyncIO2> {
         Ok(&self.async_io2)
     }
 }
 
 impl AsyncIo3Trait for Group {
-    fn interface(&self) -> windows::core::Result<&opc_da_bindings::IOPCAsyncIO3> {
+    fn interface(&self) -> windows::core::Result<&crate::bindings::da::IOPCAsyncIO3> {
         Ok(&self.async_io3)
     }
 }
 
 impl ItemDeadbandMgtTrait for Group {
-    fn interface(&self) -> windows::core::Result<&opc_da_bindings::IOPCItemDeadbandMgt> {
+    fn interface(&self) -> windows::core::Result<&crate::bindings::da::IOPCItemDeadbandMgt> {
         Ok(&self.item_deadband_mgt)
     }
 }
 
 impl ItemSamplingMgtTrait for Group {
-    fn interface(&self) -> windows::core::Result<&opc_da_bindings::IOPCItemSamplingMgt> {
+    fn interface(&self) -> windows::core::Result<&crate::bindings::da::IOPCItemSamplingMgt> {
         self.item_sampling_mgt.as_ref().ok_or_else(|| {
             windows::core::Error::new(
                 windows::Win32::Foundation::E_NOTIMPL,

@@ -1,5 +1,5 @@
-use crate::utils::{LocalPointer, RemoteArray};
-use opc_da_bindings::IOPCItemProperties;
+use crate::bindings::da::IOPCItemProperties;
+use crate::opc_da::utils::{LocalPointer, RemoteArray};
 
 /// Item properties management functionality.
 ///

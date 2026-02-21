@@ -4,7 +4,7 @@
 /// can be shared between multiple clients, allowing for more efficient
 /// server resource usage.
 pub trait PublicGroupStateMgtTrait {
-    fn interface(&self) -> windows::core::Result<&opc_da_bindings::IOPCPublicGroupStateMgt>;
+    fn interface(&self) -> windows::core::Result<&crate::bindings::da::IOPCPublicGroupStateMgt>;
 
     /// Gets the public state of the group.
     ///

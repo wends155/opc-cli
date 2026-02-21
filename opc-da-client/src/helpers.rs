@@ -283,7 +283,7 @@ pub fn opc_value_to_variant(value: &OpcValue) -> VARIANT {
 ///
 /// Returns `Err` if the `ProgID` cannot be resolved or the server
 /// cannot be instantiated.
-pub fn connect_server(server_name: &str) -> anyhow::Result<opc_da::client::v2::Server> {
+pub fn connect_server(server_name: &str) -> anyhow::Result<crate::opc_da::client::v2::Server> {
     // SAFETY: `server_wide` is null-terminated and lives until the end
     // of this scope, so the PCWSTR pointer is valid for the duration of the call.
     let clsid_raw = unsafe {
@@ -298,15 +298,17 @@ pub fn connect_server(server_name: &str) -> anyhow::Result<opc_da::client::v2::S
     // 128-bit structures with identical field layouts (4-2-2-8 byte segments).
     let clsid = unsafe { std::mem::transmute_copy(&clsid_raw) };
 
-    let client = opc_da::client::v2::Client;
-    client
-        .create_server(clsid, opc_da::def::ClassContext::All)
+    let client = crate::opc_da::client::v2::Client;
+    let server = client
+        .create_server(clsid, crate::opc_da::def::ClassContext::All)
         .map_err(|e| {
             let hint = friendly_com_hint(&anyhow::anyhow!("{e:?}"))
                 .unwrap_or("Check DCOM configuration and server status");
             tracing::error!(error = ?e, server = %server_name, hint, "create_server failed");
             anyhow::anyhow!(e)
-        })
+        })?;
+    tracing::debug!(server = %server_name, "Connected to OPC DA server");
+    Ok(server)
 }
 
 #[cfg(test)]
@@ -499,13 +501,26 @@ mod tests {
     }
 
     #[test]
-    fn test_quality_to_string_all_cases() {
+    fn quality_good() {
         assert_eq!(quality_to_string(0xC0), "Good");
-        assert_eq!(quality_to_string(0x00), "Bad");
-        assert_eq!(quality_to_string(0x40), "Uncertain");
         assert_eq!(quality_to_string(0xC4), "Good"); // sub-status bits preserved
+    }
+
+    #[test]
+    fn quality_bad() {
+        assert_eq!(quality_to_string(0x00), "Bad");
         assert_eq!(quality_to_string(0x04), "Bad"); // sub-status bits preserved
-        assert_eq!(quality_to_string(0x80), "Unknown(0x0080)");
+    }
+
+    #[test]
+    fn quality_uncertain() {
+        assert_eq!(quality_to_string(0x40), "Uncertain");
+    }
+
+    #[test]
+    fn quality_unknown() {
+        let result = quality_to_string(0x80);
+        assert!(result.starts_with("Unknown("));
     }
 
     #[test]

@@ -234,6 +234,39 @@ fn browse_recursive(
 
 ---
 
+### 1.5 `opc_da` — Internal OPC DA Module
+
+**Purpose:** Provide raw COM wrapping and lifetime management for interacting with OPC DA server, group, and item COM objects. Inherited from the vendored `opc_da` (Phase 2), with `actix` support excluded.
+
+#### Public API (Crate-Internal)
+
+##### `client::traits::*`
+
+Contains the core definitions and abstractions representing OPC DA concepts:
+- `ClientTrait`: Enumerate and connect to OPC DA servers.
+- `ServerTrait`: Create OPC items and groups, introspect namespaces.
+- `ItemMgtTrait`: Manage items natively via the server-internal arrays.
+- `SyncIoTrait`: Blocking read and write operations.
+- `BrowseServerAddressSpaceTrait`: Navigation properties.
+
+##### `def::*`
+
+Definitions representing domain structures mapping to the `tagOPC*` struct data:
+- `ServerStatus` / `ServerState`: Enums detailing health and run-state.
+- `ItemDef` / `ItemResult`: Types detailing an item added/returned individually.
+- `GroupState`: Metadata bounding an OPC Group Object.
+- `BrowseType` / `NamespaceType`: Classification rules to discern flat from tiered namespaces.
+
+##### `utils::*`
+
+- `RemoteArray` / `RemotePointer`: Safely wrap `CoTaskMemAlloc` structures and properly route through `Drop`.
+- `LocalPointer`: Handle local allocations moving into `CoTaskMem`.
+
+**Invariants:**
+- Relies exclusively on `TryFromNative` and `ToNative` bridging to interop efficiently without unsafe footprints bleeding out.
+
+---
+
 ## 2. Data Models
 
 ### `TagValue`
@@ -251,7 +284,7 @@ Defined in § 1.1. See table above.
 
 ## 3. Integration Points
 
-### 3.1 Upstream: `opc_da` Crate (v0.3.1)
+### 3.1 Internal: `opc_da` Module (merged)
 
 **Boundary:** `OpcDaWrapper` → `opc_da::client::v2::Client` / `Server`.
 

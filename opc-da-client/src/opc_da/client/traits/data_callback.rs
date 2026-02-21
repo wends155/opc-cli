@@ -1,11 +1,12 @@
-use crate::{
+use crate::bindings::da::{IOPCDataCallback, IOPCDataCallback_Impl};
+use crate::opc_da::{
     def::{CancelCompleteEvent, DataChangeEvent, ReadCompleteEvent, WriteCompleteEvent},
     utils::RemoteArray,
 };
 
 #[windows::core::implement(
     // implicit implement IUnknown
-    opc_da_bindings::IOPCDataCallback,
+    IOPCDataCallback,
 )]
 pub struct DataCallback<'a, T>(pub &'a T)
 where
@@ -34,9 +35,7 @@ pub trait DataCallbackTrait {
     fn on_cancel_complete(&self, event: CancelCompleteEvent) -> windows_core::Result<()>;
 }
 
-impl<'a, T: DataCallbackTrait + 'a> opc_da_bindings::IOPCDataCallback_Impl
-    for DataCallback_Impl<'a, T>
-{
+impl<'a, T: DataCallbackTrait + 'a> IOPCDataCallback_Impl for DataCallback_Impl<'a, T> {
     fn OnDataChange(
         &self,
         transaction_id: u32,

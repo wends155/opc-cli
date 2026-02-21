@@ -1,11 +1,11 @@
-use crate::utils::LocalPointer;
+use crate::opc_da::utils::LocalPointer;
 
 /// Server public groups management functionality.
 ///
 /// Provides methods to access and manage public groups that can be shared
 /// between multiple OPC clients for more efficient server resource usage.
 pub trait ServerPublicGroupsTrait {
-    fn interface(&self) -> windows::core::Result<&opc_da_bindings::IOPCServerPublicGroups>;
+    fn interface(&self) -> windows::core::Result<&crate::bindings::da::IOPCServerPublicGroups>;
 
     /// Gets a public group by its name.
     ///

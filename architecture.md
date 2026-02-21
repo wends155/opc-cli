@@ -19,8 +19,8 @@
 *   **Purpose**: Provides a unified, backend-agnostic trait (`OpcProvider`) for OPC DA operations.
 
 ### 3. Vendored Backends (Under `vendor/`)
-*   **Crates**: `opc_da`, `opc_da_bindings`, `opc_comn_bindings`, `opc_classic_utils`
-*   **Purpose**: The actual underlying implementation bridging Rust async iterators to COM/DCOM interfaces from the OPC Foundation. Vendored directly from `Ronbb/rust_opc` to allow bug-fixing and future merging. Includes code generation via `windows-bindgen`.
+*   **Crates**: `opc_classic_utils` (unused utilities)
+*   **Purpose**: Legacy utilities extracted from `Ronbb/rust_opc`. The core OPC DA logic and COM bindings are now generated directly inside `opc-da-client/src/bindings/`.
 
 ### 2. Core Logic & Async Runtime
 *   **Crate**: `tokio`
@@ -156,15 +156,10 @@ graph TD
         Provider["trait OpcProvider"]
         Backend["backend::opc_da"]
         OpcDaInternal["opc_da (merged)"]
-    end
-    subgraph vendor
-        OpcDaBindings["opc_da_bindings"]
-        OpcComnBindings["opc_comn_bindings"]
-        OpcClassicUtils["opc_classic_utils"]
+        Bindings["bindings (merged)"]
     end
     CLI --> Provider --> Backend --> OpcDaInternal
-    OpcDaInternal --> OpcDaBindings & OpcComnBindings
-    OpcDaBindings & OpcComnBindings --> WinCOM["Windows COM/DCOM"]
+    OpcDaInternal --> Bindings --> WinCOM["Windows COM/DCOM"]
     
     subgraph Rendering
         AppState --> |Read| View[UI Render Functions]

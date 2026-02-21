@@ -12,6 +12,11 @@ mod helpers;
 mod provider;
 
 #[cfg(feature = "opc-da-backend")]
+#[allow(warnings)]
+mod bindings;
+
+#[cfg(feature = "opc-da-backend")]
+#[allow(warnings)]
 mod opc_da;
 
 #[cfg(feature = "opc-da-backend")]

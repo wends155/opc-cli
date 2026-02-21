@@ -1,8 +1,8 @@
-use opc_da_bindings::{
+use crate::bindings::da::{
     IOPCBrowseServerAddressSpace, tagOPCBROWSEDIRECTION, tagOPCBROWSETYPE, tagOPCNAMESPACETYPE,
 };
 
-use crate::utils::{LocalPointer, RemotePointer};
+use crate::opc_da::utils::{LocalPointer, RemotePointer};
 
 /// Server address space browsing functionality.
 ///

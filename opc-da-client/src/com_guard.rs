@@ -3,14 +3,20 @@
 //! Ensures `CoUninitialize` is called exactly once per successful
 //! `CoInitializeEx`, even on early returns or panics.
 
+use std::marker::PhantomData;
 use windows::Win32::System::Com::{COINIT_MULTITHREADED, CoInitializeEx, CoUninitialize};
 
 /// Drop guard for COM thread initialization.
 ///
-/// # Safety invariant
+/// Calling [`ComGuard::new`] initializes COM in Multi-Threaded Apartment
+/// (MTA) mode. When the guard is dropped, `CoUninitialize` is called
+/// automatically.
 ///
-/// `CoUninitialize` is only called if `CoInitializeEx` returned `Ok`.
-/// The guard must be used on the same thread that called [`ComGuard::new`].
+/// # Thread Safety
+///
+/// `ComGuard` is intentionally `!Send` and `!Sync`. COM initialization
+/// is per-thread — the guard **must** be created and dropped on the same
+/// OS thread. This is enforced at compile time.
 ///
 /// # Examples
 ///
@@ -24,42 +30,62 @@ use windows::Win32::System::Com::{COINIT_MULTITHREADED, CoInitializeEx, CoUninit
 /// # Ok(())
 /// # }
 /// ```
+#[derive(Debug)]
 pub struct ComGuard {
-    initialized: bool,
+    /// Prevents `Send + Sync` auto-derivation. COM init is per-thread.
+    _not_send: PhantomData<*mut ()>,
 }
 
 impl ComGuard {
     /// Initialize COM in Multi-Threaded Apartment (MTA) mode.
     ///
+    /// Returns `Ok(ComGuard)` on success (including `S_FALSE`, which
+    /// means COM was already initialized on this thread).
+    ///
     /// # Errors
     ///
     /// Returns `Err` if `CoInitializeEx` fails with a fatal HRESULT.
-    /// `S_FALSE` (already initialized) is treated as success.
     pub fn new() -> anyhow::Result<Self> {
-        // SAFETY: `CoInitializeEx` is an FFI call to the Windows COM
-        // runtime. We pass `COINIT_MULTITHREADED` to join the MTA.
-        // The result is checked and `CoUninitialize` is guaranteed
-        // via the Drop impl.
-        // SAFETY: CoInitializeEx is a standard COM initialization call.
-        // We use COINIT_MULTITHREADED to ensure MTA for the process/thread.
+        // SAFETY: `CoInitializeEx` is a standard Win32 FFI call.
+        // We pass `COINIT_MULTITHREADED` to join the MTA. The result
+        // is checked below, and `CoUninitialize` is guaranteed via Drop.
         let hr = unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) };
+
+        if let Err(e) = hr.ok() {
+            tracing::error!(error = ?e, "COM MTA initialization failed");
+            return Err(anyhow::anyhow!("CoInitializeEx failed: {e}"));
+        }
+
+        tracing::debug!("COM MTA initialized");
+
         Ok(Self {
-            initialized: hr.is_ok(),
+            _not_send: PhantomData,
         })
     }
 }
 
 impl Drop for ComGuard {
     fn drop(&mut self) {
-        if self.initialized {
-            // SAFETY: Paired with the successful `CoInitializeEx` in
-            // `new()`. Only called on the same thread (enforced by
-            // `spawn_blocking` in the caller).
-            // SAFETY: CoUninitialize balances the CoInitializeEx call in new().
-            // We ensure this is only called if initialization succeeded.
-            unsafe {
-                CoUninitialize();
-            }
+        tracing::debug!("COM MTA teardown");
+        // SAFETY: Paired with the successful `CoInitializeEx` in `new()`.
+        // Construction guarantees COM was initialized, so this call is
+        // always balanced. Only runs on the creating thread (!Send).
+        unsafe {
+            CoUninitialize();
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn com_guard_constructs_and_drops() {
+        // On Windows, CoInitializeEx(MTA) should succeed.
+        // On non-Windows CI, this test is skipped by target gate.
+        let guard = ComGuard::new();
+        assert!(guard.is_ok(), "ComGuard::new() should succeed: {guard:?}");
+        // Guard drops here — CoUninitialize runs.
     }
 }
