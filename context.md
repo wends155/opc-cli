@@ -158,3 +158,10 @@ emove_group errors now logged instead of silently discarded.
 > * **Changes:** Remediated 11 findings across `connector.rs`, `opc_da.rs`, `helpers.rs`, `iterator.rs`: full doc coverage on all public traits/structs, `// SAFETY:` on `transmute_copy`, `&raw mut` for `borrow_as_ptr`, `cast_unsigned()` for sign-loss, collapsed `if let`, removed 5 stale imports, cleaned stale comments, removed unnecessary cast.
 > * **New Constraints:** All public items in `connector.rs` now have `///` docs with `# Errors`. The `transmute_copy` GUID conversion references the `const_assert_eq!` in `iterator.rs` for layout validation.
 > * **Pruned:** Raw clippy output and intermediate verification logs from this audit cycle.
+
+## 2026-02-22: Workspace Cargo.toml Config Fixes
+> 📝 **Context Update:**
+> * **Feature:** Re-integrated `opc-cli` into workspace and aligned dependencies.
+> * **Changes:** Added `opc-cli` to workspace members so `cargo build` produces the TUI executable again. Lifted overlapping dependencies (`anyhow`, `tokio`, `tracing`) to `[workspace.dependencies]`. Updated `opc-cli/src/main.rs` to instantiate `OpcDaWrapper::new(ComConnector)` due to the Phase 4 mockability refactor.
+> * **New Constraints:** `vendor/opc_classic_utils/` is explicitly retained in the repo until new code is fully tested, but deliberately kept out of workspace members.
+> * **Pruned:** Outdated inline `version` declarations for shared dependencies inside crate-level `Cargo.toml`s.
