@@ -7,7 +7,7 @@ A modern, asynchronous TUI (Terminal User Interface) client for browsing, readin
 The project is structured as a Cargo workspace with two crates:
 
 - **`opc-cli`**: The interactive TUI application built with `ratatui` + `crossterm`.
-- **`opc-da-client`**: A backend-agnostic library that abstracts OPC DA communication through an async trait (`OpcProvider`).
+- **`opc-da-client`**: A native Windows COM library (using `windows-rs`) that abstracts OPC DA communication through an async trait (`OpcProvider`). Generic over `ServerConnector` for easy mocking.
 
 See **[architecture.md](./architecture.md)** for the full design, state machine, and data flow diagrams.
 

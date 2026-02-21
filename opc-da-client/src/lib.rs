@@ -4,7 +4,7 @@
 //! Backend-agnostic OPC DA client library.
 //!
 //! ## Features
-//! - `opc-da-backend` (default): Uses the `opc_da` crate for COM interaction
+//! - `opc-da-backend` (default): Native OPC DA backend via `windows-rs`
 //! - `test-support`: Enables `MockOpcProvider` via `mockall`
 
 mod com_guard;

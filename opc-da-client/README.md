@@ -12,7 +12,7 @@ Backend-agnostic OPC DA client library for Rust — async, trait-based, with RAI
 - **Trait-Based Abstraction**: The `OpcProvider` trait allows for easy mocking and backend swapping.
 - **RAII COM Guard**: `ComGuard` handles COM initialization/teardown automatically — no manual `CoUninitialize` needed.
 - **Read & Write Support**: Read tag values and write typed values (`Int`, `Float`, `Bool`, `String`) to OPC tags.
-- **Windows COM/DCOM Support**: Includes a default backend (`opc-da-backend` feature) powered by the `opc_da` crate.
+- **Windows COM/DCOM Support**: Native OPC DA backend via `windows-rs` — no external OPC crates needed.
 - **Robust Error Handling**: Leverages `anyhow` for clear error chains and `friendly_com_hint()` for human-readable HRESULT explanations.
 - **Test-Friendly**: Built-in `MockOpcProvider` via the `test-support` feature.
 
@@ -42,7 +42,8 @@ use opc_da_client::{ComGuard, OpcDaWrapper, OpcProvider};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    let client = OpcDaWrapper::new();
+    let _guard = ComGuard::new()?;
+    let client = OpcDaWrapper::default();
 
     let servers = client.list_servers("localhost").await?;
     println!("Available Servers:");
@@ -58,11 +59,12 @@ async fn main() -> anyhow::Result<()> {
 Connect to a specific server and read current values for a set of tags.
 
 ```rust
-use opc_da_client::{OpcDaWrapper, OpcProvider};
+use opc_da_client::{ComGuard, OpcDaWrapper, OpcProvider};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    let client = OpcDaWrapper::new();
+    let _guard = ComGuard::new()?;
+    let client = OpcDaWrapper::default();
     let server_progid = "Matrikon.OPC.Simulation.1";
     let tags = vec![
         "Random.Int4".to_string(),
@@ -84,11 +86,12 @@ async fn main() -> anyhow::Result<()> {
 Write a typed value to a single OPC tag.
 
 ```rust
-use opc_da_client::{OpcDaWrapper, OpcProvider, OpcValue};
+use opc_da_client::{ComGuard, OpcDaWrapper, OpcProvider, OpcValue};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    let client = OpcDaWrapper::new();
+    let _guard = ComGuard::new()?;
+    let client = OpcDaWrapper::default();
     let server = "Matrikon.OPC.Simulation.1";
 
     let result = client
@@ -109,12 +112,13 @@ async fn main() -> anyhow::Result<()> {
 Recursively discover available tags on an OPC server.
 
 ```rust
-use opc_da_client::{OpcDaWrapper, OpcProvider};
+use opc_da_client::{ComGuard, OpcDaWrapper, OpcProvider};
 use std::sync::{Arc, Mutex, atomic::AtomicUsize};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    let client = OpcDaWrapper::new();
+    let _guard = ComGuard::new()?;
+    let client = OpcDaWrapper::default();
     let server_progid = "Matrikon.OPC.Simulation.1";
 
     let sink = Arc::new(Mutex::new(Vec::new()));
@@ -138,7 +142,7 @@ async fn main() -> anyhow::Result<()> {
 The library is split into a core trait layer and concrete implementations:
 
 - **`OpcProvider`**: The primary async trait defining OPC operations (list, browse, read, write).
-- **`OpcDaWrapper`**: The default implementation that wraps Windows COM calls via `ComGuard` for RAII thread safety.
+- **`OpcDaWrapper`**: The default implementation using native `windows-rs` COM calls. Generic over `ServerConnector` for testability; defaults to `ComConnector`.
 - **`ComGuard`**: RAII guard ensuring `CoUninitialize` is called exactly once per successful `CoInitializeEx`.
 
 See [architecture.md](./architecture.md) for in-depth design details and [spec.md](./spec.md) for behavioral contracts.
