@@ -1,6 +1,35 @@
 [workspace]
-members = ["opc-da-client", "opc-cli"]
+members = [
+    "opc-da-client",
+    "opc-cli",
+    "vendor/opc_classic_utils",
+    "vendor/opc_comn_bindings",
+    "vendor/opc_da",
+    "vendor/opc_da_bindings",
+]
 resolver = "2"
+
+[workspace.dependencies]
+# Vendored crates (path-based)
+opc_da = { path = "vendor/opc_da" }
+opc_da_bindings = { path = "vendor/opc_da_bindings" }
+opc_comn_bindings = { path = "vendor/opc_comn_bindings" }
+opc_classic_utils = { path = "vendor/opc_classic_utils" }
+
+# Shared deps (unified features — superset of upstream + ours)
+thiserror = "2.0"
+windows = { version = "0.61.3", features = [
+    "Win32_Foundation",
+    "Win32_Graphics_Gdi",
+    "Win32_Security",
+    "Win32_System_Com",
+    "Win32_System_Com_StructuredStorage",
+    "Win32_System_Ole",
+    "Win32_System_Variant",
+    "Win32_System_WinRT",
+] }
+windows-core = "0.61.2"
+windows-bindgen = "0.62.1"
 
 [workspace.lints.clippy]
 all = { level = "deny", priority = -1 }

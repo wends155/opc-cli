@@ -12,11 +12,15 @@
 
 ### 1. User Interface (TUI)
 *   **Crate**: `ratatui`, `crossterm`
-*   **Responsibility**: Rendering the interactive UI and handling user input events.
-*   **Pattern**: **Elm Architecture (Model-View-Update)**.
-    *   **Model**: `AppState` (holds all application data).
-    *   **View**: Pure functions rendering `AppState` to `Frame`.
-    *   **Update**: Message-passing loop handling `Event` -> `Action` -> `State Mutation`.
+*   **Purpose**: Renders the terminal interface and handles keyboard/mouse events.
+
+### 2. Client Library
+*   **Crate**: `opc-da-client`
+*   **Purpose**: Provides a unified, backend-agnostic trait (`OpcProvider`) for OPC DA operations.
+
+### 3. Vendored Backends (Under `vendor/`)
+*   **Crates**: `opc_da`, `opc_da_bindings`, `opc_comn_bindings`, `opc_classic_utils`
+*   **Purpose**: The actual underlying implementation bridging Rust async iterators to COM/DCOM interfaces from the OPC Foundation. Vendored directly from `Ronbb/rust_opc` to allow bug-fixing and future merging. Includes code generation via `windows-bindgen`.
 
 ### 2. Core Logic & Async Runtime
 *   **Crate**: `tokio`

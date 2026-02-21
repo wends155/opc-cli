@@ -79,3 +79,11 @@
 > * **Changes:** Updated both READMEs with write support, controls table, `pwsh` commands; updated both `Cargo.toml` descriptions; added `ComGuard` § 1.4 to `spec.md` and updated test checklist; updated both `architecture.md` files with WriteInput state, write key, `ComGuard` in diagrams/threading model, and `pwsh` references.
 > * **New Constraints:** All documentation now reflects `ComGuard`, write support, and `pwsh`. Keep docs in sync when adding features.
 > * **Pruned:** Outdated test count (was "37 tests"), manual `CoInitializeEx`/`CoUninitialize` references in architecture docs.
+
+## 2026-02-21: Vendored opc_da crates
+> 📝 **Context Update:**
+> * **Feature:** Vendored upstream `opc_da` crates
+> * **Changes:** Cloned `Ronbb/rust_opc` master branch and extracted `opc_da`, `opc_da_bindings`, `opc_comn_bindings`, and `opc_classic_utils` into `vendor/`. Replaced crates.io dependencies with workspace path dependencies. Added unified workspace dependencies for `windows`, `thiserror`, etc. Added missing `[lib]` to `opc_da` v0.3.1 source and implemented lint suppression so the vendored code passes the workspace gate.
+> * **New Constraints:** The vendored code is now part of the project and passes all verification gates. Future plans involve fully merging the crates into `opc-da-client` (Phase 2 & 3 tracked in `long_term_todo.md`).
+> * **Pruned:** Removed reliance on crates.io for OPC DA backend.
+
