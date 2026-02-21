@@ -1,14 +1,12 @@
+use crate::backend::connector::{ComConnector, ConnectedGroup, ConnectedServer, ServerConnector};
 use crate::bindings::da::{
     OPC_BRANCH, OPC_BROWSE_DOWN, OPC_BROWSE_UP, OPC_DS_DEVICE, OPC_LEAF, OPC_NS_FLAT, tagOPCITEMDEF,
 };
 use crate::helpers::{
-    filetime_to_string, friendly_com_hint, guid_to_progid, is_known_iterator_bug,
-    opc_value_to_variant, quality_to_string, variant_to_string,
+    filetime_to_string, friendly_com_hint, is_known_iterator_bug, opc_value_to_variant,
+    quality_to_string, variant_to_string,
 };
-use crate::opc_da::client::v2::Client;
-use crate::opc_da::client::{ServerTrait, BrowseServerAddressSpaceTrait, ClientTrait};
 use crate::provider::{OpcProvider, OpcValue, TagValue, WriteResult};
-use crate::backend::connector::{ServerConnector, ConnectedServer, ConnectedGroup, ComConnector};
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 use std::sync::Arc;
@@ -31,7 +29,9 @@ impl Default for OpcDaWrapper<ComConnector> {
 impl<C: ServerConnector> OpcDaWrapper<C> {
     /// Creates a new `OpcDaWrapper` with the given connector.
     pub fn new(connector: C) -> Self {
-        Self { connector: Arc::new(connector) }
+        Self {
+            connector: Arc::new(connector),
+        }
     }
 }
 
@@ -174,7 +174,8 @@ impl<C: ServerConnector + 'static> OpcProvider for OpcDaWrapper<C> {
             let mut tags = Vec::new();
 
             if org == OPC_NS_FLAT.0 as u32 {
-                let string_iter = opc_server.browse_opc_item_ids(OPC_LEAF.0 as u32, Some(""), 0, 0)?;
+                let string_iter =
+                    opc_server.browse_opc_item_ids(OPC_LEAF.0 as u32, Some(""), 0, 0)?;
                 for tag_res in string_iter {
                     if tags.len() >= max_tags {
                         break;
@@ -429,9 +430,9 @@ mod tests {
     use crate::bindings::da::{tagOPCITEMDEF, tagOPCITEMRESULT, tagOPCITEMSTATE};
     use crate::opc_da::client::StringIterator;
     use crate::opc_da::utils::RemoteArray;
-    use windows::Win32::System::Variant::VARIANT;
     use windows::Win32::System::Com::{IEnumString, IEnumString_Impl};
-    use windows::core::{implement, PWSTR};
+    use windows::Win32::System::Variant::VARIANT;
+    use windows::core::{PWSTR, implement};
 
     #[implement(IEnumString)]
     struct MockEnumString {
@@ -449,7 +450,7 @@ mod tests {
             let mut fetched = 0;
             let index = self.index.load(std::sync::atomic::Ordering::Relaxed);
             let rgelt = unsafe { std::slice::from_raw_parts_mut(rgelt, celt as usize) };
-            
+
             for i in 0..celt as usize {
                 if index + i < self.items.len() {
                     let s = &self.items[index + i];
@@ -462,13 +463,14 @@ mod tests {
                     break;
                 }
             }
-            
-            self.index.store(index + fetched, std::sync::atomic::Ordering::Relaxed);
-            
+
+            self.index
+                .store(index + fetched, std::sync::atomic::Ordering::Relaxed);
+
             if !pceltfetched.is_null() {
                 unsafe { *pceltfetched = fetched as u32 };
             }
-            
+
             if fetched == celt as usize {
                 windows::Win32::Foundation::S_OK.into()
             } else {
@@ -483,7 +485,9 @@ mod tests {
             Ok(())
         }
         fn Clone(&self) -> windows::core::Result<IEnumString> {
-            Err(windows::core::Error::from_hresult(windows::Win32::Foundation::E_NOTIMPL))
+            Err(windows::core::Error::from_hresult(
+                windows::Win32::Foundation::E_NOTIMPL,
+            ))
         }
     }
 
@@ -581,7 +585,10 @@ mod tests {
         type Server = MockServer;
 
         fn enumerate_servers(&self) -> anyhow::Result<Vec<String>> {
-            Ok(vec!["Mock.Server.1".to_string(), "Mock.Server.2".to_string()])
+            Ok(vec![
+                "Mock.Server.1".to_string(),
+                "Mock.Server.2".to_string(),
+            ])
         }
 
         fn connect(&self, _server_name: &str) -> anyhow::Result<Self::Server> {
@@ -591,12 +598,14 @@ mod tests {
 
     #[test]
     fn test_mock_list_servers() {
-        let rt = tokio::runtime::Builder::new_current_thread().build().unwrap();
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .unwrap();
         rt.block_on(async {
             let wrapper = OpcDaWrapper {
                 connector: std::sync::Arc::new(MockConnector),
             };
-            
+
             let servers = wrapper.list_servers("localhost").await.unwrap();
             assert_eq!(servers, vec!["Mock.Server.1", "Mock.Server.2"]);
         });
@@ -604,18 +613,22 @@ mod tests {
 
     #[test]
     fn test_mock_browse_tags() {
-        let rt = tokio::runtime::Builder::new_current_thread().build().unwrap();
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .unwrap();
         rt.block_on(async {
             let wrapper = OpcDaWrapper {
                 connector: std::sync::Arc::new(MockConnector),
             };
-            
+
             let sink = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
             let progress = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
-            let tags = wrapper.browse_tags("Mock.Server.1", 1000, progress, sink).await.unwrap();
-            
+            let tags = wrapper
+                .browse_tags("Mock.Server.1", 1000, progress, sink)
+                .await
+                .unwrap();
+
             assert_eq!(tags, vec!["MockTag.1", "MockTag.2"]);
         });
     }
 }
-

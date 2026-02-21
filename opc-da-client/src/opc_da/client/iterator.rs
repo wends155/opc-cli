@@ -215,7 +215,7 @@ impl Iterator for ItemAttributeIterator {
             return None;
         }
 
-        if self.index >= self.cache.len() as u32 {
+        if self.index >= self.cache.len() {
             let mut attrs = RemoteArray::new(MAX_CACHE_SIZE as u32);
 
             let result = unsafe {
@@ -253,7 +253,7 @@ impl Iterator for ItemAttributeIterator {
 mod tests {
     use super::*;
     use windows::Win32::System::Com::{IEnumString, IEnumString_Impl};
-    use windows::core::{implement, PWSTR};
+    use windows::core::{PWSTR, implement};
 
     #[implement(IEnumString)]
     struct MockEnumString {
@@ -271,7 +271,7 @@ mod tests {
             let mut fetched = 0;
             let index = self.index.load(std::sync::atomic::Ordering::Relaxed);
             let rgelt = unsafe { std::slice::from_raw_parts_mut(rgelt, celt as usize) };
-            
+
             for i in 0..celt as usize {
                 if index + i < self.items.len() {
                     let s = &self.items[index + i];
@@ -284,13 +284,14 @@ mod tests {
                     break;
                 }
             }
-            
-            self.index.store(index + fetched, std::sync::atomic::Ordering::Relaxed);
-            
+
+            self.index
+                .store(index + fetched, std::sync::atomic::Ordering::Relaxed);
+
             if !pceltfetched.is_null() {
                 unsafe { *pceltfetched = fetched as u32 };
             }
-            
+
             if fetched == celt as usize {
                 windows::Win32::Foundation::S_OK.into()
             } else {
@@ -305,7 +306,9 @@ mod tests {
             Ok(())
         }
         fn Clone(&self) -> windows::core::Result<IEnumString> {
-            Err(windows::core::Error::from_hresult(windows::Win32::Foundation::E_NOTIMPL))
+            Err(windows::core::Error::from_hresult(
+                windows::Win32::Foundation::E_NOTIMPL,
+            ))
         }
     }
 
@@ -316,14 +319,15 @@ mod tests {
             "Item2".to_string(),
             "Item3".to_string(),
         ];
-        
+
         let mock_enum: IEnumString = MockEnumString {
             items: items.clone(),
             index: std::sync::atomic::AtomicUsize::new(0),
-        }.into();
+        }
+        .into();
 
         let iter = StringIterator::new(mock_enum);
-        
+
         let mut results = Vec::new();
         for item in iter {
             // Verify no E_POINTER error is yielded

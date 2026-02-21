@@ -106,6 +106,7 @@ pub fn guid_to_progid(guid: &windows::core::GUID) -> anyhow::Result<String> {
 }
 
 /// Convert OPC DA VARIANT to a displayable string.
+#[allow(clippy::too_many_lines)]
 pub fn variant_to_string(variant: &VARIANT) -> String {
     // SAFETY: Accessing the VARIANT union fields. The caller (OpcDaWrapper)
     // guarantees the VARIANT was produced by COM (e.g., from `group.read()`),
@@ -116,7 +117,7 @@ pub fn variant_to_string(variant: &VARIANT) -> String {
         let is_array = (vt.0 & 0x2000) != 0;
 
         if is_array {
-            // Display element count only; full iteration tracked in TODO.md
+            // Iterate 1-D SafeArrays and display actual element values
             let parray = variant.Anonymous.Anonymous.Anonymous.parray;
             if parray.is_null() {
                 return "Array[?]".to_string();
@@ -135,9 +136,11 @@ pub fn variant_to_string(variant: &VARIANT) -> String {
 
                 if base_type == windows::Win32::System::Variant::VT_VARIANT.0 {
                     let mut data_ptr: *mut std::ffi::c_void = std::ptr::null_mut();
-                    if SafeArrayAccessData(parray, &mut data_ptr).is_ok() {
+                    if SafeArrayAccessData(parray, &raw mut data_ptr).is_ok() {
+                        #[allow(clippy::cast_sign_loss)]
                         let vars = std::slice::from_raw_parts(data_ptr as *const VARIANT, count as usize);
                         for i in 0..display_count {
+                            #[allow(clippy::cast_sign_loss)]
                             elements.push(variant_to_string(&vars[i as usize]));
                         }
                         let _ = SafeArrayUnaccessData(parray);
@@ -145,22 +148,26 @@ pub fn variant_to_string(variant: &VARIANT) -> String {
                 } else {
                     let elem_size = SafeArrayGetElemsize(parray) as usize;
                     let mut data_ptr: *mut std::ffi::c_void = std::ptr::null_mut();
-                    if SafeArrayAccessData(parray, &mut data_ptr).is_ok() {
+                    if SafeArrayAccessData(parray, &raw mut data_ptr).is_ok() {
                         for i in 0..display_count {
                             let mut temp_var = VARIANT::default();
-                            (*temp_var.Anonymous.Anonymous).vt = windows::Win32::System::Variant::VARENUM(base_type);
-                            
+                            (*temp_var.Anonymous.Anonymous).vt =
+                                windows::Win32::System::Variant::VARENUM(base_type);
+
+                            #[allow(clippy::cast_sign_loss)]
                             let src_ptr = (data_ptr as *const u8).add((i as usize) * elem_size);
-                            let dst_ptr = std::ptr::addr_of_mut!((*temp_var.Anonymous.Anonymous).Anonymous).cast::<u8>();
-                            
+                            let dst_ptr =
+                                std::ptr::addr_of_mut!((*temp_var.Anonymous.Anonymous).Anonymous)
+                                    .cast::<u8>();
+
                             std::ptr::copy_nonoverlapping(src_ptr, dst_ptr, elem_size.min(16));
-                            
+
                             elements.push(variant_to_string(&temp_var));
                         }
                         let _ = SafeArrayUnaccessData(parray);
                     }
                 }
-                
+
                 let elided = if count > 20 { ", ..." } else { "" };
                 return format!("[{}{elided}]", elements.join(", "));
             }
@@ -664,11 +671,13 @@ mod tests {
     }
     #[test]
     fn test_variant_to_string_safearray_i4() {
-        use windows::Win32::System::Ole::{SafeArrayCreateVector, SafeArrayAccessData, SafeArrayUnaccessData};
-        use std::mem::ManuallyDrop;
-        use windows::Win32::System::Variant::{VARIANT, VARIANT_0, VARIANT_0_0, VARIANT_0_0_0, VT_I4, VT_ARRAY};
         use std::ffi::c_void;
-        
+        use std::mem::ManuallyDrop;
+        use windows::Win32::System::Ole::{
+            SafeArrayAccessData, SafeArrayCreateVector, SafeArrayUnaccessData,
+        };
+        use windows::Win32::System::Variant::{VARIANT, VARIANT_0, VARIANT_0_0, VT_ARRAY, VT_I4};
+
         unsafe {
             let parray = SafeArrayCreateVector(VT_I4, 0, 3);
             let mut ptr: *mut c_void = std::ptr::null_mut();
@@ -678,17 +687,17 @@ mod tests {
             slice[1] = 20;
             slice[2] = 30;
             SafeArrayUnaccessData(parray).unwrap();
-            
+
             let mut middle = VARIANT_0_0::default();
             middle.vt = windows::Win32::System::Variant::VARENUM(VT_I4.0 | VT_ARRAY.0);
             middle.Anonymous.parray = parray;
-            
+
             let v = VARIANT {
                 Anonymous: VARIANT_0 {
                     Anonymous: ManuallyDrop::new(middle),
-                }
+                },
             };
-            
+
             assert_eq!(variant_to_string(&v), "[10, 20, 30]");
         }
     }
