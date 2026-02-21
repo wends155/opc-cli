@@ -1,5 +1,6 @@
+#[cfg(feature = "opc-da-backend")]
+use crate::opc_da::client::ClientTrait;
 use anyhow::Context;
-use opc_da::client::ClientTrait;
 use windows::Win32::Foundation::{FILETIME, VARIANT_BOOL};
 use windows::Win32::System::Com::{CLSIDFromProgID, CoTaskMemFree, ProgIDFromCLSID};
 use windows::Win32::System::Ole::{SafeArrayGetDim, SafeArrayGetLBound, SafeArrayGetUBound};

@@ -95,3 +95,11 @@
 > * **New Constraints:** The vendored crates must maintain their #[allow(...)] directives to bypass overly pedantic workspace lints, but any logic moved natively into opc-da-client (Phase 2) must adhere to the stricter zero-warning policy.
 > * **Pruned:** Intermediate build errors and clippy suppression iterations during the initial vendor phase.
 
+
+## 2026-02-21: Merge - Phase 2 opc_da inline
+> 📝 **Context Update:**
+> * **Feature:** Merged vendor/opc_da into opc-da-client/src/opc_da/
+> * **Changes:** Completed Phase 2 of the OPC DA integration. Moved client modules, defs, and utils inline. Actix, globset, and duplicate tokio dependencies were entirely dropped by selectively excluding the 'unified' and 'server' modules. The opc-da-backend feature is now triggered by the COM binding crates.
+> * **New Constraints:** opc-da-client now holds its own OPC DA logic, but continues to reference vendor/opc_da_bindings and vendor/opc_comn_bindings (Phase 3 remaining).
+> * **Pruned:** The entire vendor/opc_da boundary layer.
+

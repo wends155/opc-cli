@@ -151,7 +151,20 @@ graph TD
         Lib --> |Result| AppUpdate
         AppUpdate --> |Mutate| AppState[App State Model]
     end
- drum_sticks[" "] --- Lib --- OpcDa[opc_da Crate]
+    CLI["opc-cli"]
+    subgraph "opc-da-client"
+        Provider["trait OpcProvider"]
+        Backend["backend::opc_da"]
+        OpcDaInternal["opc_da (merged)"]
+    end
+    subgraph vendor
+        OpcDaBindings["opc_da_bindings"]
+        OpcComnBindings["opc_comn_bindings"]
+        OpcClassicUtils["opc_classic_utils"]
+    end
+    CLI --> Provider --> Backend --> OpcDaInternal
+    OpcDaInternal --> OpcDaBindings & OpcComnBindings
+    OpcDaBindings & OpcComnBindings --> WinCOM["Windows COM/DCOM"]
     
     subgraph Rendering
         AppState --> |Read| View[UI Render Functions]

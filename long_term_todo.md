@@ -2,20 +2,20 @@
 
 ## Phase 2 — Merge `opc_da` into `opc-da-client`
 
-- [ ] Create branch `feature/merge-opc-da`
-- [ ] Copy `vendor/opc_da/src/` modules into `opc-da-client/src/opc_da/`
-- [ ] Add `mod opc_da;` to `opc-da-client/src/lib.rs`
-- [ ] Replace `use opc_da::` with `use crate::opc_da::` in `backend/opc_da.rs`
-- [ ] Replace `use opc_da::` with `use crate::opc_da::` in `helpers.rs`
-- [ ] Add `thiserror` as a direct dep of `opc-da-client`
-- [ ] Remove `opc_da` from `[workspace.dependencies]` and `members` in root `Cargo.toml`
-- [ ] Remove `vendor/opc_da/` directory
-- [ ] `cargo check -p opc-da-client`
-- [ ] `cargo clippy --workspace -- -D warnings`
-- [ ] `cargo test --workspace`
-- [ ] Update `opc-da-client/architecture.md` dependency table
-- [ ] Update `architecture.md` workspace diagram
-- [ ] Git commit
+- [x] Create branch `feature/merge-opc-da`
+- [x] Copy `vendor/opc_da/src/` modules into `opc-da-client/src/opc_da/`
+- [x] Add `mod opc_da;` to `opc-da-client/src/lib.rs`
+- [x] Replace `use opc_da::` with `use crate::opc_da::` in `backend/opc_da.rs`
+- [x] Replace `use opc_da::` with `use crate::opc_da::` in `helpers.rs`
+- [x] Add `thiserror` as a direct dep of `opc-da-client`
+- [x] Remove `opc_da` from `[workspace.dependencies]` and `members` in root `Cargo.toml`
+- [x] Remove `vendor/opc_da/` directory
+- [x] `cargo check -p opc-da-client`
+- [x] `cargo clippy --workspace -- -D warnings`
+- [x] `cargo test --workspace`
+- [x] Update `opc-da-client/architecture.md` dependency table
+- [x] Update `architecture.md` workspace diagram
+- [x] Git commit
 
 ## Phase 3 — Merge `opc_da_bindings` into `opc-da-client`
 

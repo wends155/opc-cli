@@ -4,14 +4,12 @@ members = [
     "opc-cli",
     "vendor/opc_classic_utils",
     "vendor/opc_comn_bindings",
-    "vendor/opc_da",
     "vendor/opc_da_bindings",
 ]
 resolver = "2"
 
 [workspace.dependencies]
 # Vendored crates (path-based)
-opc_da = { path = "vendor/opc_da" }
 opc_da_bindings = { path = "vendor/opc_da_bindings" }
 opc_comn_bindings = { path = "vendor/opc_comn_bindings" }
 opc_classic_utils = { path = "vendor/opc_classic_utils" }

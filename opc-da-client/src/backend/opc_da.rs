@@ -2,14 +2,14 @@ use crate::helpers::{
     filetime_to_string, friendly_com_hint, guid_to_progid, is_known_iterator_bug,
     opc_value_to_variant, quality_to_string, variant_to_string,
 };
-use crate::provider::{OpcProvider, OpcValue, TagValue, WriteResult};
-use anyhow::{Context, Result};
-use async_trait::async_trait;
-use opc_da::client::v2::Client;
-use opc_da::client::{
+use crate::opc_da::client::v2::Client;
+use crate::opc_da::client::{
     BrowseServerAddressSpaceTrait, ClientTrait, ItemMgtTrait, ServerTrait, StringIterator,
     SyncIoTrait,
 };
+use crate::provider::{OpcProvider, OpcValue, TagValue, WriteResult};
+use anyhow::{Context, Result};
+use async_trait::async_trait;
 use opc_da_bindings::{
     OPC_BRANCH, OPC_BROWSE_DOWN, OPC_BROWSE_UP, OPC_DS_DEVICE, OPC_LEAF, OPC_NS_FLAT, tagOPCITEMDEF,
 };
@@ -37,7 +37,7 @@ impl Default for OpcDaWrapper {
 
 /// Recursively browse the OPC DA hierarchical address space depth-first.
 fn browse_recursive(
-    server: &opc_da::client::v2::Server,
+    server: &crate::opc_da::client::v2::Server,
     tags: &mut Vec<String>,
     max_tags: usize,
     progress: &Arc<AtomicUsize>,

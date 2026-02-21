@@ -12,6 +12,9 @@ mod helpers;
 mod provider;
 
 #[cfg(feature = "opc-da-backend")]
+mod opc_da;
+
+#[cfg(feature = "opc-da-backend")]
 mod backend;
 
 // Stable public API
