@@ -10,7 +10,7 @@
 # See Cargo.toml.orig for the original contents.
 
 [package]
-categories = []
+categories = ["api-bindings"]
 edition = "2024"
 name = "opc_da"
 version = "0.3.1"
@@ -59,6 +59,7 @@ windows-core = { workspace = true }
 
 [lints]
 workspace = true
+
 
 
 

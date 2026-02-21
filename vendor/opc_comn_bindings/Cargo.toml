@@ -1,5 +1,5 @@
 [package]
-categories = []
+categories = ["api-bindings"]
 name = "opc_comn_bindings"
 version = "0.3.0"
 edition = "2024"
@@ -23,6 +23,7 @@ windows-bindgen = { workspace = true }
 
 [lints]
 workspace = true
+
 
 
 

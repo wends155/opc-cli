@@ -87,3 +87,11 @@
 > * **New Constraints:** The vendored code is now part of the project and passes all verification gates. Future plans involve fully merging the crates into `opc-da-client` (Phase 2 & 3 tracked in `long_term_todo.md`).
 > * **Pruned:** Removed reliance on crates.io for OPC DA backend.
 
+
+## 2026-02-21: Audit - Vendored opc_da crates
+> 📝 **Context Update:**
+> * **Feature:** Structural Audit of opc-da-client and vendor/ crates
+> * **Changes:** Verified that Phase 1 vendoring aligns precisely with GEMINI.md and coding_standard.md. Validated clean execution of verification gates and confirmed that Narsil CWE/OWASP findings are contained to expected COM/DCOM raw pointer operations.
+> * **New Constraints:** The vendored crates must maintain their #[allow(...)] directives to bypass overly pedantic workspace lints, but any logic moved natively into opc-da-client (Phase 2) must adhere to the stricter zero-warning policy.
+> * **Pruned:** Intermediate build errors and clippy suppression iterations during the initial vendor phase.
+
