@@ -165,3 +165,10 @@ emove_group errors now logged instead of silently discarded.
 > * **Changes:** Added `opc-cli` to workspace members so `cargo build` produces the TUI executable again. Lifted overlapping dependencies (`anyhow`, `tokio`, `tracing`) to `[workspace.dependencies]`. Updated `opc-cli/src/main.rs` to instantiate `OpcDaWrapper::new(ComConnector)` due to the Phase 4 mockability refactor.
 > * **New Constraints:** `vendor/opc_classic_utils/` is explicitly retained in the repo until new code is fully tested, but deliberately kept out of workspace members.
 > * **Pruned:** Outdated inline `version` declarations for shared dependencies inside crate-level `Cargo.toml`s.
+
+## 2026-02-22: Documentation Sync (Post-Phase 4)
+> 📝 **Context Update:**
+> * **Feature:** Synchronized READMEs and crate descriptions with Phase 4 architecture.
+> * **Changes:** Fixed all 4 code examples in `opc-da-client/README.md` to use `ComGuard::new()?` and `OpcDaWrapper::default()` (since `new()` now requires `ComConnector`). Updated feature descriptions and doc comments to explicitly declare the native `windows-rs` implementation instead of the obsolete `opc_da` crate.
+> * **New Constraints:** Any new examples must demonstrate COM initialization via `ComGuard` and use `OpcDaWrapper::default()` unless explicitly demonstrating the mock backend.
+> * **Pruned:** References to the library being powered by the external `opc_da` crate.
