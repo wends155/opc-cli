@@ -33,4 +33,10 @@ check_*.txt
 test_*.txt
 
 # Project Governance (Local Only)
+gemini.md
 GEMINI.md
+coding_standard.md
+coding_standards.md
+
+# Database
+data.db
