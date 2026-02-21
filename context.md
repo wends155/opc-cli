@@ -127,7 +127,8 @@
 >   - Rewrote com_guard.rs: added PhantomData<*mut ()> for !Send/!Sync, changed 
 ew() to return Err on failure (was silently succeeding), added 	racing::debug! on init/teardown.
 >   - Added 	racing::info_span! to all 4 OpcProvider methods in ackend/opc_da.rs with structured fields (server, tag_count, etc.).
->   - emove_group errors now logged instead of silently discarded.
+>   - 
+emove_group errors now logged instead of silently discarded.
 >   - Removed superfluous inner blocks and deduplicated SAFETY comments.
 >   - Added success-path tracing to connect_server() in helpers.rs.
 > * **New Constraints:** ComGuard is now !Send + !Sync. It can only be created and dropped on the same OS thread. This doesn't affect current spawn_blocking usage.
@@ -150,3 +151,10 @@ ew() to return Err on failure (was silently succeeding), added 	racing::debug! o
 >   - Validated array bounds parsing with `SafeArrayGetElemsize` and `SafeArrayAccessData` inside `variant_to_string` printing full arrays (capped at 20 max items).
 > * **New Constraints:** Mock backend testing can now be used for logic testing without a real COM server. Any new methods on `OpcDaWrapper` should use `self.connector` rather than raw COM instantiation. SafeArrays now return JSON stringified vectors instead of the default `Array[N]`.
 > * **Pruned:** Outdated constraints requiring live Windows COM environment for integration testing bounds.
+
+## 2026-02-21: Compliance Audit & Remediation
+> 📝 **Context Update:**
+> * **Feature:** Deep compliance audit of `opc-da-client` against `coding_standard.md` and `GEMINI.md`.
+> * **Changes:** Remediated 11 findings across `connector.rs`, `opc_da.rs`, `helpers.rs`, `iterator.rs`: full doc coverage on all public traits/structs, `// SAFETY:` on `transmute_copy`, `&raw mut` for `borrow_as_ptr`, `cast_unsigned()` for sign-loss, collapsed `if let`, removed 5 stale imports, cleaned stale comments, removed unnecessary cast.
+> * **New Constraints:** All public items in `connector.rs` now have `///` docs with `# Errors`. The `transmute_copy` GUID conversion references the `const_assert_eq!` in `iterator.rs` for layout validation.
+> * **Pruned:** Raw clippy output and intermediate verification logs from this audit cycle.
