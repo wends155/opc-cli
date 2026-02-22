@@ -207,3 +207,10 @@ emove_group errors now logged instead of silently discarded.
 > * **Changes:** Bumped version. Cleaned up stale documentation references to `is_known_iterator_bug` in `spec.md` and `architecture.md` (OPC-BUG-001 is fixed at the source). Added strict `#![allow]` attributes for `clippy` macro-expansions. Updated CHANGELOG.
 > * **New Constraints:** None.
 > * **Pruned:** Old `is_known_iterator_bug` context is completely removed. v0.1.1 is the new active baseline.
+
+## 2026-02-22: TARS Summary — Documentation Alignment
+> 📝 **Context Update:**
+> * **Feature:** Realigned crate docs (`spec.md`, `architecture.md`, `README.md`) and codebase variables with the recent v0.1.1 changes.
+> * **Changes:** Fixed broken crates.io links in README. Added missing HRESULT hint codes to `spec.md`, removed stale `is_known_iterator_bug` rows, and corrected stale `E_POINTER` hint blame text.
+> * **New Constraints:** None.
+> * **Pruned:** The issue track `/issue update crate spec.md and architecture.md` is complete and can be archived.
