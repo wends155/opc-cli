@@ -5,6 +5,15 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.3] - 2026-02-22
+
+### Fixed
+- **docs.rs build failure**: Added `[package.metadata.docs.rs]` with `default-target = "x86_64-pc-windows-msvc"` so documentation builds correctly on crates.io.
+
+### Changed
+- Enabled `all-features = true` for docs.rs builds, making `MockOpcProvider` visible in the rendered API docs.
+- Synced all documentation with OPC_FLAT browse optimization from v0.1.2 audit.
+
 ## [0.1.2] - 2026-02-22
 
 ### Changed
