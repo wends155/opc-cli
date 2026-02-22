@@ -200,3 +200,10 @@ emove_group errors now logged instead of silently discarded.
 > * **Changes:** 16 commits (+15k/-600 lines) bringing the vendored `opc_da` components intimately into `opc-da-client`, adding testability/mocking, releasing v0.1.0 on crates.io, fixing OPC-BUG-001 (E_POINTER flood) at the source in `iterator.rs`, and enhancing global log observability.
 > * **New Constraints:** Any future developments to COM iterator consumption MUST observe the new `StringIterator` behavior (self-healing null skip, zeroed cache).
 > * **Pruned:** All prior intermediate implementation logs for these features can be dropped from active memory. The `feature/merge-opc-da` branch has been deleted.
+
+## 2026-02-22: TARS Summary — Released opc-da-client v0.1.1
+> 📝 **Context Update:**
+> * **Feature:** Released `opc-da-client` v0.1.1 to Crates.io.
+> * **Changes:** Bumped version. Cleaned up stale documentation references to `is_known_iterator_bug` in `spec.md` and `architecture.md` (OPC-BUG-001 is fixed at the source). Added strict `#![allow]` attributes for `clippy` macro-expansions. Updated CHANGELOG.
+> * **New Constraints:** None.
+> * **Pruned:** Old `is_known_iterator_bug` context is completely removed. v0.1.1 is the new active baseline.
