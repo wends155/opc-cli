@@ -63,6 +63,16 @@ pub fn friendly_com_hint(error: &anyhow::Error) -> Option<&'static str> {
     }
 }
 
+/// Format a COM HRESULT for user-facing error messages.
+#[allow(clippy::cast_sign_loss)]
+pub fn format_hresult(hr: windows::core::HRESULT) -> String {
+    let hex = format!("0x{:08X}", hr.0 as u32);
+    match friendly_com_hint(&anyhow::anyhow!("{hex}")) {
+        Some(hint) => format!("{hex}: {hint}"),
+        None => hex,
+    }
+}
+
 /// Returns `true` for `E_POINTER` errors that are known to be caused by
 /// the `opc_da` crate's `StringIterator` initialization bug (index starts
 /// at 0 with null-pointer cache, producing 16 phantom errors per iterator).
@@ -207,6 +217,17 @@ pub fn variant_to_string(variant: &VARIANT) -> String {
                     "\"\"".to_string()
                 } else {
                     format!("\"{}\"", &**bstr)
+                }
+            }
+            10 => {
+                // VT_ERROR - contains an HRESULT status code
+                let scode = variant.Anonymous.Anonymous.Anonymous.scode;
+                let hr = windows::core::HRESULT(scode);
+                #[allow(clippy::cast_sign_loss)]
+                let hr_str = format!("0x{:08X}", hr.0 as u32);
+                match friendly_com_hint(&anyhow::anyhow!("{hr_str}")) {
+                    Some(msg) => format!("Error: {msg} ({hr_str})"),
+                    None => format!("Error ({hr_str})"),
                 }
             }
             11 => format!(
@@ -421,8 +442,8 @@ mod tests {
     #[test]
     fn test_filetime_to_string_nonzero() {
         let ft = FILETIME {
-            dwHighDateTime: 0x01DC9EF1,
-            dwLowDateTime: 0xA3BDF80,
+            dwHighDateTime: 0x01DC_9EF1,
+            dwLowDateTime: 0x0A3B_DF80,
         };
         let result = filetime_to_string(ft);
         assert!(result.contains("-"));
@@ -574,13 +595,15 @@ mod tests {
 
     #[test]
     fn test_is_known_iterator_bug_match() {
-        let err = windows::core::Error::from_hresult(windows::core::HRESULT(0x80004003u32 as i32));
+        let err =
+            windows::core::Error::from_hresult(windows::core::HRESULT(0x8000_4003_u32 as i32));
         assert!(is_known_iterator_bug(&err));
     }
 
     #[test]
     fn test_is_known_iterator_bug_no_match() {
-        let err = windows::core::Error::from_hresult(windows::core::HRESULT(0x80070005u32 as i32));
+        let err =
+            windows::core::Error::from_hresult(windows::core::HRESULT(0x8007_0005_u32 as i32));
         assert!(!is_known_iterator_bug(&err));
     }
 
@@ -701,5 +724,75 @@ mod tests {
 
             assert_eq!(variant_to_string(&v), "[10, 20, 30]");
         }
+    }
+
+    #[test]
+    fn test_variant_to_string_vt_error_known() {
+        use std::mem::ManuallyDrop;
+        use windows::Win32::System::Variant::{
+            VARENUM, VARIANT, VARIANT_0, VARIANT_0_0, VARIANT_0_0_0,
+        };
+
+        // 0xC0040007 is OPC_E_UNKNOWNITEMID
+        let inner = VARIANT_0_0_0 {
+            scode: -1_073_479_673,
+        }; // 0xC0040007 as i32
+        let middle = VARIANT_0_0 {
+            vt: VARENUM(10), // VT_ERROR
+            wReserved1: 0,
+            wReserved2: 0,
+            wReserved3: 0,
+            Anonymous: inner,
+        };
+        let outer = VARIANT_0 {
+            Anonymous: ManuallyDrop::new(middle),
+        };
+        let v = VARIANT { Anonymous: outer };
+
+        assert_eq!(
+            super::variant_to_string(&v),
+            "Error: Item ID not found in server address space (OPC_E_UNKNOWNITEMID) (0xC0040007)"
+        );
+    }
+
+    #[test]
+    fn test_variant_to_string_vt_error_unknown() {
+        use std::mem::ManuallyDrop;
+        use windows::Win32::System::Variant::{
+            VARENUM, VARIANT, VARIANT_0, VARIANT_0_0, VARIANT_0_0_0,
+        };
+
+        let inner = VARIANT_0_0_0 {
+            scode: -559_038_737,
+        }; // 0xDEADBEEF as i32
+        let middle = VARIANT_0_0 {
+            vt: VARENUM(10), // VT_ERROR
+            wReserved1: 0,
+            wReserved2: 0,
+            wReserved3: 0,
+            Anonymous: inner,
+        };
+        let outer = VARIANT_0 {
+            Anonymous: ManuallyDrop::new(middle),
+        };
+        let v = VARIANT { Anonymous: outer };
+
+        assert_eq!(super::variant_to_string(&v), "Error (0xDEADBEEF)");
+    }
+
+    #[test]
+    fn test_format_hresult_known() {
+        // 0x80040154 is REGDB_E_CLASSNOTREG
+        let hr = windows::core::HRESULT(0x8004_0154_u32 as i32);
+        assert_eq!(
+            super::format_hresult(hr),
+            "0x80040154: Server is not registered on this machine"
+        );
+    }
+
+    #[test]
+    fn test_format_hresult_unknown() {
+        let hr = windows::core::HRESULT(0x1234_5678_u32 as i32);
+        assert_eq!(super::format_hresult(hr), "0x12345678");
     }
 }

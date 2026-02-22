@@ -3,7 +3,7 @@ use crate::bindings::da::{
     OPC_BRANCH, OPC_BROWSE_DOWN, OPC_BROWSE_UP, OPC_DS_DEVICE, OPC_LEAF, OPC_NS_FLAT, tagOPCITEMDEF,
 };
 use crate::helpers::{
-    filetime_to_string, friendly_com_hint, is_known_iterator_bug, opc_value_to_variant,
+    filetime_to_string, format_hresult, is_known_iterator_bug, opc_value_to_variant,
     quality_to_string, variant_to_string,
 };
 use crate::provider::{OpcProvider, OpcValue, TagValue, WriteResult};
@@ -248,6 +248,19 @@ impl<C: ServerConnector + 'static> OpcProvider for OpcDaWrapper<C> {
                 .collect();
 
             let (results, errors) = group.add_items(&item_defs)?;
+
+            // Pre-fill ALL tags with an error placeholder.
+            // We will only overwrite the ones that are successfully added and read.
+            let mut tag_values: Vec<TagValue> = tag_ids
+                .iter()
+                .map(|tag_id| TagValue {
+                    tag_id: tag_id.clone(),
+                    value: "Error".to_string(),
+                    quality: "Bad — not added to group".to_string(),
+                    timestamp: String::new(),
+                })
+                .collect();
+
             let mut server_handles = Vec::new();
             let mut valid_indices = Vec::new();
 
@@ -261,20 +274,24 @@ impl<C: ServerConnector + 'static> OpcProvider for OpcDaWrapper<C> {
                     server_handles.push(item_result.hServer);
                     valid_indices.push(idx);
                 } else {
+                    let hint = format_hresult(*error);
                     tracing::warn!(
                         tag = %tag_ids[idx],
-                        error = ?error,
+                        error = %hint,
                         "read_tag_values: add_items rejected tag"
                     );
+                    tag_values[idx].quality = format!("Bad — {hint}");
                 }
             }
 
             if server_handles.is_empty() {
-                return Err(anyhow::anyhow!("No valid items to read"));
+                if let Err(e) = opc_server.remove_group(server_handle, true) {
+                    tracing::warn!(error = ?e, "Failed to remove OPC group during cleanup");
+                }
+                return Ok(tag_values);
             }
 
             let (item_states, read_errors) = group.read(OPC_DS_DEVICE, &server_handles)?;
-            let mut tag_values = Vec::new();
             let item_states_slice = item_states.as_slice();
             let read_errors_slice = read_errors.as_slice();
 
@@ -288,25 +305,22 @@ impl<C: ServerConnector + 'static> OpcProvider for OpcDaWrapper<C> {
                         quality_to_string(state.wQuality),
                     )
                 } else {
-                    let hint = friendly_com_hint(&anyhow::anyhow!("{read_error:?}"));
-                    let full_msg = hint.unwrap_or("Unknown OPC error");
-
+                    let full_msg = format_hresult(*read_error);
                     tracing::warn!(
                         tag = %tag_ids[*idx],
                         error = ?read_error,
                         hint = %full_msg,
                         "read_tag_values: per-item read error"
                     );
-
                     ("Error".to_string(), format!("Bad — {full_msg}"))
                 };
 
-                tag_values.push(TagValue {
+                tag_values[*idx] = TagValue {
                     tag_id: tag_ids[*idx].clone(),
                     value: value_str,
                     quality: quality_str,
                     timestamp: filetime_to_string(state.ftTimeStamp),
-                });
+                };
             }
 
             if let Err(e) = opc_server.remove_group(server_handle, true) {
@@ -378,10 +392,13 @@ impl<C: ServerConnector + 'static> OpcProvider for OpcDaWrapper<C> {
 
             if let Err(e) = item_err.ok() {
                 tracing::warn!(error = ?e, "write_tag_value: failed to add tag to group");
+                if let Err(e) = opc_server.remove_group(server_handle, true) {
+                    tracing::warn!(error = ?e, "Failed to remove OPC group during cleanup");
+                }
                 return Ok(WriteResult {
                     tag_id: tag,
                     success: false,
-                    error: Some(format!("Failed to add tag to group: {e:?}")),
+                    error: Some(format!("Failed to add tag to group: {:?}", item_err)),
                 });
             }
 
@@ -400,17 +417,12 @@ impl<C: ServerConnector + 'static> OpcProvider for OpcDaWrapper<C> {
                     error: None,
                 }
             } else {
-                let hint =
-                    friendly_com_hint(&anyhow::anyhow!("{write_error:?}")).unwrap_or("");
+                let hint = format_hresult(*write_error);
                 tracing::error!(error = ?write_error, hint = %hint, "write_tag_value: server rejected write");
                 WriteResult {
                     tag_id: tag,
                     success: false,
-                    error: Some(if hint.is_empty() {
-                        format!("{write_error:?}")
-                    } else {
-                        format!("{write_error:?} ({hint})")
-                    }),
+                    error: Some(hint),
                 }
             };
 
@@ -424,6 +436,12 @@ impl<C: ServerConnector + 'static> OpcProvider for OpcDaWrapper<C> {
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::undocumented_unsafe_blocks,
+    clippy::ptr_as_ptr,
+    clippy::cast_possible_truncation,
+    clippy::cast_possible_wrap
+)]
 mod tests {
     use super::*;
     use crate::backend::connector::{ConnectedGroup, ConnectedServer, ServerConnector};
@@ -496,31 +514,124 @@ mod tests {
     impl ConnectedGroup for MockGroup {
         fn add_items(
             &self,
-            _items: &[tagOPCITEMDEF],
+            items: &[tagOPCITEMDEF],
         ) -> anyhow::Result<(
             RemoteArray<tagOPCITEMRESULT>,
             RemoteArray<windows::core::HRESULT>,
         )> {
-            Ok((RemoteArray::empty(), RemoteArray::empty()))
+            let mut results = Vec::new();
+            let mut errors = Vec::new();
+
+            for (i, item) in items.iter().enumerate() {
+                // Read the wide string
+                let mut name_w = Vec::new();
+                let mut ptr = item.szItemID.0;
+                unsafe {
+                    while !ptr.is_null() && *ptr != 0 {
+                        name_w.push(*ptr);
+                        ptr = ptr.add(1);
+                    }
+                }
+                let name = String::from_utf16_lossy(&name_w);
+
+                let mut res = tagOPCITEMRESULT::default();
+                res.hServer = (i + 1) as u32;
+
+                if name == "RejectMe" {
+                    errors.push(windows::core::HRESULT(0xC0040007_u32 as i32)); // OPC_E_UNKNOWNITEMID
+                } else if name == "RejectAll" {
+                    return Err(anyhow::anyhow!("Total failure"));
+                } else {
+                    errors.push(windows::core::HRESULT(0)); // S_OK
+                }
+                results.push(res);
+            }
+
+            unsafe {
+                let p_res = windows::Win32::System::Com::CoTaskMemAlloc(
+                    results.len() * std::mem::size_of::<tagOPCITEMRESULT>(),
+                ) as *mut tagOPCITEMRESULT;
+                std::ptr::copy_nonoverlapping(results.as_ptr(), p_res, results.len());
+                let p_err = windows::Win32::System::Com::CoTaskMemAlloc(
+                    errors.len() * std::mem::size_of::<windows::core::HRESULT>(),
+                ) as *mut windows::core::HRESULT;
+                std::ptr::copy_nonoverlapping(errors.as_ptr(), p_err, errors.len());
+
+                Ok((
+                    RemoteArray::from_mut_ptr(p_res, results.len() as u32),
+                    RemoteArray::from_mut_ptr(p_err, errors.len() as u32),
+                ))
+            }
         }
 
         fn read(
             &self,
             _source: crate::bindings::da::tagOPCDATASOURCE,
-            _server_handles: &[u32],
+            server_handles: &[u32],
         ) -> anyhow::Result<(
             RemoteArray<tagOPCITEMSTATE>,
             RemoteArray<windows::core::HRESULT>,
         )> {
-            Ok((RemoteArray::empty(), RemoteArray::empty()))
+            let mut states = Vec::new();
+            let mut errors = Vec::new();
+
+            for &handle in server_handles {
+                let mut state = tagOPCITEMSTATE::default();
+                state.hClient = handle; // mock echoing the handle as client handle for verification
+                state.wQuality = crate::bindings::da::OPC_QUALITY_GOOD as u16;
+                // mock value VT_I4 = 42
+                use windows::Win32::System::Variant::{
+                    VARENUM, VARIANT, VARIANT_0, VARIANT_0_0, VARIANT_0_0_0,
+                };
+                let variant = VARIANT_0_0 {
+                    vt: VARENUM(3), // VT_I4
+                    Anonymous: VARIANT_0_0_0 { lVal: 42 },
+                    ..Default::default()
+                };
+                state.vDataValue = VARIANT {
+                    Anonymous: VARIANT_0 {
+                        Anonymous: std::mem::ManuallyDrop::new(variant),
+                    },
+                };
+
+                states.push(state);
+                errors.push(windows::core::HRESULT(0)); // S_OK
+            }
+
+            unsafe {
+                let p_states = windows::Win32::System::Com::CoTaskMemAlloc(
+                    states.len() * std::mem::size_of::<tagOPCITEMSTATE>(),
+                ) as *mut tagOPCITEMSTATE;
+                std::ptr::copy_nonoverlapping(states.as_ptr(), p_states, states.len());
+                let p_err = windows::Win32::System::Com::CoTaskMemAlloc(
+                    errors.len() * std::mem::size_of::<windows::core::HRESULT>(),
+                ) as *mut windows::core::HRESULT;
+                std::ptr::copy_nonoverlapping(errors.as_ptr(), p_err, errors.len());
+
+                Ok((
+                    RemoteArray::from_mut_ptr(p_states, states.len() as u32),
+                    RemoteArray::from_mut_ptr(p_err, errors.len() as u32),
+                ))
+            }
         }
 
         fn write(
             &self,
-            _server_handles: &[u32],
+            server_handles: &[u32],
             _values: &[VARIANT],
         ) -> anyhow::Result<RemoteArray<windows::core::HRESULT>> {
-            Ok(RemoteArray::empty())
+            let mut errors = Vec::new();
+            for _ in server_handles {
+                errors.push(windows::core::HRESULT(0)); // S_OK
+            }
+
+            unsafe {
+                let p_err = windows::Win32::System::Com::CoTaskMemAlloc(
+                    errors.len() * std::mem::size_of::<windows::core::HRESULT>(),
+                ) as *mut windows::core::HRESULT;
+                std::ptr::copy_nonoverlapping(errors.as_ptr(), p_err, errors.len());
+                Ok(RemoteArray::from_mut_ptr(p_err, errors.len() as u32))
+            }
         }
     }
 
@@ -612,7 +723,7 @@ mod tests {
     }
 
     #[test]
-    fn test_mock_browse_tags() {
+    fn test_mock_read_tags_happy() {
         let rt = tokio::runtime::Builder::new_current_thread()
             .build()
             .unwrap();
@@ -621,14 +732,111 @@ mod tests {
                 connector: std::sync::Arc::new(MockConnector),
             };
 
-            let sink = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
-            let progress = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
-            let tags = wrapper
-                .browse_tags("Mock.Server.1", 1000, progress, sink)
+            let tags = vec!["Tag1".to_string(), "Tag2".to_string()];
+            let results = wrapper
+                .read_tag_values("Mock.Server.1", tags)
                 .await
                 .unwrap();
+            assert_eq!(results.len(), 2);
+            assert_eq!(results[0].tag_id, "Tag1");
+            assert_eq!(results[0].value, "42");
+            assert_eq!(results[1].tag_id, "Tag2");
+            assert_eq!(results[1].value, "42");
+        });
+    }
 
-            assert_eq!(tags, vec!["MockTag.1", "MockTag.2"]);
+    #[test]
+    fn test_mock_read_tags_partial_reject() {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .unwrap();
+        rt.block_on(async {
+            let wrapper = OpcDaWrapper {
+                connector: std::sync::Arc::new(MockConnector),
+            };
+
+            let tags = vec![
+                "Tag1".to_string(),
+                "RejectMe".to_string(),
+                "Tag3".to_string(),
+            ];
+            let results = wrapper
+                .read_tag_values("Mock.Server.1", tags)
+                .await
+                .unwrap();
+            assert_eq!(results.len(), 3);
+
+            assert_eq!(results[0].value, "42");
+            assert_eq!(results[1].value, "Error");
+            assert!(results[1].quality.starts_with("Bad"));
+            assert_eq!(results[2].value, "42");
+        });
+    }
+
+    #[test]
+    fn test_mock_read_tags_all_reject() {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .unwrap();
+        rt.block_on(async {
+            let wrapper = OpcDaWrapper {
+                connector: std::sync::Arc::new(MockConnector),
+            };
+
+            // Before our fixes, this returns Err("No valid items to read").
+            // After our fixes, it should return Ok(Vec) where all are Errors.
+            let tags = vec!["RejectAll".to_string()];
+            let res = wrapper.read_tag_values("Mock.Server.1", tags).await;
+            assert!(res.is_err()); // The mock `if name == "RejectAll"` returns `return Err(anyhow::anyhow!("Total failure"));`
+
+            let tags2 = vec!["RejectMe".to_string(), "RejectMe".to_string()];
+            let results2 = wrapper
+                .read_tag_values("Mock.Server.1", tags2)
+                .await
+                .unwrap();
+            assert_eq!(results2.len(), 2);
+            assert_eq!(results2[0].value, "Error");
+            assert_eq!(results2[1].value, "Error");
+        });
+    }
+
+    #[test]
+    fn test_mock_write_tag_happy() {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .unwrap();
+        rt.block_on(async {
+            let wrapper = OpcDaWrapper {
+                connector: std::sync::Arc::new(MockConnector),
+            };
+
+            use crate::provider::OpcValue;
+            let res = wrapper
+                .write_tag_value("Mock.Server.1", "Tag1", OpcValue::Int(42))
+                .await
+                .unwrap();
+            assert!(res.success);
+            assert!(res.error.is_none());
+        });
+    }
+
+    #[test]
+    fn test_mock_write_tag_add_fail() {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .unwrap();
+        rt.block_on(async {
+            let wrapper = OpcDaWrapper {
+                connector: std::sync::Arc::new(MockConnector),
+            };
+
+            use crate::provider::OpcValue;
+            let res = wrapper
+                .write_tag_value("Mock.Server.1", "RejectMe", OpcValue::Int(42))
+                .await
+                .unwrap();
+            assert!(!res.success);
+            assert!(res.error.is_some());
         });
     }
 }
