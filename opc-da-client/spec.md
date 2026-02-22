@@ -131,8 +131,11 @@ All methods use `#[async_trait]`.
 | `0x800706BA` | RPC server unavailable — the target host may be offline or blocking RPC |
 | `0x800706F4` | COM marshalling error — try restarting the OPC server |
 | `0x80040154` | Server is not registered on this machine |
-| `0x80004003` | Invalid pointer — likely a known issue with the OPC DA crate's iterator initialization |
+| `0x80004003` | Invalid pointer (E_POINTER) |
 | `0xC0040004` | Server rejected write — the item may be read-only (OPC_E_BADRIGHTS) |
+| `0xC0040006` | Data type mismatch — server cannot convert the written value (OPC_E_BADTYPE) |
+| `0xC0040007` | Item ID not found in server address space (OPC_E_UNKNOWNITEMID) |
+| `0xC0040008` | Item ID syntax is invalid for this server (OPC_E_INVALIDITEMID) |
 
 
 **Invariants:**
@@ -157,7 +160,6 @@ All methods use `#[async_trait]`.
 
 | Function | Signature | Purpose |
 | :--- | :--- | :--- |
-| `is_known_iterator_bug` | `fn(err: &windows::core::Error) -> bool` | Returns `true` for `E_POINTER` (`0x80004003`) errors from the upstream iterator bug. |
 | `guid_to_progid` | `fn(guid: &GUID) -> Result<String>` | Converts a COM GUID to its registered ProgID string. |
 | `variant_to_string` | `fn(variant: &VARIANT) -> String` | Formats a COM VARIANT as a display string. Handles VT_EMPTY, VT_NULL, VT_I2, VT_I4, VT_R4, VT_R8, VT_CY, VT_DATE, VT_BSTR, VT_ERROR, VT_BOOL, VT_I1, VT_UI1, VT_UI2, VT_UI4, VT_I8, VT_UI8, and VT_ARRAY composites. |
 | `quality_to_string` | `fn(quality: u16) -> String` | Maps OPC quality bitmask to `"Good"` / `"Bad"` / `"Uncertain"`. |
@@ -212,8 +214,7 @@ fn browse_recursive(
 3.  **Always** navigates back `UP` after recursing — even if recursion itself fails — to prevent position corruption. Failure to navigate `UP` is a hard error.
 4.  Enumerates `OPC_LEAF` items (soft-fail: errors logged and skipped).
 5.  Converts browse names to fully-qualified item IDs via `get_item_id()`; falls back to browse name on failure.
-6.  `E_POINTER` errors from `StringIterator` are filtered to `trace!` level.
-7.  Each discovered tag is pushed to both `tags` and `tags_sink`, and `progress` is incremented.
+6.  Each discovered tag is pushed to both `tags` and `tags_sink`, and `progress` is incremented.
 
 ---
 

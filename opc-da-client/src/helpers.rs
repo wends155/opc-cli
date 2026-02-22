@@ -47,9 +47,7 @@ pub fn friendly_com_hint(error: &anyhow::Error) -> Option<&'static str> {
     } else if msg.contains("0x80040154") {
         Some("Server is not registered on this machine")
     } else if msg.contains("0x80004003") {
-        Some(
-            "Invalid pointer — likely a known issue with the OPC DA crate's iterator initialization",
-        )
+        Some("Invalid pointer (E_POINTER)")
     } else if msg.contains("0xC0040004") {
         Some("Server rejected write — the item may be read-only (OPC_E_BADRIGHTS)")
     } else if msg.contains("0xC0040006") {
@@ -390,6 +388,13 @@ pub fn connect_server(server_name: &str) -> anyhow::Result<crate::opc_da::client
 
 #[cfg(test)]
 mod tests {
+    #![allow(
+        clippy::single_char_pattern,
+        clippy::cast_possible_wrap,
+        clippy::ptr_as_ptr,
+        clippy::borrow_as_ptr,
+        clippy::mixed_attributes_style
+    )]
     use super::*;
 
     #[test]

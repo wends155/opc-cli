@@ -288,7 +288,12 @@ impl Iterator for ItemAttributeIterator {
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::ref_as_ptr, clippy::inline_always, clippy::useless_conversion, clippy::needless_range_loop)]
+    #![allow(
+        clippy::ref_as_ptr,
+        clippy::inline_always,
+        clippy::useless_conversion,
+        clippy::needless_range_loop
+    )]
     use super::*;
     use windows::Win32::System::Com::{IEnumString, IEnumString_Impl};
     use windows::core::{PWSTR, implement};

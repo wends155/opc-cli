@@ -5,7 +5,7 @@
 | Field | Value |
 | :--- | :--- |
 | **Crate** | `opc-da-client` |
-| **Version** | `0.0.2` |
+| **Version** | `0.1.1` |
 | **Purpose** | Backend-agnostic Rust library for interacting with OPC DA (Data Access) servers |
 | **Spec** | [spec.md](file:///c:/Users/WSALIGAN/code/opc-cli/opc-da-client/spec.md) |
 
@@ -94,7 +94,7 @@ The verification script ([verify.ps1](file:///c:/Users/WSALIGAN/code/opc-cli/scr
 | Level | Usage |
 | :--- | :--- |
 | `error!` | COM failures, browse position corruption |
-| `warn!` | Skipped branches/leaves, max depth reached |
+| `warn!` | Skipped branches/leaves, max depth reached, handled COM operation failures (e.g., read/write rejections) |
 | `info!` | High-level milestones (server connected, browse complete) |
 | `debug!` | Internal state, GUID resolution details |
 | `trace!` | Known upstream bugs, iterator noise |

@@ -145,7 +145,7 @@ The library is split into a core trait layer and concrete implementations:
 - **`OpcDaWrapper`**: The default implementation using native `windows-rs` COM calls. Generic over `ServerConnector` for testability; defaults to `ComConnector`.
 - **`ComGuard`**: RAII guard ensuring `CoUninitialize` is called exactly once per successful `CoInitializeEx`.
 
-See [architecture.md](./architecture.md) for in-depth design details and [spec.md](./spec.md) for behavioral contracts.
+See [architecture.md](https://github.com/wends155/opc-cli/blob/main/opc-da-client/architecture.md) for in-depth design details and [spec.md](https://github.com/wends155/opc-cli/blob/main/opc-da-client/spec.md) for behavioral contracts.
 
 ## License
 

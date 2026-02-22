@@ -434,10 +434,11 @@ impl<C: ServerConnector + 'static> OpcProvider for OpcDaWrapper<C> {
     clippy::undocumented_unsafe_blocks,
     clippy::ptr_as_ptr,
     clippy::cast_possible_truncation,
-    clippy::cast_possible_wrap
+    clippy::cast_possible_wrap,
+    clippy::ref_as_ptr,
+    clippy::inline_always
 )]
 mod tests {
-    #![allow(clippy::ref_as_ptr, clippy::inline_always)]
     use super::*;
     use crate::backend::connector::{ConnectedGroup, ConnectedServer, ServerConnector};
     use crate::bindings::da::{tagOPCITEMDEF, tagOPCITEMRESULT, tagOPCITEMSTATE};
