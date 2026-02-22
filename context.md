@@ -240,3 +240,10 @@ emove_group errors now logged instead of silently discarded.
 > * **Changes:** Performed comprehensive audit of `spec.md`, `architecture.md` (repo/crate), and `context.md`. Remediated 12 findings including stale version numbers, missing OPC_FLAT behavioral contracts, stale path references (`opc_impl.rs`), and inconsistent test counts.
 > * **New Constraints:** Maintain `architecture.md` and `spec.md` in sync when modifying the `OPC_FLAT` or `StringIterator` logic.
 > * **Pruned:** References to `opc_impl.rs` are eliminated. Stale test count (20+) updated to 80+.
+
+## 2026-02-22: TARS Summary — Published opc-da-client v0.1.3
+> 📝 **Context Update:**
+> * **Feature:** Published v0.1.3 to fix docs.rs build failure.
+> * **Changes:** Added `[package.metadata.docs.rs]` with `default-target = "x86_64-pc-windows-msvc"` and `all-features = true`. Bumped version, updated CHANGELOG, README, and architecture.md.
+> * **New Constraints:** None.
+> * **Pruned:** v0.1.3 is the new active baseline on crates.io.
