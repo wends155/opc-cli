@@ -11,7 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Natively integrated and froze raw `windows-bindgen` outputs into an internal `bindings/` module, dropping required build-time codegen dependencies.
 
 ### Changed
-- **Major Architectural Refactor**: Completely merged and eliminated the external `opc_da`, `opc_da_bindings`, and `opc_comn_bindings` crate dependencies. The `opc-da-client` is now entirely self-contained for OPC COM communication natively.
+- **Major Architectural Refactor**: Completely eliminated the external `opc_da`, `opc_da_bindings`, and `opc_comn_bindings` crate dependencies. The `opc-da-client` is now entirely self-contained for OPC COM communication natively.
   - **Pros vs v0.1.3**: 
     - **Build Velocity**: Eliminates the intermediate `windows-bindgen` code-generation step entirely.
     - **Security & Maintenance**: Severs reliance on abandoned upstream crates. All `unsafe` COM pointers are now directly subject to workspace native `clippy` gating.
