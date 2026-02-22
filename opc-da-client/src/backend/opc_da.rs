@@ -138,7 +138,9 @@ impl<C: ServerConnector + 'static> OpcProvider for OpcDaWrapper<C> {
             let _enter = span.enter();
 
             let _guard = crate::ComGuard::new()?;
-            connector.enumerate_servers()
+            let servers = connector.enumerate_servers()?;
+            tracing::info!(count = servers.len(), "list_servers completed");
+            Ok(servers)
         })
         .await?
     }
@@ -181,7 +183,7 @@ impl<C: ServerConnector + 'static> OpcProvider for OpcDaWrapper<C> {
             } else {
                 browse_recursive(&opc_server, &mut tags, max_tags, &progress, &tags_sink, 0)?;
             }
-            tracing::debug!(count = tags.len(), "Browse complete");
+            tracing::info!(count = tags.len(), "browse_tags completed");
             Ok(tags)
         })
         .await?
@@ -277,7 +279,7 @@ impl<C: ServerConnector + 'static> OpcProvider for OpcDaWrapper<C> {
 
             if server_handles.is_empty() {
                 if let Err(e) = opc_server.remove_group(server_handle, true) {
-                    tracing::warn!(error = ?e, "Failed to remove OPC group during cleanup");
+                    tracing::warn!(error = ?e, operation = "read_tag_values", "Failed to remove OPC group during cleanup");
                 }
                 return Ok(tag_values);
             }
@@ -314,8 +316,9 @@ impl<C: ServerConnector + 'static> OpcProvider for OpcDaWrapper<C> {
                 };
             }
 
+            tracing::info!(count = tag_values.len(), "read_tag_values completed");
             if let Err(e) = opc_server.remove_group(server_handle, true) {
-                tracing::warn!(error = ?e, "Failed to remove OPC group during cleanup");
+                tracing::warn!(error = ?e, operation = "read_tag_values", "Failed to remove OPC group during cleanup");
             }
             Ok(tag_values)
         })
@@ -384,7 +387,7 @@ impl<C: ServerConnector + 'static> OpcProvider for OpcDaWrapper<C> {
             if let Err(e) = item_err.ok() {
                 tracing::warn!(error = ?e, "write_tag_value: failed to add tag to group");
                 if let Err(e) = opc_server.remove_group(server_handle, true) {
-                    tracing::warn!(error = ?e, "Failed to remove OPC group during cleanup");
+                    tracing::warn!(error = ?e, operation = "write_tag_value", "Failed to remove OPC group during cleanup");
                 }
                 return Ok(WriteResult {
                     tag_id: tag,
@@ -409,7 +412,7 @@ impl<C: ServerConnector + 'static> OpcProvider for OpcDaWrapper<C> {
                 }
             } else {
                 let hint = format_hresult(*write_error);
-                tracing::error!(error = ?write_error, hint = %hint, "write_tag_value: server rejected write");
+                tracing::warn!(error = ?write_error, hint = %hint, "write_tag_value: server rejected write");
                 WriteResult {
                     tag_id: tag,
                     success: false,
@@ -418,7 +421,7 @@ impl<C: ServerConnector + 'static> OpcProvider for OpcDaWrapper<C> {
             };
 
             if let Err(e) = opc_server.remove_group(server_handle, true) {
-                tracing::warn!(error = ?e, "Failed to remove OPC group during cleanup");
+                tracing::warn!(error = ?e, operation = "write_tag_value", "Failed to remove OPC group during cleanup");
             }
             Ok(write_result)
         })
