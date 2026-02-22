@@ -214,3 +214,10 @@ emove_group errors now logged instead of silently discarded.
 > * **Changes:** Fixed broken crates.io links in README. Added missing HRESULT hint codes to `spec.md`, removed stale `is_known_iterator_bug` rows, and corrected stale `E_POINTER` hint blame text.
 > * **New Constraints:** None.
 > * **Pruned:** The issue track `/issue update crate spec.md and architecture.md` is complete and can be archived.
+
+## 2026-02-22: TARS Summary — Published opc-da-client v0.1.2
+> 📝 **Context Update:**
+> * **Feature:** Published v0.1.2 to crates.io to push updated README and hint text.
+> * **Changes:** Version bump, CHANGELOG entry, corrected crates.io README links and E_POINTER hint text.
+> * **New Constraints:** None.
+> * **Pruned:** v0.1.2 is the new active baseline on crates.io.
