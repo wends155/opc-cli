@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.2] - 2026-02-22
+
+### Changed
+- Updated `friendly_com_hint` E_POINTER text — removed stale iterator blame.
+- Fixed broken `architecture.md`/`spec.md` links in README for crates.io.
+- Added 3 missing HRESULT mappings (`OPC_E_BADTYPE`, `OPC_E_UNKNOWNITEMID`, `OPC_E_INVALIDITEMID`) to documentation.
+
 ## [0.1.1] - 2026-02-22
 
 ### Fixed
