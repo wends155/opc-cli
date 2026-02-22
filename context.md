@@ -179,3 +179,18 @@ emove_group errors now logged instead of silently discarded.
 > * **Changes:** Fixed `variant_to_string` to properly parse `VT_ERROR` containing HRESULTs. Enforced 1-to-1 array sizes for `read_tag_values` using `TagValue { value: "Error", quality: "Bad", timestamp: "" }` for failed items. Ensured `remove_group` executes unconditionally in `read_tag_values` and `write_tag_value` via RAII-like scope drops. Extracted `format_hresult` to standardize `0xHHHHHHHH: <hint>` output. Updated `spec.md` and `architecture.md` with these invariants.
 > * **New Constraints:** `read_tag_values` MUST always return the exact same number of `TagValue`s as requested IDs. OPC groups must be dynamically removed using `remove_group` regardless of failure states.
 > * **Pruned:** Old console warnings from missing VT_ERROR handlers. Raw HRESULT error messages that skip `format_hresult()`.
+
+## 2026-02-22: Published opc-da-client v0.1.0 to crates.io
+> 📝 **Context Update:**
+> * **Feature:** Prepared and published `opc-da-client` v0.1.0, making the OPC DA abstraction layer publicly available.
+> * **Changes:** Bumped version to 0.1.0, addressed 18 latent `clippy` lints (`useless-conversion`, `undocumented-unsafe-blocks`, `field-reassign-with-default`, `needless-range-loop`), added `try_from_native!` missing docs, enhanced crate-level docs and `format_hresult` with doctests, and established `exclude`/`license-file` crate metadata.
+> * **New Constraints:** None.
+> * **Pruned:** The `opc-da-client` crate is now officially v0.1.0 on `crates.io`. `opc-cli` crate version also bumped to 0.1.0 to match.
+
+## 2026-02-22: Fix OPC-BUG-001 — StringIterator E_POINTER Flood
+> 📝 **Context Update:**
+> * **Feature:** Eliminated phantom `E_POINTER` errors from `StringIterator` at the source.
+> * **Changes:** Added cache zeroing before each `IEnumString::Next()` call, null-PWSTR skip loop with `debug!` logging, and diagnostic tracing (HRESULT, celt, count). Removed `is_known_iterator_bug()` function and its caller-side workaround from `browse_recursive`. Added 2 regression tests (`test_string_iterator_null_entries_skipped`, `test_string_iterator_empty`). Updated `architecture.md` and `spec.md`.
+> * **New Constraints:** `StringIterator` now self-heals null entries. Callers no longer need to filter `E_POINTER`. Any future iterator changes must preserve the cache-zeroing and null-skip logic.
+> * **Pruned:** `is_known_iterator_bug()` function and its 2 tests. `trace!`-level E_POINTER downgrade in `browse_recursive`.
+
