@@ -88,14 +88,6 @@ pub fn format_hresult(hr: windows::core::HRESULT) -> String {
     }
 }
 
-/// Returns `true` for `E_POINTER` errors that are known to be caused by
-/// the `opc_da` crate's `StringIterator` initialization bug (index starts
-/// at 0 with null-pointer cache, producing 16 phantom errors per iterator).
-#[allow(clippy::cast_sign_loss)]
-pub const fn is_known_iterator_bug(err: &windows::core::Error) -> bool {
-    err.code().0 as u32 == 0x8000_4003 // E_POINTER
-}
-
 // Verify GUID memory layout assumption for FFI (Workstream C#3)
 const _: () = assert!(
     std::mem::size_of::<windows::core::GUID>() == 16,
@@ -611,20 +603,6 @@ mod tests {
     fn quality_unknown() {
         let result = quality_to_string(0x80);
         assert!(result.starts_with("Unknown("));
-    }
-
-    #[test]
-    fn test_is_known_iterator_bug_match() {
-        let err =
-            windows::core::Error::from_hresult(windows::core::HRESULT(0x8000_4003_u32 as i32));
-        assert!(is_known_iterator_bug(&err));
-    }
-
-    #[test]
-    fn test_is_known_iterator_bug_no_match() {
-        let err =
-            windows::core::Error::from_hresult(windows::core::HRESULT(0x8007_0005_u32 as i32));
-        assert!(!is_known_iterator_bug(&err));
     }
 
     #[test]

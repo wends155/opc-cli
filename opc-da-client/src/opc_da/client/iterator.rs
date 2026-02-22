@@ -90,35 +90,72 @@ impl Iterator for StringIterator {
     type Item = windows::core::Result<String>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        if self.done {
-            return None;
-        }
-
-        if self.index >= self.count {
-            let code = unsafe {
-                self.inner
-                    .Next(self.cache.as_mut_slice(), Some(&mut self.count))
-            };
-
-            if code.is_ok() {
-                if self.count == 0 {
-                    self.done = true;
-                    return None;
-                }
-
-                self.index = 0;
-            } else {
-                self.done = true;
-                return Some(Err(windows::core::Error::new(
-                    code,
-                    "Failed to get next string",
-                )));
+        loop {
+            if self.done {
+                return None;
             }
-        }
 
-        let current = RemotePointer::from(self.cache[self.index as usize]);
-        self.index += 1;
-        Some(current.try_into())
+            if self.index >= self.count {
+                // Zero the cache to prevent stale freed pointers (OPC-BUG-001)
+                self.cache.fill(windows::core::PWSTR::null());
+
+                let code = unsafe {
+                    self.inner
+                        .Next(self.cache.as_mut_slice(), Some(&mut self.count))
+                };
+
+                tracing::debug!(
+                    hresult = format_args!("{:#010X}", code.0),
+                    celt = self.cache.len(),
+                    fetched = self.count,
+                    "StringIterator::Next completed"
+                );
+
+                if code.is_ok() {
+                    if self.count == 0 {
+                        self.done = true;
+                        return None;
+                    }
+
+                    // Detect null entries in the fetched range
+                    let null_count = self.cache[..self.count as usize]
+                        .iter()
+                        .filter(|p| p.is_null())
+                        .count();
+                    if null_count > 0 {
+                        tracing::warn!(
+                            null_count,
+                            fetched = self.count,
+                            "StringIterator: null PWSTR entries in fetched range"
+                        );
+                    }
+
+                    self.index = 0;
+                } else {
+                    self.done = true;
+                    return Some(Err(windows::core::Error::new(
+                        code,
+                        "Failed to get next string",
+                    )));
+                }
+            }
+
+            // Skip null PWSTR entries instead of producing E_POINTER (OPC-BUG-001)
+            let pwstr = self.cache[self.index as usize];
+            self.index += 1;
+
+            if pwstr.is_null() {
+                tracing::debug!(
+                    index = self.index - 1,
+                    count = self.count,
+                    "StringIterator: skipping null PWSTR entry"
+                );
+                continue; // Loop back to try the next entry
+            }
+
+            let current = RemotePointer::from(pwstr);
+            return Some(current.try_into());
+        }
     }
 }
 
@@ -336,5 +373,117 @@ mod tests {
         }
 
         assert_eq!(results, items);
+    }
+
+    /// Mock that writes only `valid_count` items but claims `pceltFetched = claimed_count`,
+    /// leaving the remaining slots as null pointers. Simulates OPC-BUG-001.
+    #[implement(IEnumString)]
+    struct MockEnumStringWithNulls {
+        items: Vec<String>,
+        index: std::sync::atomic::AtomicUsize,
+        /// How many *extra* null entries to claim beyond actual items
+        extra_nulls: u32,
+    }
+
+    impl IEnumString_Impl for MockEnumStringWithNulls_Impl {
+        fn Next(
+            &self,
+            celt: u32,
+            rgelt: *mut PWSTR,
+            pceltfetched: *mut u32,
+        ) -> windows::core::HRESULT {
+            let mut fetched = 0;
+            let index = self.index.load(std::sync::atomic::Ordering::Relaxed);
+            let rgelt = unsafe { std::slice::from_raw_parts_mut(rgelt, celt as usize) };
+
+            for i in 0..celt as usize {
+                if index + i < self.items.len() {
+                    let s = &self.items[index + i];
+                    let w: Vec<u16> = s.encode_utf16().chain(std::iter::once(0)).collect();
+                    let ptr = unsafe { windows::Win32::System::Com::CoTaskMemAlloc(w.len() * 2) };
+                    unsafe { std::ptr::copy_nonoverlapping(w.as_ptr(), ptr as *mut u16, w.len()) };
+                    rgelt[i] = PWSTR(ptr as *mut u16);
+                    fetched += 1;
+                } else {
+                    break;
+                }
+            }
+
+            self.index
+                .store(index + fetched, std::sync::atomic::Ordering::Relaxed);
+
+            // Lie about the count: claim extra null entries (only on non-empty batches)
+            let reported = if fetched > 0 {
+                (fetched as u32) + self.extra_nulls
+            } else {
+                0
+            };
+            if !pceltfetched.is_null() {
+                unsafe { *pceltfetched = reported.min(celt) };
+            }
+
+            if fetched == 0 {
+                // Enumeration exhausted
+                windows::Win32::Foundation::S_FALSE
+            } else if reported >= celt {
+                windows::Win32::Foundation::S_OK
+            } else {
+                windows::Win32::Foundation::S_FALSE
+            }
+        }
+        fn Skip(&self, _celt: u32) -> windows::core::HRESULT {
+            windows::Win32::Foundation::E_NOTIMPL
+        }
+        fn Reset(&self) -> windows::core::Result<()> {
+            self.index.store(0, std::sync::atomic::Ordering::Relaxed);
+            Ok(())
+        }
+        fn Clone(&self) -> windows::core::Result<IEnumString> {
+            Err(windows::core::Error::from_hresult(
+                windows::Win32::Foundation::E_NOTIMPL,
+            ))
+        }
+    }
+
+    /// OPC-BUG-001 regression: null PWSTR entries within the fetched range
+    /// must be silently skipped, not yield E_POINTER.
+    #[test]
+    fn test_string_iterator_null_entries_skipped() {
+        let items = vec!["Alpha".to_string(), "Beta".to_string(), "Gamma".to_string()];
+
+        let mock_enum: IEnumString = MockEnumStringWithNulls {
+            items: items.clone(),
+            index: std::sync::atomic::AtomicUsize::new(0),
+            extra_nulls: 5, // Claim 5 extra items that are actually null
+        }
+        .into();
+
+        let iter = StringIterator::new(mock_enum);
+
+        let mut results = Vec::new();
+        for item in iter {
+            // No E_POINTER should leak through
+            let value = item.expect("Expected OK value, got phantom error from null entry");
+            results.push(value);
+        }
+
+        assert_eq!(
+            results, items,
+            "Only valid items should be yielded, nulls skipped"
+        );
+    }
+
+    /// Verify iterator handles a fully empty enumeration (0 items, immediate S_FALSE).
+    #[test]
+    fn test_string_iterator_empty() {
+        let mock_enum: IEnumString = MockEnumString {
+            items: Vec::new(),
+            index: std::sync::atomic::AtomicUsize::new(0),
+        }
+        .into();
+
+        let iter = StringIterator::new(mock_enum);
+        let results: Vec<_> = iter.collect::<Result<Vec<_>, _>>().unwrap();
+        assert!(results.is_empty(), "Empty iterator should yield no items");
     }
 }

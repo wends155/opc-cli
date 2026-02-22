@@ -314,13 +314,13 @@ Defined in § 1.1. See table above.
 **Error Handling at Boundary:**
 *   All `opc_da` errors are wrapped with `anyhow::Context` to add operation context.
 *   `create_server` failures additionally log a `friendly_com_hint` before propagating.
-*   `E_POINTER` errors from `StringIterator` are identified via `is_known_iterator_bug()` and silenced to `trace!` level.
+*   `E_POINTER` errors from `StringIterator` are now handled internally by the iterator (null-PWSTR skip + `debug!` log).
 
 **Known Upstream Bugs:**
 
 | ID | Bug | Workaround |
 | :--- | :--- | :--- |
-| OPC-BUG-001 | `StringIterator` produces 16 phantom `E_POINTER` errors per iterator | `is_known_iterator_bug()` filter + `trace!`-level logging |
+| OPC-BUG-001 | `StringIterator` produces 16 phantom `E_POINTER` errors per iterator | **FIXED**: cache zeroing + null-PWSTR skip in `StringIterator::next()` |
 
 ### 3.2 Downstream: `opc-cli` (Consumer)
 
@@ -342,8 +342,8 @@ Defined in § 1.1. See table above.
 - [x] `format_hresult` returns `0xHHHHHHHH` for unknown codes.
 - [x] `filetime_to_string` returns `"N/A"` for zero FILETIME.
 - [x] `filetime_to_string` produces valid date string for non-zero FILETIME.
-- [x] `is_known_iterator_bug` returns `true` for `E_POINTER` code.
-- [x] `is_known_iterator_bug` returns `false` for other error codes.
+- [x] `StringIterator` skips null PWSTR entries without producing `E_POINTER`.
+- [x] `StringIterator` handles empty enumeration (0 items).
 - [x] `opc_value_to_variant` correctly converts `Int` variant.
 - [x] `variant_to_string` roundtrips through `VT_I4` and `VT_R4`.
 - [x] `variant_to_string` handles `VT_EMPTY` and `VT_NULL`.

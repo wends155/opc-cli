@@ -45,7 +45,7 @@ The browse implementation handles both flat and hierarchical OPC DA namespaces:
    - **Branches first:** Enumerate `OPC_BRANCH` items, navigate down via `change_browse_position(DOWN)`, recurse, then always navigate back `UP` — even if recursion fails — to prevent position corruption.
    - **Leaves second (soft-fail):** Enumerate `OPC_LEAF` items at current position; failures are logged and skipped.
    - **Fully-qualified IDs:** `get_item_id()` converts browse names to item IDs; falls back to browse name if conversion fails.
-   - **Iterator bug workaround:** `E_POINTER` (0x80004003) errors from the upstream `opc_da` crate's `StringIterator` are filtered and downgraded to `trace!` level (see [OPC-BUG-001](#opc-bug-001-stringiterator-e_pointer-flood)).
+   - **Iterator bug (OPC-BUG-001) — FIXED:** `StringIterator` now zeroes its cache before each `IEnumString::Next()` call and silently skips null `PWSTR` entries, eliminating the phantom `E_POINTER` errors at the iterator level.
 4. **Safety guards:**
    - `max_tags` hard cap (default 10000) to prevent unbounded collection.
    - `MAX_DEPTH` (50) to guard against infinite recursion in malformed namespaces.

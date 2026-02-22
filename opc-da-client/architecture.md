@@ -237,11 +237,11 @@ This library is **Windows-only** as it depends on Windows COM/DCOM for OPC DA in
 
 ### OPC-BUG-001
 
-**E_POINTER Flood from `StringIterator`**
+**E_POINTER Flood from `StringIterator` — FIXED**
 
-The `opc_da` crate's `StringIterator` has a known bug where it produces 16 phantom `E_POINTER` (`0x80004003`) errors per iterator instance (index starts at 0 with null-pointer cache).
+The upstream `opc_da` `StringIterator` had a bug where null `PWSTR` entries in the batch cache were converted to `E_POINTER` errors by `RemotePointer`. This produced up to 16 phantom errors per iterator cycle.
 
-**Workaround:** `is_known_iterator_bug()` detects these specific errors and the library downgrades them to `trace!` log level. `friendly_com_hint()` also maps this HRESULT to an explanatory message for end users.
+**Fix:** `StringIterator::next()` now zeroes the cache before each `IEnumString::Next()` call, and silently skips null `PWSTR` entries with a `debug!` log. The caller-side `is_known_iterator_bug()` workaround has been removed.
 
 ### DCOM Filter Omission (Intentional)
 

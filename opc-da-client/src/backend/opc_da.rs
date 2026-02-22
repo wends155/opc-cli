@@ -3,8 +3,7 @@ use crate::bindings::da::{
     OPC_BRANCH, OPC_BROWSE_DOWN, OPC_BROWSE_UP, OPC_DS_DEVICE, OPC_LEAF, OPC_NS_FLAT, tagOPCITEMDEF,
 };
 use crate::helpers::{
-    filetime_to_string, format_hresult, is_known_iterator_bug, opc_value_to_variant,
-    quality_to_string, variant_to_string,
+    filetime_to_string, format_hresult, opc_value_to_variant, quality_to_string, variant_to_string,
 };
 use crate::provider::{OpcProvider, OpcValue, TagValue, WriteResult};
 use anyhow::{Context, Result};
@@ -59,11 +58,7 @@ fn browse_recursive<S: ConnectedServer>(
         .filter_map(|r| match r {
             Ok(name) => Some(name),
             Err(e) => {
-                if is_known_iterator_bug(&e) {
-                    tracing::trace!(error = ?e, "Branch iteration: known crate bug, skipping");
-                } else {
-                    tracing::warn!(error = ?e, "Branch iteration error, skipping");
-                }
+                tracing::warn!(error = ?e, "Branch iteration error, skipping");
                 None
             }
         })
@@ -98,11 +93,7 @@ fn browse_recursive<S: ConnectedServer>(
             let browse_name = match leaf_res {
                 Ok(name) => name,
                 Err(e) => {
-                    if is_known_iterator_bug(&e) {
-                        tracing::trace!(error = ?e, "Leaf iteration: known crate bug, skipping");
-                    } else {
-                        tracing::warn!(error = ?e, "Leaf iteration error, skipping");
-                    }
+                    tracing::warn!(error = ?e, "Leaf iteration error, skipping");
                     continue;
                 }
             };
