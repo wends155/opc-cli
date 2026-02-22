@@ -76,7 +76,7 @@ The verification script ([verify.ps1](file:///c:/Users/WSALIGAN/code/opc-cli/scr
 | Return type | `anyhow::Result<T>` for all fallible functions |
 | Context wrapping | `.context()` / `.with_context()` at every propagation layer |
 | Logging before propagation | `map_err(\|e\| { tracing::error!(...); e })` **before** `.context()` to preserve raw HRESULTs in logs |
-| User-facing hints | `friendly_com_hint()` maps known HRESULT codes to actionable strings |
+| User-facing hints | `friendly_com_hint()` maps known HRESULT codes to actionable strings; `format_hresult()` wraps this into a consistent `0xHHHHHHHH: <hint>` format for error messages |
 | Prohibited | `unwrap()`, `expect()`, and raw panics in production code |
 
 ---
@@ -111,6 +111,11 @@ The verification script ([verify.ps1](file:///c:/Users/WSALIGAN/code/opc-cli/scr
 ### Mock-Based Tests
 - **Mechanism**: `mockall` crate, gated behind `test-support` feature.
 - **Export**: `MockOpcProvider` — allows downstream consumers (`opc-cli`) to test UI and state logic without a live OPC server on any OS.
+
+### Mock-Backend Integration Tests
+- **Location**: Co-located `#[cfg(test)] mod tests` in `backend/opc_da.rs`.
+- **Mechanism**: In-process `MockGroup` / `MockServer` / `MockConnector` implementing `ConnectedGroup`, `ConnectedServer`, and `ServerConnector` traits.
+- **Coverage**: `read_tag_values` (happy, partial reject, all reject), `write_tag_value` (happy, add fail), `list_servers` (happy).
 
 ### Doc Tests
 - `friendly_com_hint()` — runnable doctest in `helpers.rs`.
@@ -169,6 +174,7 @@ graph TD
         TagValue["struct TagValue"]
         Guard["struct ComGuard"]
         Hint["fn friendly_com_hint()"]
+        FmtHR["fn format_hresult()"]
     end
 
     subgraph "Backend (Feature-Gated)"
@@ -192,7 +198,8 @@ graph TD
     ClientTraits --> Defs & Utils
     ClientTraits --> Bindings
     Bindings --> WinCOM["Windows COM/DCOM"]
-    Wrapper -.-> Hint
+    Wrapper -.-> FmtHR
+    FmtHR -.-> Hint
 ```
 
 ### COM Threading Model

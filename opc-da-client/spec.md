@@ -47,7 +47,7 @@ All methods use `#[async_trait]`.
 *   `browse_tags` **never** collects more than `max_tags` items.
 *   `browse_tags` pushes tags to `tags_sink` incrementally; on timeout the caller can harvest partial results.
 *   `browse_tags` updates `progress` atomically for each discovered tag.
-*   `read_tag_values` returns a `TagValue` entry only for items that were successfully added to the OPC group; silently skips failed items.
+*   `read_tag_values` returns a `TagValue` entry for all requested tags, preserving the original array length and order. Items that fail to be added to the group or read will have their `value` set to `"Error"` and `quality` set to `"Bad — <hint>"`.
 *   `write_tag_value` returns `Ok(WriteResult)` in all non-fatal cases; per-tag success/error is reported inside `WriteResult`.
 
 
@@ -141,13 +141,25 @@ All methods use `#[async_trait]`.
 
 ---
 
+##### `fn format_hresult(hr: windows::core::HRESULT) -> String`
+
+**Description:** Formats a COM `HRESULT` for user-facing error messages, appending a friendly hint if one is mapped.
+
+**Inputs:** A `windows::core::HRESULT` (passed by value).
+**Output:** Format `0xHHHHHHHH: <hint>` if a hint exists, otherwise just `0xHHHHHHHH`.
+
+**Invariants:**
+*   Returns a consistently formatted upper-case hex string.
+
+---
+
 #### Internal API (crate-visible only, documented for completeness)
 
 | Function | Signature | Purpose |
 | :--- | :--- | :--- |
 | `is_known_iterator_bug` | `fn(err: &windows::core::Error) -> bool` | Returns `true` for `E_POINTER` (`0x80004003`) errors from the upstream iterator bug. |
 | `guid_to_progid` | `fn(guid: &GUID) -> Result<String>` | Converts a COM GUID to its registered ProgID string. |
-| `variant_to_string` | `fn(variant: &VARIANT) -> String` | Formats a COM VARIANT as a display string. |
+| `variant_to_string` | `fn(variant: &VARIANT) -> String` | Formats a COM VARIANT as a display string. Handles VT_EMPTY, VT_NULL, VT_I2, VT_I4, VT_R4, VT_R8, VT_CY, VT_DATE, VT_BSTR, VT_ERROR, VT_BOOL, VT_I1, VT_UI1, VT_UI2, VT_UI4, VT_I8, VT_UI8, and VT_ARRAY composites. |
 | `quality_to_string` | `fn(quality: u16) -> String` | Maps OPC quality bitmask to `"Good"` / `"Bad"` / `"Uncertain"`. |
 | `filetime_to_string` | `fn(ft: &FILETIME) -> String` | Converts Win32 FILETIME to local `YYYY-MM-DD HH:MM:SS` string. |
 | `opc_value_to_variant` | `fn(value: &OpcValue) -> VARIANT` | Converts an `OpcValue` to a COM `VARIANT`. |
@@ -178,6 +190,7 @@ Implements `OpcProvider` for all four trait methods.
 *   COM is initialized via `ComGuard::new()` at the start of every blocking task; teardown is automatic on drop.
 *   GUID filtering: zeroed GUIDs are skipped during server enumeration.
 *   Server list is sorted and deduplicated before returning.
+*   OPC groups created by `read_tag_values` and `write_tag_value` are **always** removed via `remove_group` — even on error paths — to prevent resource leaks.
 
 #### Internal: `browse_recursive`
 
@@ -325,6 +338,8 @@ Defined in § 1.1. See table above.
 
 - [x] `friendly_com_hint` returns correct hint for known HRESULT codes.
 - [x] `friendly_com_hint` returns `None` for unknown errors.
+- [x] `format_hresult` returns `0xHHHHHHHH: <hint>` for known codes.
+- [x] `format_hresult` returns `0xHHHHHHHH` for unknown codes.
 - [x] `filetime_to_string` returns `"N/A"` for zero FILETIME.
 - [x] `filetime_to_string` produces valid date string for non-zero FILETIME.
 - [x] `is_known_iterator_bug` returns `true` for `E_POINTER` code.
@@ -333,6 +348,7 @@ Defined in § 1.1. See table above.
 - [x] `variant_to_string` roundtrips through `VT_I4` and `VT_R4`.
 - [x] `variant_to_string` handles `VT_EMPTY` and `VT_NULL`.
 - [x] `variant_to_string` handles `VT_CY` (currency).
+- [x] `variant_to_string` handles `VT_ERROR` with known and unknown HRESULTs.
 - [x] `variant_to_string` returns `(VT ...)` for unknown variant types.
 
 ### Unit Tests (recommended additions)
@@ -341,6 +357,15 @@ Defined in § 1.1. See table above.
 - [ ] `quality_to_string` returns `"Bad"` for `0x00`.
 - [ ] `quality_to_string` returns `"Uncertain"` for `0x40`.
 - [ ] `quality_to_string` returns `"Unknown(…)"` for unrecognized bitmask.
+
+### Mock-Backend Integration Tests (in `opc_da.rs`)
+
+- [x] `test_mock_list_servers` returns expected mock server enumeration.
+- [x] `test_mock_read_tags_happy` — all tags valid, correct values returned.
+- [x] `test_mock_read_tags_partial_reject` — 1 of 3 tags rejected, returns length-3 array with error sentinel.
+- [x] `test_mock_read_tags_all_reject` — all tags rejected, returns `Ok` with all error sentinels.
+- [x] `test_mock_write_tag_happy` — tag valid, `success=true`.
+- [x] `test_mock_write_tag_add_fail` — tag rejected, `success=false`, group cleaned up.
 
 ### Mock-Based Tests (in `opc-cli`)
 
