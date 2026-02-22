@@ -293,5 +293,11 @@ emove_group errors now logged instead of silently discarded.
 > 📝 **Context Update:**
 > * **Feature:** Pre-publication quality control and security `/audit` for `opc-da-client`.
 > * **Changes:** Evaluated the operational readiness of `opc-da-client` for publishing to `crates.io`. Confirmed `Cargo.toml` structural completeness. Re-ran Narsil security scans across the repository resolving 0 findings and 0 vulnerable dependency maps. Fired a `cargo publish --dry-run` to assert the proper compression, exclusion mapping (`spec.md`, `.winmd`), and MSVC docs.rs target resolution. 
-> * **New Constraints:** None.
 > * **Pruned:** The crate holds a secure and technically verified baseline to initiate the official crates.io distribution.
+
+## 2026-02-23: TARS Summary — Verification Script Audit & Modernization
+> 📝 **Context Update:**
+> * **Feature:** Pre-execution `/audit` of `verify.sh` for correctness and `pwsh` efficiency.
+> * **Changes:** Replaced the legacy split verification sequence with a hyper-efficient `pwsh`-native pipeline hosted at the repository root (`verify.ps1`). The new gate implements strict $LASTEXITCODE evaluation (`$ErrorActionPreference = 'Stop'`) handling zero-exit architecture cleanly. Appended `--all-targets --all-features` to the `cargo clippy` pass to abolish blindspots seen in prior mocks. Injected `cargo test --doc` explicitly to block stale documentation errors structurally. `verify.sh` was retained simply to bridge unix executions strictly back into the `pwsh -File verify.ps1` master process. Old scattered scripts (`scripts/verify.ps1`) were deleted.
+> * **New Constraints:** Any integration gating script must pass through `verify.ps1` invoking `$ErrorActionPreference = 'Stop'`.
+> * **Pruned:** `scripts/verify.ps1` deleted. Outdated partial `verify.sh` checks deleted.
