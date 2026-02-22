@@ -129,6 +129,7 @@ impl TryFromNative<windows::Win32::Foundation::FILETIME> for std::time::SystemTi
 }
 
 #[macro_export]
+/// Helper macro for instantiating native COM structs from safe types.
 macro_rules! try_from_native {
     ($native:expr) => {
         TryFromNative::try_from_native($native)?

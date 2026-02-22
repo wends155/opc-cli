@@ -469,13 +469,13 @@ mod tests {
             let index = self.index.load(std::sync::atomic::Ordering::Relaxed);
             let rgelt = unsafe { std::slice::from_raw_parts_mut(rgelt, celt as usize) };
 
-            for i in 0..celt as usize {
+            for (i, elem) in rgelt.iter_mut().enumerate().take(celt as usize) {
                 if index + i < self.items.len() {
                     let s = &self.items[index + i];
                     let w: Vec<u16> = s.encode_utf16().chain(std::iter::once(0)).collect();
                     let ptr = unsafe { windows::Win32::System::Com::CoTaskMemAlloc(w.len() * 2) };
                     unsafe { std::ptr::copy_nonoverlapping(w.as_ptr(), ptr as *mut u16, w.len()) };
-                    rgelt[i] = PWSTR(ptr as *mut u16);
+                    *elem = PWSTR(ptr as *mut u16);
                     fetched += 1;
                 } else {
                     break;
@@ -490,13 +490,13 @@ mod tests {
             }
 
             if fetched == celt as usize {
-                windows::Win32::Foundation::S_OK.into()
+                windows::Win32::Foundation::S_OK
             } else {
-                windows::Win32::Foundation::S_FALSE.into()
+                windows::Win32::Foundation::S_FALSE
             }
         }
         fn Skip(&self, _celt: u32) -> windows::core::HRESULT {
-            windows::Win32::Foundation::E_NOTIMPL.into()
+            windows::Win32::Foundation::E_NOTIMPL
         }
         fn Reset(&self) -> windows::core::Result<()> {
             self.index.store(0, std::sync::atomic::Ordering::Relaxed);
@@ -534,8 +534,10 @@ mod tests {
                 }
                 let name = String::from_utf16_lossy(&name_w);
 
-                let mut res = tagOPCITEMRESULT::default();
-                res.hServer = (i + 1) as u32;
+                let res = tagOPCITEMRESULT {
+                    hServer: (i + 1) as u32,
+                    ..Default::default()
+                };
 
                 if name == "RejectMe" {
                     errors.push(windows::core::HRESULT(0xC0040007_u32 as i32)); // OPC_E_UNKNOWNITEMID
@@ -576,9 +578,11 @@ mod tests {
             let mut errors = Vec::new();
 
             for &handle in server_handles {
-                let mut state = tagOPCITEMSTATE::default();
-                state.hClient = handle; // mock echoing the handle as client handle for verification
-                state.wQuality = crate::bindings::da::OPC_QUALITY_GOOD as u16;
+                let mut state = tagOPCITEMSTATE {
+                    hClient: handle, // mock echoing the handle as client handle for verification
+                    wQuality: crate::bindings::da::OPC_QUALITY_GOOD,
+                    ..Default::default()
+                };
                 // mock value VT_I4 = 42
                 use windows::Win32::System::Variant::{
                     VARENUM, VARIANT, VARIANT_0, VARIANT_0_0, VARIANT_0_0_0,

@@ -466,6 +466,7 @@ mod tests {
     #[test]
     fn test_opc_value_to_variant_int() {
         let v = opc_value_to_variant(&OpcValue::Int(42));
+        // SAFETY: The bytes vector length matches the chunk size and element boundaries.
         unsafe {
             assert_eq!(v.Anonymous.Anonymous.vt, VT_I4);
             assert_eq!(v.Anonymous.Anonymous.Anonymous.lVal, 42);
@@ -475,6 +476,7 @@ mod tests {
     #[test]
     fn test_opc_value_to_variant_float() {
         let v = opc_value_to_variant(&OpcValue::Float(3.5));
+        // SAFETY: The bytes vector contains standard memory representation for elements.
         unsafe {
             assert_eq!(v.Anonymous.Anonymous.vt, VT_R8);
             assert!((v.Anonymous.Anonymous.Anonymous.dblVal - 3.5).abs() < f64::EPSILON);
@@ -484,6 +486,7 @@ mod tests {
     #[test]
     fn test_opc_value_to_variant_bool_true() {
         let v = opc_value_to_variant(&OpcValue::Bool(true));
+        // SAFETY: Same as above.
         unsafe {
             assert_eq!(v.Anonymous.Anonymous.vt, VT_BOOL);
             assert_eq!(v.Anonymous.Anonymous.Anonymous.boolVal.0, -1);
@@ -493,6 +496,7 @@ mod tests {
     #[test]
     fn test_opc_value_to_variant_bool_false() {
         let v = opc_value_to_variant(&OpcValue::Bool(false));
+        // SAFETY: Creating variant union from safe array requires unsafe blocks
         unsafe {
             assert_eq!(v.Anonymous.Anonymous.vt, VT_BOOL);
             assert_eq!(v.Anonymous.Anonymous.Anonymous.boolVal.0, 0);
@@ -502,6 +506,7 @@ mod tests {
     #[test]
     fn test_opc_value_to_variant_string() {
         let v = opc_value_to_variant(&OpcValue::String("hello".into()));
+        // SAFETY: Same as above.
         unsafe {
             assert_eq!(v.Anonymous.Anonymous.vt, VT_BSTR);
             let bstr = &v.Anonymous.Anonymous.Anonymous.bstrVal;
@@ -717,6 +722,7 @@ mod tests {
         };
         use windows::Win32::System::Variant::{VARIANT, VARIANT_0, VARIANT_0_0, VT_ARRAY, VT_I4};
 
+        // SAFETY: Array creation and access follow standard COM patterns
         unsafe {
             let parray = SafeArrayCreateVector(VT_I4, 0, 3);
             let mut ptr: *mut c_void = std::ptr::null_mut();
@@ -727,8 +733,10 @@ mod tests {
             slice[2] = 30;
             SafeArrayUnaccessData(parray).unwrap();
 
-            let mut middle = VARIANT_0_0::default();
-            middle.vt = windows::Win32::System::Variant::VARENUM(VT_I4.0 | VT_ARRAY.0);
+            let mut middle = VARIANT_0_0 {
+                vt: windows::Win32::System::Variant::VARENUM(VT_I4.0 | VT_ARRAY.0),
+                ..Default::default()
+            };
             middle.Anonymous.parray = parray;
 
             let v = VARIANT {
