@@ -247,3 +247,9 @@ emove_group errors now logged instead of silently discarded.
 > * **Changes:** Added `[package.metadata.docs.rs]` with `default-target = "x86_64-pc-windows-msvc"` and `all-features = true`. Bumped version, updated CHANGELOG, README, and architecture.md.
 > * **New Constraints:** None.
 > * **Pruned:** v0.1.3 is the new active baseline on crates.io.
+## 2026-02-22: TARS Summary — Documentation Staleness Audit
+> 📝 **Context Update:**
+> * **Feature:** Exhaustive documentation staleness audit.
+> * **Changes:** Scanned code base and markdown for stale references to Phase 2/3 vendor crates. Updated 1 rustdoc in `opc_da.rs` ("uses the `opc_da` crate" -> "uses the internal `opc_da` module") and 1 phrase in `spec.md`.
+> * **New Constraints:** None.
+> * **Pruned:** The conceptual barrier of "vendored" code is fully eliminated; `opc_da` is treated strictly as an internal module.
