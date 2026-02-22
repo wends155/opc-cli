@@ -14,8 +14,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 /// Concrete [`OpcProvider`] implementation for Windows OPC DA.
 ///
-/// Heavy-weight implementation that uses the `opc_da` crate for
-/// native COM interop.
+/// Uses native `windows-rs` COM interop via the internal `opc_da` module.
 pub struct OpcDaWrapper<C: ServerConnector = ComConnector> {
     connector: Arc<C>,
 }

@@ -254,7 +254,7 @@ Before calling `browse_recursive`, `browse_tags` attempts `BrowseOPCItemIDs(OPC_
 
 ### 1.5 `opc_da` — Internal OPC DA Module
 
-**Purpose:** Provide raw COM wrapping and lifetime management for interacting with OPC DA server, group, and item COM objects. Inherited from the vendored `opc_da` (Phase 2), with `actix` support excluded.
+**Purpose:** Provide raw COM wrapping and lifetime management for interacting with OPC DA server, group, and item COM objects. Inherited inline from the previously vendored `opc_da` code (Phase 2), with `actix` support excluded.
 
 #### Public API (Crate-Internal)
 
