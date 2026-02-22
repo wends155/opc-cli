@@ -437,6 +437,7 @@ impl<C: ServerConnector + 'static> OpcProvider for OpcDaWrapper<C> {
     clippy::cast_possible_wrap
 )]
 mod tests {
+    #![allow(clippy::ref_as_ptr, clippy::inline_always)]
     use super::*;
     use crate::backend::connector::{ConnectedGroup, ConnectedServer, ServerConnector};
     use crate::bindings::da::{tagOPCITEMDEF, tagOPCITEMRESULT, tagOPCITEMSTATE};
@@ -446,6 +447,7 @@ mod tests {
     use windows::Win32::System::Variant::VARIANT;
     use windows::core::{PWSTR, implement};
 
+    #[allow(clippy::ref_as_ptr, clippy::inline_always)]
     #[implement(IEnumString)]
     struct MockEnumString {
         items: Vec<String>,
@@ -534,7 +536,7 @@ mod tests {
                 };
 
                 if name == "RejectMe" {
-                    errors.push(windows::core::HRESULT(0xC0040007_u32 as i32)); // OPC_E_UNKNOWNITEMID
+                    errors.push(windows::core::HRESULT(0xC004_0007_u32 as i32)); // OPC_E_UNKNOWNITEMID
                 } else if name == "RejectAll" {
                     return Err(anyhow::anyhow!("Total failure"));
                 } else {

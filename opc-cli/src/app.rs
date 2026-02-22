@@ -1353,7 +1353,7 @@ mod tests {
             tag_id: "Tag1".into(),
             value: "100".into(),
             quality: "Good".into(),
-            timestamp: "".into(),
+            timestamp: String::new(),
         }];
 
         app.go_back();

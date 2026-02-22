@@ -288,10 +288,12 @@ impl Iterator for ItemAttributeIterator {
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::ref_as_ptr, clippy::inline_always, clippy::useless_conversion, clippy::needless_range_loop)]
     use super::*;
     use windows::Win32::System::Com::{IEnumString, IEnumString_Impl};
     use windows::core::{PWSTR, implement};
 
+    #[allow(clippy::ref_as_ptr, clippy::inline_always)]
     #[implement(IEnumString)]
     struct MockEnumString {
         items: Vec<String>,
@@ -377,6 +379,7 @@ mod tests {
 
     /// Mock that writes only `valid_count` items but claims `pceltFetched = claimed_count`,
     /// leaving the remaining slots as null pointers. Simulates OPC-BUG-001.
+    #[allow(clippy::ref_as_ptr, clippy::inline_always)]
     #[implement(IEnumString)]
     struct MockEnumStringWithNulls {
         items: Vec<String>,
