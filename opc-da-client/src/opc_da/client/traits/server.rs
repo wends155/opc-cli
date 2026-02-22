@@ -2,7 +2,9 @@ use windows::core::Interface as _;
 
 use crate::opc_da::{
     client::{GroupIterator, StringIterator},
-    utils::{LocalPointer, RemotePointer},
+    com_utils::{LocalPointer, RemotePointer},
+    errors::{OpcError, OpcResult},
+    typedefs::GroupHandle,
 };
 
 /// OPC Server management functionality.
@@ -10,7 +12,7 @@ use crate::opc_da::{
 /// Provides methods to create and manage groups within an OPC server,
 /// as well as monitor server status and enumerate existing groups.
 pub trait ServerTrait<Group: TryFrom<windows::core::IUnknown, Error = windows::core::Error>> {
-    fn interface(&self) -> windows::core::Result<&crate::bindings::da::IOPCServer>;
+    fn interface(&self) -> OpcResult<&crate::bindings::da::IOPCServer>;
 
     /// Adds a new group to the OPC server.
     ///
@@ -33,40 +35,47 @@ pub trait ServerTrait<Group: TryFrom<windows::core::IUnknown, Error = windows::c
         &self,
         name: &str,
         active: bool,
-        client_handle: u32,
         update_rate: u32,
-        locale_id: u32,
+        client_handle: GroupHandle,
         time_bias: i32,
         percent_deadband: f32,
-        revised_percent_deadband: &mut u32,
-        server_handle: &mut u32,
-    ) -> windows::core::Result<Group> {
+        locale_id: u32,
+        revised_update_rate: &mut u32,
+        server_handle: &mut GroupHandle,
+    ) -> OpcResult<Group> {
         let mut group = None;
         let group_name = LocalPointer::from(name);
         let group_name = group_name.as_pcwstr();
 
+        let mut raw_server_handle = 0u32;
         unsafe {
             self.interface()?.AddGroup(
                 group_name,
                 active,
                 update_rate,
-                client_handle,
+                client_handle.0,
                 &time_bias,
                 &percent_deadband,
                 locale_id,
-                server_handle,
-                revised_percent_deadband,
+                &mut raw_server_handle,
+                revised_update_rate,
                 &crate::bindings::da::IOPCItemMgt::IID,
                 &mut group,
             )?;
         }
+        *server_handle = GroupHandle(raw_server_handle);
 
         match group {
-            None => Err(windows::core::Error::new(
-                windows::Win32::Foundation::E_POINTER,
-                "Failed to add group, returned null",
-            )),
-            Some(group) => group.cast::<windows::core::IUnknown>()?.try_into(),
+            None => Err(OpcError::Com {
+                source: windows::core::Error::new(
+                    windows::Win32::Foundation::E_POINTER,
+                    "Failed to add group, returned null",
+                ),
+            }),
+            Some(group) => group
+                .cast::<windows::core::IUnknown>()?
+                .try_into()
+                .map_err(|source| OpcError::Com { source }),
         }
     }
 
@@ -75,9 +84,7 @@ pub trait ServerTrait<Group: TryFrom<windows::core::IUnknown, Error = windows::c
     /// # Returns
     /// Server status structure containing vendor info, time, state,
     /// and group counts
-    fn get_status(
-        &self,
-    ) -> windows::core::Result<RemotePointer<crate::bindings::da::tagOPCSERVERSTATUS>> {
+    fn get_status(&self) -> OpcResult<RemotePointer<crate::bindings::da::tagOPCSERVERSTATUS>> {
         let status = unsafe { self.interface()?.GetStatus()? };
         Ok(RemotePointer::from_raw(status))
     }
@@ -87,9 +94,9 @@ pub trait ServerTrait<Group: TryFrom<windows::core::IUnknown, Error = windows::c
     /// # Arguments
     /// * `server_handle` - Server's handle for the group
     /// * `force` - If true, remove even if clients are connected
-    fn remove_group(&self, server_handle: u32, force: bool) -> windows::core::Result<()> {
+    fn remove_group(&self, server_handle: GroupHandle, force: bool) -> OpcResult<()> {
         unsafe {
-            self.interface()?.RemoveGroup(server_handle, force)?;
+            self.interface()?.RemoveGroup(server_handle.0, force)?;
         }
         Ok(())
     }
@@ -104,7 +111,7 @@ pub trait ServerTrait<Group: TryFrom<windows::core::IUnknown, Error = windows::c
     fn create_group_enumerator(
         &self,
         scope: crate::bindings::da::tagOPCENUMSCOPE,
-    ) -> windows::core::Result<GroupIterator<Group>> {
+    ) -> OpcResult<GroupIterator<Group>> {
         let enumerator = unsafe {
             self.interface()?
                 .CreateGroupEnumerator(scope, &windows::Win32::System::Com::IEnumUnknown::IID)?
@@ -123,7 +130,7 @@ pub trait ServerTrait<Group: TryFrom<windows::core::IUnknown, Error = windows::c
     fn create_group_name_enumerator(
         &self,
         scope: crate::bindings::da::tagOPCENUMSCOPE,
-    ) -> windows::core::Result<StringIterator> {
+    ) -> OpcResult<StringIterator> {
         let enumerator = unsafe {
             self.interface()?
                 .CreateGroupEnumerator(scope, &windows::Win32::System::Com::IEnumString::IID)?

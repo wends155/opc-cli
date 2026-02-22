@@ -37,7 +37,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - **`OpcProvider` trait** — async trait with `list_servers`, `browse_tags`, `read_tag_values`, and `write_tag_value`.
-- **`OpcDaWrapper`** — native OPC DA backend via `windows-rs` COM calls. Generic over `ServerConnector` for testability.
+- **`OpcDaClient`** — native OPC DA backend via `windows-rs` COM calls. Generic over `ServerConnector` for testability.
 - **`ComGuard`** — RAII guard for COM MTA initialization/teardown.
 - **`friendly_com_hint()`** — maps 11 known COM/DCOM HRESULT codes to actionable user hints.
 - **`format_hresult()`** — formats `HRESULT` as `0xHHHHHHHH: <hint>` for consistent error messages.

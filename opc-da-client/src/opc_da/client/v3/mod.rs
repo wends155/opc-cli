@@ -5,6 +5,8 @@
 
 use windows::core::Interface as _;
 
+use crate::opc_da::errors::{OpcError, OpcResult};
+
 use super::{
     ClientTrait,
     traits::{
@@ -52,33 +54,31 @@ impl TryFrom<windows::core::IUnknown> for Server {
 }
 
 impl ServerTrait<Group> for Server {
-    fn interface(&self) -> windows::core::Result<&crate::bindings::da::IOPCServer> {
+    fn interface(&self) -> OpcResult<&crate::bindings::da::IOPCServer> {
         Ok(&self.server)
     }
 }
 
 impl CommonTrait for Server {
-    fn interface(&self) -> windows::core::Result<&crate::bindings::comn::IOPCCommon> {
+    fn interface(&self) -> OpcResult<&crate::bindings::comn::IOPCCommon> {
         Ok(&self.common)
     }
 }
 
 impl ConnectionPointContainerTrait for Server {
-    fn interface(
-        &self,
-    ) -> windows::core::Result<&windows::Win32::System::Com::IConnectionPointContainer> {
+    fn interface(&self) -> OpcResult<&windows::Win32::System::Com::IConnectionPointContainer> {
         Ok(&self.connection_point_container)
     }
 }
 
 impl BrowseTrait for Server {
-    fn interface(&self) -> windows::core::Result<&crate::bindings::da::IOPCBrowse> {
+    fn interface(&self) -> OpcResult<&crate::bindings::da::IOPCBrowse> {
         Ok(&self.browse)
     }
 }
 
 impl ItemIoTrait for Server {
-    fn interface(&self) -> windows::core::Result<&crate::bindings::da::IOPCItemIO> {
+    fn interface(&self) -> OpcResult<&crate::bindings::da::IOPCItemIO> {
         Ok(&self.item_io)
     }
 }
@@ -129,68 +129,63 @@ impl TryFrom<windows::core::IUnknown> for Group {
 }
 
 impl ItemMgtTrait for Group {
-    fn interface(&self) -> windows::core::Result<&crate::bindings::da::IOPCItemMgt> {
+    fn interface(&self) -> OpcResult<&crate::bindings::da::IOPCItemMgt> {
         Ok(&self.item_mgt)
     }
 }
 
 impl GroupStateMgtTrait for Group {
-    fn interface(&self) -> windows::core::Result<&crate::bindings::da::IOPCGroupStateMgt> {
+    fn interface(&self) -> OpcResult<&crate::bindings::da::IOPCGroupStateMgt> {
         Ok(&self.group_state_mgt)
     }
 }
 
 impl GroupStateMgt2Trait for Group {
-    fn interface(&self) -> windows::core::Result<&crate::bindings::da::IOPCGroupStateMgt2> {
+    fn interface(&self) -> OpcResult<&crate::bindings::da::IOPCGroupStateMgt2> {
         Ok(&self.group_state_mgt2)
     }
 }
 
 impl SyncIoTrait for Group {
-    fn interface(&self) -> windows::core::Result<&crate::bindings::da::IOPCSyncIO> {
+    fn interface(&self) -> OpcResult<&crate::bindings::da::IOPCSyncIO> {
         Ok(&self.sync_io)
     }
 }
 
 impl SyncIo2Trait for Group {
-    fn interface(&self) -> windows::core::Result<&crate::bindings::da::IOPCSyncIO2> {
+    fn interface(&self) -> OpcResult<&crate::bindings::da::IOPCSyncIO2> {
         Ok(&self.sync_io2)
     }
 }
 
 impl AsyncIo2Trait for Group {
-    fn interface(&self) -> windows::core::Result<&crate::bindings::da::IOPCAsyncIO2> {
+    fn interface(&self) -> OpcResult<&crate::bindings::da::IOPCAsyncIO2> {
         Ok(&self.async_io2)
     }
 }
 
 impl AsyncIo3Trait for Group {
-    fn interface(&self) -> windows::core::Result<&crate::bindings::da::IOPCAsyncIO3> {
+    fn interface(&self) -> OpcResult<&crate::bindings::da::IOPCAsyncIO3> {
         Ok(&self.async_io3)
     }
 }
 
 impl ItemDeadbandMgtTrait for Group {
-    fn interface(&self) -> windows::core::Result<&crate::bindings::da::IOPCItemDeadbandMgt> {
+    fn interface(&self) -> OpcResult<&crate::bindings::da::IOPCItemDeadbandMgt> {
         Ok(&self.item_deadband_mgt)
     }
 }
 
 impl ItemSamplingMgtTrait for Group {
-    fn interface(&self) -> windows::core::Result<&crate::bindings::da::IOPCItemSamplingMgt> {
+    fn interface(&self) -> OpcResult<&crate::bindings::da::IOPCItemSamplingMgt> {
         self.item_sampling_mgt.as_ref().ok_or_else(|| {
-            windows::core::Error::new(
-                windows::Win32::Foundation::E_NOTIMPL,
-                "IOPCItemSamplingMgt not supported",
-            )
+            OpcError::NotImplemented("IOPCItemSamplingMgt not supported".to_string())
         })
     }
 }
 
 impl ConnectionPointContainerTrait for Group {
-    fn interface(
-        &self,
-    ) -> windows::core::Result<&windows::Win32::System::Com::IConnectionPointContainer> {
+    fn interface(&self) -> OpcResult<&windows::Win32::System::Com::IConnectionPointContainer> {
         Ok(&self.connection_point_container)
     }
 }

@@ -1,4 +1,5 @@
 #![allow(unsafe_code, unreachable_pub)]
+#![doc = include_str!("../README.md")]
 //! # opc-da-client
 //!
 //! Backend-agnostic OPC DA client library for Rust — async, trait-based,
@@ -8,12 +9,12 @@
 //!
 //! ```no_run
 //! # use anyhow::Result;
-//! use opc_da_client::{ComGuard, OpcDaWrapper, OpcProvider};
+//! use opc_da_client::{ComGuard, OpcDaClient, OpcProvider};
 //!
 //! # #[tokio::main]
 //! # async fn main() -> Result<()> {
 //! let _guard = ComGuard::new()?;
-//! let client = OpcDaWrapper::default();
+//! let client = OpcDaClient::default();
 //! let servers = client.list_servers("localhost").await?;
 //! # Ok(())
 //! # }
@@ -50,9 +51,15 @@ pub use com_guard::ComGuard;
 pub use helpers::{format_hresult, friendly_com_hint};
 pub use provider::{OpcProvider, OpcValue, TagValue, WriteResult};
 
+#[cfg(feature = "opc-da-backend")]
+pub use opc_da::{
+    errors::{OpcError, OpcResult},
+    typedefs::{GroupHandle, ItemHandle},
+};
+
 // Backend re-exports (conditional)
 #[cfg(feature = "opc-da-backend")]
-pub use backend::{connector::ComConnector, opc_da::OpcDaWrapper};
+pub use backend::{connector::ComConnector, opc_da::OpcDaClient};
 
 // Test support re-export
 #[cfg(feature = "test-support")]

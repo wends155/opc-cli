@@ -5,6 +5,8 @@
 
 use windows::core::Interface as _;
 
+use crate::opc_da::errors::{OpcError, OpcResult};
+
 use super::{
     ClientTrait,
     traits::{
@@ -47,31 +49,23 @@ impl TryFrom<windows::core::IUnknown> for Server {
 }
 
 impl ServerTrait<Group> for Server {
-    fn interface(&self) -> windows::core::Result<&crate::bindings::da::IOPCServer> {
+    fn interface(&self) -> OpcResult<&crate::bindings::da::IOPCServer> {
         Ok(&self.server)
     }
 }
 
 impl ServerPublicGroupsTrait for Server {
-    fn interface(&self) -> windows::core::Result<&crate::bindings::da::IOPCServerPublicGroups> {
+    fn interface(&self) -> OpcResult<&crate::bindings::da::IOPCServerPublicGroups> {
         self.server_public_groups.as_ref().ok_or_else(|| {
-            windows::core::Error::new(
-                windows::Win32::Foundation::E_NOTIMPL,
-                "IOPCServerPublicGroups not supported",
-            )
+            OpcError::NotImplemented("IOPCServerPublicGroups not supported".to_string())
         })
     }
 }
 
 impl BrowseServerAddressSpaceTrait for Server {
-    fn interface(
-        &self,
-    ) -> windows::core::Result<&crate::bindings::da::IOPCBrowseServerAddressSpace> {
+    fn interface(&self) -> OpcResult<&crate::bindings::da::IOPCBrowseServerAddressSpace> {
         self.browse_server_address_space.as_ref().ok_or_else(|| {
-            windows::core::Error::new(
-                windows::Win32::Foundation::E_NOTIMPL,
-                "IOPCBrowseServerAddressSpace not supported",
-            )
+            OpcError::NotImplemented("IOPCBrowseServerAddressSpace not supported".to_string())
         })
     }
 }
@@ -113,42 +107,39 @@ impl TryFrom<windows::core::IUnknown> for Group {
 }
 
 impl ItemMgtTrait for Group {
-    fn interface(&self) -> windows::core::Result<&crate::bindings::da::IOPCItemMgt> {
+    fn interface(&self) -> OpcResult<&crate::bindings::da::IOPCItemMgt> {
         Ok(&self.item_mgt)
     }
 }
 
 impl GroupStateMgtTrait for Group {
-    fn interface(&self) -> windows::core::Result<&crate::bindings::da::IOPCGroupStateMgt> {
+    fn interface(&self) -> OpcResult<&crate::bindings::da::IOPCGroupStateMgt> {
         Ok(&self.group_state_mgt)
     }
 }
 
 impl PublicGroupStateMgtTrait for Group {
-    fn interface(&self) -> windows::core::Result<&crate::bindings::da::IOPCPublicGroupStateMgt> {
+    fn interface(&self) -> OpcResult<&crate::bindings::da::IOPCPublicGroupStateMgt> {
         self.public_group_state_mgt.as_ref().ok_or_else(|| {
-            windows::core::Error::new(
-                windows::Win32::Foundation::E_NOTIMPL,
-                "IOPCPublicGroupStateMgt not supported",
-            )
+            OpcError::NotImplemented("IOPCPublicGroupStateMgt not supported".to_string())
         })
     }
 }
 
 impl SyncIoTrait for Group {
-    fn interface(&self) -> windows::core::Result<&crate::bindings::da::IOPCSyncIO> {
+    fn interface(&self) -> OpcResult<&crate::bindings::da::IOPCSyncIO> {
         Ok(&self.sync_io)
     }
 }
 
 impl AsyncIoTrait for Group {
-    fn interface(&self) -> windows::core::Result<&crate::bindings::da::IOPCAsyncIO> {
+    fn interface(&self) -> OpcResult<&crate::bindings::da::IOPCAsyncIO> {
         Ok(&self.async_io)
     }
 }
 
 impl DataObjectTrait for Group {
-    fn interface(&self) -> windows::core::Result<&windows::Win32::System::Com::IDataObject> {
+    fn interface(&self) -> OpcResult<&windows::Win32::System::Com::IDataObject> {
         Ok(&self.data_object)
     }
 }

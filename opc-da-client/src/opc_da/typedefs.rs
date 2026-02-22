@@ -1,7 +1,39 @@
-use crate::opc_da::utils::{
+use crate::opc_da::com_utils::{
     IntoBridge, LocalPointer, RemoteArray, ToNative, TryFromNative, TryToNative,
 };
 use crate::try_from_native;
+
+/// Opaque handle for an OPC group.
+///
+/// This wrapper type enhances type safety when interacting with OPC COM interfaces,
+/// preventing accidental mixing of group and item handles.
+///
+/// # Examples
+///
+/// ```
+/// use opc_da_client::GroupHandle;
+/// let handle = GroupHandle(123u32);
+/// assert_eq!(handle.0, 123u32);
+/// ```
+#[repr(transparent)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub struct GroupHandle(pub u32);
+
+/// Opaque handle for an OPC item.
+///
+/// Similar to [`GroupHandle`], this ensures type-safe identification of tags
+/// within an OPC group.
+///
+/// # Examples
+///
+/// ```
+/// use opc_da_client::ItemHandle;
+/// let handle = ItemHandle(456u32);
+/// assert_eq!(handle.0, 456u32);
+/// ```
+#[repr(transparent)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub struct ItemHandle(pub u32);
 
 /// Supported OPC DA Specification versions.
 #[derive(Debug, Clone, PartialEq)]
@@ -12,30 +44,54 @@ pub enum Version {
 }
 
 /// Current state and properties of an active OPC group.
+///
+/// This structure encapsulates both the requested and currently active properties
+/// of an OPC group, as reported by the server.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct GroupState {
+    /// Actual update rate in milliseconds (may differ from requested).
     pub update_rate: u32,
+    /// Whether the group is currently active (processing updates).
     pub active: bool,
+    /// The unique name of the group.
     pub name: String,
+    /// Time zone bias in minutes from UTC.
     pub time_bias: i32,
+    /// Percent change for a tag value required to trigger an update.
     pub percent_deadband: f32,
+    /// Locale ID used for formatting strings in this group.
     pub locale_id: u32,
-    pub client_handle: u32,
-    pub server_handle: u32,
+    /// Handle assigned by the client for this group.
+    pub client_handle: GroupHandle,
+    /// Handle assigned by the server for this group.
+    pub server_handle: GroupHandle,
 }
 
 /// Operational status and metadata of the connected server.
+///
+/// This structure provides a snapshot of the server's health, current load,
+/// and version information.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ServerStatus {
+    /// Time when the server was started.
     pub start_time: std::time::SystemTime,
+    /// Current time according to the server.
     pub current_time: std::time::SystemTime,
+    /// Time of the last data update.
     pub last_update_time: std::time::SystemTime,
+    /// The current operational state of the server.
     pub server_state: ServerState,
+    /// Number of groups currently managed by the server.
     pub group_count: u32,
+    /// Current bandwidth utilization as reported by the server.
     pub band_width: u32,
+    /// Major version of the server software.
     pub major_version: u16,
+    /// Minor version of the server software.
     pub minor_version: u16,
+    /// Build or revision number of the server software.
     pub build_number: u16,
+    /// Descriptive vendor-specific information.
     pub vendor_info: String,
 }
 
@@ -59,13 +115,22 @@ impl TryFromNative<crate::bindings::da::tagOPCSERVERSTATUS> for ServerStatus {
 }
 
 /// Definition required to add a new item to an OPC group.
+///
+/// This structure contains the parameters needed for the server to identify
+/// and initialize a tag within a group.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct ItemDef {
+    /// Optional access path for the item (server-specific).
     pub access_path: String,
+    /// The unique identifier of the tag within the server namespace.
     pub item_id: String,
+    /// Whether the item should be added in an active state.
     pub active: bool,
-    pub client_handle: u32,
+    /// Handle assigned by the client for this item.
+    pub client_handle: ItemHandle,
+    /// Requested canonical data type (0 for server default).
     pub data_type: u16,
+    /// Optional opaque blob for the item.
     pub blob: Vec<u8>,
 }
 
@@ -85,7 +150,7 @@ impl IntoBridge<ItemDefBridge> for ItemDef {
             access_path: LocalPointer::from(&self.access_path),
             item_id: LocalPointer::from(&self.item_id),
             active: self.active,
-            item_client_handle: self.client_handle,
+            item_client_handle: self.client_handle.0,
             requested_data_type: self.data_type,
             blob: LocalPointer::new(Some(self.blob)),
         }
@@ -113,11 +178,18 @@ impl TryToNative<crate::bindings::da::tagOPCITEMDEF> for ItemDefBridge {
 }
 
 /// Result properties of an item after being added to a group.
+///
+/// This structure contains the server-assigned properties for an item
+/// that was successfully added.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ItemResult {
-    pub server_handle: u32,
+    /// Handle assigned by the server for this item.
+    pub server_handle: ItemHandle,
+    /// The actual canonical data type supported by the server for this item.
     pub data_type: u16,
+    /// Access rights for this item (read/write permissions).
     pub access_rights: u32,
+    /// Optional opaque blob returned by the server.
     pub blob: Vec<u8>,
 }
 
@@ -126,7 +198,7 @@ impl TryFromNative<crate::bindings::da::tagOPCITEMRESULT> for ItemResult {
         native: &crate::bindings::da::tagOPCITEMRESULT,
     ) -> windows::core::Result<Self> {
         Ok(Self {
-            server_handle: native.hServer,
+            server_handle: ItemHandle(native.hServer),
             data_type: native.vtCanonicalDataType,
             access_rights: native.dwAccessRights,
             blob: RemoteArray::from_mut_ptr(native.pBlob, native.dwBlobSize)
@@ -227,8 +299,8 @@ pub struct ItemAttributes {
     pub access_path: String,
     pub item_id: String,
     pub active: bool,
-    pub client_handle: u32,
-    pub server_handle: u32,
+    pub client_handle: ItemHandle,
+    pub server_handle: ItemHandle,
     pub access_rights: u32,
     pub blob: Vec<u8>,
     pub requested_data_type: u16,
@@ -245,8 +317,8 @@ impl TryFromNative<crate::bindings::da::tagOPCITEMATTRIBUTES> for ItemAttributes
             access_path: try_from_native!(&native.szAccessPath),
             item_id: try_from_native!(&native.szItemID),
             active: native.bActive.into(),
-            client_handle: native.hClient,
-            server_handle: native.hServer,
+            client_handle: ItemHandle(native.hClient),
+            server_handle: ItemHandle(native.hServer),
             access_rights: native.dwAccessRights,
             blob: RemoteArray::from_mut_ptr(native.pBlob, native.dwBlobSize)
                 .as_slice()
@@ -282,7 +354,7 @@ impl TryFromNative<crate::bindings::da::tagOPCEUTYPE> for EuType {
 
 /// Current state of a watched OPC item including value, quality, and time.
 pub struct ItemState {
-    pub client_handle: u32,
+    pub client_handle: ItemHandle,
     pub timestamp: std::time::SystemTime,
     pub quality: u16,
     pub data_value: windows::Win32::System::Variant::VARIANT,
@@ -293,7 +365,7 @@ impl TryFromNative<crate::bindings::da::tagOPCITEMSTATE> for ItemState {
         native: &crate::bindings::da::tagOPCITEMSTATE,
     ) -> windows::core::Result<Self> {
         Ok(Self {
-            client_handle: native.hClient,
+            client_handle: ItemHandle(native.hClient),
             timestamp: try_from_native!(&native.ftTimeStamp),
             quality: native.wQuality,
             data_value: native.vDataValue.clone(),
@@ -492,60 +564,6 @@ impl ToNative<crate::bindings::da::tagOPCBROWSEFILTER> for BrowseFilter {
             BrowseFilter::Items => crate::bindings::da::OPC_BROWSE_FILTER_ITEMS,
         }
     }
-}
-
-/// Event types dispatched by asynchronous COM callbacks.
-#[derive(Debug, Clone, PartialEq)]
-pub enum DataCallbackEvent {
-    DataChange(DataChangeEvent),
-    ReadComplete(ReadCompleteEvent),
-    WriteComplete(WriteCompleteEvent),
-    CancelComplete(CancelCompleteEvent),
-}
-
-/// Payload for data change synchronous/asynchronous callbacks.
-#[derive(Debug, Clone, PartialEq)]
-pub struct DataChangeEvent {
-    pub transaction_id: u32,
-    pub group_handle: u32,
-    pub master_quality: windows_core::HRESULT,
-    pub master_error: windows_core::HRESULT,
-    pub client_items: RemoteArray<u32>,
-    pub values: RemoteArray<windows::Win32::System::Variant::VARIANT>,
-    pub qualities: RemoteArray<u16>,
-    pub timestamps: RemoteArray<windows::Win32::Foundation::FILETIME>,
-    pub errors: RemoteArray<windows_core::HRESULT>,
-}
-
-/// Payload for async read completion.
-#[derive(Debug, Clone, PartialEq)]
-pub struct ReadCompleteEvent {
-    pub transaction_id: u32,
-    pub group_handle: u32,
-    pub master_quality: windows_core::HRESULT,
-    pub master_error: windows_core::HRESULT,
-    pub client_items: RemoteArray<u32>,
-    pub values: RemoteArray<windows::Win32::System::Variant::VARIANT>,
-    pub qualities: RemoteArray<u16>,
-    pub timestamps: RemoteArray<windows::Win32::Foundation::FILETIME>,
-    pub errors: RemoteArray<windows_core::HRESULT>,
-}
-
-/// Payload for async write completion.
-#[derive(Debug, Clone, PartialEq)]
-pub struct WriteCompleteEvent {
-    pub transaction_id: u32,
-    pub group_handle: u32,
-    pub master_error: windows_core::HRESULT,
-    pub client_handles: RemoteArray<u32>,
-    pub errors: RemoteArray<windows_core::HRESULT>,
-}
-
-/// Payload for async cancel completion.
-#[derive(Debug, Clone, PartialEq)]
-pub struct CancelCompleteEvent {
-    pub transaction_id: u32,
-    pub group_handle: u32,
 }
 
 /// Typology of the server's address space.

@@ -1,6 +1,7 @@
 #[cfg(feature = "opc-da-backend")]
 use crate::opc_da::client::ClientTrait;
-use anyhow::Context;
+use crate::opc_da::errors::{OpcError, OpcResult};
+use crate::provider::OpcValue;
 use windows::Win32::Foundation::{FILETIME, VARIANT_BOOL};
 use windows::Win32::System::Com::{CLSIDFromProgID, CoTaskMemFree, ProgIDFromCLSID};
 use windows::Win32::System::Ole::{
@@ -10,81 +11,9 @@ use windows::Win32::System::Ole::{
 use windows::Win32::System::Variant::{VARIANT, VT_BOOL, VT_BSTR, VT_I4, VT_R8};
 use windows::core::{BSTR, PCWSTR};
 
-use crate::provider::OpcValue;
-
-/// Maps known COM/DCOM error codes to actionable user hints.
-///
-/// # Examples
-/// ```
-/// use opc_da_client::friendly_com_hint;
-///
-/// let err = anyhow::anyhow!("COM error 0x80040154");
-/// assert_eq!(
-///     friendly_com_hint(&err),
-///     Some("Server is not registered on this machine"),
-/// );
-///
-/// let unknown = anyhow::anyhow!("Something else");
-/// assert_eq!(friendly_com_hint(&unknown), None);
-/// ```
-///
-/// # Errors
-///
-/// This function never returns `Err`, but it documents common error codes
-/// that might be passed in.
-pub fn friendly_com_hint(error: &anyhow::Error) -> Option<&'static str> {
-    let msg = format!("{error:?}");
-    if msg.contains("0x80040112") {
-        Some("Server license does not permit OPC client connections")
-    } else if msg.contains("0x80080005") {
-        Some("Server process failed to start — check if it is installed and running")
-    } else if msg.contains("0x80070005") {
-        Some("Access denied — DCOM launch/activation permissions not configured for this user")
-    } else if msg.contains("0x800706BA") {
-        Some("RPC server unavailable — the target host may be offline or blocking RPC")
-    } else if msg.contains("0x800706F4") {
-        Some("COM marshalling error — try restarting the OPC server")
-    } else if msg.contains("0x80040154") {
-        Some("Server is not registered on this machine")
-    } else if msg.contains("0x80004003") {
-        Some("Invalid pointer (E_POINTER)")
-    } else if msg.contains("0xC0040004") {
-        Some("Server rejected write — the item may be read-only (OPC_E_BADRIGHTS)")
-    } else if msg.contains("0xC0040006") {
-        Some("Data type mismatch — server cannot convert the written value (OPC_E_BADTYPE)")
-    } else if msg.contains("0xC0040007") {
-        Some("Item ID not found in server address space (OPC_E_UNKNOWNITEMID)")
-    } else if msg.contains("0xC0040008") {
-        Some("Item ID syntax is invalid for this server (OPC_E_INVALIDITEMID)")
-    } else {
-        None
-    }
-}
-
-/// Format a COM HRESULT for user-facing error messages.
-///
-/// Returns `0xHHHHHHHH: <hint>` for known codes, or just `0xHHHHHHHH` otherwise.
-///
-/// # Examples
-///
-/// ```
-/// use opc_da_client::format_hresult;
-/// use windows::core::HRESULT;
-///
-/// let hr = HRESULT(0x80040154_u32 as i32);
-/// assert_eq!(
-///     format_hresult(hr),
-///     "0x80040154: Server is not registered on this machine",
-/// );
-/// ```
-#[allow(clippy::cast_sign_loss)]
-pub fn format_hresult(hr: windows::core::HRESULT) -> String {
-    let hex = format!("0x{:08X}", hr.0 as u32);
-    match friendly_com_hint(&anyhow::anyhow!("{hex}")) {
-        Some(hint) => format!("{hex}: {hint}"),
-        None => hex,
-    }
-}
+pub use crate::opc_da::errors::{
+    format_hresult, friendly_com_hint, friendly_hresult_hint as friendly_com_hresult_hint,
+};
 
 // Verify GUID memory layout assumption for FFI (Workstream C#3)
 const _: () = assert!(
@@ -97,19 +26,20 @@ const _: () = assert!(
 );
 
 /// Helper to convert GUID to `ProgID` using Windows API
-pub fn guid_to_progid(guid: &windows::core::GUID) -> anyhow::Result<String> {
+pub fn guid_to_progid(guid: &windows::core::GUID) -> OpcResult<String> {
     // SAFETY: `ProgIDFromCLSID` is a Win32 FFI call that allocates a PWSTR
     // via the COM allocator. We read it and free it with `CoTaskMemFree`
     // before returning — the pointer is not used after free.
     unsafe {
-        let progid = ProgIDFromCLSID(guid).context("Failed to get ProgID from CLSID")?;
+        let progid = ProgIDFromCLSID(guid)
+            .map_err(|e| OpcError::Internal(format!("Failed to get ProgID from CLSID: {e}")))?;
 
         let result = if progid.is_null() {
             String::new()
         } else {
             progid
                 .to_string()
-                .map_err(|e| anyhow::anyhow!("Failed into convert PWSTR: {e}"))?
+                .map_err(|e| OpcError::Conversion(format!("Failed into convert PWSTR: {e}")))?
         };
 
         if !progid.is_null() {
@@ -123,7 +53,7 @@ pub fn guid_to_progid(guid: &windows::core::GUID) -> anyhow::Result<String> {
 /// Convert OPC DA VARIANT to a displayable string.
 #[allow(clippy::too_many_lines)]
 pub fn variant_to_string(variant: &VARIANT) -> String {
-    // SAFETY: Accessing the VARIANT union fields. The caller (OpcDaWrapper)
+    // SAFETY: Accessing the VARIANT union fields. The caller (OpcDaClient)
     // guarantees the VARIANT was produced by COM (e.g., from `group.read()`),
     // so the `vt` discriminant correctly identifies which union arm is active.
     unsafe {
@@ -228,11 +158,10 @@ pub fn variant_to_string(variant: &VARIANT) -> String {
                 // VT_ERROR - contains an HRESULT status code
                 let scode = variant.Anonymous.Anonymous.Anonymous.scode;
                 let hr = windows::core::HRESULT(scode);
-                #[allow(clippy::cast_sign_loss)]
-                let hr_str = format!("0x{:08X}", hr.0 as u32);
-                match friendly_com_hint(&anyhow::anyhow!("{hr_str}")) {
-                    Some(msg) => format!("Error: {msg} ({hr_str})"),
-                    None => format!("Error ({hr_str})"),
+                let hex = format!("0x{:08X}", hr.0.cast_unsigned());
+                match friendly_com_hresult_hint(hr) {
+                    Some(msg) => format!("Error: {msg} ({hex})"),
+                    None => format!("Error ({hex})"),
                 }
             }
             11 => format!(
@@ -358,7 +287,7 @@ pub fn opc_value_to_variant(value: &OpcValue) -> VARIANT {
 ///
 /// Returns `Err` if the `ProgID` cannot be resolved or the server
 /// cannot be instantiated.
-pub fn connect_server(server_name: &str) -> anyhow::Result<crate::opc_da::client::v2::Server> {
+pub fn connect_server(server_name: &str) -> OpcResult<crate::bindings::da::IOPCServer> {
     // SAFETY: `server_wide` is null-terminated and lives until the end
     // of this scope, so the PCWSTR pointer is valid for the duration of the call.
     let clsid_raw = unsafe {
@@ -366,8 +295,11 @@ pub fn connect_server(server_name: &str) -> anyhow::Result<crate::opc_da::client
             .encode_utf16()
             .chain(std::iter::once(0))
             .collect();
-        CLSIDFromProgID(PCWSTR(server_wide.as_ptr()))
-            .with_context(|| format!("Failed to resolve ProgID '{server_name}' to CLSID"))?
+        CLSIDFromProgID(PCWSTR(server_wide.as_ptr())).map_err(|e| {
+            OpcError::Connection(format!(
+                "Failed to resolve ProgID '{server_name}' to CLSID: {e}"
+            ))
+        })?
     };
     // SAFETY: `opc_da::GUID` and `windows::core::GUID` are binary compatible
     // 128-bit structures with identical field layouts (4-2-2-8 byte segments).
@@ -375,15 +307,19 @@ pub fn connect_server(server_name: &str) -> anyhow::Result<crate::opc_da::client
 
     let client = crate::opc_da::client::v2::Client;
     let server = client
-        .create_server(clsid, crate::opc_da::def::ClassContext::All)
+        .create_server(clsid, crate::opc_da::typedefs::ClassContext::All)
         .map_err(|e| {
-            let hint = friendly_com_hint(&anyhow::anyhow!("{e:?}"))
-                .unwrap_or("Check DCOM configuration and server status");
+            let hint = if let OpcError::Com { ref source } = e {
+                friendly_com_hresult_hint(source.code())
+            } else {
+                None
+            }
+            .unwrap_or("Check DCOM configuration and server status");
             tracing::error!(error = ?e, server = %server_name, hint, "create_server failed");
-            anyhow::anyhow!(e)
+            e
         })?;
     tracing::debug!(server = %server_name, "Connected to OPC DA server");
-    Ok(server)
+    Ok(server.server)
 }
 
 #[cfg(test)]
@@ -393,43 +329,68 @@ mod tests {
         clippy::cast_possible_wrap,
         clippy::ptr_as_ptr,
         clippy::borrow_as_ptr,
-        clippy::mixed_attributes_style
+        clippy::mixed_attributes_style,
+        clippy::unreadable_literal
     )]
     use super::*;
 
     #[test]
     fn test_friendly_com_hint_known_codes() {
-        let err = anyhow::anyhow!("COM error 0x800706F4");
+        let err = OpcError::Com {
+            source: windows::core::Error::from_hresult(windows::core::HRESULT(
+                0x800706F4_u32 as i32,
+            )),
+        };
         assert_eq!(
             friendly_com_hint(&err),
             Some("COM marshalling error — try restarting the OPC server")
         );
 
-        let err = anyhow::anyhow!("COM error 0x80040154");
+        let err = OpcError::Com {
+            source: windows::core::Error::from_hresult(windows::core::HRESULT(
+                0x80040154_u32 as i32,
+            )),
+        };
         assert_eq!(
             friendly_com_hint(&err),
             Some("Server is not registered on this machine")
         );
 
-        let err = anyhow::anyhow!("COM error 0xC0040004");
+        let err = OpcError::Com {
+            source: windows::core::Error::from_hresult(windows::core::HRESULT(
+                0xC0040004_u32 as i32,
+            )),
+        };
         assert_eq!(
             friendly_com_hint(&err),
             Some("Server rejected write — the item may be read-only (OPC_E_BADRIGHTS)"),
         );
 
-        let err = anyhow::anyhow!("HRESULT(0xC0040006)");
+        let err = OpcError::Com {
+            source: windows::core::Error::from_hresult(windows::core::HRESULT(
+                0xC0040006_u32 as i32,
+            )),
+        };
         assert_eq!(
             friendly_com_hint(&err),
             Some("Data type mismatch — server cannot convert the written value (OPC_E_BADTYPE)"),
         );
 
-        let err = anyhow::anyhow!("HRESULT(0xC0040007)");
+        let err = OpcError::Com {
+            source: windows::core::Error::from_hresult(windows::core::HRESULT(
+                0xC0040007_u32 as i32,
+            )),
+        };
         assert_eq!(
             friendly_com_hint(&err),
             Some("Item ID not found in server address space (OPC_E_UNKNOWNITEMID)"),
         );
 
-        let err = anyhow::anyhow!("HRESULT(0xC0040008)");
+        let err = OpcError::Com {
+            source: windows::core::Error::from_hresult(windows::core::HRESULT(
+                0xC0040008_u32 as i32,
+            )),
+        };
         assert_eq!(
             friendly_com_hint(&err),
             Some("Item ID syntax is invalid for this server (OPC_E_INVALIDITEMID)"),
@@ -438,7 +399,7 @@ mod tests {
 
     #[test]
     fn test_friendly_com_hint_unknown_code() {
-        let err = anyhow::anyhow!("Some other error");
+        let err = OpcError::Internal("Some other error".to_string());
         assert_eq!(friendly_com_hint(&err), None);
     }
 

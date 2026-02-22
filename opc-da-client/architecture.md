@@ -49,7 +49,7 @@ opc-da-client/
     └── backend/
         ├── mod.rs          # Backend module gate (feature-conditional)
         ├── connector.rs    # ServerConnector trait (Mock & Real COM backend decoupling)
-        └── opc_da.rs       # OpcDaWrapper: concrete OpcProvider using opc_da module
+        └── opc_da.rs       # OpcDaClient: concrete OpcProvider using opc_da module
 ```
 
 ---
@@ -74,7 +74,7 @@ The verification script ([verify.ps1](file:///c:/Users/WSALIGAN/code/opc-cli/scr
 
 | Pattern | Details |
 | :--- | :--- |
-| Return type | `anyhow::Result<T>` for all fallible functions |
+| Return type | `OpcResult<T>` for all fallible functions |
 | Context wrapping | `.context()` / `.with_context()` at every propagation layer |
 | Logging before propagation | `map_err(\|e\| { tracing::error!(...); e })` **before** `.context()` to preserve raw HRESULTs in logs |
 | User-facing hints | `friendly_com_hint()` maps known HRESULT codes to actionable strings; `format_hresult()` wraps this into a consistent `0xHHHHHHHH: <hint>` format for error messages |
@@ -180,7 +180,7 @@ graph TD
     end
 
     subgraph "Backend (Feature-Gated)"
-        Wrapper["OpcDaWrapper"]
+        Wrapper["OpcDaClient"]
         Browse["browse_recursive()"]
     end
 
@@ -207,7 +207,7 @@ graph TD
 ### COM Threading Model
 
 OPC DA relies on Windows COM, which requires per-thread initialization.
-The `OpcDaWrapper` implementation handles this via the `ComGuard` RAII pattern:
+The `OpcDaClient` implementation handles this via the `ComGuard` RAII pattern:
 1. Using `tokio::task::spawn_blocking` to move COM work to a dedicated thread pool.
 2. Creating a `ComGuard` (`ComGuard::new()`) at the start of each blocking task to initialize COM in MTA mode.
 3. `ComGuard`'s `Drop` impl calls `CoUninitialize` automatically when the task completes — **regardless of success or failure**.

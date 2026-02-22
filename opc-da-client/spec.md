@@ -114,11 +114,11 @@ All methods use `#[async_trait]`.
 
 #### Public API
 
-##### `fn friendly_com_hint(err: &anyhow::Error) -> Option<&'static str>`
+##### `fn friendly_com_hint(error: &OpcError) -> Option<&'static str>`
 
-**Description:** Inspects the debug representation of `err` for known COM/DCOM HRESULT patterns and returns a human-readable hint.
+**Description:** Inspects the `OpcError` instance for known COM/DCOM HRESULT patterns and returns a human-readable hint.
 
-**Inputs:** An `anyhow::Error` reference.
+**Inputs:** An `OpcError` reference.
 **Output:** `Some(hint)` if a known code is found, `None` otherwise.
 
 **Known Mappings:**
@@ -178,7 +178,7 @@ All methods use `#[async_trait]`.
 
 #### Public API
 
-##### `struct OpcDaWrapper`
+##### `struct OpcDaClient`
 
 | Method | Signature | Description |
 | :--- | :--- | :--- |
@@ -295,7 +295,7 @@ Defined in § 1.1. See table above.
 
 | Flag | Default | Effect |
 | :--- | :--- | :--- |
-| `opc-da-backend` | ✅ Yes | Compiles the `backend::opc_da` module and exports `OpcDaWrapper`. |
+| `opc-da-backend` | ✅ Yes | Compiles the `backend::opc_da` module and exports `OpcDaClient`. |
 | `test-support` | ❌ No | Enables `mockall` and exports `MockOpcProvider`. |
 
 ---
@@ -304,7 +304,7 @@ Defined in § 1.1. See table above.
 
 ### 3.1 Internal: `opc_da` Module (merged)
 
-**Boundary:** `OpcDaWrapper` → `opc_da::client::v2::Client` / `Server`.
+**Boundary:** `OpcDaClient` → `opc_da::client::v2::Client` / `Server`.
 
 | Operation | `opc_da` API Used |
 | :--- | :--- |
@@ -331,7 +331,7 @@ Defined in § 1.1. See table above.
 
 **Boundary:** `opc-cli` → `dyn OpcProvider`.
 
-*   The CLI crate depends on the `OpcProvider` trait, never on `OpcDaWrapper` directly in its core logic.
+*   The CLI crate depends on the `OpcProvider` trait, never on `OpcDaClient` directly in its core logic.
 *   Tests use `MockOpcProvider` (via `test-support` feature).
 *   `friendly_com_hint()` is called by the CLI to enrich error messages displayed in the TUI status bar.
 

@@ -1,15 +1,15 @@
 use crate::bindings::da::{
     IOPCBrowse, tagOPCBROWSEELEMENT, tagOPCBROWSEFILTER, tagOPCITEMPROPERTIES,
 };
-
-use crate::opc_da::utils::{LocalPointer, RemoteArray, RemotePointer};
+use crate::opc_da::com_utils::{LocalPointer, RemoteArray, RemotePointer};
+use crate::opc_da::errors::{OpcError, OpcResult};
 
 /// Server address space browsing functionality (OPC DA 3.0).
 ///
 /// Provides methods to browse the hierarchical namespace of an OPC server
 /// and retrieve item properties.
 pub trait BrowseTrait {
-    fn interface(&self) -> windows::core::Result<&IOPCBrowse>;
+    fn interface(&self) -> OpcResult<&IOPCBrowse>;
 
     /// Gets properties for specified items from the server.
     ///
@@ -28,12 +28,9 @@ pub trait BrowseTrait {
         item_ids: &[String],
         return_property_values: bool,
         property_ids: &[u32],
-    ) -> windows::core::Result<RemoteArray<tagOPCITEMPROPERTIES>> {
+    ) -> OpcResult<RemoteArray<tagOPCITEMPROPERTIES>> {
         if item_ids.is_empty() {
-            return Err(windows::core::Error::new(
-                windows::Win32::Foundation::E_INVALIDARG,
-                "item_ids is empty",
-            ));
+            return Err(OpcError::InvalidState("item_ids is empty".to_string()));
         }
 
         let item_ptrs: LocalPointer<Vec<Vec<u16>>> = LocalPointer::from(item_ids);
@@ -82,7 +79,7 @@ pub trait BrowseTrait {
         return_all_properties: bool,
         return_property_values: bool,
         property_ids: &[u32],
-    ) -> windows::core::Result<(bool, Option<String>, RemoteArray<tagOPCBROWSEELEMENT>)>
+    ) -> OpcResult<(bool, Option<String>, RemoteArray<tagOPCBROWSEELEMENT>)>
     where
         S0: AsRef<str>,
         S1: AsRef<str>,

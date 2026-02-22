@@ -1,5 +1,4 @@
-use anyhow::Result;
-use opc_da_client::{OpcProvider, OpcValue, TagValue, WriteResult, friendly_com_hint};
+use opc_da_client::{OpcError, OpcProvider, OpcValue, TagValue, WriteResult, friendly_com_hint};
 use ratatui::widgets::{ListState, TableState}; // Added TableState
 use std::sync::Arc;
 use std::sync::atomic::AtomicUsize;
@@ -37,11 +36,11 @@ pub struct App {
     pub list_state: ListState,
     pub table_state: TableState, // New field
     pub browse_progress: Arc<AtomicUsize>,
-    pub browse_result_rx: Option<oneshot::Receiver<Result<Vec<String>>>>,
-    pub fetch_result_rx: Option<oneshot::Receiver<Result<Vec<String>>>>,
+    pub browse_result_rx: Option<oneshot::Receiver<Result<Vec<String>, OpcError>>>,
+    pub fetch_result_rx: Option<oneshot::Receiver<Result<Vec<String>, OpcError>>>,
     pub selected_tags: Vec<bool>,
     pub tag_values: Vec<TagValue>,
-    pub read_result_rx: Option<oneshot::Receiver<Result<Vec<TagValue>>>>,
+    pub read_result_rx: Option<oneshot::Receiver<Result<Vec<TagValue>, OpcError>>>,
     /// Context for auto-refresh: server used for the last read.
     pub refresh_server: Option<String>,
     /// Context for auto-refresh: tag IDs from the last read.
@@ -62,7 +61,7 @@ pub struct App {
     /// User-entered value string for writing.
     pub write_value_input: String,
     /// Receiver for background write result.
-    pub write_result_rx: Option<oneshot::Receiver<Result<WriteResult>>>,
+    pub write_result_rx: Option<oneshot::Receiver<Result<WriteResult, OpcError>>>,
     /// The server `ProgID` that was used for the current tag browse.
     pub browsed_server: Option<String>,
 }
@@ -126,9 +125,9 @@ impl App {
 
             let final_result = result.unwrap_or_else(|_| {
                 tracing::error!("Server listing timed out ({OPC_TIMEOUT_SECS}s)");
-                Err(anyhow::anyhow!(
+                Err(OpcError::Internal(format!(
                     "Connection timed out ({OPC_TIMEOUT_SECS}s)"
-                ))
+                )))
             });
 
             let _ = tx.send(final_result);
@@ -326,9 +325,9 @@ impl App {
                             timeout_secs = OPC_TIMEOUT_SECS,
                             "Browse tags timed out with zero tags found"
                         );
-                        Err(anyhow::anyhow!(
+                        Err(OpcError::Internal(format!(
                             "Browse timed out ({OPC_TIMEOUT_SECS}s) for '{server}' with no tags found"
-                        ))
+                        )))
                     }
                 }
             };
@@ -461,7 +460,9 @@ impl App {
                 Ok(inner) => inner,
                 Err(_) => {
                     tracing::error!("Read tag values timed out ({OPC_TIMEOUT_SECS}s)");
-                    Err(anyhow::anyhow!("Read timed out ({OPC_TIMEOUT_SECS}s)"))
+                    Err(OpcError::Internal(format!(
+                        "Read timed out ({OPC_TIMEOUT_SECS}s)"
+                    )))
                 }
             };
 
@@ -611,9 +612,9 @@ impl App {
                 Ok(inner) => inner,
                 Err(_) => {
                     tracing::error!("Write tag value timed out ({OPC_TIMEOUT_SECS_WRITE}s)");
-                    Err(anyhow::anyhow!(
+                    Err(OpcError::Internal(format!(
                         "Write timed out ({OPC_TIMEOUT_SECS_WRITE}s)"
-                    ))
+                    )))
                 }
             };
             let _ = tx.send(final_result);
@@ -698,9 +699,9 @@ impl App {
                 Ok(inner) => inner,
                 Err(_) => {
                     tracing::error!("Auto-refresh timed out ({OPC_TIMEOUT_SECS}s)");
-                    Err(anyhow::anyhow!(
+                    Err(OpcError::Internal(format!(
                         "Auto-refresh timed out ({OPC_TIMEOUT_SECS}s)"
-                    ))
+                    )))
                 }
             };
 
@@ -858,7 +859,7 @@ fn parse_opc_value(s: &str) -> OpcValue {
 mod tests {
     use super::*;
     use mockall::predicate::*;
-    use opc_da_client::MockOpcProvider;
+    use opc_da_client::{MockOpcProvider, OpcResult};
 
     #[test]
     fn test_poll_fetch_result_success() {
@@ -887,7 +888,8 @@ mod tests {
         app.current_screen = CurrentScreen::Loading;
         app.fetch_result_rx = Some(rx);
 
-        tx.send(Err(anyhow::anyhow!("Connection failed"))).unwrap();
+        tx.send(Err(OpcError::Internal("Connection failed".to_string())))
+            .unwrap();
         app.poll_fetch_result();
 
         assert_eq!(app.current_screen, CurrentScreen::Home);
@@ -914,7 +916,7 @@ mod tests {
 
     #[test]
     fn test_poll_fetch_result_closed() {
-        let (tx, rx) = oneshot::channel::<Result<Vec<String>>>();
+        let (tx, rx) = oneshot::channel::<OpcResult<Vec<String>>>();
         let mock = MockOpcProvider::new();
         let mut app = App::new(Arc::new(mock));
         app.current_screen = CurrentScreen::Loading;
@@ -1083,8 +1085,10 @@ mod tests {
         app.browse_result_rx = Some(rx);
 
         // Simulate provider returning a descriptive error
-        tx.send(Err(anyhow::anyhow!("DCOM access denied on remote host")))
-            .unwrap();
+        tx.send(Err(OpcError::Internal(
+            "DCOM access denied on remote host".to_string(),
+        )))
+        .unwrap();
 
         app.poll_browse_result();
 
@@ -1170,8 +1174,10 @@ mod tests {
         app.current_screen = CurrentScreen::Loading;
         app.fetch_result_rx = Some(rx);
 
-        tx.send(Err(anyhow::anyhow!("Connection timed out (30s)")))
-            .unwrap();
+        tx.send(Err(OpcError::Internal(
+            "Connection timed out (30s)".to_string(),
+        )))
+        .unwrap();
         app.poll_fetch_result();
 
         assert_eq!(app.current_screen, CurrentScreen::Home);
@@ -1330,7 +1336,8 @@ mod tests {
         app.current_screen = CurrentScreen::Loading;
         app.read_result_rx = Some(rx);
 
-        tx.send(Err(anyhow::anyhow!("Read failed"))).unwrap();
+        tx.send(Err(OpcError::Internal("Read failed".to_string())))
+            .unwrap();
         app.poll_read_result();
 
         assert_eq!(app.current_screen, CurrentScreen::TagList);

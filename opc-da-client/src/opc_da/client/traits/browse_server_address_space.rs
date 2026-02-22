@@ -1,22 +1,25 @@
 use crate::bindings::da::{
     IOPCBrowseServerAddressSpace, tagOPCBROWSEDIRECTION, tagOPCBROWSETYPE, tagOPCNAMESPACETYPE,
 };
-
-use crate::opc_da::utils::{LocalPointer, RemotePointer};
+use crate::opc_da::{
+    client::StringIterator,
+    com_utils::{LocalPointer, RemotePointer},
+    errors::{OpcError, OpcResult},
+};
 
 /// Server address space browsing functionality.
 ///
 /// Provides methods to navigate and discover items in the OPC server's address space.
 /// Supports hierarchical and flat address spaces with filtering capabilities.
 pub trait BrowseServerAddressSpaceTrait {
-    fn interface(&self) -> windows::core::Result<&IOPCBrowseServerAddressSpace>;
+    fn interface(&self) -> OpcResult<&IOPCBrowseServerAddressSpace>;
 
     /// Queries the organization type of the server's address space.
     ///
     /// # Returns
     /// The namespace type (hierarchical or flat)
-    fn query_organization(&self) -> windows::core::Result<tagOPCNAMESPACETYPE> {
-        unsafe { self.interface()?.QueryOrganization() }
+    fn query_organization(&self) -> OpcResult<tagOPCNAMESPACETYPE> {
+        unsafe { Ok(self.interface()?.QueryOrganization()?) }
     }
 
     /// Changes the current position in the server's address space.
@@ -31,12 +34,13 @@ pub trait BrowseServerAddressSpaceTrait {
         &self,
         browse_direction: tagOPCBROWSEDIRECTION,
         position: &str,
-    ) -> windows::core::Result<()> {
+    ) -> OpcResult<()> {
         let position = LocalPointer::from(position);
 
         unsafe {
-            self.interface()?
-                .ChangeBrowsePosition(browse_direction, position.as_pwstr())
+            Ok(self
+                .interface()?
+                .ChangeBrowsePosition(browse_direction, position.as_pwstr())?)
         }
     }
 
@@ -56,19 +60,20 @@ pub trait BrowseServerAddressSpaceTrait {
         filter_criteria: Option<S0>,
         data_type_filter: u16,
         access_rights_filter: u32,
-    ) -> windows::core::Result<windows::Win32::System::Com::IEnumString>
+    ) -> OpcResult<StringIterator>
     where
         S0: AsRef<str>,
     {
         let filter_criteria = LocalPointer::from_option(filter_criteria);
 
         unsafe {
-            self.interface()?.BrowseOPCItemIDs(
+            let iter = self.interface()?.BrowseOPCItemIDs(
                 browse_type,
                 filter_criteria.as_pwstr(),
                 data_type_filter,
                 access_rights_filter,
-            )
+            )?;
+            Ok(StringIterator::new(iter))
         }
     }
 
@@ -79,12 +84,13 @@ pub trait BrowseServerAddressSpaceTrait {
     ///
     /// # Returns
     /// Fully qualified item ID string
-    fn get_item_id(&self, item_data_id: &str) -> windows::core::Result<String> {
+    fn get_item_id(&self, item_data_id: &str) -> OpcResult<String> {
         let item_data_id = LocalPointer::from(item_data_id);
 
         let output = unsafe { self.interface()?.GetItemID(item_data_id.as_pwstr())? };
 
-        RemotePointer::from(output).try_into()
+        let ptr = RemotePointer::from(output);
+        ptr.try_into().map_err(OpcError::from)
     }
 
     /// Browses available access paths for an item.
@@ -94,11 +100,11 @@ pub trait BrowseServerAddressSpaceTrait {
     ///
     /// # Returns
     /// Enumerator for available access paths
-    fn browse_access_paths(
-        &self,
-        item_id: &str,
-    ) -> windows::core::Result<windows::Win32::System::Com::IEnumString> {
+    fn browse_access_paths(&self, item_id: &str) -> OpcResult<StringIterator> {
         let item_id = LocalPointer::from(item_id);
-        unsafe { self.interface()?.BrowseAccessPaths(item_id.as_pwstr()) }
+        unsafe {
+            let iter = self.interface()?.BrowseAccessPaths(item_id.as_pwstr())?;
+            Ok(StringIterator::new(iter))
+        }
     }
 }

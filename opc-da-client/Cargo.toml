@@ -1,6 +1,6 @@
 [package]
 name = "opc-da-client"
-version = "0.1.3"
+version = "0.2.0"
 edition = "2024"
 rust-version = "1.93.1"
 description = "Backend-agnostic OPC DA client library for Rust — async, trait-based, with RAII COM guard"
@@ -35,6 +35,7 @@ async-trait = "0.1.86"
 chrono = "0.4.43"
 tokio = { workspace = true }
 tracing = { workspace = true }
+thiserror = { workspace = true }
 # OS: Windows (required)
 windows = { workspace = true }
 windows-core = { workspace = true }

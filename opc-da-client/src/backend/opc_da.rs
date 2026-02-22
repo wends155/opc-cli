@@ -6,8 +6,9 @@ use crate::bindings::da::{
 use crate::helpers::{
     filetime_to_string, format_hresult, opc_value_to_variant, quality_to_string, variant_to_string,
 };
+use crate::opc_da::errors::{OpcError, OpcResult};
+use crate::opc_da::typedefs::{GroupHandle, ItemHandle};
 use crate::provider::{OpcProvider, OpcValue, TagValue, WriteResult};
-use anyhow::{Context, Result};
 use async_trait::async_trait;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -15,18 +16,18 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 /// Concrete [`OpcProvider`] implementation for Windows OPC DA.
 ///
 /// Uses native `windows-rs` COM interop via the internal `opc_da` module.
-pub struct OpcDaWrapper<C: ServerConnector = ComConnector> {
+pub struct OpcDaClient<C: ServerConnector = ComConnector> {
     connector: Arc<C>,
 }
 
-impl Default for OpcDaWrapper<ComConnector> {
+impl Default for OpcDaClient<ComConnector> {
     fn default() -> Self {
         Self::new(ComConnector)
     }
 }
 
-impl<C: ServerConnector> OpcDaWrapper<C> {
-    /// Creates a new `OpcDaWrapper` with the given connector.
+impl<C: ServerConnector> OpcDaClient<C> {
+    /// Creates a new `OpcDaClient` with the given connector.
     pub fn new(connector: C) -> Self {
         Self {
             connector: Arc::new(connector),
@@ -41,7 +42,7 @@ fn browse_recursive<S: ConnectedServer>(
     progress: &Arc<AtomicUsize>,
     tags_sink: &Arc<std::sync::Mutex<Vec<String>>>,
     depth: usize,
-) -> Result<()> {
+) -> OpcResult<()> {
     const MAX_DEPTH: usize = 50;
     if depth > MAX_DEPTH || tags.len() >= max_tags {
         if depth > MAX_DEPTH {
@@ -50,9 +51,7 @@ fn browse_recursive<S: ConnectedServer>(
         return Ok(());
     }
 
-    let branch_enum = server
-        .browse_opc_item_ids(OPC_BRANCH.0 as u32, Some(""), 0, 0)
-        .context("Failed to browse branches at current position")?;
+    let branch_enum = server.browse_opc_item_ids(OPC_BRANCH.0 as u32, Some(""), 0, 0)?;
 
     let branches: Vec<String> = branch_enum
         .filter_map(|r| match r {
@@ -78,9 +77,9 @@ fn browse_recursive<S: ConnectedServer>(
 
         if let Err(e) = server.change_browse_position(OPC_BROWSE_UP.0 as u32, "") {
             tracing::error!(branch = %branch, error = ?e, "Failed to navigate back up!");
-            return Err(anyhow::anyhow!(
-                "Browse position corrupted: failed to navigate up from branch '{branch}'"
-            ));
+            return Err(OpcError::Internal(format!(
+                "Browse position corrupted: failed to navigate up from branch '{branch}': {e}"
+            )));
         }
         recurse_result?;
     }
@@ -129,8 +128,8 @@ fn browse_recursive<S: ConnectedServer>(
 
 #[allow(clippy::too_many_lines)]
 #[async_trait]
-impl<C: ServerConnector + 'static> OpcProvider for OpcDaWrapper<C> {
-    async fn list_servers(&self, host: &str) -> Result<Vec<String>> {
+impl<C: ServerConnector + 'static> OpcProvider for OpcDaClient<C> {
+    async fn list_servers(&self, host: &str) -> OpcResult<Vec<String>> {
         let host_owned = host.to_string();
         let connector = Arc::clone(&self.connector);
         tokio::task::spawn_blocking(move || {
@@ -151,7 +150,7 @@ impl<C: ServerConnector + 'static> OpcProvider for OpcDaWrapper<C> {
         max_tags: usize,
         progress: Arc<AtomicUsize>,
         tags_sink: Arc<std::sync::Mutex<Vec<String>>>,
-    ) -> Result<Vec<String>> {
+    ) -> OpcResult<Vec<String>> {
         let server_name = server.to_string();
         let connector = Arc::clone(&self.connector);
         tokio::task::spawn_blocking(move || {
@@ -162,8 +161,7 @@ impl<C: ServerConnector + 'static> OpcProvider for OpcDaWrapper<C> {
             let opc_server = connector.connect(&server_name)?;
 
             let org = opc_server
-                .query_organization()
-                .context("Failed to query namespace organization")?;
+                .query_organization()?;
             let mut tags = Vec::new();
 
             if org == OPC_NS_FLAT.0 as u32 {
@@ -173,7 +171,7 @@ impl<C: ServerConnector + 'static> OpcProvider for OpcDaWrapper<C> {
                     if tags.len() >= max_tags {
                         break;
                     }
-                    let tag = tag_res.map_err(|e| anyhow::anyhow!("Tag iteration error: {e:?}"))?;
+                    let tag = tag_res?;
                     tags.push(tag.clone());
                     if let Ok(mut sink) = tags_sink.lock() {
                         sink.push(tag);
@@ -235,7 +233,11 @@ impl<C: ServerConnector + 'static> OpcProvider for OpcDaWrapper<C> {
         .await?
     }
 
-    async fn read_tag_values(&self, server: &str, tag_ids: Vec<String>) -> Result<Vec<TagValue>> {
+    async fn read_tag_values(
+        &self,
+        server: &str,
+        tag_ids: Vec<String>,
+    ) -> OpcResult<Vec<TagValue>> {
         let server_name = server.to_string();
         let connector = Arc::clone(&self.connector);
         tokio::task::spawn_blocking(move || {
@@ -250,15 +252,15 @@ impl<C: ServerConnector + 'static> OpcProvider for OpcDaWrapper<C> {
             let opc_server = connector.connect(&server_name)?;
 
             let mut revised_update_rate = 0u32;
-            let mut server_handle = 0u32;
+            let mut server_handle = GroupHandle::default();
             let group = opc_server.add_group(
                 "opc-da-client-read",
                 true,
-                1000, // update_rate
-                0,    // client_handle
-                0,    // time_bias
-                0.0,  // percent_deadband
-                0,    // locale_id
+                1000,          // update_rate
+                server_handle, // client_handle
+                0,             // time_bias
+                0.0,           // percent_deadband
+                0,             // locale_id
                 &mut revised_update_rate,
                 &mut server_handle,
             )?;
@@ -300,7 +302,7 @@ impl<C: ServerConnector + 'static> OpcProvider for OpcDaWrapper<C> {
                 })
                 .collect();
 
-            let mut server_handles = Vec::new();
+            let mut server_handles: Vec<ItemHandle> = Vec::new();
             let mut valid_indices = Vec::new();
 
             for (idx, (item_result, error)) in results
@@ -310,7 +312,7 @@ impl<C: ServerConnector + 'static> OpcProvider for OpcDaWrapper<C> {
                 .enumerate()
             {
                 if error.is_ok() {
-                    server_handles.push(item_result.hServer);
+                    server_handles.push(ItemHandle(item_result.hServer));
                     valid_indices.push(idx);
                 } else {
                     let hint = format_hresult(*error);
@@ -376,7 +378,7 @@ impl<C: ServerConnector + 'static> OpcProvider for OpcDaWrapper<C> {
         server: &str,
         tag_id: &str,
         value: OpcValue,
-    ) -> Result<WriteResult> {
+    ) -> OpcResult<WriteResult> {
         let server_name = server.to_string();
         let tag = tag_id.to_string();
         let connector = Arc::clone(&self.connector);
@@ -392,12 +394,12 @@ impl<C: ServerConnector + 'static> OpcProvider for OpcDaWrapper<C> {
             let opc_server = connector.connect(&server_name)?;
 
             let mut revised_update_rate = 0u32;
-            let mut server_handle = 0u32;
+            let mut server_handle = GroupHandle::default();
             let group = opc_server.add_group(
                 "opc-da-client-write",
                 true,
                 1000,
-                0,
+                GroupHandle(0),
                 0,
                 0.0,
                 0,
@@ -424,11 +426,11 @@ impl<C: ServerConnector + 'static> OpcProvider for OpcDaWrapper<C> {
             let item_res = results
                 .as_slice()
                 .first()
-                .context("Server returned empty item results")?;
+                .ok_or_else(|| OpcError::Internal("Server returned empty item results".to_string()))?;
             let item_err = errors
                 .as_slice()
                 .first()
-                .context("Server returned empty item errors")?;
+                .ok_or_else(|| OpcError::Internal("Server returned empty item errors".to_string()))?;
 
             if let Err(e) = item_err.ok() {
                 tracing::warn!(error = ?e, "write_tag_value: failed to add tag to group");
@@ -443,11 +445,11 @@ impl<C: ServerConnector + 'static> OpcProvider for OpcDaWrapper<C> {
             }
 
             let variant = opc_value_to_variant(&value);
-            let write_errors = group.write(&[item_res.hServer], &[variant])?;
+            let write_errors = group.write(&[ItemHandle(item_res.hServer)], &[variant])?;
             let write_error = write_errors
                 .as_slice()
                 .first()
-                .context("Server returned empty write errors")?;
+                .ok_or_else(|| OpcError::Internal("Server returned empty write errors".to_string()))?;
 
             let write_result = if write_error.is_ok() {
                 tracing::info!("write_tag_value: write completed successfully");
@@ -491,12 +493,11 @@ mod tests {
         OPC_NS_HIERARCHIAL, tagOPCITEMDEF, tagOPCITEMRESULT, tagOPCITEMSTATE,
     };
     use crate::opc_da::client::StringIterator;
-    use crate::opc_da::utils::RemoteArray;
+    use crate::opc_da::com_utils::RemoteArray;
     use windows::Win32::System::Com::{IEnumString, IEnumString_Impl};
     use windows::Win32::System::Variant::VARIANT;
     use windows::core::{PWSTR, implement};
 
-    #[allow(clippy::ref_as_ptr, clippy::inline_always)]
     #[implement(IEnumString)]
     struct MockEnumString {
         items: Vec<String>,
@@ -560,7 +561,7 @@ mod tests {
         fn add_items(
             &self,
             items: &[tagOPCITEMDEF],
-        ) -> anyhow::Result<(
+        ) -> OpcResult<(
             RemoteArray<tagOPCITEMRESULT>,
             RemoteArray<windows::core::HRESULT>,
         )> {
@@ -587,7 +588,7 @@ mod tests {
                 if name == "RejectMe" {
                     errors.push(windows::core::HRESULT(0xC004_0007_u32 as i32)); // OPC_E_UNKNOWNITEMID
                 } else if name == "RejectAll" {
-                    return Err(anyhow::anyhow!("Total failure"));
+                    return Err(OpcError::Internal("Total failure".to_string()));
                 } else {
                     errors.push(windows::core::HRESULT(0)); // S_OK
                 }
@@ -614,8 +615,8 @@ mod tests {
         fn read(
             &self,
             _source: crate::bindings::da::tagOPCDATASOURCE,
-            server_handles: &[u32],
-        ) -> anyhow::Result<(
+            server_handles: &[ItemHandle],
+        ) -> OpcResult<(
             RemoteArray<tagOPCITEMSTATE>,
             RemoteArray<windows::core::HRESULT>,
         )> {
@@ -624,7 +625,7 @@ mod tests {
 
             for &handle in server_handles {
                 let mut state = tagOPCITEMSTATE {
-                    hClient: handle, // mock echoing the handle as client handle for verification
+                    hClient: handle.0, // mock echoing the handle as client handle for verification
                     wQuality: crate::bindings::da::OPC_QUALITY_GOOD,
                     ..Default::default()
                 };
@@ -666,9 +667,9 @@ mod tests {
 
         fn write(
             &self,
-            server_handles: &[u32],
+            server_handles: &[ItemHandle],
             _values: &[VARIANT],
-        ) -> anyhow::Result<RemoteArray<windows::core::HRESULT>> {
+        ) -> OpcResult<RemoteArray<windows::core::HRESULT>> {
             let mut errors = Vec::new();
             for _ in server_handles {
                 errors.push(windows::core::HRESULT(0)); // S_OK
@@ -689,7 +690,7 @@ mod tests {
     impl ConnectedServer for MockServer {
         type Group = MockGroup;
 
-        fn query_organization(&self) -> anyhow::Result<u32> {
+        fn query_organization(&self) -> OpcResult<u32> {
             Ok(crate::bindings::da::OPC_NS_FLAT.0 as u32)
         }
 
@@ -699,7 +700,7 @@ mod tests {
             _filter: Option<&str>,
             _data_type: u16,
             _access_rights: u32,
-        ) -> anyhow::Result<StringIterator> {
+        ) -> OpcResult<StringIterator> {
             let mock_enum: IEnumString = MockEnumString {
                 items: vec!["MockTag.1".to_string(), "MockTag.2".to_string()],
                 index: std::sync::atomic::AtomicUsize::new(0),
@@ -708,11 +709,11 @@ mod tests {
             Ok(StringIterator::new(mock_enum))
         }
 
-        fn change_browse_position(&self, _direction: u32, _name: &str) -> anyhow::Result<()> {
+        fn change_browse_position(&self, _direction: u32, _name: &str) -> OpcResult<()> {
             Ok(())
         }
 
-        fn get_item_id(&self, item_name: &str) -> anyhow::Result<String> {
+        fn get_item_id(&self, item_name: &str) -> OpcResult<String> {
             Ok(item_name.to_string())
         }
 
@@ -721,19 +722,19 @@ mod tests {
             _name: &str,
             _active: bool,
             _update_rate: u32,
-            _client_handle: u32,
+            _client_handle: GroupHandle,
             _time_bias: i32,
             _percent_deadband: f32,
             _locale_id: u32,
             revised_update_rate: &mut u32,
-            server_handle: &mut u32,
-        ) -> anyhow::Result<Self::Group> {
+            server_handle: &mut GroupHandle,
+        ) -> OpcResult<Self::Group> {
             *revised_update_rate = 1000;
-            *server_handle = 1;
+            *server_handle = GroupHandle(1);
             Ok(MockGroup)
         }
 
-        fn remove_group(&self, _server_group: u32, _force: bool) -> anyhow::Result<()> {
+        fn remove_group(&self, _server_group: GroupHandle, _force: bool) -> OpcResult<()> {
             Ok(())
         }
     }
@@ -744,14 +745,14 @@ mod tests {
     impl ServerConnector for MockConnector {
         type Server = MockServer;
 
-        fn enumerate_servers(&self) -> anyhow::Result<Vec<String>> {
+        fn enumerate_servers(&self) -> OpcResult<Vec<String>> {
             Ok(vec![
                 "Mock.Server.1".to_string(),
                 "Mock.Server.2".to_string(),
             ])
         }
 
-        fn connect(&self, _server_name: &str) -> anyhow::Result<Self::Server> {
+        fn connect(&self, _server_name: &str) -> OpcResult<Self::Server> {
             Ok(MockServer)
         }
     }
@@ -771,7 +772,7 @@ mod tests {
     impl ConnectedServer for MockHierarchicalServer {
         type Group = MockGroup;
 
-        fn query_organization(&self) -> anyhow::Result<u32> {
+        fn query_organization(&self) -> OpcResult<u32> {
             Ok(OPC_NS_HIERARCHIAL.0 as u32)
         }
 
@@ -781,7 +782,7 @@ mod tests {
             _filter: Option<&str>,
             _data_type: u16,
             _access_rights: u32,
-        ) -> anyhow::Result<StringIterator> {
+        ) -> OpcResult<StringIterator> {
             let pos = self.position.borrow();
             let mut results = Vec::new();
 
@@ -791,7 +792,9 @@ mod tests {
                         results = items.clone();
                     }
                     OpcFlatBehavior::ReturnsError => {
-                        return Err(anyhow::anyhow!("OPC_FLAT not supported mock error"));
+                        return Err(OpcError::Internal(
+                            "OPC_FLAT not supported mock error".to_string(),
+                        ));
                     }
                     OpcFlatBehavior::ReturnsEmpty => {
                         // Return empty iterator
@@ -819,7 +822,7 @@ mod tests {
             Ok(StringIterator::new(mock_enum))
         }
 
-        fn change_browse_position(&self, direction: u32, name: &str) -> anyhow::Result<()> {
+        fn change_browse_position(&self, direction: u32, name: &str) -> OpcResult<()> {
             let mut pos = self.position.borrow_mut();
             if direction == OPC_BROWSE_DOWN.0 as u32 {
                 pos.push(name.to_string());
@@ -829,7 +832,7 @@ mod tests {
             Ok(())
         }
 
-        fn get_item_id(&self, item_name: &str) -> anyhow::Result<String> {
+        fn get_item_id(&self, item_name: &str) -> OpcResult<String> {
             let pos = self.position.borrow();
             if pos.is_empty() {
                 Ok(item_name.to_string())
@@ -843,17 +846,17 @@ mod tests {
             _name: &str,
             _active: bool,
             _update_rate: u32,
-            _client_handle: u32,
+            _client_handle: GroupHandle,
             _time_bias: i32,
             _percent_deadband: f32,
             _locale_id: u32,
             _revised_update_rate: &mut u32,
-            _server_handle: &mut u32,
-        ) -> anyhow::Result<Self::Group> {
+            _server_handle: &mut GroupHandle,
+        ) -> OpcResult<Self::Group> {
             Ok(MockGroup)
         }
 
-        fn remove_group(&self, _server_group: u32, _force: bool) -> anyhow::Result<()> {
+        fn remove_group(&self, _server_group: GroupHandle, _force: bool) -> OpcResult<()> {
             Ok(())
         }
     }
@@ -865,11 +868,11 @@ mod tests {
     impl ServerConnector for MockHierarchicalConnector {
         type Server = MockHierarchicalServer;
 
-        fn enumerate_servers(&self) -> anyhow::Result<Vec<String>> {
+        fn enumerate_servers(&self) -> OpcResult<Vec<String>> {
             Ok(vec!["Mock.Hierarchical.1".to_string()])
         }
 
-        fn connect(&self, _server_name: &str) -> anyhow::Result<Self::Server> {
+        fn connect(&self, _server_name: &str) -> OpcResult<Self::Server> {
             Ok(MockHierarchicalServer {
                 opc_flat_behavior: self.opc_flat_behavior.clone(),
                 position: std::cell::RefCell::new(Vec::new()),
@@ -883,7 +886,7 @@ mod tests {
             .build()
             .unwrap();
         rt.block_on(async {
-            let wrapper = OpcDaWrapper {
+            let wrapper = OpcDaClient {
                 connector: std::sync::Arc::new(MockConnector),
             };
 
@@ -914,7 +917,7 @@ mod tests {
             let connector = MockHierarchicalConnector {
                 opc_flat_behavior: OpcFlatBehavior::ReturnsError,
             };
-            let wrapper = OpcDaWrapper {
+            let wrapper = OpcDaClient {
                 connector: std::sync::Arc::new(connector),
             };
 
@@ -950,7 +953,7 @@ mod tests {
                     "FQ.Branch2.Leaf3".to_string(),
                 ]),
             };
-            let wrapper = OpcDaWrapper {
+            let wrapper = OpcDaClient {
                 connector: std::sync::Arc::new(connector),
             };
 
@@ -982,7 +985,7 @@ mod tests {
             let connector = MockHierarchicalConnector {
                 opc_flat_behavior: OpcFlatBehavior::ReturnsError,
             };
-            let wrapper = OpcDaWrapper {
+            let wrapper = OpcDaClient {
                 connector: std::sync::Arc::new(connector),
             };
 
@@ -1010,7 +1013,7 @@ mod tests {
             let connector = MockHierarchicalConnector {
                 opc_flat_behavior: OpcFlatBehavior::ReturnsEmpty,
             };
-            let wrapper = OpcDaWrapper {
+            let wrapper = OpcDaClient {
                 connector: std::sync::Arc::new(connector),
             };
 
@@ -1035,7 +1038,7 @@ mod tests {
             .build()
             .unwrap();
         rt.block_on(async {
-            let wrapper = OpcDaWrapper {
+            let wrapper = OpcDaClient {
                 connector: std::sync::Arc::new(MockConnector),
             };
 
@@ -1059,7 +1062,7 @@ mod tests {
             .build()
             .unwrap();
         rt.block_on(async {
-            let wrapper = OpcDaWrapper {
+            let wrapper = OpcDaClient {
                 connector: std::sync::Arc::new(MockConnector),
             };
 
@@ -1074,7 +1077,7 @@ mod tests {
             .build()
             .unwrap();
         rt.block_on(async {
-            let wrapper = OpcDaWrapper {
+            let wrapper = OpcDaClient {
                 connector: std::sync::Arc::new(MockConnector),
             };
 
@@ -1097,7 +1100,7 @@ mod tests {
             .build()
             .unwrap();
         rt.block_on(async {
-            let wrapper = OpcDaWrapper {
+            let wrapper = OpcDaClient {
                 connector: std::sync::Arc::new(MockConnector),
             };
 
@@ -1125,7 +1128,7 @@ mod tests {
             .build()
             .unwrap();
         rt.block_on(async {
-            let wrapper = OpcDaWrapper {
+            let wrapper = OpcDaClient {
                 connector: std::sync::Arc::new(MockConnector),
             };
 
@@ -1152,7 +1155,7 @@ mod tests {
             .build()
             .unwrap();
         rt.block_on(async {
-            let wrapper = OpcDaWrapper {
+            let wrapper = OpcDaClient {
                 connector: std::sync::Arc::new(MockConnector),
             };
 
@@ -1172,7 +1175,7 @@ mod tests {
             .build()
             .unwrap();
         rt.block_on(async {
-            let wrapper = OpcDaWrapper {
+            let wrapper = OpcDaClient {
                 connector: std::sync::Arc::new(MockConnector),
             };
 

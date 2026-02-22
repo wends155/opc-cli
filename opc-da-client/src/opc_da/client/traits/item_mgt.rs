@@ -1,6 +1,10 @@
+use crate::opc_da::{
+    client::ItemAttributeIterator,
+    com_utils::RemoteArray,
+    errors::{OpcError, OpcResult},
+    typedefs::ItemHandle,
+};
 use windows::core::Interface as _;
-
-use crate::opc_da::{client::ItemAttributeIterator, utils::RemoteArray};
 
 /// Item management functionality.
 ///
@@ -8,7 +12,7 @@ use crate::opc_da::{client::ItemAttributeIterator, utils::RemoteArray};
 /// removing, and modifying item properties such as active state, client
 /// handles, and data types.
 pub trait ItemMgtTrait {
-    fn interface(&self) -> windows::core::Result<&crate::bindings::da::IOPCItemMgt>;
+    fn interface(&self) -> OpcResult<&crate::bindings::da::IOPCItemMgt>;
 
     /// Adds items to the group.
     ///
@@ -25,15 +29,12 @@ pub trait ItemMgtTrait {
     fn add_items(
         &self,
         items: &[crate::bindings::da::tagOPCITEMDEF],
-    ) -> windows::core::Result<(
+    ) -> OpcResult<(
         RemoteArray<crate::bindings::da::tagOPCITEMRESULT>,
         RemoteArray<windows::core::HRESULT>,
     )> {
         if items.is_empty() {
-            return Err(windows_core::Error::new(
-                windows::Win32::Foundation::E_INVALIDARG,
-                "items cannot be empty",
-            ));
+            return Err(OpcError::InvalidState("items cannot be empty".to_string()));
         }
 
         let len = items.len().try_into()?;
@@ -70,15 +71,12 @@ pub trait ItemMgtTrait {
         &self,
         items: &[crate::bindings::da::tagOPCITEMDEF],
         blob_update: bool,
-    ) -> windows::core::Result<(
+    ) -> OpcResult<(
         RemoteArray<crate::bindings::da::tagOPCITEMRESULT>,
         RemoteArray<windows::core::HRESULT>,
     )> {
         if items.is_empty() {
-            return Err(windows_core::Error::new(
-                windows::Win32::Foundation::E_INVALIDARG,
-                "items cannot be empty",
-            ));
+            return Err(OpcError::InvalidState("items cannot be empty".to_string()));
         }
 
         let len = items.len().try_into()?;
@@ -110,12 +108,11 @@ pub trait ItemMgtTrait {
     /// Returns E_INVALIDARG if server_handles is empty
     fn remove_items(
         &self,
-        server_handles: &[u32],
-    ) -> windows::core::Result<RemoteArray<windows::core::HRESULT>> {
+        server_handles: &[ItemHandle],
+    ) -> OpcResult<RemoteArray<windows::core::HRESULT>> {
         if server_handles.is_empty() {
-            return Err(windows_core::Error::new(
-                windows::Win32::Foundation::E_INVALIDARG,
-                "server_handles cannot be empty",
+            return Err(OpcError::InvalidState(
+                "server_handles cannot be empty".to_string(),
             ));
         }
 
@@ -127,8 +124,11 @@ pub trait ItemMgtTrait {
         let mut errors = RemoteArray::new(len);
 
         unsafe {
-            self.interface()?
-                .RemoveItems(len, server_handles.as_ptr(), errors.as_mut_ptr())?;
+            self.interface()?.RemoveItems(
+                len,
+                server_handles.as_ptr() as *const u32,
+                errors.as_mut_ptr(),
+            )?;
         }
 
         Ok(errors)
@@ -147,13 +147,12 @@ pub trait ItemMgtTrait {
     /// Returns E_INVALIDARG if server_handles is empty
     fn set_active_state(
         &self,
-        server_handles: &[u32],
+        server_handles: &[ItemHandle],
         active: bool,
-    ) -> windows::core::Result<RemoteArray<windows::core::HRESULT>> {
+    ) -> OpcResult<RemoteArray<windows::core::HRESULT>> {
         if server_handles.is_empty() {
-            return Err(windows_core::Error::new(
-                windows::Win32::Foundation::E_INVALIDARG,
-                "server_handles cannot be empty",
+            return Err(OpcError::InvalidState(
+                "server_handles cannot be empty".to_string(),
             ));
         }
 
@@ -163,7 +162,7 @@ pub trait ItemMgtTrait {
         unsafe {
             self.interface()?.SetActiveState(
                 len,
-                server_handles.as_ptr(),
+                server_handles.as_ptr() as *const u32,
                 active,
                 errors.as_mut_ptr(),
             )?;
@@ -185,20 +184,18 @@ pub trait ItemMgtTrait {
     /// Returns E_INVALIDARG if arrays are empty or have different lengths
     fn set_client_handles(
         &self,
-        server_handles: &[u32],
-        client_handles: &[u32],
-    ) -> windows::core::Result<RemoteArray<windows::core::HRESULT>> {
+        server_handles: &[ItemHandle],
+        client_handles: &[ItemHandle],
+    ) -> OpcResult<RemoteArray<windows::core::HRESULT>> {
         if server_handles.len() != client_handles.len() {
-            return Err(windows_core::Error::new(
-                windows::Win32::Foundation::E_INVALIDARG,
-                "server_handles and client_handles must have the same length",
+            return Err(OpcError::InvalidState(
+                "server_handles and client_handles must have the same length".to_string(),
             ));
         }
 
         if server_handles.is_empty() {
-            return Err(windows_core::Error::new(
-                windows::Win32::Foundation::E_INVALIDARG,
-                "server_handles cannot be empty",
+            return Err(OpcError::InvalidState(
+                "server_handles cannot be empty".to_string(),
             ));
         }
 
@@ -208,8 +205,8 @@ pub trait ItemMgtTrait {
         unsafe {
             self.interface()?.SetClientHandles(
                 len,
-                server_handles.as_ptr(),
-                client_handles.as_ptr(),
+                server_handles.as_ptr() as *const u32,
+                client_handles.as_ptr() as *const u32,
                 errors.as_mut_ptr(),
             )?;
         }
@@ -230,20 +227,18 @@ pub trait ItemMgtTrait {
     /// Returns E_INVALIDARG if arrays are empty or have different lengths
     fn set_datatypes(
         &self,
-        server_handles: &[u32],
+        server_handles: &[ItemHandle],
         requested_datatypes: &[u16],
-    ) -> windows::core::Result<RemoteArray<windows::core::HRESULT>> {
+    ) -> OpcResult<RemoteArray<windows::core::HRESULT>> {
         if server_handles.len() != requested_datatypes.len() {
-            return Err(windows_core::Error::new(
-                windows::Win32::Foundation::E_INVALIDARG,
-                "server_handles and requested_datatypes must have the same length",
+            return Err(OpcError::InvalidState(
+                "server_handles and requested_datatypes must have the same length".to_string(),
             ));
         }
 
         if server_handles.is_empty() {
-            return Err(windows_core::Error::new(
-                windows::Win32::Foundation::E_INVALIDARG,
-                "server_handles cannot be empty",
+            return Err(OpcError::InvalidState(
+                "server_handles cannot be empty".to_string(),
             ));
         }
 
@@ -253,7 +248,7 @@ pub trait ItemMgtTrait {
         unsafe {
             self.interface()?.SetDatatypes(
                 len,
-                server_handles.as_ptr(),
+                server_handles.as_ptr() as *const u32,
                 requested_datatypes.as_ptr(),
                 errors.as_mut_ptr(),
             )?;
@@ -269,10 +264,11 @@ pub trait ItemMgtTrait {
     ///
     /// # Returns
     /// Enumerator interface for iterating through items
-    fn create_enumerator(&self) -> windows::core::Result<ItemAttributeIterator> {
+    fn create_enumerator(&self) -> OpcResult<ItemAttributeIterator> {
         let enumerator = unsafe {
-            self.interface()?
-                .CreateEnumerator(&crate::bindings::da::IEnumOPCItemAttributes::IID)?
+            self.interface()?.CreateEnumerator(
+                &<crate::bindings::da::IEnumOPCItemAttributes as windows_core::Interface>::IID,
+            )?
         };
 
         Ok(ItemAttributeIterator::new(enumerator.cast()?))

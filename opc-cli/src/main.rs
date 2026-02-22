@@ -9,7 +9,7 @@ use crossterm::{
     execute,
     terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
 };
-use opc_da_client::{ComConnector, OpcDaWrapper};
+use opc_da_client::{ComConnector, OpcDaClient};
 use ratatui::{Terminal, backend::CrosstermBackend};
 use std::{io, sync::Arc, time::Duration};
 use tracing_subscriber::{EnvFilter, fmt, prelude::*};
@@ -39,7 +39,7 @@ async fn main() -> Result<()> {
     let mut terminal = Terminal::new(backend)?;
 
     // Create app and run it
-    let opc_wrapper = Arc::new(OpcDaWrapper::new(ComConnector));
+    let opc_wrapper = Arc::new(OpcDaClient::new(ComConnector));
     let mut app = App::new(opc_wrapper);
     let res = run_app(&mut terminal, &mut app);
 

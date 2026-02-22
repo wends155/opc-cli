@@ -1,6 +1,7 @@
-use crate::bindings::comn::IOPCCommon;
-
-use crate::opc_da::utils::{LocalPointer, RemoteArray, RemotePointer};
+use crate::opc_da::{
+    com_utils::{LocalPointer, RemoteArray, RemotePointer},
+    errors::{OpcError, OpcResult},
+};
 
 /// Common OPC server functionality trait.
 ///
@@ -8,7 +9,7 @@ use crate::opc_da::utils::{LocalPointer, RemoteArray, RemotePointer};
 /// This trait is implemented by all OPC DA servers to support basic
 /// configuration and error handling capabilities.
 pub trait CommonTrait {
-    fn interface(&self) -> windows::core::Result<&IOPCCommon>;
+    fn interface(&self) -> OpcResult<&crate::bindings::comn::IOPCCommon>;
 
     /// Sets the locale ID for server string localization.
     ///
@@ -17,23 +18,23 @@ pub trait CommonTrait {
     ///
     /// # Returns
     /// Result indicating if the locale was successfully set
-    fn set_locale_id(&self, locale_id: u32) -> windows::core::Result<()> {
-        unsafe { self.interface()?.SetLocaleID(locale_id) }
+    fn set_locale_id(&self, locale_id: u32) -> OpcResult<()> {
+        unsafe { Ok(self.interface()?.SetLocaleID(locale_id)?) }
     }
 
     /// Gets the current locale ID used by the server.
     ///
     /// # Returns
     /// Windows LCID value representing the current locale
-    fn get_locale_id(&self) -> windows::core::Result<u32> {
-        unsafe { self.interface()?.GetLocaleID() }
+    fn get_locale_id(&self) -> OpcResult<u32> {
+        unsafe { Ok(self.interface()?.GetLocaleID()?) }
     }
 
     /// Gets a list of locale IDs supported by the server.
     ///
     /// # Returns
     /// Array of Windows LCID values for supported locales
-    fn query_available_locale_ids(&self) -> windows::core::Result<RemoteArray<u32>> {
+    fn query_available_locale_ids(&self) -> OpcResult<RemoteArray<u32>> {
         let mut locale_ids = RemoteArray::empty();
 
         unsafe {
@@ -51,10 +52,12 @@ pub trait CommonTrait {
     ///
     /// # Returns
     /// Localized error message string in current locale
-    fn get_error_string(&self, error: windows::core::HRESULT) -> windows::core::Result<String> {
+    fn get_error_string(&self, error: windows::core::HRESULT) -> OpcResult<String> {
         let output = unsafe { self.interface()?.GetErrorString(error)? };
 
-        RemotePointer::from(output).try_into()
+        RemotePointer::from(output)
+            .try_into()
+            .map_err(OpcError::from)
     }
 
     /// Sets a client name for server identification.
@@ -64,8 +67,8 @@ pub trait CommonTrait {
     ///
     /// # Returns
     /// Result indicating if the client name was successfully set
-    fn set_client_name(&self, name: &str) -> windows::core::Result<()> {
+    fn set_client_name(&self, name: &str) -> OpcResult<()> {
         let name = LocalPointer::from(name);
-        unsafe { self.interface()?.SetClientName(name.as_pcwstr()) }
+        unsafe { Ok(self.interface()?.SetClientName(name.as_pcwstr())?) }
     }
 }

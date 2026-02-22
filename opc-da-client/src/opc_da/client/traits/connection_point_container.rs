@@ -1,3 +1,4 @@
+use crate::opc_da::errors::{OpcError, OpcResult};
 use windows::core::{GUID, Interface as _};
 
 /// COM connection point container functionality.
@@ -6,9 +7,7 @@ use windows::core::{GUID, Interface as _};
 /// and event sinks in the OPC COM architecture. Used primarily for
 /// handling asynchronous callbacks.
 pub trait ConnectionPointContainerTrait {
-    fn interface(
-        &self,
-    ) -> windows::core::Result<&windows::Win32::System::Com::IConnectionPointContainer>;
+    fn interface(&self) -> OpcResult<&windows::Win32::System::Com::IConnectionPointContainer>;
 
     /// Finds a connection point for a specific interface.
     ///
@@ -30,13 +29,13 @@ pub trait ConnectionPointContainerTrait {
     fn find_connection_point(
         &self,
         id: &GUID,
-    ) -> windows::core::Result<windows::Win32::System::Com::IConnectionPoint> {
-        unsafe { self.interface()?.FindConnectionPoint(id) }
+    ) -> OpcResult<windows::Win32::System::Com::IConnectionPoint> {
+        unsafe { Ok(self.interface()?.FindConnectionPoint(id)?) }
     }
 
     fn data_callback_connection_point(
         &self,
-    ) -> windows::core::Result<windows::Win32::System::Com::IConnectionPoint> {
+    ) -> OpcResult<windows::Win32::System::Com::IConnectionPoint> {
         self.find_connection_point(&crate::bindings::da::IOPCDataCallback::IID)
     }
 
@@ -56,7 +55,7 @@ pub trait ConnectionPointContainerTrait {
     /// - No connection points are available  
     fn enum_connection_points(
         &self,
-    ) -> windows::core::Result<windows::Win32::System::Com::IEnumConnectionPoints> {
-        unsafe { self.interface()?.EnumConnectionPoints() }
+    ) -> OpcResult<windows::Win32::System::Com::IEnumConnectionPoints> {
+        unsafe { Ok(self.interface()?.EnumConnectionPoints()?) }
     }
 }

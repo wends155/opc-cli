@@ -1,6 +1,6 @@
 use unified::{Guard, Server};
 
-use crate::opc_da::utils::LocalPointer;
+use crate::opc_da::com_utils::LocalPointer;
 
 use super::*;
 

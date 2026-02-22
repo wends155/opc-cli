@@ -146,10 +146,10 @@ emove_group errors now logged instead of silently discarded.
 > * **Feature:** OPC DA Mocking & SafeArray iteration.
 > * **Changes:**
 >   - Abstracted concrete COM bindings via the `ServerConnector` trait inside `connector.rs`.
->   - Bound `OpcDaWrapper<C>` to `<C: ServerConnector>`.
+>   - Bound `OpcDaClient<C>` to `<C: ServerConnector>`.
 >   - Implemented `MockServerConnector` along with realistic integration test cases in `backend/opc_da.rs`.
 >   - Validated array bounds parsing with `SafeArrayGetElemsize` and `SafeArrayAccessData` inside `variant_to_string` printing full arrays (capped at 20 max items).
-> * **New Constraints:** Mock backend testing can now be used for logic testing without a real COM server. Any new methods on `OpcDaWrapper` should use `self.connector` rather than raw COM instantiation. SafeArrays now return JSON stringified vectors instead of the default `Array[N]`.
+> * **New Constraints:** Mock backend testing can now be used for logic testing without a real COM server. Any new methods on `OpcDaClient` should use `self.connector` rather than raw COM instantiation. SafeArrays now return JSON stringified vectors instead of the default `Array[N]`.
 > * **Pruned:** Outdated constraints requiring live Windows COM environment for integration testing bounds.
 
 ## 2026-02-21: Compliance Audit & Remediation
@@ -162,15 +162,15 @@ emove_group errors now logged instead of silently discarded.
 ## 2026-02-22: Workspace Cargo.toml Config Fixes
 > 📝 **Context Update:**
 > * **Feature:** Re-integrated `opc-cli` into workspace and aligned dependencies.
-> * **Changes:** Added `opc-cli` to workspace members so `cargo build` produces the TUI executable again. Lifted overlapping dependencies (`anyhow`, `tokio`, `tracing`) to `[workspace.dependencies]`. Updated `opc-cli/src/main.rs` to instantiate `OpcDaWrapper::new(ComConnector)` due to the Phase 4 mockability refactor.
+> * **Changes:** Added `opc-cli` to workspace members so `cargo build` produces the TUI executable again. Lifted overlapping dependencies (`anyhow`, `tokio`, `tracing`) to `[workspace.dependencies]`. Updated `opc-cli/src/main.rs` to instantiate `OpcDaClient::new(ComConnector)` due to the Phase 4 mockability refactor.
 > * **New Constraints:** `vendor/opc_classic_utils/` is explicitly retained in the repo until new code is fully tested, but deliberately kept out of workspace members.
 > * **Pruned:** Outdated inline `version` declarations for shared dependencies inside crate-level `Cargo.toml`s.
 
 ## 2026-02-22: Documentation Sync (Post-Phase 4)
 > 📝 **Context Update:**
 > * **Feature:** Synchronized READMEs and crate descriptions with Phase 4 architecture.
-> * **Changes:** Fixed all 4 code examples in `opc-da-client/README.md` to use `ComGuard::new()?` and `OpcDaWrapper::default()` (since `new()` now requires `ComConnector`). Updated feature descriptions and doc comments to explicitly declare the native `windows-rs` implementation instead of the obsolete `opc_da` crate.
-> * **New Constraints:** Any new examples must demonstrate COM initialization via `ComGuard` and use `OpcDaWrapper::default()` unless explicitly demonstrating the mock backend.
+> * **Changes:** Fixed all 4 code examples in `opc-da-client/README.md` to use `ComGuard::new()?` and `OpcDaClient::default()` (since `new()` now requires `ComConnector`). Updated feature descriptions and doc comments to explicitly declare the native `windows-rs` implementation instead of the obsolete `opc_da` crate.
+> * **New Constraints:** Any new examples must demonstrate COM initialization via `ComGuard` and use `OpcDaClient::default()` unless explicitly demonstrating the mock backend.
 > * **Pruned:** References to the library being powered by the external `opc_da` crate.
 
 ## 2026-02-22: VT_ERROR and Resource Leak Fixes 
@@ -253,3 +253,45 @@ emove_group errors now logged instead of silently discarded.
 > * **Changes:** Scanned code base and markdown for stale references to Phase 2/3 vendor crates. Updated 1 rustdoc in `opc_da.rs` ("uses the `opc_da` crate" -> "uses the internal `opc_da` module") and 1 phrase in `spec.md`.
 > * **New Constraints:** None.
 > * **Pruned:** The conceptual barrier of "vendored" code is fully eliminated; `opc_da` is treated strictly as an internal module.
+
+## 2026-02-22: TARS Summary — Audit Remediation
+> 📝 **Context Update:**
+> * **Feature:** Pre-implementation Audit Remediation
+> * **Changes:** Fixed 6 conformance findings (F1-F6). Added `#[non_exhaustive]` to `OpcError`, scrubbed redundant empty lines, scoped `clippy::missing_errors_doc` to the `client` module, added `//!` module doc to `opc_da/mod.rs`, replaced manual `as i32` casting with `.cast_signed()`, and replaced `ComGroup` initialization with `Self`. Workspace `cargo fmt`, `clippy`, and `test` execution is completely clean.
+> * **New Constraints:** The `clippy::missing_errors_doc` allowance is strictly localized to the COM bindings wrapping layer (client module). Other opc-da-client library modules must continue documenting `# Errors`.
+> * **Pruned:** The audit findings are resolved and the code holds a stable zero-exit verification state.
+
+## 2026-02-22: TARS Summary — Codebase Security Audit
+> 📝 **Context Update:**
+> * **Feature:** Baseline Security & Compliance Audit
+> * **Changes:** Ran Narsil scans (OWASP Top 10, CWE Top 25) and Cargo checks. 0 actionable security findings in `opc-cli`; 1 false positive SQL-i detected on UI keystroke logic.
+> * **New Constraints:** None.
+> * **Pruned:** The codebase holds a high-fidelity state against the architecture specification.
+
+## 2026-02-23: TARS Summary — Documentation Staleness Audit & Remediation
+> 📝 **Context Update:**
+> * **Feature:** Documentation Staleness Audit & Remediation
+> * **Changes:** Performed a codebase-wide audit catching 7 lingering references to `OpcDaWrapper`. Replaced all instances with the active struct name `OpcDaClient` across architectural diagrams, spec tables, changelogs, and rustdoc safety comments. Verified zero-exit status with `cargo doc` and standard tests.
+> * **New Constraints:** None.
+> * **Pruned:** The `OpcDaWrapper` identifier is universally excised from the repositories.
+
+## 2026-02-23: TARS Summary — Documentation Issue Remediation
+> 📝 **Context Update:**
+> * **Feature:** Remediation of Issue Check on `opc-da-client` Documentation.
+> * **Changes:** Modernized stale rustdoc claims across `README.md`, `architecture.md`, `spec.md`, and `connector.rs` pointing to `anyhow` instead of the crate's unified `OpcError`/`OpcResult` type hierarchy. Implemented strict `#![doc = include_str!("../README.md")]` static checks, alongside `no_run` attributes to prohibit live CI invocation of OPC DA integration doc-tests without environment dependencies.
+> * **New Constraints:** Any new examples added to `README.md` must be valid rust logic and bear the `no_run` attribute so they do not crash standard test suites relying on `OpcDaClient<ComConnector>`.
+> * **Pruned:** The `opc-da-client/README.md` issue stands resolved.
+
+## 2026-02-23: TARS Summary — Observability Audit
+> 📝 **Context Update:**
+> * **Feature:** `/audit` execution inspecting `opc-da-client` observability and tracing compliance. 
+> * **Changes:** Evaluated the entire `opc-da-client` library against the explicit constraints established by `coding_standard.md`. Verified that `println!` logging is correctly absent from all production code. Verified that `backend::opc_da::OpcDaClient` structurally enforces `tracing::info_span!` mapping across facade entry-points. Reconciled `tracing::info!` occurrences on all success paths and `tracing::error!` / `tracing::warn!` statements on failure modes, fallback loops, and COM teardown contexts.
+> * **New Constraints:** None. All functions cleanly comply with the observability mandate.
+> * **Pruned:** The task represents an observational snapshot and required zero codebase modifications. 
+
+## 2026-02-23: TARS Summary — Publication Readiness Audit
+> 📝 **Context Update:**
+> * **Feature:** Pre-publication quality control and security `/audit` for `opc-da-client`.
+> * **Changes:** Evaluated the operational readiness of `opc-da-client` for publishing to `crates.io`. Confirmed `Cargo.toml` structural completeness. Re-ran Narsil security scans across the repository resolving 0 findings and 0 vulnerable dependency maps. Fired a `cargo publish --dry-run` to assert the proper compression, exclusion mapping (`spec.md`, `.winmd`), and MSVC docs.rs target resolution. 
+> * **New Constraints:** None.
+> * **Pruned:** The crate holds a secure and technically verified baseline to initiate the official crates.io distribution.

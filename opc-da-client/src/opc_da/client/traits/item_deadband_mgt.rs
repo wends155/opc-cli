@@ -1,4 +1,7 @@
-use crate::opc_da::utils::RemoteArray;
+use crate::opc_da::{
+    com_utils::RemoteArray,
+    errors::{OpcError, OpcResult},
+};
 
 /// Item deadband management functionality (OPC DA 3.0).
 ///
@@ -6,7 +9,7 @@ use crate::opc_da::utils::RemoteArray;
 /// control the minimum value change required before the server reports
 /// a data change to the client.
 pub trait ItemDeadbandMgtTrait {
-    fn interface(&self) -> windows::core::Result<&crate::bindings::da::IOPCItemDeadbandMgt>;
+    fn interface(&self) -> OpcResult<&crate::bindings::da::IOPCItemDeadbandMgt>;
 
     /// Sets deadband values for specified items.
     ///
@@ -23,19 +26,17 @@ pub trait ItemDeadbandMgtTrait {
         &self,
         server_handles: &[u32],
         deadbands: &[f32],
-    ) -> windows::core::Result<RemoteArray<windows::core::HRESULT>> {
+    ) -> OpcResult<RemoteArray<windows::core::HRESULT>> {
         if server_handles.len() != deadbands.len() {
-            return Err(windows::core::Error::new(
-                windows::Win32::Foundation::E_INVALIDARG,
-                "server_handles and deadbands must have the same length",
+            return Err(OpcError::InvalidState(
+                "server_handles and deadbands must have the same length".to_string(),
             ));
         }
 
         // Validate deadband values (0.0 to 100.0)
         if deadbands.iter().any(|&v| !(0.0..=100.0).contains(&v)) {
-            return Err(windows::core::Error::new(
-                windows::Win32::Foundation::E_INVALIDARG,
-                "deadband values must be between 0.0 and 100.0",
+            return Err(OpcError::InvalidState(
+                "deadband values must be between 0.0 and 100.0".to_string(),
             ));
         }
 
@@ -67,7 +68,7 @@ pub trait ItemDeadbandMgtTrait {
     fn get_item_deadband(
         &self,
         server_handles: &[u32],
-    ) -> windows::core::Result<(RemoteArray<f32>, RemoteArray<windows::core::HRESULT>)> {
+    ) -> OpcResult<(RemoteArray<f32>, RemoteArray<windows::core::HRESULT>)> {
         let len = server_handles.len().try_into()?;
 
         let mut errors = RemoteArray::new(len);
@@ -95,7 +96,7 @@ pub trait ItemDeadbandMgtTrait {
     fn clear_item_deadband(
         &self,
         server_handles: &[u32],
-    ) -> windows::core::Result<RemoteArray<windows::core::HRESULT>> {
+    ) -> OpcResult<RemoteArray<windows::core::HRESULT>> {
         let len = server_handles.len().try_into()?;
 
         let mut errors = RemoteArray::new(len);
