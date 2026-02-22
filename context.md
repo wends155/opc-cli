@@ -315,3 +315,10 @@ emove_group errors now logged instead of silently discarded.
 > * **Changes:** Injected the `## [0.2.0]` release node natively into `opc-da-client/CHANGELOG.md`. Documented the pivotal architectural leap representing the version bump: purging external `opc_da*` bindings dependencies in favor of native workspace inclusion to drastically boost build velocity, safety, and testing agility (`MockServerConnector`). Cataloged the migration from `anyhow` to the strongly-typed `OpcResult` (`thiserror`) while preserving structural application compatibility. Logged the injection of `no_run` onto `README.md` examples.
 > * **New Constraints:** None.
 > * **Pruned:** The `/issue` surrounding missing changelog data for v0.2.0 is closed. No further ambiguities surround the `v0.1.3 -> v0.2.0` evolution.
+
+## 2026-02-23: TARS Summary — `/prepublish` Workflow Architecture
+> 📝 **Context Update:**
+> * **Feature:** Constructed `.agent/workflows/prepublish.md` — a 9-step AI workflow automating pre-publication QA/QC for `crates.io` releases.
+> * **Changes:** Created the workflow with: Context Init, Version Sync (README/Cargo/rustdocs/CHANGELOG), Docs Consistency, Cargo Manifest QC, Narsil Security Scan, Verification Gate (`verify.ps1`), Simulated `cargo publish --dry-run`, structured Report (`prepublish_report.md` with Pass/Fail matrix, Action Items, Recommendations), and Completion. Follows the same structural conventions as `/audit` and `/plan-making`.
+> * **New Constraints:** Invoke `/prepublish` before every `cargo publish` to guarantee documentation, versioning, and security alignment.
+> * **Pruned:** Ad-hoc pre-publish manual checks are superseded by the formalized workflow.
