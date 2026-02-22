@@ -1,6 +1,6 @@
 [package]
 name = "opc-cli"
-version = "0.0.2"
+version = "0.1.0"
 edition = "2024"
 rust-version = "1.93.1"
 description = "Interactive TUI for browsing, reading, and writing OPC DA tags on Windows"

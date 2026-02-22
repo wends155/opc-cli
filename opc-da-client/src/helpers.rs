@@ -64,6 +64,21 @@ pub fn friendly_com_hint(error: &anyhow::Error) -> Option<&'static str> {
 }
 
 /// Format a COM HRESULT for user-facing error messages.
+///
+/// Returns `0xHHHHHHHH: <hint>` for known codes, or just `0xHHHHHHHH` otherwise.
+///
+/// # Examples
+///
+/// ```
+/// use opc_da_client::format_hresult;
+/// use windows::core::HRESULT;
+///
+/// let hr = HRESULT(0x80040154_u32 as i32);
+/// assert_eq!(
+///     format_hresult(hr),
+///     "0x80040154: Server is not registered on this machine",
+/// );
+/// ```
 #[allow(clippy::cast_sign_loss)]
 pub fn format_hresult(hr: windows::core::HRESULT) -> String {
     let hex = format!("0x{:08X}", hr.0 as u32);

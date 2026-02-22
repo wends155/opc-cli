@@ -22,7 +22,7 @@ Add this to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-opc-da-client = "0.0.2"
+opc-da-client = "0.1.0"
 ```
 
 ## Prerequisites

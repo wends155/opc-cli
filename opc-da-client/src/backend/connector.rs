@@ -165,7 +165,7 @@ use crate::opc_da::client::{
 };
 use anyhow::Context;
 
-/// Real COM-backed [`ServerConnector`] implementation.
+/// Real COM-backed server connector implementation.
 ///
 /// Uses `v2::Client` to enumerate and connect to OPC DA servers via Windows COM.
 pub struct ComConnector;
