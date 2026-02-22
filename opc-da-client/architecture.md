@@ -88,7 +88,6 @@ The verification script ([verify.ps1](file:///c:/Users/WSALIGAN/code/opc-cli/scr
 | Framework | `tracing` crate |
 | Output | File-based (TUI captures stdout/stderr) — see parent `opc-cli` for subscriber setup |
 | Timing | `std::time::Instant` wrapping major COM calls (`create_server`, `query_organization`, `browse`); `elapsed_ms` logged on success |
-| Noise filter | `E_POINTER` (`0x80004003`) errors from `StringIterator` are downgraded to `trace!` level via `is_known_iterator_bug()` |
 
 ### Log Level Usage
 
@@ -106,7 +105,7 @@ The verification script ([verify.ps1](file:///c:/Users/WSALIGAN/code/opc-cli/scr
 
 ### Unit Tests
 - **Location**: Co-located `#[cfg(test)] mod tests` in `helpers.rs`.
-- **Coverage**: `friendly_com_hint` mappings, `filetime_to_string` edge cases, `is_known_iterator_bug`, `opc_value_to_variant`, `variant_to_string` roundtrips (including `VT_CY`).
+- **Coverage**: `friendly_com_hint` mappings, `filetime_to_string` edge cases, `opc_value_to_variant`, `variant_to_string` roundtrips (including `VT_CY`), and `StringIterator` self-healing behavior.
 
 ### Mock-Based Tests
 - **Mechanism**: `mockall` crate, gated behind `test-support` feature.
@@ -220,7 +219,7 @@ The library handles both flat and hierarchical OPC DA namespaces:
    - **Branches first:** Enumerate `OPC_BRANCH` items, navigate down via `change_browse_position(DOWN)`, recurse, then **always** navigate back `UP` — even if recursion fails — to prevent position corruption.
    - **Leaves second (soft-fail):** Enumerate `OPC_LEAF` items at current position; failures are logged and skipped.
    - **Fully-qualified IDs:** `get_item_id()` converts browse names to item IDs; falls back to browse name if conversion fails.
-   - **Iterator bug workaround:** `E_POINTER` errors from `StringIterator` are filtered to `trace!` level (see [OPC-BUG-001](#opc-bug-001)).
+   - **Iterator bug handled:** The upstream `StringIterator` bug (OPC-BUG-001) is handled internally via cache zeroing.
 4. **Safety guards:**
    - `max_tags` hard cap (default 10,000) to prevent unbounded collection.
    - `MAX_DEPTH` (50) to guard against infinite recursion in malformed namespaces.

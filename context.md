@@ -194,3 +194,9 @@ emove_group errors now logged instead of silently discarded.
 > * **New Constraints:** `StringIterator` now self-heals null entries. Callers no longer need to filter `E_POINTER`. Any future iterator changes must preserve the cache-zeroing and null-skip logic.
 > * **Pruned:** `is_known_iterator_bug()` function and its 2 tests. `trace!`-level E_POINTER downgrade in `browse_recursive`.
 
+## 2026-02-22: TARS Summary — Mainline Merge
+> 📝 **Context Update:**
+> * **Feature:** Merged `feature/merge-opc-da` into `main` (Fast-Forward).
+> * **Changes:** 16 commits (+15k/-600 lines) bringing the vendored `opc_da` components intimately into `opc-da-client`, adding testability/mocking, releasing v0.1.0 on crates.io, fixing OPC-BUG-001 (E_POINTER flood) at the source in `iterator.rs`, and enhancing global log observability.
+> * **New Constraints:** Any future developments to COM iterator consumption MUST observe the new `StringIterator` behavior (self-healing null skip, zeroed cache).
+> * **Pruned:** All prior intermediate implementation logs for these features can be dropped from active memory. The `feature/merge-opc-da` branch has been deleted.
