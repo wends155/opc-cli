@@ -216,6 +216,10 @@ fn browse_recursive(
 5.  Converts browse names to fully-qualified item IDs via `get_item_id()`; falls back to browse name on failure.
 6.  Each discovered tag is pushed to both `tags` and `tags_sink`, and `progress` is incremented.
 
+#### Internal: OPC_FLAT Fast Path
+
+Before calling `browse_recursive`, `browse_tags` attempts `BrowseOPCItemIDs(OPC_FLAT)` at root. If the server returns items, they are collected directly as fully-qualified IDs — skipping recursion and `get_item_id()` entirely. Falls back to `browse_recursive` on error, empty results, or first-item failure.
+
 ---
 
 ### 1.4 `com_guard` — RAII COM Initialization
@@ -307,7 +311,7 @@ Defined in § 1.1. See table above.
 | Server enumeration | `Client.get_servers()` |
 | Server connection | `Client.create_server()` |
 | Namespace detection | `Server.query_organization()` |
-| Tag browsing | `Server.browse_opc_item_ids()`, `Server.change_browse_position()`, `Server.get_item_id()` |
+| Tag browsing | `Server.browse_opc_item_ids()` (OPC_LEAF, OPC_BRANCH, OPC_FLAT), `Server.change_browse_position()`, `Server.get_item_id()` |
 | Tag reading | `Server.add_group()`, group `.add_items()`, group `.read()`, `Server.remove_group()` |
 | Tag writing | `Server.add_group()`, group `.add_items()`, group `.write()`, `Server.remove_group()` |
 | String iteration | `StringIterator::new()` |
@@ -367,6 +371,12 @@ Defined in § 1.1. See table above.
 - [x] `test_mock_read_tags_all_reject` — all tags rejected, returns `Ok` with all error sentinels.
 - [x] `test_mock_write_tag_happy` — tag valid, `success=true`.
 - [x] `test_mock_write_tag_add_fail` — tag rejected, `success=false`, group cleaned up.
+- [x] `test_browse_tags_flat_server` — flat namespace browse collects tags correctly.
+- [x] `test_browse_tags_opc_flat_success` — OPC_FLAT fast path collects all tags.
+- [x] `test_browse_tags_opc_flat_error_fallback` — OPC_FLAT error falls back to recursive.
+- [x] `test_browse_tags_opc_flat_empty_fallback` — OPC_FLAT empty falls back to recursive.
+- [x] `test_browse_tags_hierarchical_recursive` — recursive browse traverses hierarchy.
+- [x] `test_browse_tags_max_tags_limit` — max_tags cap works on all paths.
 
 ### Mock-Based Tests (in `opc-cli`)
 

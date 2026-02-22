@@ -221,3 +221,22 @@ emove_group errors now logged instead of silently discarded.
 > * **Changes:** Version bump, CHANGELOG entry, corrected crates.io README links and E_POINTER hint text.
 > * **New Constraints:** None.
 > * **Pruned:** v0.1.2 is the new active baseline on crates.io.
+
+## 2026-02-22: OPC_FLAT Browse Performance Optimization
+📝 **Context Update:**
+* **Feature:** OPC DA V2 Browse Performance Optimization (OPC_FLAT Try-First)
+* **Changes:** 
+    * Implemented `OPC_FLAT` try-first hierarchy traversal in `opc_da::client::browse_tags` to eliminate ~90% of COM calls during namespace browsing, smoothly falling back to recursive enumeration on error or empty results.
+    * Increased `StringIterator` batch fetched size `STRING_CACHE_SIZE` to 256 for a 16x reduction in `IEnumString::Next` COM round-trips.
+    * Added comprehensive `MockHierarchicalServer` TDD tests inside `opc_da.rs` to validate all fast-path and fallback execution flows.
+* **New Constraints:** 
+    * Future `ServerConnector` mock additions for `browse_tags` must now account for `OpcFlatBehavior` to verify fast-path interactions.
+* **Pruned:** 
+    * `OPC-BUG-001` (null PWSTR entries) is permanently fixed in `StringIterator` and no longer needs manual tracking as an active constraint.
+
+## 2026-02-22: Documentation Audit & Remediation
+> 📝 **Context Update:**
+> * **Feature:** Document Audit (Reflect & Summarize)
+> * **Changes:** Performed comprehensive audit of `spec.md`, `architecture.md` (repo/crate), and `context.md`. Remediated 12 findings including stale version numbers, missing OPC_FLAT behavioral contracts, stale path references (`opc_impl.rs`), and inconsistent test counts.
+> * **New Constraints:** Maintain `architecture.md` and `spec.md` in sync when modifying the `OPC_FLAT` or `StringIterator` logic.
+> * **Pruned:** References to `opc_impl.rs` are eliminated. Stale test count (20+) updated to 80+.

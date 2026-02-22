@@ -5,9 +5,10 @@
 | Field | Value |
 | :--- | :--- |
 | **Crate** | `opc-da-client` |
-| **Version** | `0.1.1` |
+| **Version** | `0.1.2` |
 | **Purpose** | Backend-agnostic Rust library for interacting with OPC DA (Data Access) servers |
 | **Spec** | [spec.md](file:///c:/Users/WSALIGAN/code/opc-cli/opc-da-client/spec.md) |
+| **Status** | ✅ 0.1.2 baseline (Crates.io) |
 
 The library provides an async, trait-based API that abstracts away the complexities of Windows COM/DCOM and the underlying OPC implementation. It follows a layered architecture: a **stable public API** (trait + data types) and **feature-gated backend implementations** that can be swapped without affecting consumer code.
 
@@ -115,6 +116,7 @@ The verification script ([verify.ps1](file:///c:/Users/WSALIGAN/code/opc-cli/scr
 - **Location**: Co-located `#[cfg(test)] mod tests` in `backend/opc_da.rs`.
 - **Mechanism**: In-process `MockGroup` / `MockServer` / `MockConnector` implementing `ConnectedGroup`, `ConnectedServer`, and `ServerConnector` traits.
 - **Coverage**: `read_tag_values` (happy, partial reject, all reject), `write_tag_value` (happy, add fail), `list_servers` (happy).
+- **Browse Coverage**: `browse_tags` (flat server, OPC_FLAT success, OPC_FLAT error fallback, OPC_FLAT empty fallback, hierarchical recursive, max_tags limit).
 
 ### Doc Tests
 - `friendly_com_hint()` — runnable doctest in `helpers.rs`.
@@ -149,6 +151,7 @@ The verification script ([verify.ps1](file:///c:/Users/WSALIGAN/code/opc-cli/scr
 | `tokio` | 1.43.0 | Async runtime (`rt`, `sync` features) |
 | `tracing` | 0.1.41 | Structured logging |
 | `windows` | 0.61.3 | Win32 COM/DCOM/Foundation/Variant APIs |
+| `windows-core` | 0.61.3 | Core COM runtime types (HRESULT, PWSTR, etc.) |
 
 ### Backend: `opc-da-backend` (default feature)
 
@@ -215,12 +218,15 @@ The library handles both flat and hierarchical OPC DA namespaces:
 
 1. `query_organization()` detects namespace type (flat vs hierarchical).
 2. **Flat:** Enumerate all `OPC_LEAF` items at root.
-3. **Hierarchical:** Recursive depth-first walk via `browse_recursive()`:
+3. **Hierarchical — OPC_FLAT fast path (preferred):**
+   Try `BrowseOPCItemIDs(OPC_FLAT)` at root — returns ALL leaf items as fully-qualified IDs in a single pass. Falls back to recursive browse if the server returns an error or empty results.
+4. **Hierarchical — Recursive fallback:**
+   Depth-first walk via `browse_recursive()`:
    - **Branches first:** Enumerate `OPC_BRANCH` items, navigate down via `change_browse_position(DOWN)`, recurse, then **always** navigate back `UP` — even if recursion fails — to prevent position corruption.
    - **Leaves second (soft-fail):** Enumerate `OPC_LEAF` items at current position; failures are logged and skipped.
    - **Fully-qualified IDs:** `get_item_id()` converts browse names to item IDs; falls back to browse name if conversion fails.
    - **Iterator bug handled:** The upstream `StringIterator` bug (OPC-BUG-001) is handled internally via cache zeroing.
-4. **Safety guards:**
+5. **Safety guards:**
    - `max_tags` hard cap (default 10,000) to prevent unbounded collection.
    - `MAX_DEPTH` (50) to guard against infinite recursion in malformed namespaces.
    - A shared `tags_sink` (`Arc<Mutex<Vec<String>>>`) allows the caller to harvest tags mid-browse on timeout.

@@ -4,6 +4,7 @@ use crate::opc_da::{
 };
 
 const MAX_CACHE_SIZE: usize = 16;
+const STRING_CACHE_SIZE: usize = 256;
 
 /// Iterator over COM GUIDs from IEnumGUID.  
 ///
@@ -68,7 +69,7 @@ impl Iterator for GuidIterator {
 
 pub struct StringIterator {
     inner: windows::Win32::System::Com::IEnumString,
-    cache: Box<[windows::core::PWSTR; MAX_CACHE_SIZE]>,
+    cache: Box<[windows::core::PWSTR; STRING_CACHE_SIZE]>,
     index: u32,
     count: u32,
     done: bool,
@@ -78,8 +79,8 @@ impl StringIterator {
     pub fn new(inner: windows::Win32::System::Com::IEnumString) -> Self {
         Self {
             inner,
-            cache: Box::new([windows::core::PWSTR::null(); MAX_CACHE_SIZE]),
-            index: MAX_CACHE_SIZE as u32,
+            cache: Box::new([windows::core::PWSTR::null(); STRING_CACHE_SIZE]),
+            index: STRING_CACHE_SIZE as u32,
             count: 0,
             done: false,
         }

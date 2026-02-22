@@ -1,6 +1,7 @@
 use crate::backend::connector::{ComConnector, ConnectedGroup, ConnectedServer, ServerConnector};
 use crate::bindings::da::{
-    OPC_BRANCH, OPC_BROWSE_DOWN, OPC_BROWSE_UP, OPC_DS_DEVICE, OPC_LEAF, OPC_NS_FLAT, tagOPCITEMDEF,
+    OPC_BRANCH, OPC_BROWSE_DOWN, OPC_BROWSE_UP, OPC_DS_DEVICE, OPC_FLAT, OPC_LEAF, OPC_NS_FLAT,
+    tagOPCITEMDEF,
 };
 use crate::helpers::{
     filetime_to_string, format_hresult, opc_value_to_variant, quality_to_string, variant_to_string,
@@ -181,7 +182,53 @@ impl<C: ServerConnector + 'static> OpcProvider for OpcDaWrapper<C> {
                     progress.fetch_add(1, Ordering::Relaxed);
                 }
             } else {
-                browse_recursive(&opc_server, &mut tags, max_tags, &progress, &tags_sink, 0)?;
+                // Try OPC_FLAT — returns fully-qualified item IDs directly,
+                // eliminating recursive traversal and per-leaf get_item_id().
+                let use_flat = match opc_server.browse_opc_item_ids(OPC_FLAT.0 as u32, Some(""), 0, 0) {
+                    Ok(mut flat_enum) => match flat_enum.next() {
+                        Some(Ok(first_tag)) => {
+                            tracing::info!("OPC_FLAT browse supported — using fast flat enumeration");
+                            tags.push(first_tag.clone());
+                            if let Ok(mut sink) = tags_sink.lock() {
+                                sink.push(first_tag);
+                            }
+                            progress.fetch_add(1, Ordering::Relaxed);
+
+                            for tag_res in flat_enum {
+                                if tags.len() >= max_tags { break; }
+                                match tag_res {
+                                    Ok(tag) => {
+                                        tags.push(tag.clone());
+                                        if let Ok(mut sink) = tags_sink.lock() {
+                                            sink.push(tag);
+                                        }
+                                        progress.fetch_add(1, Ordering::Relaxed);
+                                    }
+                                    Err(e) => {
+                                        tracing::warn!(error = ?e, "OPC_FLAT tag iteration error, skipping");
+                                    }
+                                }
+                            }
+                            true
+                        }
+                        Some(Err(e)) => {
+                            tracing::debug!(error = ?e, "OPC_FLAT first item error, falling back to recursive");
+                            false
+                        }
+                        None => {
+                            tracing::debug!("OPC_FLAT returned no items, falling back to recursive");
+                            false
+                        }
+                    },
+                    Err(e) => {
+                        tracing::debug!(error = ?e, "OPC_FLAT not supported, falling back to recursive");
+                        false
+                    }
+                };
+
+                if !use_flat {
+                    browse_recursive(&opc_server, &mut tags, max_tags, &progress, &tags_sink, 0)?;
+                }
             }
             tracing::info!(count = tags.len(), "browse_tags completed");
             Ok(tags)
@@ -441,7 +488,9 @@ impl<C: ServerConnector + 'static> OpcProvider for OpcDaWrapper<C> {
 mod tests {
     use super::*;
     use crate::backend::connector::{ConnectedGroup, ConnectedServer, ServerConnector};
-    use crate::bindings::da::{tagOPCITEMDEF, tagOPCITEMRESULT, tagOPCITEMSTATE};
+    use crate::bindings::da::{
+        OPC_NS_HIERARCHIAL, tagOPCITEMDEF, tagOPCITEMRESULT, tagOPCITEMSTATE,
+    };
     use crate::opc_da::client::StringIterator;
     use crate::opc_da::utils::RemoteArray;
     use windows::Win32::System::Com::{IEnumString, IEnumString_Impl};
@@ -706,6 +755,303 @@ mod tests {
         fn connect(&self, _server_name: &str) -> anyhow::Result<Self::Server> {
             Ok(MockServer)
         }
+    }
+
+    #[derive(Clone, Debug, PartialEq)]
+    enum OpcFlatBehavior {
+        Success(Vec<String>),
+        ReturnsError,
+        ReturnsEmpty,
+    }
+
+    struct MockHierarchicalServer {
+        opc_flat_behavior: OpcFlatBehavior,
+        position: std::cell::RefCell<Vec<String>>,
+    }
+
+    impl ConnectedServer for MockHierarchicalServer {
+        type Group = MockGroup;
+
+        fn query_organization(&self) -> anyhow::Result<u32> {
+            Ok(OPC_NS_HIERARCHIAL.0 as u32)
+        }
+
+        fn browse_opc_item_ids(
+            &self,
+            browse_type: u32,
+            _filter: Option<&str>,
+            _data_type: u16,
+            _access_rights: u32,
+        ) -> anyhow::Result<StringIterator> {
+            let pos = self.position.borrow();
+            let mut results = Vec::new();
+
+            if browse_type == OPC_FLAT.0 as u32 {
+                match &self.opc_flat_behavior {
+                    OpcFlatBehavior::Success(items) => {
+                        results = items.clone();
+                    }
+                    OpcFlatBehavior::ReturnsError => {
+                        return Err(anyhow::anyhow!("OPC_FLAT not supported mock error"));
+                    }
+                    OpcFlatBehavior::ReturnsEmpty => {
+                        // Return empty iterator
+                    }
+                }
+            } else if browse_type == OPC_BRANCH.0 as u32 {
+                if pos.is_empty() {
+                    results.push("Branch1".to_string());
+                    results.push("Branch2".to_string());
+                }
+            } else if browse_type == OPC_LEAF.0 as u32 {
+                if pos.len() == 1 && pos[0] == "Branch1" {
+                    results.push("Leaf1".to_string());
+                    results.push("Leaf2".to_string());
+                } else if pos.len() == 1 && pos[0] == "Branch2" {
+                    results.push("Leaf3".to_string());
+                }
+            }
+
+            let mock_enum: IEnumString = MockEnumString {
+                items: results,
+                index: std::sync::atomic::AtomicUsize::new(0),
+            }
+            .into();
+            Ok(StringIterator::new(mock_enum))
+        }
+
+        fn change_browse_position(&self, direction: u32, name: &str) -> anyhow::Result<()> {
+            let mut pos = self.position.borrow_mut();
+            if direction == OPC_BROWSE_DOWN.0 as u32 {
+                pos.push(name.to_string());
+            } else if direction == OPC_BROWSE_UP.0 as u32 {
+                pos.pop();
+            }
+            Ok(())
+        }
+
+        fn get_item_id(&self, item_name: &str) -> anyhow::Result<String> {
+            let pos = self.position.borrow();
+            if pos.is_empty() {
+                Ok(item_name.to_string())
+            } else {
+                Ok(format!("{}.{}", pos.join("."), item_name))
+            }
+        }
+
+        fn add_group(
+            &self,
+            _name: &str,
+            _active: bool,
+            _update_rate: u32,
+            _client_handle: u32,
+            _time_bias: i32,
+            _percent_deadband: f32,
+            _locale_id: u32,
+            _revised_update_rate: &mut u32,
+            _server_handle: &mut u32,
+        ) -> anyhow::Result<Self::Group> {
+            Ok(MockGroup)
+        }
+
+        fn remove_group(&self, _server_group: u32, _force: bool) -> anyhow::Result<()> {
+            Ok(())
+        }
+    }
+
+    struct MockHierarchicalConnector {
+        opc_flat_behavior: OpcFlatBehavior,
+    }
+
+    impl ServerConnector for MockHierarchicalConnector {
+        type Server = MockHierarchicalServer;
+
+        fn enumerate_servers(&self) -> anyhow::Result<Vec<String>> {
+            Ok(vec!["Mock.Hierarchical.1".to_string()])
+        }
+
+        fn connect(&self, _server_name: &str) -> anyhow::Result<Self::Server> {
+            Ok(MockHierarchicalServer {
+                opc_flat_behavior: self.opc_flat_behavior.clone(),
+                position: std::cell::RefCell::new(Vec::new()),
+            })
+        }
+    }
+
+    #[test]
+    fn test_browse_tags_flat_server() {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .unwrap();
+        rt.block_on(async {
+            let wrapper = OpcDaWrapper {
+                connector: std::sync::Arc::new(MockConnector),
+            };
+
+            let progress = Arc::new(AtomicUsize::new(0));
+            let sink = Arc::new(std::sync::Mutex::new(Vec::new()));
+
+            let tags = wrapper
+                .browse_tags("Mock.Server", 100, progress.clone(), sink.clone())
+                .await
+                .unwrap();
+
+            assert_eq!(tags.len(), 2);
+            assert_eq!(tags[0], "MockTag.1");
+            assert_eq!(tags[1], "MockTag.2");
+
+            assert_eq!(progress.load(Ordering::Relaxed), 2);
+            let sink_tags = sink.lock().unwrap().clone();
+            assert_eq!(sink_tags, tags);
+        });
+    }
+
+    #[test]
+    fn test_browse_tags_hierarchical_recursive() {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .unwrap();
+        rt.block_on(async {
+            let connector = MockHierarchicalConnector {
+                opc_flat_behavior: OpcFlatBehavior::ReturnsError,
+            };
+            let wrapper = OpcDaWrapper {
+                connector: std::sync::Arc::new(connector),
+            };
+
+            let progress = Arc::new(AtomicUsize::new(0));
+            let sink = Arc::new(std::sync::Mutex::new(Vec::new()));
+
+            let tags = wrapper
+                .browse_tags("Mock.Hierarchical", 100, progress.clone(), sink.clone())
+                .await
+                .unwrap();
+
+            assert_eq!(tags.len(), 3);
+            assert_eq!(tags[0], "Branch1.Leaf1");
+            assert_eq!(tags[1], "Branch1.Leaf2");
+            assert_eq!(tags[2], "Branch2.Leaf3");
+
+            assert_eq!(progress.load(Ordering::Relaxed), 3);
+            let sink_tags = sink.lock().unwrap().clone();
+            assert_eq!(sink_tags, tags);
+        });
+    }
+
+    #[test]
+    fn test_browse_tags_opc_flat_success() {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .unwrap();
+        rt.block_on(async {
+            let connector = MockHierarchicalConnector {
+                opc_flat_behavior: OpcFlatBehavior::Success(vec![
+                    "FQ.Branch1.Leaf1".to_string(),
+                    "FQ.Branch1.Leaf2".to_string(),
+                    "FQ.Branch2.Leaf3".to_string(),
+                ]),
+            };
+            let wrapper = OpcDaWrapper {
+                connector: std::sync::Arc::new(connector),
+            };
+
+            let progress = Arc::new(AtomicUsize::new(0));
+            let sink = Arc::new(std::sync::Mutex::new(Vec::new()));
+
+            let tags = wrapper
+                .browse_tags("Mock.Hierarchical", 100, progress.clone(), sink.clone())
+                .await
+                .unwrap();
+
+            assert_eq!(tags.len(), 3);
+            assert_eq!(tags[0], "FQ.Branch1.Leaf1");
+            assert_eq!(tags[1], "FQ.Branch1.Leaf2");
+            assert_eq!(tags[2], "FQ.Branch2.Leaf3");
+
+            assert_eq!(progress.load(Ordering::Relaxed), 3);
+            let sink_tags = sink.lock().unwrap().clone();
+            assert_eq!(sink_tags, tags);
+        });
+    }
+
+    #[test]
+    fn test_browse_tags_opc_flat_error_fallback() {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .unwrap();
+        rt.block_on(async {
+            let connector = MockHierarchicalConnector {
+                opc_flat_behavior: OpcFlatBehavior::ReturnsError,
+            };
+            let wrapper = OpcDaWrapper {
+                connector: std::sync::Arc::new(connector),
+            };
+
+            let progress = Arc::new(AtomicUsize::new(0));
+            let sink = Arc::new(std::sync::Mutex::new(Vec::new()));
+
+            let tags = wrapper
+                .browse_tags("Mock.Hierarchical", 100, progress.clone(), sink.clone())
+                .await
+                .unwrap();
+
+            assert_eq!(tags.len(), 3);
+            assert_eq!(tags[0], "Branch1.Leaf1");
+            assert_eq!(tags[1], "Branch1.Leaf2");
+            assert_eq!(tags[2], "Branch2.Leaf3");
+        });
+    }
+
+    #[test]
+    fn test_browse_tags_opc_flat_empty_fallback() {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .unwrap();
+        rt.block_on(async {
+            let connector = MockHierarchicalConnector {
+                opc_flat_behavior: OpcFlatBehavior::ReturnsEmpty,
+            };
+            let wrapper = OpcDaWrapper {
+                connector: std::sync::Arc::new(connector),
+            };
+
+            let progress = Arc::new(AtomicUsize::new(0));
+            let sink = Arc::new(std::sync::Mutex::new(Vec::new()));
+
+            let tags = wrapper
+                .browse_tags("Mock.Hierarchical", 100, progress.clone(), sink.clone())
+                .await
+                .unwrap();
+
+            assert_eq!(tags.len(), 3);
+            assert_eq!(tags[0], "Branch1.Leaf1");
+            assert_eq!(tags[1], "Branch1.Leaf2");
+            assert_eq!(tags[2], "Branch2.Leaf3");
+        });
+    }
+
+    #[test]
+    fn test_browse_tags_max_tags_limit() {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .unwrap();
+        rt.block_on(async {
+            let wrapper = OpcDaWrapper {
+                connector: std::sync::Arc::new(MockConnector),
+            };
+
+            let progress = Arc::new(AtomicUsize::new(0));
+            let sink = Arc::new(std::sync::Mutex::new(Vec::new()));
+
+            // Limit to 2 tags
+            let tags = wrapper
+                .browse_tags("Mock.Server", 2, progress.clone(), sink.clone())
+                .await
+                .unwrap();
+
+            assert_eq!(tags.len(), 2);
+            assert_eq!(progress.load(Ordering::Relaxed), 2);
+        });
     }
 
     #[test]

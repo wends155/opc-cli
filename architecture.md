@@ -18,7 +18,7 @@
 *   **Crate**: `opc-da-client`
 *   **Purpose**: Provides a unified, backend-agnostic trait (`OpcProvider`) for OPC DA operations.
 
-### 2. Core Logic & Async Runtime
+### 3. Core Logic & Async Runtime
 *   **Crate**: `tokio`
 *   **Responsibility**: Driving the main event loop and handling async tasks (though COM interactions are often thread-bound).
 
@@ -41,17 +41,20 @@
 The browse implementation handles both flat and hierarchical OPC DA namespaces:
 1. `query_organization()` detects namespace type (flat vs hierarchical).
 2. **Flat:** Enumerate all `OPC_LEAF` items at root.
-3. **Hierarchical:** Recursive depth-first walk via `browse_recursive()`:
+3. **Hierarchical — OPC_FLAT fast path (preferred):**
+   Try `BrowseOPCItemIDs(OPC_FLAT)` at root — returns ALL leaf items as fully-qualified IDs in a single pass. Falls back to recursive browse if the server returns an error or empty results.
+4. **Hierarchical — Recursive fallback:**
+   Depth-first walk via `browse_recursive()`:
    - **Branches first:** Enumerate `OPC_BRANCH` items, navigate down via `change_browse_position(DOWN)`, recurse, then always navigate back `UP` — even if recursion fails — to prevent position corruption.
    - **Leaves second (soft-fail):** Enumerate `OPC_LEAF` items at current position; failures are logged and skipped.
    - **Fully-qualified IDs:** `get_item_id()` converts browse names to item IDs; falls back to browse name if conversion fails.
    - **Iterator bug (OPC-BUG-001) — FIXED:** `StringIterator` now zeroes its cache before each `IEnumString::Next()` call and silently skips null `PWSTR` entries, eliminating the phantom `E_POINTER` errors at the iterator level.
-4. **Safety guards:**
+5. **Safety guards:**
    - `max_tags` hard cap (default 10000) to prevent unbounded collection.
    - `MAX_DEPTH` (50) to guard against infinite recursion in malformed namespaces.
    - **300-second timeout** with graceful partial result harvesting. If tags are discovered before the timeout, the application displays the partial list with a warning instead of an error.
    - A shared `tags_sink` (`Arc<Mutex<Vec<String>>>`) allows the main thread to harvest tags mid-browse on timeout.
-5. **Non-blocking:** Browse runs as a background task; progress reported via `Arc<AtomicUsize>` to the Loading screen.
+6. **Non-blocking:** Browse runs as a background task; progress reported via `Arc<AtomicUsize>` to the Loading screen.
 6. **Decoupled Architecture**: Detailed browse logic and COM handling live in `opc-da-client`. See [architecture: opc-da-client](file:///c:/Users/WSALIGAN/code/opc-cli/opc-da-client/architecture.md) for specifics.
 
 #### TUI Interaction Features
@@ -78,7 +81,7 @@ The browse implementation handles both flat and hierarchical OPC DA namespaces:
 *   **Crate**: `anyhow`
 *   **Responsibility**: Propagating rich context errors to the UI logic for display in the Status Bar or Error Popups.
 *   **Strategy**: 
-    1.  **Friendly Hints**: A mapping engine in `opc_impl.rs` translates common technical codes (like licensing or RPC errors) into plain-English advice.
+    1.  **Friendly Hints**: A mapping engine in `helpers.rs` (`opc-da-client`) translates common technical codes (like licensing or RPC errors) into plain-English advice.
     2.  **Display Chain**: The UI uses `{:#}` formatting to show the full breadcrumb trail of a failure to the user.
 
 ## Application State Flow
@@ -189,13 +192,13 @@ The project prioritizes a **Test-Driven Architecture** where the UI and business
 ### 1. Unit Testing (Mock-Based)
 *   **Mechanism**: Uses the `mockall` crate to provide a `MockOpcProvider` during tests.
 *   **Decoupling**: By abstracting OPC interactions behind the `OpcProvider` trait, the TUI and state transition logic can be verified on any platform (Linux/macOS/Windows) without a physical OPC server.
-*   **Coverage** (20+ tests as of 2026-02-21):
+*   **Coverage** (80+ tests as of 2026-02-22):
     *   **UI Logic (`opc-cli/src/app.rs`)**: State transitions, navigation, search, tag selection, message ring-buffer, graceful timeout handling, and background task result polling.
     *   **Input Handling (`opc-cli/src/main.rs`)**: Key event processing across all screens.
     *   **OPC Logic (`opc-da-client`)**: HRESULT hint mapping, GUID filtering, FILETIME conversion, variant roundtrip, iterator bug detection, and `ComGuard` doctest.
 
 ### 2. Integration & Manual Testing
-*   **OPC Implementation (`src/opc_impl.rs`)**: Due to its direct reliance on the Windows `opc_da` crate and COM/DCOM registry, this layer is primarily verified through manual end-to-end testing against real OPC servers (e.g., Matrikon, Kepware, or local simulation servers).
+*   **OPC DA Layer (`opc-da-client`)**: Due to its direct reliance on Windows COM/DCOM, this layer is primarily verified through mock-backend integration tests and manual end-to-end testing against real OPC servers (e.g., Matrikon, Kepware, or local simulation servers).
 *   **Async Boundaries**: Background task spawning and `tokio` timeouts are tested in `src/app.rs` using `#[tokio::test]`.
 > [!IMPORTANT]
 > Known bugs in the `opc_da` crate (like the **StringIterator E_POINTER flood**) and their workarounds are now documented in [opc-da-client/architecture.md](file:///c:/Users/WSALIGAN/code/opc-cli/opc-da-client/architecture.md).
