@@ -329,3 +329,10 @@ emove_group errors now logged instead of silently discarded.
 > * **Changes:** Replaced spawn_blocking/ComGuard per-request pattern with a dedicated ComWorker thread using mpsc/oneshot messaging. Added connection cache to the worker to fix COM connection churn and ephemeral port exhaustion. Verified all 51 tests across both crates.
 > * **New Constraints:** Any modifications to COM logic MUST occur via ComRequest messages executed inside the single ComWorker thread. Tests needing COM execution must wrap their worker spawn in 	okio::task::spawn_blocking.
 > * **Pruned:** ComGuard references and per-request spawn_blocking from opc_da.rs are obsolete. Previous audit recommendations around short-lived connections are superseded by the worker pool.
+
+
+> 📝 **Context Update:**
+> * **Feature:** Resolve 	okio runtime panic in ComWorker::start()
+> * **Changes:** Switched ComWorker initialization signal from 	okio::sync::oneshot to std::sync::mpsc. The OS-level synchronization prevents Tokio from detecting a blocking call on the async runtime thread, safely avoiding a deadlock panic. Enhanced tracing visibility by adding bookend 	racing::info! milestones in OpcDaClient::new() and reordering main.rs to initialize OPC *before* taking over the terminal with the raw UI, ensuring any future startup errors write to standard terminal out instead of being swallowed by the alternate screen.
+> * **New Constraints:** Only use 	okio::sync primitives if waiting inside async methods via .await. Use std::sync::mpsc for purely blocking initialization synchronization between a standard thread and an async tokio thread context.
+> * **Pruned:** The panic.txt log output can be completely ignored.

@@ -22,7 +22,9 @@ impl Default for OpcDaClient<ComConnector> {
 impl<C: ServerConnector + 'static> OpcDaClient<C> {
     /// Creates a new `OpcDaClient` with the given connector.
     pub fn new(connector: C) -> OpcResult<Self> {
+        tracing::info!("Initializing OpcDaClient...");
         let worker = ComWorker::start(Arc::new(connector))?;
+        tracing::info!("OpcDaClient initialized successfully");
         Ok(Self { worker })
     }
 }

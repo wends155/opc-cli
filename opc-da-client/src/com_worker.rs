@@ -61,7 +61,7 @@ fn is_connection_error(err: &OpcError) -> bool {
 impl<C: ServerConnector + 'static> ComWorker<C> {
     pub fn start(connector: Arc<C>) -> Result<Self, OpcError> {
         let (tx, mut rx) = mpsc::channel(32);
-        let (init_tx, init_rx) = oneshot::channel();
+        let (init_tx, init_rx) = std::sync::mpsc::channel();
 
         let handle = std::thread::spawn(move || {
             tracing::debug!("COM worker thread spawned, initializing COM (MTA)");
@@ -157,7 +157,7 @@ impl<C: ServerConnector + 'static> ComWorker<C> {
         });
 
         init_rx
-            .blocking_recv()
+            .recv()
             .map_err(|_| OpcError::Internal("COM worker thread panicked during init".into()))??;
 
         tracing::debug!("COM worker thread started");

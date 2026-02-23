@@ -37,6 +37,9 @@ async fn main() -> Result<()> {
     // The ComGuard here was intentionally removed per connection pooling architecture.
     // The dedicated COM worker thread will now own and manage COM initialization.
 
+    // Create OPC client BEFORE entering TUI mode so init errors are visible
+    let opc_wrapper = Arc::new(OpcDaClient::new(ComConnector)?);
+
     // Setup terminal
     enable_raw_mode()?;
     let mut stdout = io::stdout();
@@ -45,7 +48,6 @@ async fn main() -> Result<()> {
     let mut terminal = Terminal::new(backend)?;
 
     // Create app and run it
-    let opc_wrapper = Arc::new(OpcDaClient::new(ComConnector)?);
     let mut app = App::new(opc_wrapper);
     let res = run_app(&mut terminal, &mut app);
 
