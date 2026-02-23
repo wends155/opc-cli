@@ -85,7 +85,7 @@ Execute the workspace's standard verification pipeline:
 
 ```powershell
 # From the repository root
-.\verify.ps1
+.\scripts\verify.ps1
 ```
 
 This runs:

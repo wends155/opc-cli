@@ -3,7 +3,7 @@
     Automated Git Commit & Push Pipeline.
 .DESCRIPTION
     Mandates a strict commit message parameter.
-    Executes the workspace `/verify.ps1` quality gate prior to tracking.
+    Executes the workspace `scripts/verify.ps1` quality gate prior to tracking.
     Safely commits all modified structures and pushes to remote with tracking hooks.
 #>
 
@@ -14,8 +14,12 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
-Write-Host ">>> Checking Quality Gates via verify.ps1..." -ForegroundColor Cyan
-pwsh -File .\verify.ps1
+# Resolve repo root (one level up from scripts/)
+$repoRoot = Split-Path -Parent $PSScriptRoot
+Set-Location $repoRoot
+
+Write-Host ">>> Checking Quality Gates via scripts/verify.ps1..." -ForegroundColor Cyan
+pwsh -File $PSScriptRoot\verify.ps1
 
 if ($LASTEXITCODE -ne 0) {
     Write-Host "`ncommit.ps1 Failed: verify.ps1 encountered a non-zero exit code. Fix the errors before committing." -ForegroundColor Red
