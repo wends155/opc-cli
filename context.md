@@ -322,3 +322,10 @@ emove_group errors now logged instead of silently discarded.
 > * **Changes:** Created the workflow with: Context Init, Version Sync (README/Cargo/rustdocs/CHANGELOG), Docs Consistency, Cargo Manifest QC, Narsil Security Scan, Verification Gate (`verify.ps1`), Simulated `cargo publish --dry-run`, structured Report (`prepublish_report.md` with Pass/Fail matrix, Action Items, Recommendations), and Completion. Follows the same structural conventions as `/audit` and `/plan-making`.
 > * **New Constraints:** Invoke `/prepublish` before every `cargo publish` to guarantee documentation, versioning, and security alignment.
 > * **Pruned:** Ad-hoc pre-publish manual checks are superseded by the formalized workflow.
+
+## 2026-02-23: Refactor OPC DA COM Threading & Pooling
+> 📝 **Context Update:**
+> * **Feature:** Replace task-based COM threading with long-lived ComWorker pool
+> * **Changes:** Replaced spawn_blocking/ComGuard per-request pattern with a dedicated ComWorker thread using mpsc/oneshot messaging. Added connection cache to the worker to fix COM connection churn and ephemeral port exhaustion. Verified all 51 tests across both crates.
+> * **New Constraints:** Any modifications to COM logic MUST occur via ComRequest messages executed inside the single ComWorker thread. Tests needing COM execution must wrap their worker spawn in 	okio::task::spawn_blocking.
+> * **Pruned:** ComGuard references and per-request spawn_blocking from opc_da.rs are obsolete. Previous audit recommendations around short-lived connections are superseded by the worker pool.

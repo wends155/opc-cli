@@ -64,8 +64,10 @@ impl<C: ServerConnector + 'static> ComWorker<C> {
         let (init_tx, init_rx) = oneshot::channel();
 
         let handle = std::thread::spawn(move || {
+            tracing::debug!("COM worker thread spawned, initializing COM (MTA)");
             let _guard = match crate::ComGuard::new() {
                 Ok(g) => {
+                    tracing::info!("COM MTA initialized successfully on worker thread");
                     let _ = init_tx.send(Ok(()));
                     g
                 }
@@ -84,9 +86,21 @@ impl<C: ServerConnector + 'static> ComWorker<C> {
                     ComRequest::ListServers { host, reply } => {
                         let span = tracing::info_span!("opc.list_servers", host = %host);
                         let _enter = span.enter();
+                        let start = std::time::Instant::now();
                         let servers = connector.enumerate_servers();
                         if let Ok(s) = &servers {
-                            tracing::info!(count = s.len(), "list_servers completed");
+                            tracing::info!(
+                                count = s.len(),
+                                elapsed_ms =
+                                    u64::try_from(start.elapsed().as_millis()).unwrap_or(u64::MAX),
+                                "list_servers completed"
+                            );
+                        } else if let Err(e) = &servers {
+                            tracing::error!(
+                                error = ?e,
+                                elapsed_ms = u64::try_from(start.elapsed().as_millis()).unwrap_or(u64::MAX),
+                                "list_servers failed"
+                            );
                         }
                         let _ = reply.send(servers);
                     }
@@ -195,6 +209,7 @@ impl<C: ServerConnector + 'static> ComWorker<C> {
         } else {
             tracing::debug!(server = %server_name, "Cache miss, connecting");
             let srv = connector.connect(server_name)?;
+            tracing::info!(server = %server_name, "Connection established, added to pool");
             cache.insert(server_name.to_string(), srv);
             cache.get(server_name)
         };
@@ -211,6 +226,7 @@ impl<C: ServerConnector + 'static> ComWorker<C> {
                 })?;
                 let fresh_ref = &fresh_srv;
                 let result = operation(fresh_ref);
+                tracing::info!(server = %server_name, "Reconnection successful, pool updated");
                 cache.insert(server_name.to_string(), fresh_srv);
                 result
             }
@@ -230,6 +246,7 @@ impl<C: ServerConnector + 'static> ComWorker<C> {
             tag_count = tag_ids.len()
         );
         let _enter = span.enter();
+        let start = std::time::Instant::now();
 
         let mut revised_update_rate = 0u32;
         let mut server_handle = GroupHandle::default();
@@ -340,7 +357,11 @@ impl<C: ServerConnector + 'static> ComWorker<C> {
             };
         }
 
-        tracing::info!(count = tag_values.len(), "read_tag_values completed");
+        tracing::info!(
+            count = tag_values.len(),
+            elapsed_ms = u64::try_from(start.elapsed().as_millis()).unwrap_or(u64::MAX),
+            "read_tag_values completed"
+        );
         if let Err(e) = opc_server.remove_group(server_handle, true) {
             tracing::warn!(error = ?e, operation = "read_tag_values", "Failed to remove OPC group during cleanup");
         }
@@ -360,6 +381,7 @@ impl<C: ServerConnector + 'static> ComWorker<C> {
             tag = %tag_id
         );
         let _enter = span.enter();
+        let start = std::time::Instant::now();
 
         let mut revised_update_rate = 0u32;
         let mut server_handle = GroupHandle::default();
@@ -419,7 +441,10 @@ impl<C: ServerConnector + 'static> ComWorker<C> {
             .ok_or_else(|| OpcError::Internal("Server returned empty write errors".to_string()))?;
 
         let write_result = if write_err.is_ok() {
-            tracing::info!("write_tag_value completed");
+            tracing::info!(
+                elapsed_ms = u64::try_from(start.elapsed().as_millis()).unwrap_or(u64::MAX),
+                "write_tag_value completed"
+            );
             WriteResult {
                 tag_id: tag_id.to_string(),
                 success: true,
@@ -427,7 +452,11 @@ impl<C: ServerConnector + 'static> ComWorker<C> {
             }
         } else {
             let msg = format_hresult(*write_err);
-            tracing::warn!(error = %msg, "write_tag_value: server rejected write");
+            tracing::warn!(
+                error = %msg,
+                elapsed_ms = u64::try_from(start.elapsed().as_millis()).unwrap_or(u64::MAX),
+                "write_tag_value: server rejected write"
+            );
             WriteResult {
                 tag_id: tag_id.to_string(),
                 success: false,
@@ -450,6 +479,7 @@ impl<C: ServerConnector + 'static> ComWorker<C> {
     ) -> OpcResult<Vec<String>> {
         let span = tracing::info_span!("opc.browse_tags", server = %server_name, max_tags);
         let _enter = span.enter();
+        let start = std::time::Instant::now();
 
         let org = opc_server.query_organization()?;
         let mut tags = Vec::new();
@@ -516,7 +546,11 @@ impl<C: ServerConnector + 'static> ComWorker<C> {
                 Self::browse_recursive(opc_server, &mut tags, max_tags, progress, tags_sink, 0)?;
             }
         }
-        tracing::info!(count = tags.len(), "browse_tags completed");
+        tracing::info!(
+            count = tags.len(),
+            elapsed_ms = u64::try_from(start.elapsed().as_millis()).unwrap_or(u64::MAX),
+            "browse_tags completed"
+        );
         Ok(tags)
     }
 
@@ -598,6 +632,12 @@ impl<C: ServerConnector + 'static> ComWorker<C> {
         }
 
         Ok(())
+    }
+}
+
+impl<C: ServerConnector + 'static> Drop for ComWorker<C> {
+    fn drop(&mut self) {
+        tracing::debug!("ComWorker dropping — channel closing, signaling thread shutdown");
     }
 }
 

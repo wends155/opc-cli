@@ -11,13 +11,16 @@
     Minimum severity filter: TRACE, DEBUG, INFO, WARN, or ERROR. Default: WARN.
 .PARAMETER All
     Scan all log files, not just the latest.
+.PARAMETER Lifecycle
+    Extract and display COM lifecycle, connection pool, and operation timing events.
 #>
 
 param(
     [int]$Lines = 50,
     [ValidateSet("TRACE", "DEBUG", "INFO", "WARN", "ERROR")]
     [string]$Level = "WARN",
-    [switch]$All
+    [switch]$All,
+    [switch]$Lifecycle
 )
 
 $ErrorActionPreference = 'Stop'
@@ -129,6 +132,102 @@ Write-Host " INFO           : $totalInfo" -ForegroundColor Gray
 Write-Host " WARN           : $totalWarn" -ForegroundColor DarkYellow
 Write-Host " ERROR          : $totalError" -ForegroundColor Red
 Write-Host "========================================" -ForegroundColor Cyan
+
+# --- COM Lifecycle Extraction ---
+if ($Lifecycle) {
+    Write-Host "`n========================================" -ForegroundColor Magenta
+    Write-Host " COM Lifecycle & Pool Events" -ForegroundColor Magenta
+    Write-Host "========================================" -ForegroundColor Magenta
+
+    # Collect all content across scanned files
+    $allContent = foreach ($file in $logFiles) { Get-Content $file.FullName }
+
+    # --- Lifecycle events ---
+    $lifecyclePatterns = @(
+        'COM worker thread spawned',
+        'COM MTA initialized',
+        'COM worker thread started',
+        'COM worker thread exiting cleanly',
+        'ComWorker dropping',
+        'COM MTA teardown',
+        'COM worker failed to initialize MTA',
+        'COM worker thread panicked'
+    )
+    $lifecycleRegex = ($lifecyclePatterns | ForEach-Object { [regex]::Escape($_) }) -join '|'
+    $lifecycleLines = $allContent | Select-String -Pattern $lifecycleRegex
+
+    Write-Host "`n  Thread Lifecycle ($($lifecycleLines.Count) events):" -ForegroundColor White
+    if ($lifecycleLines.Count -eq 0) {
+        Write-Host "    (none found — run with -Level DEBUG to capture)" -ForegroundColor DarkGray
+    } else {
+        foreach ($line in $lifecycleLines) {
+            $text = $line.Line
+            if ($text -match 'ERROR') {
+                Write-Host "    $text" -ForegroundColor Red
+            } elseif ($text -match 'initialized|started') {
+                Write-Host "    $text" -ForegroundColor Green
+            } elseif ($text -match 'exiting|dropping|teardown') {
+                Write-Host "    $text" -ForegroundColor DarkYellow
+            } else {
+                Write-Host "    $text" -ForegroundColor Gray
+            }
+        }
+    }
+
+    # --- Connection pool events ---
+    $poolPatterns = @(
+        'Connection established',
+        'Evicting stale connection',
+        'Reconnection successful',
+        'Reconnect failed',
+        'Cache hit',
+        'Cache miss'
+    )
+    $poolRegex = ($poolPatterns | ForEach-Object { [regex]::Escape($_) }) -join '|'
+    $poolLines = $allContent | Select-String -Pattern $poolRegex
+
+    Write-Host "`n  Connection Pool ($($poolLines.Count) events):" -ForegroundColor White
+    if ($poolLines.Count -eq 0) {
+        Write-Host "    (none found)" -ForegroundColor DarkGray
+    } else {
+        foreach ($line in $poolLines) {
+            $text = $line.Line
+            if ($text -match 'Evicting|failed') {
+                Write-Host "    $text" -ForegroundColor DarkYellow
+            } elseif ($text -match 'established|successful') {
+                Write-Host "    $text" -ForegroundColor Green
+            } else {
+                Write-Host "    $text" -ForegroundColor DarkCyan
+            }
+        }
+    }
+
+    # --- Timing extraction ---
+    $timingLines = $allContent | Select-String -Pattern 'elapsed_ms='
+    Write-Host "`n  Operation Timings ($($timingLines.Count) events):" -ForegroundColor White
+    if ($timingLines.Count -eq 0) {
+        Write-Host "    (none found)" -ForegroundColor DarkGray
+    } else {
+        foreach ($line in $timingLines) {
+            Write-Host "    $($line.Line)" -ForegroundColor Cyan
+        }
+    }
+
+    # --- Sequence validation ---
+    Write-Host "`n  Sequence Check:" -ForegroundColor White
+    $spawnCount = ($lifecycleLines | Where-Object { $_.Line -match 'spawned' }).Count
+    $initCount  = ($lifecycleLines | Where-Object { $_.Line -match 'initialized successfully' }).Count
+    $exitCount  = ($lifecycleLines | Where-Object { $_.Line -match 'exiting cleanly' }).Count
+    $dropCount  = ($lifecycleLines | Where-Object { $_.Line -match 'dropping' }).Count
+
+    if ($spawnCount -eq $initCount -and $initCount -ge $exitCount) {
+        Write-Host "    OK: spawn=$spawnCount init=$initCount exit=$exitCount drop=$dropCount" -ForegroundColor Green
+    } else {
+        Write-Host "    ANOMALY: spawn=$spawnCount init=$initCount exit=$exitCount drop=$dropCount" -ForegroundColor Red
+    }
+
+    Write-Host "========================================`n" -ForegroundColor Magenta
+}
 
 if ($hasErrors) {
     Write-Host "`nErrors detected." -ForegroundColor Red

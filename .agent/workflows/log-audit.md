@@ -35,6 +35,21 @@ This identifies available log files, line counts, and the distribution across al
 
 > **IMPORTANT**: NEVER guess the log filename from the current date. Always use dynamic discovery.
 
+### 1b. Lifecycle Discovery
+
+// turbo
+Run the lifecycle extraction to get COM thread and connection pool event timelines:
+```powershell
+pwsh -File scripts/check-logs.ps1 -Level TRACE -Lifecycle
+```
+
+This produces:
+- **Thread Lifecycle**: spawn → init → started → exiting → drop sequence with anomaly detection.
+- **Connection Pool**: establish/evict/reconnect events showing cache health.
+- **Operation Timings**: `elapsed_ms` values for list/read/write/browse operations.
+
+Use this output to pre-populate §3b (Event Ordering) and §3d (Resource Lifecycle) analysis.
+
 ### 2. Full Content Ingestion
 
 Read the **entire** log file (all levels), stripping ANSI escape codes:
@@ -55,8 +70,9 @@ Analyze the log across **6 dimensions**. Problems can exist at ANY severity leve
 - These are direct failure signals — record each one.
 
 #### 3b. Event Ordering
+- **Start with the `-Lifecycle` output from Step 1b** — it pre-extracts the COM thread timeline.
 - Are lifecycle events in the correct sequence?
-- Expected: `init → use → teardown` (e.g., `COM MTA initialized → operations → COM MTA teardown`).
+- Expected: `spawn → init → started → [operations] → exiting → drop → teardown`.
 - Flag any out-of-order sequences (teardown before use, operations after teardown).
 - Check that startup events precede operational events.
 
@@ -66,9 +82,10 @@ Analyze the log across **6 dimensions**. Problems can exist at ANY severity leve
 - Compare timestamps between related operations to detect stalls.
 
 #### 3d. Resource Lifecycle
-- Track paired events: every `init` should have a matching `teardown`.
+- **Start with the Connection Pool output from Step 1b** — it shows cache events.
+- Track paired events: every `Connection established` should eventually have an `Evicting` or graceful shutdown.
 - Flag: init without teardown (leak), double init, teardown without prior init.
-- For this project, specifically track `COM MTA initialized` ↔ `COM MTA teardown` pairs.
+- Check `spawn` count matches `init` count matches `exit` count (Sequence Check output).
 
 #### 3e. Repetition Anomalies
 - Unexpected repeated operations — retries, duplicate calls, or spin loops visible in DEBUG/TRACE.
