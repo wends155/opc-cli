@@ -182,14 +182,14 @@ All methods use `#[async_trait]`.
 
 | Method | Signature | Description |
 | :--- | :--- | :--- |
-| `new()` | `fn new() -> Self` | Constructs a new wrapper. |
-| `default()` | `fn default() -> Self` | Same as `new()`. |
+| `new(connector: C)` | `fn new(connector: C) -> OpcResult<Self>` | Constructs a new wrapper, launching the dedicated COM worker thread. |
 
-Implements `OpcProvider` for all four trait methods.
+Implements `OpcProvider` for all four trait methods by dispatching to the `ComWorker`.
 
 **Invariants:**
-*   All COM work runs on a dedicated blocking thread via `tokio::task::spawn_blocking`.
-*   COM is initialized via `ComGuard::new()` at the start of every blocking task; teardown is automatic on drop.
+*   All COM work runs on a dedicated, long-lived `ComWorker` thread, avoiding repeated initialization overhead and solving COM thread-affinity constraints.
+*   Connections are pooled and cached automatically inside the worker, mapped by ProgID.
+*   Stale connections are transparently evicted and retried during request dispatch.
 *   GUID filtering: zeroed GUIDs are skipped during server enumeration.
 *   Server list is sorted and deduplicated before returning.
 *   OPC groups created by `read_tag_values` and `write_tag_value` are **always** removed via `remove_group` — even on error paths — to prevent resource leaks.

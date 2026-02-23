@@ -204,13 +204,14 @@ graph TD
     FmtHR -.-> Hint
 ```
 
-### COM Threading Model
+### COM Threading Model & Connection Pooling
 
-OPC DA relies on Windows COM, which requires per-thread initialization.
-The `OpcDaClient` implementation handles this via the `ComGuard` RAII pattern:
-1. Using `tokio::task::spawn_blocking` to move COM work to a dedicated thread pool.
-2. Creating a `ComGuard` (`ComGuard::new()`) at the start of each blocking task to initialize COM in MTA mode.
-3. `ComGuard`'s `Drop` impl calls `CoUninitialize` automatically when the task completes — **regardless of success or failure**.
+OPC DA relies on Windows COM, which requires per-thread initialization and strict thread affinity for proxy pointers.
+The `OpcDaClient` handles this using a dedicated **Worker Thread** and **Connection Pooling**:
+1. **`ComWorker` Thread:** Initialized once via `ComWorker::start()`, it spawns a dedicated `std::thread` that calls `CoInitializeEx` in MTA mode. This thread stays alive for the lifetime of the client, exclusively owning all COM pointers.
+2. **Message Passing:** The async `OpcProvider` trait functions convert caller requests into `ComRequest` elements, sending them over a Tokio `mpsc` channel to the worker. Execution results are returned via `oneshot::Sender`.
+3. **Connection Pooling:** To prevent COM connection churn and ephemeral port exhaustion, the worker maintains a cache (`HashMap<String, C::Server>`) of active server connections mapped by ProgID.
+4. **Resilience & Retry:** If a cached connection becomes stale or the remote server restarts (e.g. `RPC_S_SERVER_UNAVAILABLE`), the `dispatch_with_retry` logic transparently evicts the corrupted proxy, reconnects, and retries the operation.
 
 ### Browse Strategy
 

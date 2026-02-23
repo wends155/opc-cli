@@ -66,9 +66,7 @@ $hasErrors = $false
 $matchedLines = @()
 
 foreach ($file in $logFiles) {
-    $rawContent = Get-Content $file.FullName
-    # Strip ANSI escape codes (tracing emits colorized output to file)
-    $content = $rawContent | ForEach-Object { $_ -replace '\x1B\[[0-9;]*m', '' }
+    $content = Get-Content $file.FullName
     $fileLines = $content.Count
     $totalLines += $fileLines
 

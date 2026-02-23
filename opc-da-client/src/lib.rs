@@ -38,6 +38,7 @@ mod provider;
 #[cfg(feature = "opc-da-backend")]
 #[allow(warnings)]
 mod bindings;
+pub mod com_worker;
 
 #[cfg(feature = "opc-da-backend")]
 #[allow(warnings)]

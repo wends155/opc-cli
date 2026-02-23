@@ -3,7 +3,7 @@ mod app;
 mod ui;
 
 use crate::app::{App, CurrentScreen};
-use anyhow::{Context, Result};
+use anyhow::Result;
 use crossterm::{
     event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode},
     execute,
@@ -23,13 +23,19 @@ async fn main() -> Result<()> {
     let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("debug"));
 
     tracing_subscriber::registry()
-        .with(fmt::layer().with_writer(non_blocking).with_filter(filter))
+        .with(
+            fmt::layer()
+                .with_writer(non_blocking)
+                .with_ansi(false)
+                .with_filter(filter),
+        )
         .init();
 
     tracing::info!("Starting OPC CLI");
 
     // Initialize COM (MTA) for the main thread
-    let _com_guard = opc_da_client::ComGuard::new().context("Failed to initialize COM MTA")?;
+    // The ComGuard here was intentionally removed per connection pooling architecture.
+    // The dedicated COM worker thread will now own and manage COM initialization.
 
     // Setup terminal
     enable_raw_mode()?;
@@ -39,7 +45,7 @@ async fn main() -> Result<()> {
     let mut terminal = Terminal::new(backend)?;
 
     // Create app and run it
-    let opc_wrapper = Arc::new(OpcDaClient::new(ComConnector));
+    let opc_wrapper = Arc::new(OpcDaClient::new(ComConnector)?);
     let mut app = App::new(opc_wrapper);
     let res = run_app(&mut terminal, &mut app);
 

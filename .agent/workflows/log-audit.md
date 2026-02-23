@@ -40,7 +40,7 @@ This identifies available log files, line counts, and the distribution across al
 Read the **entire** log file (all levels), stripping ANSI escape codes:
 ```powershell
 $latest = Get-ChildItem logs -File | Sort-Object LastWriteTime -Descending | Select-Object -First 1
-Get-Content $latest.FullName | ForEach-Object { $_ -replace '\x1B\[[0-9;]*m', '' }
+Get-Content $latest.FullName
 ```
 
 Build a mental timeline of events from first to last entry. Note the overall session structure:
