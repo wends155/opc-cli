@@ -8,14 +8,14 @@
 .PARAMETER Lines
     Number of matching tail lines to display. Default: 50.
 .PARAMETER Level
-    Minimum severity filter: INFO, WARN, or ERROR. Default: WARN.
+    Minimum severity filter: TRACE, DEBUG, INFO, WARN, or ERROR. Default: WARN.
 .PARAMETER All
     Scan all log files, not just the latest.
 #>
 
 param(
     [int]$Lines = 50,
-    [ValidateSet("INFO", "WARN", "ERROR")]
+    [ValidateSet("TRACE", "DEBUG", "INFO", "WARN", "ERROR")]
     [string]$Level = "WARN",
     [switch]$All
 )
@@ -42,12 +42,14 @@ if (-not $All) {
 }
 
 # --- Severity hierarchy ---
-$severityOrder = @{ "INFO" = 1; "WARN" = 2; "ERROR" = 3 }
+$severityOrder = @{ "TRACE" = 0; "DEBUG" = 1; "INFO" = 2; "WARN" = 3; "ERROR" = 4 }
 $minSeverity = $severityOrder[$Level]
 # Tracing format: "2026-02-22T03:13:24.527Z  INFO module::path: message"
 # Anchor severity to the tracing timestamp prefix to avoid false positives
 # from data containing words like "Error" in tag names.
 $levelPattern = switch ($Level) {
+    "TRACE" { '\d{4}-\d{2}-\d{2}T[\d:.]+Z\s+(TRACE|DEBUG|INFO|WARN|ERROR)' }
+    "DEBUG" { '\d{4}-\d{2}-\d{2}T[\d:.]+Z\s+(DEBUG|INFO|WARN|ERROR)' }
     "INFO"  { '\d{4}-\d{2}-\d{2}T[\d:.]+Z\s+(INFO|WARN|ERROR)' }
     "WARN"  { '\d{4}-\d{2}-\d{2}T[\d:.]+Z\s+(WARN|ERROR)' }
     "ERROR" { '\d{4}-\d{2}-\d{2}T[\d:.]+Z\s+ERROR' }
@@ -55,6 +57,8 @@ $levelPattern = switch ($Level) {
 
 # --- Process each file ---
 $totalLines = 0
+$totalTrace = 0
+$totalDebug = 0
 $totalInfo = 0
 $totalWarn = 0
 $totalError = 0
@@ -69,10 +73,14 @@ foreach ($file in $logFiles) {
     $totalLines += $fileLines
 
     # Count severities using anchored patterns
+    $traceCount = ($content | Select-String -Pattern '\d{4}-\d{2}-\d{2}T[\d:.]+Z\s+TRACE').Count
+    $debugCount = ($content | Select-String -Pattern '\d{4}-\d{2}-\d{2}T[\d:.]+Z\s+DEBUG').Count
     $infoCount  = ($content | Select-String -Pattern '\d{4}-\d{2}-\d{2}T[\d:.]+Z\s+INFO').Count
     $warnCount  = ($content | Select-String -Pattern '\d{4}-\d{2}-\d{2}T[\d:.]+Z\s+WARN').Count
     $errorCount = ($content | Select-String -Pattern '\d{4}-\d{2}-\d{2}T[\d:.]+Z\s+ERROR').Count
 
+    $totalTrace += $traceCount
+    $totalDebug += $debugCount
     $totalInfo  += $infoCount
     $totalWarn  += $warnCount
     $totalError += $errorCount
@@ -88,7 +96,7 @@ foreach ($file in $logFiles) {
     Write-Host " Log : $($file.Name)" -ForegroundColor Cyan
     Write-Host " Size: $([math]::Round($file.Length / 1KB, 1)) KB" -ForegroundColor Cyan
     Write-Host " Lines: $fileLines" -ForegroundColor Cyan
-    Write-Host " INFO: $infoCount | WARN: $warnCount | ERROR: $errorCount" -ForegroundColor Cyan
+    Write-Host " TRACE: $traceCount | DEBUG: $debugCount | INFO: $infoCount | WARN: $warnCount | ERROR: $errorCount" -ForegroundColor Cyan
     Write-Host "========================================" -ForegroundColor Cyan
 }
 
@@ -102,8 +110,12 @@ foreach ($line in $tail) {
         Write-Host $text -ForegroundColor Red
     } elseif ($text -match '\d{4}-\d{2}-\d{2}T[\d:.]+Z\s+WARN') {
         Write-Host $text -ForegroundColor DarkYellow
-    } else {
+    } elseif ($text -match '\d{4}-\d{2}-\d{2}T[\d:.]+Z\s+INFO') {
         Write-Host $text -ForegroundColor Gray
+    } elseif ($text -match '\d{4}-\d{2}-\d{2}T[\d:.]+Z\s+DEBUG') {
+        Write-Host $text -ForegroundColor DarkCyan
+    } else {
+        Write-Host $text -ForegroundColor DarkGray
     }
 }
 
@@ -113,6 +125,8 @@ Write-Host " Summary" -ForegroundColor Cyan
 Write-Host "========================================" -ForegroundColor Cyan
 Write-Host " Files scanned : $($logFiles.Count)" -ForegroundColor Cyan
 Write-Host " Total lines   : $totalLines" -ForegroundColor Cyan
+Write-Host " TRACE          : $totalTrace" -ForegroundColor DarkGray
+Write-Host " DEBUG          : $totalDebug" -ForegroundColor DarkCyan
 Write-Host " INFO           : $totalInfo" -ForegroundColor Gray
 Write-Host " WARN           : $totalWarn" -ForegroundColor DarkYellow
 Write-Host " ERROR          : $totalError" -ForegroundColor Red
