@@ -50,6 +50,22 @@ This produces:
 
 Use this output to pre-populate §3b (Event Ordering) and §3d (Resource Lifecycle) analysis.
 
+### 1c. Deep Analysis Discovery
+
+// turbo
+Run the statistical analysis to get timing, churn, repetition, and span reports:
+```powershell
+pwsh -File scripts/check-logs.ps1 -Level TRACE -DeepAnalysis
+```
+
+This produces:
+- **§A Timing Statistics**: min/max/avg elapsed_ms with outlier breakdown.
+- **§B Connection Churn**: connection-to-refresh ratio and cache health.
+- **§C Repetition**: top 10 most-repeated log messages (timestamps stripped).
+- **§D Span Integrity**: grouped `opc.*` span counts.
+
+Use this output to pre-populate §3c (Timing), §3e (Repetition), and §3f (Span Integrity) analysis.
+
 ### 2. Full Content Ingestion
 
 Read the **entire** log file (all levels), stripping ANSI escape codes:
@@ -77,9 +93,10 @@ Analyze the log across **6 dimensions**. Problems can exist at ANY severity leve
 - Check that startup events precede operational events.
 
 #### 3c. Timing Anomalies
+- **Start with the §A Timing Statistics from Step 1c** — it pre-computes min/max/avg and outliers.
+- Investigate any outliers >100ms: are they correlated with first-use warmup or genuine stalls?
 - Look for unreasonable gaps between sequential operations that should be fast.
 - Large delays may indicate blocking, deadlocks, resource contention, or thread starvation.
-- Compare timestamps between related operations to detect stalls.
 
 #### 3d. Resource Lifecycle
 - **Start with the Connection Pool output from Step 1b** — it shows cache events.
@@ -88,10 +105,12 @@ Analyze the log across **6 dimensions**. Problems can exist at ANY severity leve
 - Check `spawn` count matches `init` count matches `exit` count (Sequence Check output).
 
 #### 3e. Repetition Anomalies
+- **Start with the §C Top Repeated Messages from Step 1c** — it identifies the most frequent log patterns.
 - Unexpected repeated operations — retries, duplicate calls, or spin loops visible in DEBUG/TRACE.
 - Identical log lines appearing in rapid succession may indicate a retry loop or polling issue.
 
 #### 3f. Span Integrity
+- **Start with the §D Span Integrity from Step 1c** — it groups all `opc.*` spans by type and count.
 - Are tracing spans (`{span_name}`) properly opened and closed?
 - Orphaned or mismatched spans indicate control flow issues.
 - Check that nested span entries are logically consistent.

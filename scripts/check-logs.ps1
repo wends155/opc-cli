@@ -13,6 +13,8 @@
     Scan all log files, not just the latest.
 .PARAMETER Lifecycle
     Extract and display COM lifecycle, connection pool, and operation timing events.
+.PARAMETER DeepAnalysis
+    Statistical analysis: timing stats, connection churn ratio, repetition analysis, span integrity.
 #>
 
 param(
@@ -20,7 +22,8 @@ param(
     [ValidateSet("TRACE", "DEBUG", "INFO", "WARN", "ERROR")]
     [string]$Level = "WARN",
     [switch]$All,
-    [switch]$Lifecycle
+    [switch]$Lifecycle,
+    [switch]$DeepAnalysis
 )
 
 $ErrorActionPreference = 'Stop'
@@ -227,6 +230,91 @@ if ($Lifecycle) {
     }
 
     Write-Host "========================================`n" -ForegroundColor Magenta
+}
+
+# --- Deep Analysis ---
+if ($DeepAnalysis) {
+    Write-Host "`n========================================" -ForegroundColor Blue
+    Write-Host " Deep Analysis" -ForegroundColor Blue
+    Write-Host "========================================" -ForegroundColor Blue
+
+    # Collect all content with ANSI stripping
+    $deepContent = foreach ($file in $logFiles) {
+        Get-Content $file.FullName | ForEach-Object { $_ -replace '\x1B\[[0-9;]*m', '' }
+    }
+
+    # --- §A. Timing Statistics ---
+    $timingMatches = $deepContent | Select-String -Pattern 'elapsed_ms=(\d+)'
+    Write-Host "`n  §A. Timing Statistics ($($timingMatches.Count) ops):" -ForegroundColor White
+    if ($timingMatches.Count -eq 0) {
+        Write-Host "      No timed operations found." -ForegroundColor DarkGray
+    } else {
+        $nums = $timingMatches | ForEach-Object { [int]$_.Matches[0].Groups[1].Value }
+        $stats = $nums | Measure-Object -Minimum -Maximum -Average
+        $avg = [math]::Round($stats.Average, 1)
+        Write-Host "      Min: $($stats.Minimum)ms | Max: $($stats.Maximum)ms | Avg: ${avg}ms" -ForegroundColor Cyan
+
+        $outliers = @($nums | Where-Object { $_ -gt 100 } | Sort-Object -Descending)
+        $pct = [math]::Round(($outliers.Count / $stats.Count) * 100, 1)
+        if ($outliers.Count -eq 0) {
+            Write-Host "      Outliers (>100ms): 0 — all within budget" -ForegroundColor Green
+        } else {
+            Write-Host "      Outliers (>100ms): $($outliers.Count) of $($stats.Count) (${pct}%)" -ForegroundColor Yellow
+            $outlierStr = ($outliers | ForEach-Object { "${_}ms" }) -join '  '
+            Write-Host "        $outlierStr" -ForegroundColor DarkYellow
+        }
+    }
+
+    # --- §B. Connection Churn ---
+    $connCount = ($deepContent | Select-String -Pattern 'Connection established').Count
+    $refreshCount = ($deepContent | Select-String -Pattern 'Auto-refreshing tag values').Count
+    $cacheHits = ($deepContent | Select-String -Pattern 'Cache hit').Count
+    $evictions = ($deepContent | Select-String -Pattern 'evict' -CaseSensitive:$false).Count
+
+    Write-Host "`n  §B. Connection Churn:" -ForegroundColor White
+    if ($refreshCount -eq 0) {
+        Write-Host "      Connections: $connCount | Refreshes: 0 | Ratio: N/A" -ForegroundColor DarkGray
+    } else {
+        $ratio = "${connCount}:${refreshCount}"
+        $churnColor = if ($connCount -le 1 -or ($connCount / $refreshCount) -le 0.1) { 'Green' } else { 'Yellow' }
+        Write-Host "      Connections: $connCount | Refreshes: $refreshCount | Ratio: $ratio" -ForegroundColor $churnColor
+    }
+    Write-Host "      Evictions: $evictions | Cache hits: $cacheHits" -ForegroundColor Cyan
+
+    # --- §C. Repetition Analysis ---
+    Write-Host "`n  §C. Top Repeated Messages:" -ForegroundColor White
+    $grouped = $deepContent |
+        ForEach-Object { $_ -replace '^\d{4}-\d{2}-\d{2}T[\d:.]+Z\s+\w+\s+', '' } |
+        Where-Object { $_.Trim() -ne '' } |
+        Group-Object |
+        Sort-Object Count -Descending |
+        Select-Object -First 10
+
+    if ($grouped.Count -eq 0) {
+        Write-Host "      (none)" -ForegroundColor DarkGray
+    } else {
+        foreach ($g in $grouped) {
+            $msg = $g.Name
+            if ($msg.Length -gt 100) { $msg = $msg.Substring(0, 100) + '...' }
+            Write-Host "      $($g.Count.ToString().PadLeft(5))x  $msg" -ForegroundColor Gray
+        }
+    }
+
+    # --- §D. Span Integrity ---
+    Write-Host "`n  §D. Span Integrity:" -ForegroundColor White
+    $spanMatches = $deepContent | Select-String -Pattern 'opc\.(\w+)\{'
+    if ($spanMatches.Count -eq 0) {
+        Write-Host "      No opc.* spans found." -ForegroundColor DarkGray
+    } else {
+        $spans = $spanMatches | ForEach-Object { $_.Matches[0].Groups[1].Value } |
+            Group-Object |
+            Sort-Object Count -Descending
+        foreach ($s in $spans) {
+            Write-Host "      $($s.Count.ToString().PadLeft(5))x  opc.$($s.Name)" -ForegroundColor Cyan
+        }
+    }
+
+    Write-Host "`n========================================`n" -ForegroundColor Blue
 }
 
 if ($hasErrors) {
