@@ -448,3 +448,13 @@ emove_group errors now logged instead of silently discarded.
 >   - Executed the workspace validation pipeline to verify clean compilation, zero lints, and passing tests across the entire workspace.
 > * **New Constraints:** None.
 > * **Pruned:** The stale `ComGuard` removal comment block inside `opc-cli/src/main.rs`.
+## 2026-07-15: TARS Summary — Documentation Sync & Codebase Alignment
+> 📝 **Context Update:**
+> * **Feature:** Executed `/update-doc` workflow to ensure complete compliance with codebase standards.
+> * **Changes:**
+>   - Added comprehensive `//!` module-level doc comments to all binary crate source files in `opc-cli`: `main.rs`, `app.rs`, and `ui.rs`.
+>   - Synchronized description fields in `Cargo.toml` and documentation across the workspace.
+>   - Updated the `Last verified against` reference commit hash in `opc-da-client/spec.md` to `91632d6` (matching the current functional codebase state) for drift tracking.
+>   - Validated formatting, clippy lints, unit/doc tests, and drift boundaries.
+> * **New Constraints:** None.
+> * **Pruned:** Lacking module-level doc comments in `opc-cli` TUI modules.
