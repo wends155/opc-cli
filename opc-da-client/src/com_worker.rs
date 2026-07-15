@@ -203,18 +203,19 @@ impl<C: ServerConnector + 'static> ComWorker<C> {
     where
         F: Fn(&C::Server) -> OpcResult<R>,
     {
-        let cached_server = if let Some(srv) = cache.get(server_name) {
-            tracing::trace!(server = %server_name, "Cache hit");
-            Some(srv)
-        } else {
-            tracing::debug!(server = %server_name, "Cache miss, connecting");
-            let srv = connector.connect(server_name)?;
-            tracing::info!(server = %server_name, "Connection established, added to pool");
-            cache.insert(server_name.to_string(), srv);
-            cache.get(server_name)
+        let server_ref = match cache.entry(server_name.to_string()) {
+            std::collections::hash_map::Entry::Occupied(e) => {
+                tracing::trace!(server = %server_name, "Cache hit");
+                e.into_mut()
+            }
+            std::collections::hash_map::Entry::Vacant(e) => {
+                tracing::debug!(server = %server_name, "Cache miss, connecting");
+                let srv = connector.connect(server_name)?;
+                tracing::info!(server = %server_name, "Connection established, added to pool");
+                e.insert(srv)
+            }
         };
 
-        let server_ref = cached_server.unwrap();
         match operation(server_ref) {
             Err(e) if is_connection_error(&e) => {
                 tracing::warn!(server = %server_name, error = ?e, "Evicting stale connection");
@@ -284,6 +285,16 @@ impl<C: ServerConnector + 'static> ComWorker<C> {
             .collect();
 
         let (results, errors) = group.add_items(&item_defs)?;
+
+        // RemoteArray::len() returns u32; tag_ids.len() returns usize.
+        if results.len() as usize != tag_ids.len() || errors.len() as usize != tag_ids.len() {
+            if let Err(e) = opc_server.remove_group(server_handle, true) {
+                tracing::warn!(error = ?e, operation = "read_tag_values", "Failed to remove OPC group during cleanup");
+            }
+            return Err(OpcError::Internal(
+                "OPC server returned mismatched result array sizes".into(),
+            ));
+        }
 
         let mut tag_values: Vec<TagValue> = tag_ids
             .iter()
@@ -764,9 +775,117 @@ mod tests {
         // Wait for implementation
     }
 
+    struct MismatchedConnector;
+    struct MismatchedServer;
+    struct MismatchedGroup;
+
+    impl ConnectedGroup for MismatchedGroup {
+        fn add_items(
+            &self,
+            _items: &[tagOPCITEMDEF],
+        ) -> OpcResult<(
+            RemoteArray<tagOPCITEMRESULT>,
+            RemoteArray<windows::core::HRESULT>,
+        )> {
+            Ok((RemoteArray::empty(), RemoteArray::empty()))
+        }
+        fn read(
+            &self,
+            _source: tagOPCDATASOURCE,
+            _server_handles: &[crate::opc_da::typedefs::ItemHandle],
+        ) -> OpcResult<(
+            RemoteArray<tagOPCITEMSTATE>,
+            RemoteArray<windows::core::HRESULT>,
+        )> {
+            Ok((RemoteArray::empty(), RemoteArray::empty()))
+        }
+        fn write(
+            &self,
+            _server_handles: &[crate::opc_da::typedefs::ItemHandle],
+            _values: &[windows::Win32::System::Variant::VARIANT],
+        ) -> OpcResult<RemoteArray<windows::core::HRESULT>> {
+            Ok(RemoteArray::empty())
+        }
+    }
+
+    impl ConnectedServer for MismatchedServer {
+        type Group = MismatchedGroup;
+        fn query_organization(&self) -> OpcResult<u32> {
+            Ok(0)
+        }
+        fn browse_opc_item_ids(
+            &self,
+            _b: u32,
+            _f: Option<&str>,
+            _d: u16,
+            _a: u32,
+        ) -> OpcResult<StringIterator> {
+            Err(OpcError::NotImplemented("mock".into()))
+        }
+        fn change_browse_position(&self, _direction: u32, _name: &str) -> OpcResult<()> {
+            Ok(())
+        }
+        fn get_item_id(&self, _item_name: &str) -> OpcResult<String> {
+            Ok(String::new())
+        }
+        fn add_group(
+            &self,
+            _name: &str,
+            _active: bool,
+            _update_rate: u32,
+            _client_handle: crate::opc_da::typedefs::GroupHandle,
+            _time_bias: i32,
+            _percent_deadband: f32,
+            _locale_id: u32,
+            _revised_update_rate: &mut u32,
+            _server_handle: &mut crate::opc_da::typedefs::GroupHandle,
+        ) -> OpcResult<Self::Group> {
+            Ok(MismatchedGroup)
+        }
+        fn remove_group(
+            &self,
+            _server_group: crate::opc_da::typedefs::GroupHandle,
+            _force: bool,
+        ) -> OpcResult<()> {
+            Ok(())
+        }
+    }
+
+    impl ServerConnector for MismatchedConnector {
+        type Server = MismatchedServer;
+        fn enumerate_servers(&self) -> OpcResult<Vec<String>> {
+            Ok(vec![])
+        }
+        fn connect(&self, _server_name: &str) -> OpcResult<Self::Server> {
+            Ok(MismatchedServer)
+        }
+    }
+
     #[tokio::test]
-    async fn test_worker_read_tag_values() {
-        // dummy for now
+    async fn test_worker_read_tag_values_mismatched_lengths() {
+        let worker = tokio::task::spawn_blocking(|| {
+            ComWorker::start(Arc::new(MismatchedConnector)).unwrap()
+        })
+        .await
+        .unwrap();
+
+        let result = worker
+            .send_request(|reply| ComRequest::ReadTagValues {
+                server: "MockServer".to_string(),
+                tag_ids: vec!["Tag1".to_string(), "Tag2".to_string()],
+                reply,
+            })
+            .await;
+
+        assert!(
+            result.is_err(),
+            "Expected read to fail due to mismatched lengths"
+        );
+        if let Err(OpcError::Internal(msg)) = result {
+            assert!(msg.contains("mismatched result array sizes"));
+        } else {
+            panic!("Expected OpcError::Internal, got {:?}", result);
+        }
     }
 
     #[tokio::test]
