@@ -410,3 +410,18 @@ emove_group errors now logged instead of silently discarded.
 >   - Documented the panicking behavior of `OpcDaClient::default()` in `opc_da.rs` rustdocs.
 > * **New Constraints:** None.
 > * **Pruned:** The risk of silent zip-truncation data misalignment on array mismatches is resolved.
+
+## 2026-07-15: TARS Summary — Prepublish QA & Release Merge to Main
+> 📝 **Context Update:**
+> * **Feature:** Prepublish QA sweep, package release, and clean release branch merge.
+> * **Changes:**
+>   - Performed full `/prepublish` QA check on `opc-da-client` v0.2.0 (version verification, documentation consistency, license attributions check, security scans, verify.ps1 compilation and tests).
+>   - Updated `opc-da-client/CHANGELOG.md` for v0.2.0 to detail the ComWorker hardening and `Default::default()` panic behavior documentation.
+>   - Added `rewrite.py` to the `exclude` list in `opc-da-client/Cargo.toml` to prevent build scripts from packaging.
+>   - Executed `scripts/Merge-ToMain.ps1` to cleanly merge the `dev` branch changes to `main` while stripping all agent metadata and workflows.
+>   - Committed and pushed `dev` and `main` branches to remote repository.
+>   - Performed a simulated registry dry-run publish, which was successful.
+> * **New Constraints:**
+>   - Official crates.io publish is prepared and validated on the clean `main` branch, but requires the user's cargo authentication token to publish live.
+> * **Pruned:** Outdated CHANGELOG v0.2.0 omissions.
+
