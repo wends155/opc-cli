@@ -80,6 +80,16 @@ if (-not $Message) {
 Write-Output "=== Clean Merge: $SourceBranch -> $TargetBranch ==="
 Write-Output ""
 
+# Files to remove on main
+$removeFiles = @(
+    '.agents/workflows/',
+    'context.md',
+    'architecture.md',
+    'TODO.md',
+    'long_term_todo.md',
+    'clippy_output.json'
+)
+
 # --- Step 1: Checkout target ---
 
 Write-Output "[1/5] Checking out $TargetBranch..."
@@ -94,29 +104,45 @@ if ($LASTEXITCODE -ne 0) {
 Write-Output "[2/5] Merging $SourceBranch --no-commit --no-ff..."
 Invoke-Git { git merge $SourceBranch --no-commit --no-ff }
 if ($LASTEXITCODE -ne 0) {
-    Write-Output "[FAIL] Merge had conflicts. Aborting and returning to $OriginalBranch."
-    Invoke-Git { git merge --abort 2>$null }
-    Invoke-Git { git checkout $OriginalBranch 2>$null }
-    exit 3
+    # Check if conflicts are ONLY on files we are going to remove anyway
+    $conflicts = Invoke-Git { git diff --name-only --diff-filter=U }
+    $unresolvedConflicts = @()
+    foreach ($c in $conflicts) {
+        if (-not $c) { continue }
+        $cTrim = $c.Trim()
+        if ([string]::IsNullOrEmpty($cTrim)) { continue }
+        $match = $false
+        foreach ($rf in $removeFiles) {
+            if ($cTrim -like "$rf*") {
+                $match = $true
+                break
+            }
+        }
+        if (-not $match) {
+            $unresolvedConflicts += $cTrim
+        }
+    }
+
+    if ($unresolvedConflicts.Count -gt 0) {
+        Write-Output "[FAIL] Merge had real conflicts on: $($unresolvedConflicts -join ', ')."
+        Write-Output "Aborting and returning to $OriginalBranch."
+        Invoke-Git { git merge --abort 2>$null }
+        Invoke-Git { git checkout $OriginalBranch 2>$null }
+        exit 3
+    }
+
+    Write-Output "  Resolving modify/delete conflicts on dev-only files..."
 }
 
 # --- Step 3: Remove dev-only files from staging ---
 
 Write-Output "[3/5] Removing dev-only files from staging..."
 
-$removeFiles = @(
-    '.agents/workflows/',
-    'context.md',
-    'architecture.md',
-    'TODO.md',
-    'long_term_todo.md',
-    'clippy_output.json'
-)
-
 foreach ($f in $removeFiles) {
-    # Check if path exists in the index before attempting removal
+    # Check if path exists in the index or as conflict before attempting removal
     $inIndex = Invoke-Git { git ls-files -- $f 2>$null }
-    if ($inIndex) {
+    $inConflicts = Invoke-Git { git diff --name-only --diff-filter=U -- $f 2>$null }
+    if ($inIndex -or $inConflicts) {
         if ($f.EndsWith('/')) {
             Invoke-Git { git rm -r -f --quiet $f 2>$null }
         } else {
