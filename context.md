@@ -386,4 +386,15 @@ emove_group errors now logged instead of silently discarded.
 > * **New Constraints:**
 >   - All active development and agent usage occurs on the `dev` branch.
 >   - Use the `scripts/Merge-ToMain.ps1` script to propagate changes to `main` for release tags. Do not merge `dev` directly into `main` using standard Git merge commands, as this will bleed agent metadata into the release branch.
-> * **Pruned:** Root-level `architecture.md`, `context.md`, `TODO.md`, `long_term_todo.md`, `.agents/`, and `clippy_output.json` are excluded from the `main` branch index and workspace.
+
+## 2026-07-15: Documentation Sync & Verification Hash Tracking
+> 📝 **Context Update:**
+> * **Feature:** Documented clean release merge utility and branch strategy; synced newline formatting workspace-wide.
+> * **Changes:**
+>   - Updated [architecture.md](file:///c:/Users/WSALIGAN/code/opc-cli/architecture.md) (root level) to document the Branch Strategy & Release Workflow (`dev` vs. `main`) and the release merge utility (`Merge-ToMain.ps1`).
+>   - Updated [opc-da-client/architecture.md](file:///c:/Users/WSALIGAN/code/opc-cli/opc-da-client/architecture.md) to add the `Merge-ToMain.ps1` script to the Toolchain inventory.
+>   - Added a verification reference commit hash (`e768239`) to [opc-da-client/spec.md](file:///c:/Users/WSALIGAN/code/opc-cli/opc-da-client/spec.md) for drift detection tracking.
+>   - Normalized newline endings to Unix-style LF across all source code files using `cargo fmt` to resolve formatting linter warnings.
+>   - Successfully executed the clean release merge from `dev` to `main`, auto-resolving modify/delete conflicts on stripped files.
+> * **New Constraints:** None.
+> * **Pruned:** Redundant CR character carriage returns in source files.
