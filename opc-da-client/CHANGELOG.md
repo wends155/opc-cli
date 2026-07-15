@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 - Natively integrated and froze raw `windows-bindgen` outputs into an internal `bindings/` module, dropping required build-time codegen dependencies.
+- Added defensive array length validation checks on the return values of `group.add_items` in `ComWorker` to prevent silent zip truncation during per-item tag processing.
+- Documented panicking behavior of `OpcDaClient::default()` in rustdocs.
 
 ### Changed
 - **Major Architectural Refactor**: Completely eliminated the external `opc_da`, `opc_da_bindings`, and `opc_comn_bindings` crate dependencies. The `opc-da-client` is now entirely self-contained for OPC COM communication natively.
@@ -20,10 +22,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Synchronized architectural documentation, replacing obsolete `anyhow::Result` references with the active `OpcResult` type.
   - **Context:** The library migrated away from `anyhow` (an application-level, type-erased error) to `thiserror` (`OpcError`) to adhere to standard Rust library best practices. 
   - **Compatibility:** Because `OpcError` implements `std::error::Error`, downstream consumers (like `opc-cli`) using `anyhow` can still perfectly propagate `OpcResult` using the standard `?` operator.
+- Refactored server cache lookup logic in `dispatch_with_retry` to use Rust's `Entry` API, removing double lookup hash penalties and unsafe `.unwrap()` calls.
 
 ### Fixed
 - Patched integration doc-tests within `README.md` with `no_run` attributes.
-  - **Context:** `cargo test --doc` natively executes all Rust codeblocks found in markdown files. Because the `README.md` snippets demonstrate live COM initializations and connections to the Matrikon OPC Simulation server, running them in raw CI pipelines (where the simulator isn't installed) caused systemic test failures. `no_run` ensures the code is still statically analyzed for compilation correctness but safely skips the runtime execution.
+- Fixed potential resource leaks during array length mismatch failures in `ComWorker` by ensuring COM groups are cleaned up immediately.
 
 ## [0.1.3] - 2026-02-22
 
