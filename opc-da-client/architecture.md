@@ -64,9 +64,10 @@ All commands are run from the **workspace root** (`opc-cli/`).
 | Linter | `cargo clippy --workspace -- -D warnings` |
 | Tests | `cargo test --workspace` |
 | Verification Script | `pwsh -File scripts/verify.ps1` |
+| Release Merge Script | `powershell -File scripts/Merge-ToMain.ps1` |
 | Documentation | `cargo doc --no-deps --package opc-da-client` |
 
-The verification script ([verify.ps1](file:///c:/Users/WSALIGAN/code/opc-cli/scripts/verify.ps1)) runs all three gates sequentially and prepends the portable MSVC toolchain to `PATH`.
+The verification script ([verify.ps1](file:///c:/Users/WSALIGAN/code/opc-cli/scripts/verify.ps1)) runs all three verification gates sequentially. The release merge script ([Merge-ToMain.ps1](file:///c:/Users/WSALIGAN/code/opc-cli/scripts/Merge-ToMain.ps1)) automates clean merges to the `main` branch.
 
 ---
 

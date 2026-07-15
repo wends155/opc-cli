@@ -172,6 +172,14 @@ graph TD
     end
 ```
 
+## Branch Strategy & Release Workflow
+
+To maintain a clean and pristine public-facing release history, the repository uses a divergent branch architecture:
+
+*   **`dev` Branch**: The active development branch. All code changes, agent interactions, workflows (`.agents/`), and session logs (`context.md`) reside here.
+*   **`main` Branch**: The production release branch. It contains only production source code and minimal tooling, completely clean of agent-related files, metadata, and dev-only rules.
+*   **Release Merging (`Merge-ToMain.ps1`)**: Developers use the automated script to propagate changes from `dev` to `main`. Direct Git merges are prohibited, as the script is responsible for trimming out development assets and cleaning up `.gitignore` during the checkout and merge phases.
+
 ## Build System
 
 The project uses a dual build system for flexibility:
@@ -184,6 +192,10 @@ The project uses a dual build system for flexibility:
     - Usage: `pwsh -File ./scripts/package.ps1 <task>`
     - Supported tasks: `debug`, `release`, `test`, `package`.
 3.  **Verification Gate**: `pwsh -File scripts/verify.ps1` — runs formatter, linter, and tests sequentially.
+4.  **Release Merging Utility**: `powershell -File scripts/Merge-ToMain.ps1`
+    - Automates clean releases from development branches to the `main` branch.
+    - Strips agent workflows, logs, and build artifacts from the release branch index and cleans `.gitignore`.
+    - Automatically resolves modify/delete conflicts for stripped assets.
 
 ## Testing Strategy
 
