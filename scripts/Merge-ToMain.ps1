@@ -71,7 +71,7 @@ Write-Output ""
 # --- Step 1: Checkout target ---
 
 Write-Output "[1/5] Checking out $TargetBranch..."
-git checkout $TargetBranch
+git checkout $TargetBranch 2>&1 | Out-Null
 if ($LASTEXITCODE -ne 0) {
     Write-Error "Failed to checkout $TargetBranch."
     exit 3
@@ -80,11 +80,11 @@ if ($LASTEXITCODE -ne 0) {
 # --- Step 2: Merge (no-commit) ---
 
 Write-Output "[2/5] Merging $SourceBranch --no-commit --no-ff..."
-git merge $SourceBranch --no-commit --no-ff
+git merge $SourceBranch --no-commit --no-ff 2>&1 | Out-Null
 if ($LASTEXITCODE -ne 0) {
     Write-Output "[FAIL] Merge had conflicts. Aborting and returning to $OriginalBranch."
     git merge --abort 2>$null
-    git checkout $OriginalBranch 2>$null
+    git checkout $OriginalBranch 2>&1 | Out-Null
     exit 3
 }
 
@@ -161,7 +161,7 @@ git commit -m $Message
 if ($LASTEXITCODE -ne 0) {
     Write-Output "[FAIL] Commit failed. Aborting merge and returning to $OriginalBranch."
     git merge --abort 2>$null
-    git checkout $OriginalBranch 2>$null
+    git checkout $OriginalBranch 2>&1 | Out-Null
     exit 3
 }
 
@@ -170,7 +170,7 @@ Write-Output ""
 Write-Output "[OK] $LogLine"
 Write-Output ""
 
-git checkout $OriginalBranch 2>$null
+git checkout $OriginalBranch 2>&1 | Out-Null
 Write-Output "Returned to $OriginalBranch."
 Write-Output "=== Clean Merge Complete ==="
 exit 0
