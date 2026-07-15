@@ -1,6 +1,7 @@
 use crate::opc_da::{
-    def::GroupState,
-    utils::{LocalPointer, RemotePointer},
+    com_utils::{LocalPointer, RemotePointer},
+    errors::{OpcError, OpcResult},
+    typedefs::GroupState,
 };
 
 /// Group state management functionality.
@@ -13,14 +14,16 @@ use crate::opc_da::{
 /// - Locale ID
 /// - Group handles
 pub trait GroupStateMgtTrait {
-    fn interface(&self) -> windows::core::Result<&crate::bindings::da::IOPCGroupStateMgt>;
+    fn interface(&self) -> OpcResult<&crate::bindings::da::IOPCGroupStateMgt>;
 
     /// Gets the current state of the group.
     ///
     /// Returns a GroupState structure containing all group parameters.
-    fn get_state(&self) -> windows::core::Result<GroupState> {
+    fn get_state(&self) -> OpcResult<GroupState> {
         let mut state = GroupState::default();
         let mut active = windows_core::BOOL::default();
+        let mut client_handle = 0u32;
+        let mut server_handle = 0u32;
         let name = {
             let mut name = RemotePointer::null();
             unsafe {
@@ -31,12 +34,15 @@ pub trait GroupStateMgtTrait {
                     &mut state.time_bias,
                     &mut state.percent_deadband,
                     &mut state.locale_id,
-                    &mut state.client_handle,
-                    &mut state.server_handle,
+                    &mut client_handle,
+                    &mut server_handle,
                 )?;
             }
             name
         };
+
+        state.client_handle = crate::opc_da::typedefs::GroupHandle(client_handle);
+        state.server_handle = crate::opc_da::typedefs::GroupHandle(server_handle);
 
         state.active = active.as_bool();
         state.name = name.try_into()?;
@@ -63,15 +69,15 @@ pub trait GroupStateMgtTrait {
         time_bias: Option<i32>,
         percent_deadband: Option<f32>,
         locale_id: Option<u32>,
-        client_handle: Option<u32>,
-    ) -> windows::core::Result<u32> {
+        client_handle: Option<crate::opc_da::typedefs::GroupHandle>,
+    ) -> OpcResult<u32> {
         let requested_update_rate = LocalPointer::new(update_rate);
         let mut revised_update_rate = LocalPointer::new(Some(0));
         let active = LocalPointer::new(active.map(windows_core::BOOL::from));
         let time_bias = LocalPointer::new(time_bias);
         let percent_deadband = LocalPointer::new(percent_deadband);
         let locale_id = LocalPointer::new(locale_id);
-        let client_handle = LocalPointer::new(client_handle);
+        let client_handle = LocalPointer::new(client_handle.map(|h| h.0));
 
         unsafe {
             self.interface()?.SetState(
@@ -89,10 +95,10 @@ pub trait GroupStateMgtTrait {
     }
 
     /// Sets the name of the group.
-    fn set_name(&self, name: &str) -> windows::core::Result<()> {
+    fn set_name(&self, name: &str) -> OpcResult<()> {
         let name = LocalPointer::from(name);
 
-        unsafe { self.interface()?.SetName(name.as_pwstr()) }
+        unsafe { Ok(self.interface()?.SetName(name.as_pwstr())?) }
     }
 
     /// Creates a copy of the group with a new name.
@@ -104,9 +110,9 @@ pub trait GroupStateMgtTrait {
         &self,
         name: &str,
         id: &windows::core::GUID,
-    ) -> windows::core::Result<windows::core::IUnknown> {
+    ) -> OpcResult<windows::core::IUnknown> {
         let name = LocalPointer::from(name);
 
-        unsafe { self.interface()?.CloneGroup(name.as_pwstr(), id) }
+        unsafe { Ok(self.interface()?.CloneGroup(name.as_pwstr(), id)?) }
     }
 }

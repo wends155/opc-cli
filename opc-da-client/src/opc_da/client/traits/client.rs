@@ -2,8 +2,9 @@ use windows_core::Interface as _;
 
 use crate::opc_da::{
     client::GuidIterator,
-    def::{ClassContext, ServerInfo},
-    utils::{IntoBridge, ToNative, TryToNative as _},
+    com_utils::{IntoBridge, ToNative, TryToNative as _},
+    errors::{OpcError, OpcResult},
+    typedefs::{ClassContext, ServerInfo},
 };
 
 /// Trait defining client functionality for OPC Data Access servers.
@@ -16,7 +17,7 @@ pub trait ClientTrait<Server: TryFrom<windows::core::IUnknown, Error = windows::
     /// # Returns
     ///
     /// A `Result` containing a `GuidIterator` over server GUIDs, or an error if the operation fails.
-    fn get_servers(&self) -> windows::core::Result<GuidIterator> {
+    fn get_servers(&self) -> OpcResult<GuidIterator> {
         tracing::debug!("Enumerating OPC DA Server classes via COM Component Categories Manager");
         let id = unsafe {
             windows::Win32::System::Com::CLSIDFromProgID(windows::core::w!("OPC.ServerList.1"))?
@@ -58,7 +59,7 @@ pub trait ClientTrait<Server: TryFrom<windows::core::IUnknown, Error = windows::
         &self,
         class_id: windows::core::GUID,
         class_context: ClassContext,
-    ) -> windows::core::Result<Server> {
+    ) -> OpcResult<Server> {
         tracing::debug!(
             ?class_id,
             ?class_context,
@@ -72,7 +73,10 @@ pub trait ClientTrait<Server: TryFrom<windows::core::IUnknown, Error = windows::
             )?
         };
 
-        server.cast::<windows::core::IUnknown>()?.try_into()
+        server
+            .cast::<windows::core::IUnknown>()?
+            .try_into()
+            .map_err(|source| OpcError::Com { source })
     }
 
     fn create_server2(
@@ -80,7 +84,7 @@ pub trait ClientTrait<Server: TryFrom<windows::core::IUnknown, Error = windows::
         class_id: windows::core::GUID,
         class_context: ClassContext,
         server_info: Option<ServerInfo>,
-    ) -> windows::core::Result<Server> {
+    ) -> OpcResult<Server> {
         let mut results = [windows::Win32::System::Com::MULTI_QI {
             pIID: &windows::core::IUnknown::IID,
             pItf: core::mem::ManuallyDrop::new(None),
@@ -101,14 +105,19 @@ pub trait ClientTrait<Server: TryFrom<windows::core::IUnknown, Error = windows::
         };
 
         if results[0].hr.is_err() {
-            return Err(results[0].hr.into());
+            return Err(OpcError::Com {
+                source: results[0].hr.into(),
+            });
         }
 
         match results[0].pItf.as_ref() {
-            Some(itf) => itf.cast::<windows::core::IUnknown>()?.try_into(),
-            None => Err(windows::core::Error::from(
-                windows::Win32::Foundation::E_POINTER,
-            )),
+            Some(itf) => itf
+                .cast::<windows::core::IUnknown>()?
+                .try_into()
+                .map_err(|source| OpcError::Com { source }),
+            None => Err(OpcError::Com {
+                source: windows::core::Error::from(windows::Win32::Foundation::E_POINTER),
+            }),
         }
     }
 }

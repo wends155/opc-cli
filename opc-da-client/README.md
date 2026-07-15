@@ -13,7 +13,7 @@ Backend-agnostic OPC DA client library for Rust — async, trait-based, with RAI
 - **RAII COM Guard**: `ComGuard` handles COM initialization/teardown automatically — no manual `CoUninitialize` needed.
 - **Read & Write Support**: Read tag values and write typed values (`Int`, `Float`, `Bool`, `String`) to OPC tags.
 - **Windows COM/DCOM Support**: Native OPC DA backend via `windows-rs` — no external OPC crates needed.
-- **Robust Error Handling**: Leverages `anyhow` for clear error chains and `friendly_com_hint()` for human-readable HRESULT explanations.
+- **Robust Error Handling**: Leverages `thiserror` for the `OpcError` domain type and `friendly_com_hint()` for human-readable HRESULT explanations.
 - **Test-Friendly**: Built-in `MockOpcProvider` via the `test-support` feature.
 
 ## Installation
@@ -22,7 +22,7 @@ Add this to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-opc-da-client = "0.1.3"
+opc-da-client = "0.2.0"
 ```
 
 ## Prerequisites
@@ -37,13 +37,13 @@ opc-da-client = "0.1.3"
 
 Enumerate available OPC DA servers on a local or remote host.
 
-```rust
-use opc_da_client::{ComGuard, OpcDaWrapper, OpcProvider};
+```rust,no_run
+use opc_da_client::{ComGuard, OpcDaClient, OpcProvider};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let _guard = ComGuard::new()?;
-    let client = OpcDaWrapper::default();
+    let client = OpcDaClient::default();
 
     let servers = client.list_servers("localhost").await?;
     println!("Available Servers:");
@@ -58,13 +58,13 @@ async fn main() -> anyhow::Result<()> {
 
 Connect to a specific server and read current values for a set of tags.
 
-```rust
-use opc_da_client::{ComGuard, OpcDaWrapper, OpcProvider};
+```rust,no_run
+use opc_da_client::{ComGuard, OpcDaClient, OpcProvider};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let _guard = ComGuard::new()?;
-    let client = OpcDaWrapper::default();
+    let client = OpcDaClient::default();
     let server_progid = "Matrikon.OPC.Simulation.1";
     let tags = vec![
         "Random.Int4".to_string(),
@@ -85,13 +85,13 @@ async fn main() -> anyhow::Result<()> {
 
 Write a typed value to a single OPC tag.
 
-```rust
-use opc_da_client::{ComGuard, OpcDaWrapper, OpcProvider, OpcValue};
+```rust,no_run
+use opc_da_client::{ComGuard, OpcDaClient, OpcProvider, OpcValue};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let _guard = ComGuard::new()?;
-    let client = OpcDaWrapper::default();
+    let client = OpcDaClient::default();
     let server = "Matrikon.OPC.Simulation.1";
 
     let result = client
@@ -111,27 +111,26 @@ async fn main() -> anyhow::Result<()> {
 
 Recursively discover available tags on an OPC server.
 
-```rust
-use opc_da_client::{ComGuard, OpcDaWrapper, OpcProvider};
+```rust,no_run
+use opc_da_client::{ComGuard, OpcDaClient, OpcProvider};
 use std::sync::{Arc, Mutex, atomic::AtomicUsize};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let _guard = ComGuard::new()?;
-    let client = OpcDaWrapper::default();
+    let client = OpcDaClient::default();
     let server_progid = "Matrikon.OPC.Simulation.1";
 
     let sink = Arc::new(Mutex::new(Vec::new()));
     let progress = Arc::new(AtomicUsize::new(0));
 
-    client.browse_tags(
+    let discovered_tags = client.browse_tags(
         server_progid,
         100, // Max tags to discover
         progress,
-        sink.clone()
+        sink
     ).await?;
 
-    let discovered_tags = sink.lock().unwrap();
     println!("Found {} tags", discovered_tags.len());
     Ok(())
 }
@@ -142,7 +141,7 @@ async fn main() -> anyhow::Result<()> {
 The library is split into a core trait layer and concrete implementations:
 
 - **`OpcProvider`**: The primary async trait defining OPC operations (list, browse, read, write).
-- **`OpcDaWrapper`**: The default implementation using native `windows-rs` COM calls. Generic over `ServerConnector` for testability; defaults to `ComConnector`.
+- **`OpcDaClient`**: The default implementation using native `windows-rs` COM calls. Generic over `ServerConnector` for testability; defaults to `ComConnector`.
 - **`ComGuard`**: RAII guard ensuring `CoUninitialize` is called exactly once per successful `CoInitializeEx`.
 
 See [architecture.md](https://github.com/wends155/opc-cli/blob/main/opc-da-client/architecture.md) for in-depth design details and [spec.md](https://github.com/wends155/opc-cli/blob/main/opc-da-client/spec.md) for behavioral contracts.

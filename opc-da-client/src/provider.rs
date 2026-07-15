@@ -1,4 +1,4 @@
-use anyhow::Result;
+use crate::opc_da::errors::OpcResult;
 use async_trait::async_trait;
 use std::sync::Arc;
 use std::sync::atomic::AtomicUsize;
@@ -93,7 +93,7 @@ pub trait OpcProvider: Send + Sync {
     /// # Errors
     /// Returns `Err` if COM initialization fails or the server registry
     /// cannot be enumerated.
-    async fn list_servers(&self, host: &str) -> Result<Vec<String>>;
+    async fn list_servers(&self, host: &str) -> OpcResult<Vec<String>>;
 
     /// Browse tags recursively, pushing discoveries to `tags_sink`.
     ///
@@ -106,14 +106,15 @@ pub trait OpcProvider: Send + Sync {
         max_tags: usize,
         progress: Arc<AtomicUsize>,
         tags_sink: Arc<std::sync::Mutex<Vec<String>>>,
-    ) -> Result<Vec<String>>;
+    ) -> OpcResult<Vec<String>>;
 
     /// Read current values for the given tag IDs.
     ///
     /// # Errors
     /// Returns `Err` if the server connection fails, no items can be added
     /// to the OPC group, or the synchronous read operation fails.
-    async fn read_tag_values(&self, server: &str, tag_ids: Vec<String>) -> Result<Vec<TagValue>>;
+    async fn read_tag_values(&self, server: &str, tag_ids: Vec<String>)
+    -> OpcResult<Vec<TagValue>>;
 
     /// Write a value to a single OPC DA tag.
     ///
@@ -125,5 +126,5 @@ pub trait OpcProvider: Send + Sync {
         server: &str,
         tag_id: &str,
         value: OpcValue,
-    ) -> Result<WriteResult>;
+    ) -> OpcResult<WriteResult>;
 }

@@ -1,12 +1,15 @@
 use crate::bindings::da::{IOPCItemIO, tagOPCITEMVQT};
-use crate::opc_da::utils::{LocalPointer, RemoteArray};
+use crate::opc_da::{
+    com_utils::{LocalPointer, RemoteArray},
+    errors::{OpcError, OpcResult},
+};
 
 /// Direct item I/O functionality (OPC DA 3.0).
 ///
 /// Provides methods for direct read/write operations on items without requiring
 /// group creation. This trait offers a simplified interface for basic data access.
 pub trait ItemIoTrait {
-    fn interface(&self) -> windows::core::Result<&IOPCItemIO>;
+    fn interface(&self) -> OpcResult<&IOPCItemIO>;
 
     /// Reads values directly from items with age constraints.
     ///
@@ -28,16 +31,15 @@ pub trait ItemIoTrait {
         &self,
         item_ids: &[String],
         max_age: &[u32],
-    ) -> windows::core::Result<(
+    ) -> OpcResult<(
         RemoteArray<windows::Win32::System::Variant::VARIANT>,
         RemoteArray<u16>,
         RemoteArray<windows::Win32::Foundation::FILETIME>,
         RemoteArray<windows::core::HRESULT>,
     )> {
         if item_ids.is_empty() || max_age.is_empty() || item_ids.len() != max_age.len() {
-            return Err(windows::core::Error::new(
-                windows::Win32::Foundation::E_INVALIDARG,
-                "Invalid arguments - arrays must be non-empty and have same length",
+            return Err(OpcError::InvalidState(
+                "Invalid arguments - arrays must be non-empty and have same length".to_string(),
             ));
         }
 
@@ -81,11 +83,10 @@ pub trait ItemIoTrait {
         &self,
         item_ids: &[String],
         item_vqts: &[tagOPCITEMVQT],
-    ) -> windows::core::Result<RemoteArray<windows::core::HRESULT>> {
+    ) -> OpcResult<RemoteArray<windows::core::HRESULT>> {
         if item_ids.is_empty() || item_vqts.is_empty() || item_ids.len() != item_vqts.len() {
-            return Err(windows::core::Error::new(
-                windows::Win32::Foundation::E_INVALIDARG,
-                "Invalid arguments - arrays must be non-empty and have same length",
+            return Err(OpcError::InvalidState(
+                "Invalid arguments - arrays must be non-empty and have same length".to_string(),
             ));
         }
 

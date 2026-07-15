@@ -1,4 +1,8 @@
-use crate::opc_da::utils::RemoteArray;
+use crate::opc_da::{
+    com_utils::RemoteArray,
+    errors::{OpcError, OpcResult},
+    typedefs::ItemHandle,
+};
 use windows::Win32::System::Variant::VARIANT;
 
 /// Synchronous I/O functionality (OPC DA 3.0).
@@ -6,7 +10,7 @@ use windows::Win32::System::Variant::VARIANT;
 /// Provides enhanced synchronous read/write operations with support for
 /// quality, timestamp, and maximum age constraints.
 pub trait SyncIo2Trait {
-    fn interface(&self) -> windows::core::Result<&crate::bindings::da::IOPCSyncIO2>;
+    fn interface(&self) -> OpcResult<&crate::bindings::da::IOPCSyncIO2>;
 
     /// Reads values with maximum age constraint.
     ///
@@ -26,25 +30,23 @@ pub trait SyncIo2Trait {
     #[allow(clippy::type_complexity)]
     fn read_max_age(
         &self,
-        server_handles: &[u32],
+        server_handles: &[ItemHandle],
         max_age: &[u32],
-    ) -> windows::core::Result<(
+    ) -> OpcResult<(
         RemoteArray<VARIANT>,
         RemoteArray<u16>,
         RemoteArray<windows::Win32::Foundation::FILETIME>,
         RemoteArray<windows::core::HRESULT>,
     )> {
         if server_handles.len() != max_age.len() {
-            return Err(windows::core::Error::new(
-                windows::Win32::Foundation::E_INVALIDARG,
-                "server_handles and max_age must have the same length",
+            return Err(OpcError::InvalidState(
+                "server_handles and max_age must have the same length".to_string(),
             ));
         }
 
         if server_handles.is_empty() {
-            return Err(windows::core::Error::new(
-                windows::Win32::Foundation::E_INVALIDARG,
-                "server_handles cannot be empty",
+            return Err(OpcError::InvalidState(
+                "server_handles cannot be empty".to_string(),
             ));
         }
 
@@ -58,7 +60,7 @@ pub trait SyncIo2Trait {
         unsafe {
             self.interface()?.ReadMaxAge(
                 len,
-                server_handles.as_ptr(),
+                server_handles.as_ptr() as *const u32,
                 max_age.as_ptr(),
                 values.as_mut_ptr(),
                 qualities.as_mut_ptr(),
@@ -83,20 +85,18 @@ pub trait SyncIo2Trait {
     /// Returns E_INVALIDARG if arrays are empty or have different lengths
     fn write_vqt(
         &self,
-        server_handles: &[u32],
+        server_handles: &[ItemHandle],
         values: &[crate::bindings::da::tagOPCITEMVQT],
-    ) -> windows::core::Result<RemoteArray<windows::core::HRESULT>> {
+    ) -> OpcResult<RemoteArray<windows::core::HRESULT>> {
         if server_handles.len() != values.len() {
-            return Err(windows::core::Error::new(
-                windows::Win32::Foundation::E_INVALIDARG,
-                "server_handles and values must have the same length",
+            return Err(OpcError::InvalidState(
+                "server_handles and values must have the same length".to_string(),
             ));
         }
 
         if server_handles.is_empty() {
-            return Err(windows::core::Error::new(
-                windows::Win32::Foundation::E_INVALIDARG,
-                "server_handles cannot be empty",
+            return Err(OpcError::InvalidState(
+                "server_handles cannot be empty".to_string(),
             ));
         }
 
@@ -107,7 +107,7 @@ pub trait SyncIo2Trait {
         unsafe {
             self.interface()?.WriteVQT(
                 len,
-                server_handles.as_ptr(),
+                server_handles.as_ptr() as *const u32,
                 values.as_ptr(),
                 errors.as_mut_ptr(),
             )?;

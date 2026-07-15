@@ -1,5 +1,8 @@
 use crate::bindings::da::IOPCItemProperties;
-use crate::opc_da::utils::{LocalPointer, RemoteArray};
+use crate::opc_da::{
+    com_utils::{LocalPointer, RemoteArray},
+    errors::{OpcError, OpcResult},
+};
 
 /// Item properties management functionality.
 ///
@@ -7,7 +10,7 @@ use crate::opc_da::utils::{LocalPointer, RemoteArray};
 /// the OPC server. Properties include metadata such as engineering units,
 /// descriptions, and other vendor-specific attributes.
 pub trait ItemPropertiesTrait {
-    fn interface(&self) -> windows::core::Result<&IOPCItemProperties>;
+    fn interface(&self) -> OpcResult<&IOPCItemProperties>;
 
     /// Queries available properties for a specific item.
     ///
@@ -25,16 +28,13 @@ pub trait ItemPropertiesTrait {
     fn query_available_properties(
         &self,
         item_id: &str,
-    ) -> windows::core::Result<(
+    ) -> OpcResult<(
         RemoteArray<u32>,                  // property IDs
         RemoteArray<windows::core::PWSTR>, // descriptions
         RemoteArray<u16>,                  // datatypes
     )> {
         if item_id.is_empty() {
-            return Err(windows::core::Error::new(
-                windows::Win32::Foundation::E_INVALIDARG,
-                "item_id is empty",
-            ));
+            return Err(OpcError::InvalidState("item_id is empty".to_string()));
         }
 
         let item_id = LocalPointer::from(item_id);
@@ -82,15 +82,12 @@ pub trait ItemPropertiesTrait {
         &self,
         item_id: &str,
         property_ids: &[u32],
-    ) -> windows::core::Result<(
+    ) -> OpcResult<(
         RemoteArray<windows::Win32::System::Variant::VARIANT>,
         RemoteArray<windows::core::HRESULT>,
     )> {
         if property_ids.is_empty() {
-            return Err(windows::core::Error::new(
-                windows::Win32::Foundation::E_INVALIDARG,
-                "property_ids is empty",
-            ));
+            return Err(OpcError::InvalidState("property_ids is empty".to_string()));
         }
 
         let item_id = LocalPointer::from(item_id);
@@ -128,15 +125,12 @@ pub trait ItemPropertiesTrait {
         &self,
         item_id: &str,
         property_ids: &[u32],
-    ) -> windows::core::Result<(
+    ) -> OpcResult<(
         RemoteArray<windows::core::PWSTR>,
         RemoteArray<windows::core::HRESULT>,
     )> {
         if property_ids.is_empty() {
-            return Err(windows::core::Error::new(
-                windows::Win32::Foundation::E_INVALIDARG,
-                "property_ids is empty",
-            ));
+            return Err(OpcError::InvalidState("property_ids is empty".to_string()));
         }
 
         let item_id = LocalPointer::from(item_id);

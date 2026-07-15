@@ -1,3 +1,4 @@
+use crate::opc_da::errors::{OpcError, OpcResult};
 use windows::Win32::System::Com::{FORMATETC, STGMEDIUM};
 
 /// Data transfer functionality using COM's structured storage.
@@ -5,7 +6,7 @@ use windows::Win32::System::Com::{FORMATETC, STGMEDIUM};
 /// Provides methods to transfer data between client and server using
 /// structured storage formats and advisory connections.
 pub trait DataObjectTrait {
-    fn interface(&self) -> windows::core::Result<&windows::Win32::System::Com::IDataObject>;
+    fn interface(&self) -> OpcResult<&windows::Win32::System::Com::IDataObject>;
 
     /// Gets data from the object in the specified format.
     ///
@@ -14,8 +15,8 @@ pub trait DataObjectTrait {
     ///
     /// # Returns
     /// Storage medium containing the requested data
-    fn get_data(&self, format: &FORMATETC) -> windows::core::Result<STGMEDIUM> {
-        unsafe { self.interface()?.GetData(format) }
+    fn get_data(&self, format: &FORMATETC) -> OpcResult<STGMEDIUM> {
+        unsafe { Ok(self.interface()?.GetData(format)?) }
     }
 
     /// Gets data in place using the specified format.
@@ -25,7 +26,7 @@ pub trait DataObjectTrait {
     ///
     /// # Returns
     /// Storage medium updated with the requested data
-    fn get_data_here(&self, format: &FORMATETC) -> windows::core::Result<STGMEDIUM> {
+    fn get_data_here(&self, format: &FORMATETC) -> OpcResult<STGMEDIUM> {
         let mut output = STGMEDIUM::default();
         unsafe { self.interface()?.GetDataHere(format, &mut output)? };
         Ok(output)
@@ -38,8 +39,13 @@ pub trait DataObjectTrait {
     ///
     /// # Returns
     /// Ok(()) if the format is supported, error otherwise
-    fn query_get_data(&self, format: &FORMATETC) -> windows::core::Result<()> {
-        unsafe { self.interface()?.QueryGetData(format) }.ok()
+    fn query_get_data(&self, format: &FORMATETC) -> OpcResult<()> {
+        unsafe {
+            self.interface()?
+                .QueryGetData(format)
+                .ok()
+                .map_err(OpcError::from)
+        }
     }
 
     /// Gets the canonical format equivalent to the specified format.
@@ -49,7 +55,7 @@ pub trait DataObjectTrait {
     ///
     /// # Returns
     /// Canonical format specification
-    fn get_canonical_format(&self, format_in: &FORMATETC) -> windows::core::Result<FORMATETC> {
+    fn get_canonical_format(&self, format_in: &FORMATETC) -> OpcResult<FORMATETC> {
         let mut output = FORMATETC::default();
         unsafe {
             self.interface()?
@@ -69,13 +75,8 @@ pub trait DataObjectTrait {
     ///
     /// # Returns
     /// Ok(()) if data was set successfully
-    fn set_data(
-        &self,
-        format: &FORMATETC,
-        medium: &STGMEDIUM,
-        release: bool,
-    ) -> windows::core::Result<()> {
-        unsafe { self.interface()?.SetData(format, medium, release) }
+    fn set_data(&self, format: &FORMATETC, medium: &STGMEDIUM, release: bool) -> OpcResult<()> {
+        unsafe { Ok(self.interface()?.SetData(format, medium, release)?) }
     }
 
     /// Enumerates available data formats.
@@ -88,8 +89,8 @@ pub trait DataObjectTrait {
     fn enumerate_formats(
         &self,
         direction: u32,
-    ) -> windows::core::Result<windows::Win32::System::Com::IEnumFORMATETC> {
-        unsafe { self.interface()?.EnumFormatEtc(direction) }
+    ) -> OpcResult<windows::Win32::System::Com::IEnumFORMATETC> {
+        unsafe { Ok(self.interface()?.EnumFormatEtc(direction)?) }
     }
 
     /// Establishes an advisory connection for data change notifications.
@@ -106,8 +107,8 @@ pub trait DataObjectTrait {
         format: &FORMATETC,
         advf: u32,
         sink: &windows::Win32::System::Com::IAdviseSink,
-    ) -> windows::core::Result<u32> {
-        unsafe { self.interface()?.DAdvise(format, advf, sink) }
+    ) -> OpcResult<u32> {
+        unsafe { Ok(self.interface()?.DAdvise(format, advf, sink)?) }
     }
 
     /// Terminates an advisory connection.
@@ -117,15 +118,15 @@ pub trait DataObjectTrait {
     ///
     /// # Returns
     /// Ok(()) if connection was terminated successfully
-    fn dunadvise(&self, connection: u32) -> windows::core::Result<()> {
-        unsafe { self.interface()?.DUnadvise(connection) }
+    fn dunadvise(&self, connection: u32) -> OpcResult<()> {
+        unsafe { Ok(self.interface()?.DUnadvise(connection)?) }
     }
 
     /// Enumerates active advisory connections.
     ///
     /// # Returns
     /// Enumerator for active advisory connections
-    fn enum_dadvise(&self) -> windows::core::Result<windows::Win32::System::Com::IEnumSTATDATA> {
-        unsafe { self.interface()?.EnumDAdvise() }
+    fn enum_dadvise(&self) -> OpcResult<windows::Win32::System::Com::IEnumSTATDATA> {
+        unsafe { Ok(self.interface()?.EnumDAdvise()?) }
     }
 }

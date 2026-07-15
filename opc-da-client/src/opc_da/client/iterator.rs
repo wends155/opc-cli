@@ -1,7 +1,8 @@
 use crate::opc_da::{
-    def::ItemAttributes,
-    utils::{RemoteArray, RemotePointer, TryToLocal as _},
+    com_utils::{RemoteArray, RemotePointer, TryToLocal as _},
+    errors::{OpcError, OpcResult},
 };
+use windows::core::Interface as _;
 
 const MAX_CACHE_SIZE: usize = 16;
 const STRING_CACHE_SIZE: usize = 256;
@@ -32,7 +33,7 @@ impl GuidIterator {
 }
 
 impl Iterator for GuidIterator {
-    type Item = windows::core::Result<windows::core::GUID>;
+    type Item = OpcResult<windows::core::GUID>;
 
     fn next(&mut self) -> Option<Self::Item> {
         if self.done {
@@ -57,7 +58,8 @@ impl Iterator for GuidIterator {
                 return Some(Err(windows::core::Error::new(
                     code,
                     "Failed to get next GUID",
-                )));
+                )
+                .into()));
             }
         }
 
@@ -88,7 +90,7 @@ impl StringIterator {
 }
 
 impl Iterator for StringIterator {
-    type Item = windows::core::Result<String>;
+    type Item = OpcResult<String>;
 
     fn next(&mut self) -> Option<Self::Item> {
         loop {
@@ -137,7 +139,8 @@ impl Iterator for StringIterator {
                     return Some(Err(windows::core::Error::new(
                         code,
                         "Failed to get next string",
-                    )));
+                    )
+                    .into()));
                 }
             }
 
@@ -155,7 +158,7 @@ impl Iterator for StringIterator {
             }
 
             let current = RemotePointer::from(pwstr);
-            return Some(current.try_into());
+            return Some(current.try_into().map_err(OpcError::from));
         }
     }
 }
@@ -185,7 +188,7 @@ impl<Group: TryFrom<windows::core::IUnknown, Error = windows::core::Error>> Grou
 impl<Group: TryFrom<windows::core::IUnknown, Error = windows::core::Error>> Iterator
     for GroupIterator<Group>
 {
-    type Item = windows::core::Result<Group>;
+    type Item = OpcResult<Group>;
 
     fn next(&mut self) -> Option<Self::Item> {
         if self.done {
@@ -210,18 +213,20 @@ impl<Group: TryFrom<windows::core::IUnknown, Error = windows::core::Error>> Iter
                 return Some(Err(windows::core::Error::new(
                     code,
                     "Failed to get next group",
-                )));
+                )
+                .into()));
             }
         }
 
         let current = self.cache[self.index as usize].take();
         self.index += 1;
         Some(match current {
-            Some(group) => group.try_into(),
+            Some(group) => group.try_into().map_err(OpcError::from),
             None => Err(windows::core::Error::new(
                 windows::Win32::Foundation::E_POINTER,
                 "Failed to get group, returned null",
-            )),
+            )
+            .into()),
         })
     }
 }
@@ -246,7 +251,7 @@ impl ItemAttributeIterator {
 }
 
 impl Iterator for ItemAttributeIterator {
-    type Item = windows::core::Result<ItemAttributes>;
+    type Item = OpcResult<crate::opc_da::typedefs::ItemAttributes>;
 
     fn next(&mut self) -> Option<Self::Item> {
         if self.done {
@@ -276,14 +281,15 @@ impl Iterator for ItemAttributeIterator {
                 }
                 Err(err) => {
                     self.done = true;
-                    return Some(Err(err));
+                    return Some(Err(err.into()));
                 }
             }
         }
 
-        let current = self.cache.as_slice()[self.index as usize].try_to_local();
+        let current: windows::core::Result<crate::opc_da::typedefs::ItemAttributes> =
+            self.cache.as_slice()[self.index as usize].try_to_local();
         self.index += 1;
-        Some(current)
+        Some(current.map_err(OpcError::from))
     }
 }
 

@@ -1,11 +1,11 @@
-use crate::opc_da::utils::LocalPointer;
+use crate::opc_da::{com_utils::LocalPointer, errors::OpcResult};
 
 /// Server public groups management functionality.
 ///
 /// Provides methods to access and manage public groups that can be shared
 /// between multiple OPC clients for more efficient server resource usage.
 pub trait ServerPublicGroupsTrait {
-    fn interface(&self) -> windows::core::Result<&crate::bindings::da::IOPCServerPublicGroups>;
+    fn interface(&self) -> OpcResult<&crate::bindings::da::IOPCServerPublicGroups>;
 
     /// Gets a public group by its name.
     ///
@@ -19,10 +19,14 @@ pub trait ServerPublicGroupsTrait {
         &self,
         name: &str,
         id: &windows::core::GUID,
-    ) -> windows::core::Result<windows::core::IUnknown> {
+    ) -> OpcResult<windows::core::IUnknown> {
         let name = LocalPointer::from(name);
 
-        unsafe { self.interface()?.GetPublicGroupByName(name.as_pcwstr(), id) }
+        unsafe {
+            Ok(self
+                .interface()?
+                .GetPublicGroupByName(name.as_pcwstr(), id)?)
+        }
     }
 
     /// Removes a public group from the server.
@@ -33,7 +37,7 @@ pub trait ServerPublicGroupsTrait {
     ///
     /// # Returns
     /// Ok(()) if the group was successfully removed
-    fn remove_public_group(&self, server_group: u32, force: bool) -> windows::core::Result<()> {
-        unsafe { self.interface()?.RemovePublicGroup(server_group, force) }
+    fn remove_public_group(&self, server_group: u32, force: bool) -> OpcResult<()> {
+        unsafe { Ok(self.interface()?.RemovePublicGroup(server_group, force)?) }
     }
 }

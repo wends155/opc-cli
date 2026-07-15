@@ -1,4 +1,7 @@
-use crate::opc_da::utils::RemoteArray;
+use crate::opc_da::{
+    com_utils::RemoteArray,
+    errors::{OpcError, OpcResult},
+};
 use windows_core::BOOL;
 
 /// Item sampling management functionality (OPC DA 3.0).
@@ -6,7 +9,7 @@ use windows_core::BOOL;
 /// Provides methods to control sampling rates and buffering behavior
 /// for individual items in an OPC group.
 pub trait ItemSamplingMgtTrait {
-    fn interface(&self) -> windows::core::Result<&crate::bindings::da::IOPCItemSamplingMgt>;
+    fn interface(&self) -> OpcResult<&crate::bindings::da::IOPCItemSamplingMgt>;
 
     /// Sets sampling rates for specified items.
     ///
@@ -25,11 +28,10 @@ pub trait ItemSamplingMgtTrait {
         &self,
         server_handles: &[u32],
         sampling_rates: &[u32],
-    ) -> windows::core::Result<(RemoteArray<u32>, RemoteArray<windows::core::HRESULT>)> {
+    ) -> OpcResult<(RemoteArray<u32>, RemoteArray<windows::core::HRESULT>)> {
         if server_handles.len() != sampling_rates.len() {
-            return Err(windows::core::Error::new(
-                windows::Win32::Foundation::E_INVALIDARG,
-                "server_handles and sampling_rates must have the same length",
+            return Err(OpcError::InvalidState(
+                "server_handles and sampling_rates must have the same length".to_string(),
             ));
         }
 
@@ -63,7 +65,7 @@ pub trait ItemSamplingMgtTrait {
     fn get_item_sampling_rate(
         &self,
         server_handles: &[u32],
-    ) -> windows::core::Result<(RemoteArray<u32>, RemoteArray<windows::core::HRESULT>)> {
+    ) -> OpcResult<(RemoteArray<u32>, RemoteArray<windows::core::HRESULT>)> {
         let len = server_handles.len().try_into()?;
 
         let mut sampling_rates = RemoteArray::new(len);
@@ -91,7 +93,7 @@ pub trait ItemSamplingMgtTrait {
     fn clear_item_sampling_rate(
         &self,
         server_handles: &[u32],
-    ) -> windows::core::Result<RemoteArray<windows::core::HRESULT>> {
+    ) -> OpcResult<RemoteArray<windows::core::HRESULT>> {
         let len = server_handles.len().try_into()?;
 
         let mut errors = RemoteArray::new(len);
@@ -122,11 +124,10 @@ pub trait ItemSamplingMgtTrait {
         &self,
         server_handles: &[u32],
         enable: &[bool],
-    ) -> windows::core::Result<RemoteArray<windows::core::HRESULT>> {
+    ) -> OpcResult<RemoteArray<windows::core::HRESULT>> {
         if server_handles.len() != enable.len() {
-            return Err(windows::core::Error::new(
-                windows::Win32::Foundation::E_INVALIDARG,
-                "server_handles and enable must have the same length",
+            return Err(OpcError::InvalidState(
+                "server_handles and enable must have the same length".to_string(),
             ));
         }
 
@@ -159,7 +160,7 @@ pub trait ItemSamplingMgtTrait {
     fn get_item_buffer_enable(
         &self,
         server_handles: &[u32],
-    ) -> windows::core::Result<(
+    ) -> OpcResult<(
         RemoteArray<windows_core::BOOL>,
         RemoteArray<windows::core::HRESULT>,
     )> {

@@ -1,23 +1,26 @@
 //! Abstractions for OPC DA server connectivity.
 //!
 //! Defines the [`ServerConnector`], [`ConnectedServer`], and [`ConnectedGroup`]
-//! traits that decouple [`super::opc_da::OpcDaWrapper`] from concrete COM types.
+//! traits that decouple [`super::opc_da::OpcDaClient`] from concrete COM types.
 //! This enables mock implementations for unit testing without a live COM server.
 
 pub use crate::bindings::da::tagOPCITEMDEF;
 pub use crate::bindings::da::{tagOPCITEMRESULT, tagOPCITEMSTATE};
-use crate::opc_da::client::StringIterator;
-pub use crate::opc_da::utils::RemoteArray;
+pub use crate::opc_da::client::*;
+pub use crate::opc_da::com_utils::RemoteArray;
+pub use crate::opc_da::errors::{OpcError, OpcResult};
+use anyhow::Context;
 pub use windows::Win32::System::Variant::VARIANT;
+use windows::core::Interface;
 
 /// Factory for connecting to OPC DA servers.
 ///
-/// Abstracts the concrete `v2::Client` usage so that tests can inject mocks
+/// Abstracts the concrete COM client usage so that tests can inject mocks
 /// that return pre-configured server/group results without a live COM runtime.
 ///
 /// # Errors
 ///
-/// All methods return `anyhow::Result` — implementations should wrap COM errors
+/// All methods return `OpcResult` — implementations should wrap COM errors
 /// with contextual messages.
 pub trait ServerConnector: Send + Sync {
     /// The server facade type returned by [`Self::connect`].
@@ -28,14 +31,14 @@ pub trait ServerConnector: Send + Sync {
     /// # Errors
     ///
     /// Returns an error if the COM registry enumeration fails.
-    fn enumerate_servers(&self) -> anyhow::Result<Vec<String>>;
+    fn enumerate_servers(&self) -> OpcResult<Vec<String>>;
 
     /// Connect to the named OPC DA server and return a server facade.
     ///
     /// # Errors
     ///
     /// Returns an error if the COM server cannot be created or connected.
-    fn connect(&self, server_name: &str) -> anyhow::Result<Self::Server>;
+    fn connect(&self, server_name: &str) -> OpcResult<Self::Server>;
 }
 
 /// Facade over a connected OPC DA server instance.
@@ -44,7 +47,7 @@ pub trait ServerConnector: Send + Sync {
 ///
 /// # Errors
 ///
-/// All methods return `anyhow::Result` — COM errors are propagated with context.
+/// All methods return `OpcResult` — COM errors are propagated with context.
 pub trait ConnectedServer {
     /// The group facade type returned by [`Self::add_group`].
     type Group: ConnectedGroup;
@@ -56,7 +59,7 @@ pub trait ConnectedServer {
     /// # Errors
     ///
     /// Returns an error if the COM call fails.
-    fn query_organization(&self) -> anyhow::Result<u32>;
+    fn query_organization(&self) -> OpcResult<u32>;
 
     /// Browse the server's address space for item IDs of the given type.
     ///
@@ -69,21 +72,21 @@ pub trait ConnectedServer {
         filter: Option<&str>,
         data_type: u16,
         access_rights: u32,
-    ) -> anyhow::Result<StringIterator>;
+    ) -> OpcResult<StringIterator>;
 
     /// Change the current browse position (e.g., navigate into/out of branches).
     ///
     /// # Errors
     ///
     /// Returns an error if the position change is rejected by the server.
-    fn change_browse_position(&self, direction: u32, name: &str) -> anyhow::Result<()>;
+    fn change_browse_position(&self, direction: u32, name: &str) -> OpcResult<()>;
 
     /// Resolve a browse name to its fully-qualified item ID.
     ///
     /// # Errors
     ///
     /// Returns an error if the server cannot resolve the item name.
-    fn get_item_id(&self, item_name: &str) -> anyhow::Result<String>;
+    fn get_item_id(&self, item_name: &str) -> OpcResult<String>;
 
     /// Add a new OPC group to this server connection.
     ///
@@ -96,27 +99,27 @@ pub trait ConnectedServer {
         name: &str,
         active: bool,
         update_rate: u32,
-        client_handle: u32,
+        client_handle: GroupHandle,
         time_bias: i32,
         percent_deadband: f32,
         locale_id: u32,
         revised_update_rate: &mut u32,
-        server_handle: &mut u32,
-    ) -> anyhow::Result<Self::Group>;
+        server_handle: &mut GroupHandle,
+    ) -> OpcResult<Self::Group>;
 
     /// Remove an OPC group by its server-assigned handle.
     ///
     /// # Errors
     ///
     /// Returns an error if the group removal fails.
-    fn remove_group(&self, server_group: u32, force: bool) -> anyhow::Result<()>;
+    fn remove_group(&self, server_group: GroupHandle, force: bool) -> OpcResult<()>;
 }
 
 /// Facade over an OPC DA group for item management and I/O.
 ///
 /// # Errors
 ///
-/// All methods return `anyhow::Result` — COM errors are propagated with context.
+/// All methods return `OpcResult` — COM errors are propagated with context.
 pub trait ConnectedGroup {
     /// Add items to this group for monitoring.
     ///
@@ -126,7 +129,7 @@ pub trait ConnectedGroup {
     fn add_items(
         &self,
         items: &[tagOPCITEMDEF],
-    ) -> anyhow::Result<(
+    ) -> OpcResult<(
         RemoteArray<tagOPCITEMRESULT>,
         RemoteArray<windows::core::HRESULT>,
     )>;
@@ -139,8 +142,8 @@ pub trait ConnectedGroup {
     fn read(
         &self,
         source: crate::bindings::da::tagOPCDATASOURCE,
-        server_handles: &[u32],
-    ) -> anyhow::Result<(
+        server_handles: &[ItemHandle],
+    ) -> OpcResult<(
         RemoteArray<tagOPCITEMSTATE>,
         RemoteArray<windows::core::HRESULT>,
     )>;
@@ -152,29 +155,23 @@ pub trait ConnectedGroup {
     /// Returns an error if the COM `Write` call fails.
     fn write(
         &self,
-        server_handles: &[u32],
+        server_handles: &[ItemHandle],
         values: &[VARIANT],
-    ) -> anyhow::Result<RemoteArray<windows::core::HRESULT>>;
+    ) -> OpcResult<RemoteArray<windows::core::HRESULT>>;
 }
 
 // ── COM-backed implementations ──────────────────────────────────────
 
-use crate::opc_da::client::v2::{Client, Group, Server};
-use crate::opc_da::client::{
-    BrowseServerAddressSpaceTrait, ClientTrait, ItemMgtTrait, ServerTrait, SyncIoTrait,
-};
-use anyhow::Context;
-
 /// Real COM-backed server connector implementation.
 ///
-/// Uses `v2::Client` to enumerate and connect to OPC DA servers via Windows COM.
+/// Uses Windows COM to enumerate and connect to OPC DA servers.
 pub struct ComConnector;
 
 impl ServerConnector for ComConnector {
     type Server = ComServer;
 
-    fn enumerate_servers(&self) -> anyhow::Result<Vec<String>> {
-        let client = Client;
+    fn enumerate_servers(&self) -> OpcResult<Vec<String>> {
+        let client = crate::opc_da::client::v2::Client;
         let guid_iter = client
             .get_servers()
             .context("Failed to enumerate OPC DA servers from registry")?;
@@ -201,20 +198,78 @@ impl ServerConnector for ComConnector {
         Ok(servers)
     }
 
-    fn connect(&self, server_name: &str) -> anyhow::Result<Self::Server> {
+    fn connect(&self, server_name: &str) -> OpcResult<Self::Server> {
         let opc_server = crate::helpers::connect_server(server_name)?;
-        Ok(ComServer(opc_server))
+        let unknown: windows::core::IUnknown = opc_server.cast()?;
+
+        Ok(ComServer {
+            server: opc_server,
+            common: unknown.cast()?,
+            connection_point_container: unknown.cast()?,
+            item_properties: unknown.cast()?,
+            server_public_groups: unknown.cast().ok(),
+            browse_server_address_space: unknown.cast().ok(),
+        })
     }
 }
 
-/// COM-backed [`ConnectedServer`] wrapping a `v2::Server`.
-pub struct ComServer(Server);
+/// COM-backed [`ConnectedServer`].
+pub struct ComServer {
+    pub(crate) server: crate::bindings::da::IOPCServer,
+    pub(crate) common: crate::bindings::comn::IOPCCommon,
+    pub(crate) connection_point_container: windows::Win32::System::Com::IConnectionPointContainer,
+    pub(crate) item_properties: crate::bindings::da::IOPCItemProperties,
+    pub(crate) server_public_groups: Option<crate::bindings::da::IOPCServerPublicGroups>,
+    pub(crate) browse_server_address_space:
+        Option<crate::bindings::da::IOPCBrowseServerAddressSpace>,
+}
+
+impl ServerTrait<ComGroup> for ComServer {
+    fn interface(&self) -> OpcResult<&crate::bindings::da::IOPCServer> {
+        Ok(&self.server)
+    }
+}
+
+impl CommonTrait for ComServer {
+    fn interface(&self) -> OpcResult<&crate::bindings::comn::IOPCCommon> {
+        Ok(&self.common)
+    }
+}
+
+impl ConnectionPointContainerTrait for ComServer {
+    fn interface(&self) -> OpcResult<&windows::Win32::System::Com::IConnectionPointContainer> {
+        Ok(&self.connection_point_container)
+    }
+}
+
+impl ItemPropertiesTrait for ComServer {
+    fn interface(&self) -> OpcResult<&crate::bindings::da::IOPCItemProperties> {
+        Ok(&self.item_properties)
+    }
+}
+
+impl ServerPublicGroupsTrait for ComServer {
+    fn interface(&self) -> OpcResult<&crate::bindings::da::IOPCServerPublicGroups> {
+        self.server_public_groups.as_ref().ok_or_else(|| {
+            OpcError::NotImplemented("IOPCServerPublicGroups not supported".to_string())
+        })
+    }
+}
+
+impl BrowseServerAddressSpaceTrait for ComServer {
+    fn interface(&self) -> OpcResult<&crate::bindings::da::IOPCBrowseServerAddressSpace> {
+        self.browse_server_address_space.as_ref().ok_or_else(|| {
+            OpcError::NotImplemented("IOPCBrowseServerAddressSpace not supported".to_string())
+        })
+    }
+}
 
 impl ConnectedServer for ComServer {
     type Group = ComGroup;
 
-    fn query_organization(&self) -> anyhow::Result<u32> {
-        Ok(self.0.query_organization()?.0.cast_unsigned())
+    fn query_organization(&self) -> OpcResult<u32> {
+        let org = BrowseServerAddressSpaceTrait::query_organization(self)?;
+        Ok(org.0.cast_unsigned())
     }
 
     fn browse_opc_item_ids(
@@ -223,27 +278,26 @@ impl ConnectedServer for ComServer {
         filter: Option<&str>,
         data_type: u16,
         access_rights: u32,
-    ) -> anyhow::Result<StringIterator> {
-        #[allow(clippy::cast_possible_wrap)]
-        let enum_str = self.0.browse_opc_item_ids(
-            crate::bindings::da::tagOPCBROWSETYPE(browse_type as i32),
+    ) -> OpcResult<StringIterator> {
+        BrowseServerAddressSpaceTrait::browse_opc_item_ids(
+            self,
+            crate::bindings::da::tagOPCBROWSETYPE(browse_type.cast_signed()),
             filter,
             data_type,
             access_rights,
-        )?;
-        Ok(StringIterator::new(enum_str))
+        )
     }
 
-    fn change_browse_position(&self, direction: u32, name: &str) -> anyhow::Result<()> {
-        #[allow(clippy::cast_possible_wrap)]
-        Ok(self.0.change_browse_position(
-            crate::bindings::da::tagOPCBROWSEDIRECTION(direction as i32),
+    fn change_browse_position(&self, direction: u32, name: &str) -> OpcResult<()> {
+        BrowseServerAddressSpaceTrait::change_browse_position(
+            self,
+            crate::bindings::da::tagOPCBROWSEDIRECTION(direction.cast_signed()),
             name,
-        )?)
+        )
     }
 
-    fn get_item_id(&self, item_name: &str) -> anyhow::Result<String> {
-        Ok(self.0.get_item_id(item_name)?)
+    fn get_item_id(&self, item_name: &str) -> OpcResult<String> {
+        BrowseServerAddressSpaceTrait::get_item_id(self, item_name)
     }
 
     fn add_group(
@@ -251,62 +305,141 @@ impl ConnectedServer for ComServer {
         name: &str,
         active: bool,
         update_rate: u32,
-        client_handle: u32,
+        client_handle: GroupHandle,
         time_bias: i32,
         percent_deadband: f32,
         locale_id: u32,
         revised_update_rate: &mut u32,
-        server_handle: &mut u32,
-    ) -> anyhow::Result<Self::Group> {
-        let group = self.0.add_group(
+        server_handle: &mut GroupHandle,
+    ) -> OpcResult<Self::Group> {
+        ServerTrait::add_group(
+            self,
             name,
             active,
-            client_handle,
             update_rate,
-            locale_id,
+            client_handle,
             time_bias,
             percent_deadband,
+            locale_id,
             revised_update_rate,
             server_handle,
-        )?;
-        Ok(ComGroup(group))
+        )
     }
 
-    fn remove_group(&self, server_group: u32, force: bool) -> anyhow::Result<()> {
-        Ok(self.0.remove_group(server_group, force)?)
+    fn remove_group(&self, server_group: GroupHandle, force: bool) -> OpcResult<()> {
+        ServerTrait::remove_group(self, server_group, force)
     }
 }
 
-/// COM-backed [`ConnectedGroup`] wrapping a `v2::Group`.
-pub struct ComGroup(Group);
+pub struct ComGroup {
+    pub(crate) item_mgt: crate::bindings::da::IOPCItemMgt,
+    pub(crate) group_state_mgt: crate::bindings::da::IOPCGroupStateMgt,
+    pub(crate) public_group_state_mgt: Option<crate::bindings::da::IOPCPublicGroupStateMgt>,
+    pub(crate) sync_io: crate::bindings::da::IOPCSyncIO,
+    pub(crate) async_io: Option<crate::bindings::da::IOPCAsyncIO>,
+    pub(crate) async_io2: crate::bindings::da::IOPCAsyncIO2,
+    pub(crate) connection_point_container: windows::Win32::System::Com::IConnectionPointContainer,
+    pub(crate) data_object: Option<windows::Win32::System::Com::IDataObject>,
+}
+
+impl ItemMgtTrait for ComGroup {
+    fn interface(&self) -> OpcResult<&crate::bindings::da::IOPCItemMgt> {
+        Ok(&self.item_mgt)
+    }
+}
+
+impl GroupStateMgtTrait for ComGroup {
+    fn interface(&self) -> OpcResult<&crate::bindings::da::IOPCGroupStateMgt> {
+        Ok(&self.group_state_mgt)
+    }
+}
+
+impl PublicGroupStateMgtTrait for ComGroup {
+    fn interface(&self) -> OpcResult<&crate::bindings::da::IOPCPublicGroupStateMgt> {
+        self.public_group_state_mgt.as_ref().ok_or_else(|| {
+            OpcError::NotImplemented("IOPCPublicGroupStateMgt not supported".to_string())
+        })
+    }
+}
+
+impl SyncIoTrait for ComGroup {
+    fn interface(&self) -> OpcResult<&crate::bindings::da::IOPCSyncIO> {
+        Ok(&self.sync_io)
+    }
+}
+
+impl AsyncIoTrait for ComGroup {
+    fn interface(&self) -> OpcResult<&crate::bindings::da::IOPCAsyncIO> {
+        self.async_io
+            .as_ref()
+            .ok_or_else(|| OpcError::NotImplemented("IOPCAsyncIO not supported".to_string()))
+    }
+}
+
+impl AsyncIo2Trait for ComGroup {
+    fn interface(&self) -> OpcResult<&crate::bindings::da::IOPCAsyncIO2> {
+        Ok(&self.async_io2)
+    }
+}
+
+impl ConnectionPointContainerTrait for ComGroup {
+    fn interface(&self) -> OpcResult<&windows::Win32::System::Com::IConnectionPointContainer> {
+        Ok(&self.connection_point_container)
+    }
+}
+
+impl DataObjectTrait for ComGroup {
+    fn interface(&self) -> OpcResult<&windows::Win32::System::Com::IDataObject> {
+        self.data_object
+            .as_ref()
+            .ok_or_else(|| OpcError::NotImplemented("IDataObject not supported".to_string()))
+    }
+}
 
 impl ConnectedGroup for ComGroup {
     fn add_items(
         &self,
         items: &[tagOPCITEMDEF],
-    ) -> anyhow::Result<(
+    ) -> OpcResult<(
         RemoteArray<tagOPCITEMRESULT>,
         RemoteArray<windows::core::HRESULT>,
     )> {
-        Ok(self.0.add_items(items)?)
+        ItemMgtTrait::add_items(self, items)
     }
 
     fn read(
         &self,
         source: crate::bindings::da::tagOPCDATASOURCE,
-        server_handles: &[u32],
-    ) -> anyhow::Result<(
+        server_handles: &[ItemHandle],
+    ) -> OpcResult<(
         RemoteArray<tagOPCITEMSTATE>,
         RemoteArray<windows::core::HRESULT>,
     )> {
-        Ok(self.0.read(source, server_handles)?)
+        SyncIoTrait::read(self, source, server_handles)
     }
 
     fn write(
         &self,
-        server_handles: &[u32],
+        server_handles: &[ItemHandle],
         values: &[VARIANT],
-    ) -> anyhow::Result<RemoteArray<windows::core::HRESULT>> {
-        Ok(self.0.write(server_handles, values)?)
+    ) -> OpcResult<RemoteArray<windows::core::HRESULT>> {
+        SyncIoTrait::write(self, server_handles, values)
+    }
+}
+
+impl TryFrom<windows::core::IUnknown> for ComGroup {
+    type Error = windows::core::Error;
+
+    fn try_from(unknown: windows::core::IUnknown) -> Result<Self, Self::Error> {
+        Ok(Self {
+            item_mgt: unknown.cast()?,
+            group_state_mgt: unknown.cast()?,
+            public_group_state_mgt: unknown.cast().ok(),
+            sync_io: unknown.cast()?,
+            async_io: unknown.cast().ok(),
+            async_io2: unknown.cast()?,
+            connection_point_container: unknown.cast()?,
+            data_object: unknown.cast().ok(),
+        })
     }
 }

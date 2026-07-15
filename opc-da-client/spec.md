@@ -114,11 +114,11 @@ All methods use `#[async_trait]`.
 
 #### Public API
 
-##### `fn friendly_com_hint(err: &anyhow::Error) -> Option<&'static str>`
+##### `fn friendly_com_hint(error: &OpcError) -> Option<&'static str>`
 
-**Description:** Inspects the debug representation of `err` for known COM/DCOM HRESULT patterns and returns a human-readable hint.
+**Description:** Inspects the `OpcError` instance for known COM/DCOM HRESULT patterns and returns a human-readable hint.
 
-**Inputs:** An `anyhow::Error` reference.
+**Inputs:** An `OpcError` reference.
 **Output:** `Some(hint)` if a known code is found, `None` otherwise.
 
 **Known Mappings:**
@@ -178,18 +178,18 @@ All methods use `#[async_trait]`.
 
 #### Public API
 
-##### `struct OpcDaWrapper`
+##### `struct OpcDaClient`
 
 | Method | Signature | Description |
 | :--- | :--- | :--- |
-| `new()` | `fn new() -> Self` | Constructs a new wrapper. |
-| `default()` | `fn default() -> Self` | Same as `new()`. |
+| `new(connector: C)` | `fn new(connector: C) -> OpcResult<Self>` | Constructs a new wrapper, launching the dedicated COM worker thread. |
 
-Implements `OpcProvider` for all four trait methods.
+Implements `OpcProvider` for all four trait methods by dispatching to the `ComWorker`.
 
 **Invariants:**
-*   All COM work runs on a dedicated blocking thread via `tokio::task::spawn_blocking`.
-*   COM is initialized via `ComGuard::new()` at the start of every blocking task; teardown is automatic on drop.
+*   All COM work runs on a dedicated, long-lived `ComWorker` thread, avoiding repeated initialization overhead and solving COM thread-affinity constraints.
+*   Connections are pooled and cached automatically inside the worker, mapped by ProgID.
+*   Stale connections are transparently evicted and retried during request dispatch.
 *   GUID filtering: zeroed GUIDs are skipped during server enumeration.
 *   Server list is sorted and deduplicated before returning.
 *   OPC groups created by `read_tag_values` and `write_tag_value` are **always** removed via `remove_group` — even on error paths — to prevent resource leaks.
@@ -295,7 +295,7 @@ Defined in § 1.1. See table above.
 
 | Flag | Default | Effect |
 | :--- | :--- | :--- |
-| `opc-da-backend` | ✅ Yes | Compiles the `backend::opc_da` module and exports `OpcDaWrapper`. |
+| `opc-da-backend` | ✅ Yes | Compiles the `backend::opc_da` module and exports `OpcDaClient`. |
 | `test-support` | ❌ No | Enables `mockall` and exports `MockOpcProvider`. |
 
 ---
@@ -304,7 +304,7 @@ Defined in § 1.1. See table above.
 
 ### 3.1 Internal: `opc_da` Module (merged)
 
-**Boundary:** `OpcDaWrapper` → `opc_da::client::v2::Client` / `Server`.
+**Boundary:** `OpcDaClient` → `opc_da::client::v2::Client` / `Server`.
 
 | Operation | `opc_da` API Used |
 | :--- | :--- |
@@ -331,7 +331,7 @@ Defined in § 1.1. See table above.
 
 **Boundary:** `opc-cli` → `dyn OpcProvider`.
 
-*   The CLI crate depends on the `OpcProvider` trait, never on `OpcDaWrapper` directly in its core logic.
+*   The CLI crate depends on the `OpcProvider` trait, never on `OpcDaClient` directly in its core logic.
 *   Tests use `MockOpcProvider` (via `test-support` feature).
 *   `friendly_com_hint()` is called by the CLI to enrich error messages displayed in the TUI status bar.
 

@@ -24,7 +24,11 @@
 /// - ItemDeadbandMgtTrait: Item deadband management
 /// - ItemIoTrait: Direct item access
 /// - ItemSamplingMgtTrait: Sampling rate control
-/// - GroupStateMgt2Trait: Extended group management
+///   - GroupStateMgt2Trait: Extended group management
+///
+/// Types:
+/// - GroupHandle: Type-safe handle for OPC groups
+/// - ItemHandle: Type-safe handle for OPC items
 mod async_io;
 mod async_io2;
 mod async_io3;
@@ -33,7 +37,6 @@ mod browse_server_address_space;
 mod client;
 mod common;
 mod connection_point_container;
-mod data_callback;
 mod data_object;
 mod group_state_mgt;
 mod group_state_mgt2;
@@ -56,7 +59,6 @@ pub use browse_server_address_space::*;
 pub use client::*;
 pub use common::*;
 pub use connection_point_container::*;
-pub use data_callback::*;
 pub use data_object::*;
 pub use group_state_mgt::*;
 pub use group_state_mgt2::*;
@@ -70,3 +72,5 @@ pub use server::*;
 pub use server_public_groups::*;
 pub use sync_io::*;
 pub use sync_io2::*;
+
+pub use crate::opc_da::typedefs::{GroupHandle, ItemHandle};
