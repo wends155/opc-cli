@@ -3,7 +3,7 @@
 > **Behavioral Source of Truth** for the `opc-da-client` library crate.
 > Defines *what* each module should do — independent of current implementation.
 >
-> Last verified against: e768239
+> Last verified against: a368133
 
 ---
 

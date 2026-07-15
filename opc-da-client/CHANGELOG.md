@@ -23,6 +23,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - **Context:** The library migrated away from `anyhow` (an application-level, type-erased error) to `thiserror` (`OpcError`) to adhere to standard Rust library best practices. 
   - **Compatibility:** Because `OpcError` implements `std::error::Error`, downstream consumers (like `opc-cli`) using `anyhow` can still perfectly propagate `OpcResult` using the standard `?` operator.
 - Refactored server cache lookup logic in `dispatch_with_retry` to use Rust's `Entry` API, removing double lookup hash penalties and unsafe `.unwrap()` calls.
+- **API Simplification**: Internalized the `ComGuard` struct and constructor to be crate-private (`pub(crate)`). Downstream consumers no longer need to handle manual COM initialization; the MTA COM apartment lifecycle is managed transparently on a dedicated background worker thread pool.
 
 ### Fixed
 - Patched integration doc-tests within `README.md` with `no_run` attributes.
