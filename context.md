@@ -362,3 +362,14 @@ emove_group errors now logged instead of silently discarded.
 > * **New Constraints:**
 >   - Use the new `.agents/` folder path for all agent workflows and codebase validation scripts.
 > * **Pruned:** The old `.agent/` configuration directory is deleted.
+
+## 2026-07-15: Fix Join-Path & Shell Invocations in Git-Checkpoint
+> 📝 **Context Update:**
+> * **Feature:** Fixed PowerShell 5.1 compatibility and dynamic shell resolution in `Git-Checkpoint.ps1`.
+> * **Changes:**
+>   - Corrected the three-argument `Join-Path` call in [.agents/scripts/Git-Checkpoint.ps1](file:///c:/Users/WSALIGAN/code/opc-cli/.agents/scripts/Git-Checkpoint.ps1) line 114 to use nested two-argument calls compatible with Windows PowerShell 5.1.
+>   - Replaced the hardcoded `pwsh` task validation invocation in `Git-Checkpoint.ps1` line 125 with a dynamic shell selection (`pwsh` if available, falling back to standard `powershell`).
+>   - Updated [scratch/sanitize.ps1](file:///C:/Users/WSALIGAN/.gemini/antigravity/brain/ba1a478e-271c-4b53-97ee-9753ed0f9b69/scratch/sanitize.ps1) replacements to match and clean both three-argument and four-argument `Join-Path` formats in future synchronization passes.
+> * **New Constraints:** None.
+> * **Pruned:** Invalid parameter binding parser crash in `Git-Checkpoint.ps1`.
+
