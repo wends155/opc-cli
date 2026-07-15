@@ -24,7 +24,7 @@
 
 *   **Layer**: `opc-da-client` (Stable library crate)
 *   **Responsibility**: Communicating with Local/Remote OPC Servers.
-*   **COM Safety**: `ComGuard` (RAII guard in `opc-da-client/src/com_guard.rs`) ensures `CoUninitialize` is called exactly once per successful `CoInitializeEx`, even on panics.
+*   **COM Safety**: `ComGuard` (internal RAII guard in `opc-da-client/src/com_guard.rs`) ensures `CoUninitialize` is called exactly once per successful `CoInitializeEx` on the worker thread, even on panics.
 *   **Abstraction**: `trait OpcProvider` (defined in `opc-da-client/src/provider.rs`)
     *   Decouples the UI from the specific OPC implementation.
     *   Enables **Testability** via `mockall` (allowing UI development on any OS).
@@ -207,7 +207,7 @@ The project prioritizes a **Test-Driven Architecture** where the UI and business
 *   **Coverage** (80+ tests as of 2026-02-22):
     *   **UI Logic (`opc-cli/src/app.rs`)**: State transitions, navigation, search, tag selection, message ring-buffer, graceful timeout handling, and background task result polling.
     *   **Input Handling (`opc-cli/src/main.rs`)**: Key event processing across all screens.
-    *   **OPC Logic (`opc-da-client`)**: HRESULT hint mapping, GUID filtering, FILETIME conversion, variant roundtrip, iterator bug detection, and `ComGuard` doctest.
+    *   **OPC Logic (`opc-da-client`)**: HRESULT hint mapping, GUID filtering, FILETIME conversion, variant roundtrip, iterator bug detection, and `ComGuard` unit test.
 
 ### 2. Integration & Manual Testing
 *   **OPC DA Layer (`opc-da-client`)**: Due to its direct reliance on Windows COM/DCOM, this layer is primarily verified through mock-backend integration tests and manual end-to-end testing against real OPC servers (e.g., Matrikon, Kepware, or local simulation servers).

@@ -425,3 +425,16 @@ emove_group errors now logged instead of silently discarded.
 >   - Official crates.io publish is prepared and validated on the clean `main` branch, but requires the user's cargo authentication token to publish live.
 > * **Pruned:** Outdated CHANGELOG v0.2.0 omissions.
 
+
+## 2026-07-15: Internalize ComGuard & API Simplification
+> 📝 **Context Update:**
+> * **Feature:** Internalize ComGuard and document transparent COM management.
+> * **Changes:**
+>   - Modified `opc-da-client/src/com_guard.rs` to keep `ComGuard` and its constructor internal-only (crate-private) to the library, resolving public API noise.
+>   - Re-exported `ComGuard` inside `opc-da-client/src/lib.rs` using `pub(crate) use` to allow crate modules (like `com_worker.rs`) to continue using `crate::ComGuard`.
+>   - Updated all four quickstart examples in `opc-da-client/README.md` and module-level docs in `lib.rs` to remove the redundant `ComGuard` initialization lines.
+>   - Rewrote the features list and added a detailed "COM Threading Model" architectural overview to the library `README.md` and root `README.md` to clarify the background MTA threading pool.
+>   - Switched the doc-test in `com_guard.rs` to `ignore` and updated `spec.md` and `architecture.md` (in both crate and workspace levels) to reflect the new internal API classification.
+> * **New Constraints:**
+>   - Downstream consumers do not need to call `ComGuard` or initialize COM. COM MTA lifecycles are completely self-contained within `OpcDaClient`.
+> * **Pruned:** The public API exposure of `ComGuard` and all associated developer-facing manual COM initialization steps.

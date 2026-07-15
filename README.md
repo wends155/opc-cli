@@ -19,7 +19,7 @@ See **[architecture.md](./architecture.md)** for the full design, state machine,
 - **Tag Write Support**: Write typed values (int, float, bool, string) to individual tags.
 - **Search & Filter**: Substring search with `Tab`/`Shift+Tab` cycling through matches.
 - **Rich Error Hints**: Human-readable explanations for cryptic Windows COM/DCOM HRESULT codes.
-- **RAII COM Guard**: Safe COM initialization/teardown via `ComGuard` — no manual `CoUninitialize`.
+- **Transparent COM Management**: COM initialization and apartment thread affinity handled automatically by a dedicated background worker thread.
 - **Mockable Backend**: Unit-test the TUI on any OS without a live OPC server.
 
 ## 🚀 Getting Started

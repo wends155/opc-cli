@@ -4,13 +4,13 @@
 [![Docs.rs](https://docs.rs/opc-da-client/badge.svg)](https://docs.rs/opc-da-client)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-Backend-agnostic OPC DA client library for Rust — async, trait-based, with RAII COM guard.
+Backend-agnostic OPC DA client library for Rust — async, trait-based, with transparent COM management.
 
 ## Features
 
 - **Async/Await API**: Built for modern asynchronous Rust using `tokio` and `async-trait`.
 - **Trait-Based Abstraction**: The `OpcProvider` trait allows for easy mocking and backend swapping.
-- **RAII COM Guard**: `ComGuard` handles COM initialization/teardown automatically — no manual `CoUninitialize` needed.
+- **Transparent COM Management**: Handles COM initialization (`CoInitializeEx`) and apartment thread affinity automatically in the background.
 - **Read & Write Support**: Read tag values and write typed values (`Int`, `Float`, `Bool`, `String`) to OPC tags.
 - **Windows COM/DCOM Support**: Native OPC DA backend via `windows-rs` — no external OPC crates needed.
 - **Robust Error Handling**: Leverages `thiserror` for the `OpcError` domain type and `friendly_com_hint()` for human-readable HRESULT explanations.
@@ -38,11 +38,10 @@ opc-da-client = "0.2.0"
 Enumerate available OPC DA servers on a local or remote host.
 
 ```rust,no_run
-use opc_da_client::{ComGuard, OpcDaClient, OpcProvider};
+use opc_da_client::{OpcDaClient, OpcProvider};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    let _guard = ComGuard::new()?;
     let client = OpcDaClient::default();
 
     let servers = client.list_servers("localhost").await?;
@@ -59,11 +58,10 @@ async fn main() -> anyhow::Result<()> {
 Connect to a specific server and read current values for a set of tags.
 
 ```rust,no_run
-use opc_da_client::{ComGuard, OpcDaClient, OpcProvider};
+use opc_da_client::{OpcDaClient, OpcProvider};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    let _guard = ComGuard::new()?;
     let client = OpcDaClient::default();
     let server_progid = "Matrikon.OPC.Simulation.1";
     let tags = vec![
@@ -86,11 +84,10 @@ async fn main() -> anyhow::Result<()> {
 Write a typed value to a single OPC tag.
 
 ```rust,no_run
-use opc_da_client::{ComGuard, OpcDaClient, OpcProvider, OpcValue};
+use opc_da_client::{OpcDaClient, OpcProvider, OpcValue};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    let _guard = ComGuard::new()?;
     let client = OpcDaClient::default();
     let server = "Matrikon.OPC.Simulation.1";
 
@@ -112,12 +109,11 @@ async fn main() -> anyhow::Result<()> {
 Recursively discover available tags on an OPC server.
 
 ```rust,no_run
-use opc_da_client::{ComGuard, OpcDaClient, OpcProvider};
+use opc_da_client::{OpcDaClient, OpcProvider};
 use std::sync::{Arc, Mutex, atomic::AtomicUsize};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    let _guard = ComGuard::new()?;
     let client = OpcDaClient::default();
     let server_progid = "Matrikon.OPC.Simulation.1";
 
@@ -142,9 +138,14 @@ The library is split into a core trait layer and concrete implementations:
 
 - **`OpcProvider`**: The primary async trait defining OPC operations (list, browse, read, write).
 - **`OpcDaClient`**: The default implementation using native `windows-rs` COM calls. Generic over `ServerConnector` for testability; defaults to `ComConnector`.
-- **`ComGuard`**: RAII guard ensuring `CoUninitialize` is called exactly once per successful `CoInitializeEx`.
 
 See [architecture.md](https://github.com/wends155/opc-cli/blob/main/opc-da-client/architecture.md) for in-depth design details and [spec.md](https://github.com/wends155/opc-cli/blob/main/opc-da-client/spec.md) for behavioral contracts.
+
+### COM Threading Model
+
+OPC DA relies on Windows COM, which requires per-thread initialization and strict thread affinity. `opc-da-client` handles this transparently:
+* **Dedicated Worker Thread**: All COM operations are executed on a dedicated background worker thread initialized in Multi-Threaded Apartment (MTA) mode.
+* **No Manual Init**: You do not need to call `CoInitialize` or manage COM lifecycles in your calling application.
 
 ## License
 

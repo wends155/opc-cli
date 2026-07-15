@@ -3,17 +3,16 @@
 //! # opc-da-client
 //!
 //! Backend-agnostic OPC DA client library for Rust — async, trait-based,
-//! with RAII COM guard.
+//! with transparent COM management.
 //!
 //! ## Quick Start
 //!
 //! ```no_run
 //! # use anyhow::Result;
-//! use opc_da_client::{ComGuard, OpcDaClient, OpcProvider};
+//! use opc_da_client::{OpcDaClient, OpcProvider};
 //!
 //! # #[tokio::main]
 //! # async fn main() -> Result<()> {
-//! let _guard = ComGuard::new()?;
 //! let client = OpcDaClient::default();
 //! let servers = client.list_servers("localhost").await?;
 //! # Ok(())
@@ -32,6 +31,7 @@
 //! **Windows only** — OPC DA is built on COM/DCOM.
 
 mod com_guard;
+pub(crate) use com_guard::ComGuard;
 mod helpers;
 mod provider;
 
@@ -48,7 +48,6 @@ mod opc_da;
 mod backend;
 
 // Stable public API
-pub use com_guard::ComGuard;
 pub use helpers::{format_hresult, friendly_com_hint};
 pub use provider::{OpcProvider, OpcValue, TagValue, WriteResult};
 
