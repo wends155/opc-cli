@@ -13,6 +13,13 @@ pub struct OpcDaClient<C: ServerConnector + 'static = ComConnector> {
     pub worker: ComWorker<C>,
 }
 
+/// Returns the default `OpcDaClient` using native COM settings.
+///
+/// # Panics
+///
+/// Panics if the background COM worker thread cannot be started or COM
+/// Multi-Threaded Apartment (MTA) initialization fails on the worker thread.
+/// Use [`OpcDaClient::new`] for fallible construction.
 impl Default for OpcDaClient<ComConnector> {
     fn default() -> Self {
         Self::new(ComConnector).expect("Failed to initialize OpcDaClient")
