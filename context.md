@@ -438,3 +438,13 @@ emove_group errors now logged instead of silently discarded.
 > * **New Constraints:**
 >   - Downstream consumers do not need to call `ComGuard` or initialize COM. COM MTA lifecycles are completely self-contained within `OpcDaClient`.
 > * **Pruned:** The public API exposure of `ComGuard` and all associated developer-facing manual COM initialization steps.
+
+## 2026-07-15: TARS Summary — Sync opc-cli with Transparent COM API
+> 📝 **Context Update:**
+> * **Feature:** Synchronized the `opc-cli` TUI/CLI crate with the new simplified transparent COM API of `opc-da-client`.
+> * **Changes:**
+>   - Replaced a stale 3-line comment block in `opc-cli/src/main.rs` that referenced the removal of `ComGuard` as a recent transition, establishing it as settled architecture.
+>   - Verified that all `opc-cli` CLI and TUI source code contains zero imports or references to the now crate-private `ComGuard` struct.
+>   - Executed the workspace validation pipeline to verify clean compilation, zero lints, and passing tests across the entire workspace.
+> * **New Constraints:** None.
+> * **Pruned:** The stale `ComGuard` removal comment block inside `opc-cli/src/main.rs`.

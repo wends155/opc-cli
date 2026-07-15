@@ -33,9 +33,7 @@ async fn main() -> Result<()> {
 
     tracing::info!("Starting OPC CLI");
 
-    // Initialize COM (MTA) for the main thread
-    // The ComGuard here was intentionally removed per connection pooling architecture.
-    // The dedicated COM worker thread will now own and manage COM initialization.
+    // COM initialization is handled transparently by the OpcDaClient worker thread.
 
     // Create OPC client BEFORE entering TUI mode so init errors are visible
     let opc_wrapper = Arc::new(OpcDaClient::new(ComConnector)?);
