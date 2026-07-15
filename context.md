@@ -398,3 +398,15 @@ emove_group errors now logged instead of silently discarded.
 >   - Successfully executed the clean release merge from `dev` to `main`, auto-resolving modify/delete conflicts on stripped files.
 > * **New Constraints:** None.
 > * **Pruned:** Redundant CR character carriage returns in source files.
+
+## 2026-07-15: TARS Summary — Hardening opc-da-client Core Logic
+> 📝 **Context Update:**
+> * **Feature:** Hardened the core logic of `opc-da-client` COM communications and pool caching.
+> * **Changes:**
+>   - Added defensive array length validation checks on the return values of `group.add_items` in `ComWorker::handle_read`, comparing COM-allocated array sizes with the requested `tag_ids` to block silent zip truncation.
+>   - Added group destruction cleanup to prevent resource leaks during length mismatch failures.
+>   - Replaced the stub `test_worker_read_tag_values` in `com_worker.rs` with `test_worker_read_tag_values_mismatched_lengths` unit test.
+>   - Refactored server cache lookup logic in `dispatch_with_retry` to use Rust's `Entry` API, removing double lookup hash penalties and unsafe `.unwrap()` calls.
+>   - Documented the panicking behavior of `OpcDaClient::default()` in `opc_da.rs` rustdocs.
+> * **New Constraints:** None.
+> * **Pruned:** The risk of silent zip-truncation data misalignment on array mismatches is resolved.
