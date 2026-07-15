@@ -1,4 +1,15 @@
 #![forbid(unsafe_code)]
+//! # opc-cli
+//!
+//! Interactive TUI for browsing, reading, and writing OPC DA tags on Windows.
+//!
+//! ## Overview
+//!
+//! This binary crate implements the user-facing CLI and interactive TUI
+//! (Terminal User Interface) for the workspace. It initializes the OPC DA
+//! client, manages the terminal lifecycle using `ratatui` and `crossterm`,
+//! and runs the primary input-event and render loops.
+
 mod app;
 mod ui;
 

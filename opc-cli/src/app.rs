@@ -1,3 +1,13 @@
+//! # app
+//!
+//! Main application state manager and event handler for the OPC DA client TUI.
+//!
+//! ## Overview
+//!
+//! This module defines the state structures ([`App`]) and screen state representations
+//! ([`CurrentScreen`]) driving the TUI layout, handling user inputs, managing the list selection
+//! states, and communicating asynchronously with the background OPC DA client provider.
+
 use opc_da_client::{OpcError, OpcProvider, OpcValue, TagValue, WriteResult, friendly_com_hint};
 use ratatui::widgets::{ListState, TableState}; // Added TableState
 use std::sync::Arc;
