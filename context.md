@@ -348,3 +348,17 @@ emove_group errors now logged instead of silently discarded.
 > * **New Constraints:**
 >   - Maintain ASCII-only strings in repository automation scripts to prevent parsing issues on Windows PowerShell 5.1 environments.
 > * **Pruned:** The encoding/parse error in `Sync-TaskList.ps1` is resolved.
+
+## 2026-07-15: Migration of Agent Configuration to `.agents/`
+> 📝 **Context Update:**
+> * **Feature:** Migrated project agent configuration to the unified `.agents/` layout.
+> * **Changes:**
+>   - Created the `.agents/` directory structure containing `rules/`, `workflows/`, and `scripts/`.
+>   - Copied all standard rules and workflows from the central rules repository `c:\Users\WSALIGAN\code\rules\.agents\`.
+>   - Migrated project-specific workflows ([log-audit.md](file:///c:/Users/WSALIGAN/code/opc-cli/.agents/workflows/log-audit.md) and [prepublish.md](file:///c:/Users/WSALIGAN/code/opc-cli/.agents/workflows/prepublish.md)) to the new layout.
+>   - Copied and sanitized all 7 helper PowerShell scripts in `.agents/scripts/`, replacing multibyte Unicode emojis with ASCII tags (`[OK]`, `[FAIL]`, `[WARN]`, `[SKIP]`, `[NEW]`, `[MODIFY]`, `[DELETE]`, `[AUTO]`, `[MANUAL]`, `[BUG]`, `[TOOL]`) and correcting multiple-argument `Join-Path` calls for Windows PowerShell 5.1 compatibility.
+>   - Updated [.gitignore](file:///c:/Users/WSALIGAN/code/opc-cli/.gitignore) to use directory-level ignores for `.agents/rules/`, `.agents/scripts/`, and `.agents/workflows/*` while tracking our project-specific workflows.
+>   - Deleted the obsolete `.agent/` directory recursively.
+> * **New Constraints:**
+>   - Use the new `.agents/` folder path for all agent workflows and codebase validation scripts.
+> * **Pruned:** The old `.agent/` configuration directory is deleted.

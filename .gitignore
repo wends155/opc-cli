@@ -38,11 +38,13 @@ GEMINI.md
 coding_standard.md
 coding_standards.md
 
-# Agent Workflows (Tracked in separate repo)
-.agent/workflows/audit.md
-.agent/workflows/feature.md
-.agent/workflows/issue.md
-.agent/workflows/plan-making.md
+# Agent Configuration (synced from rules repo)
+.agents/rules/
+.agents/scripts/
+.agents/workflows/*
+# Project-specific workflows (tracked in this repo)
+!.agents/workflows/log-audit.md
+!.agents/workflows/prepublish.md
 
 # Database
 data.db
