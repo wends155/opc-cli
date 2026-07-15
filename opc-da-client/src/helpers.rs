@@ -151,7 +151,7 @@ pub fn variant_to_string(variant: &VARIANT) -> String {
                 if bstr.is_empty() {
                     "\"\"".to_string()
                 } else {
-                    format!("\"{}\"", &**bstr)
+                    format!("\"{}\"", **bstr)
                 }
             }
             10 => {

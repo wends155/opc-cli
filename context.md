@@ -332,7 +332,19 @@ emove_group errors now logged instead of silently discarded.
 
 
 > 📝 **Context Update:**
-> * **Feature:** Resolve 	okio runtime panic in ComWorker::start()
-> * **Changes:** Switched ComWorker initialization signal from 	okio::sync::oneshot to std::sync::mpsc. The OS-level synchronization prevents Tokio from detecting a blocking call on the async runtime thread, safely avoiding a deadlock panic. Enhanced tracing visibility by adding bookend 	racing::info! milestones in OpcDaClient::new() and reordering main.rs to initialize OPC *before* taking over the terminal with the raw UI, ensuring any future startup errors write to standard terminal out instead of being swallowed by the alternate screen.
-> * **New Constraints:** Only use 	okio::sync primitives if waiting inside async methods via .await. Use std::sync::mpsc for purely blocking initialization synchronization between a standard thread and an async tokio thread context.
+> * **Feature:** Resolve tokio runtime panic in ComWorker::start()
+> * **Changes:** Switched ComWorker initialization signal from tokio::sync::oneshot to std::sync::mpsc. The OS-level synchronization prevents Tokio from detecting a blocking call on the async runtime thread, safely avoiding a deadlock panic. Enhanced tracing visibility by adding bookend tracing::info! milestones in OpcDaClient::new() and reordering main.rs to initialize OPC *before* taking over the terminal with the raw UI, ensuring any future startup errors write to standard terminal out instead of being swallowed by the alternate screen.
+> * **New Constraints:** Only use tokio::sync primitives if waiting inside async methods via .await. Use std::sync::mpsc for purely blocking initialization synchronization between a standard thread and an async tokio thread context.
 > * **Pruned:** The panic.txt log output can be completely ignored.
+
+## 2026-07-15: Author Attribution & Sync-TaskList Fix
+> 📝 **Context Update:**
+> * **Feature:** Added developer attribution and fixed PowerShell 5.1 compatibility.
+> * **Changes:**
+>   - Updated [LICENSE](file:///c:/Users/WSALIGAN/code/opc-cli/LICENSE) copyright notice to attribute ownership to `Wendell Saligan <saliganw@gmail.com>`.
+>   - Added `authors` array containing `Wendell Saligan <saliganw@gmail.com>` in both workspace manifests ([opc-cli/Cargo.toml](file:///c:/Users/WSALIGAN/code/opc-cli/opc-cli/Cargo.toml) and [opc-da-client/Cargo.toml](file:///c:/Users/WSALIGAN/code/opc-cli/opc-da-client/Cargo.toml)).
+>   - Replaced multibyte Unicode emojis (`✅`, `❌`, `🟢`, `🟡`, `🔴`) and em-dashes (`—`) with standard ASCII strings and hyphens inside [.agent/scripts/Sync-TaskList.ps1](file:///c:/Users/WSALIGAN/code/opc-cli/.agent/scripts/Sync-TaskList.ps1) to resolve parse and syntax errors in Windows PowerShell 5.1.
+>   - Remediated a cargo clippy warning in `opc-da-client/src/helpers.rs` concerning a redundant borrow in `format!`.
+> * **New Constraints:**
+>   - Maintain ASCII-only strings in repository automation scripts to prevent parsing issues on Windows PowerShell 5.1 environments.
+> * **Pruned:** The encoding/parse error in `Sync-TaskList.ps1` is resolved.
