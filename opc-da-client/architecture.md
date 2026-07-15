@@ -35,7 +35,7 @@ opc-da-client/
 ├── spec.md                 # Behavioral contracts — Behavioral Source of Truth
 └── src/
     ├── lib.rs              # Crate root: module declarations, public re-exports
-    ├── com_guard.rs        # RAII guard for COM init/teardown (ComGuard)
+    ├── com_guard.rs        # Internal RAII guard for COM init/teardown (ComGuard)
     ├── provider.rs         # OpcProvider trait + TagValue struct
     ├── helpers.rs          # COM utilities: friendly_com_hint, variant/quality/time converters
     ├── opc_da/             # Merged from vendor/opc_da (Phase 2)
@@ -121,7 +121,7 @@ The verification script ([verify.ps1](file:///c:/Users/WSALIGAN/code/opc-cli/scr
 
 ### Doc Tests
 - `friendly_com_hint()` — runnable doctest in `helpers.rs`.
-- `ComGuard::new()` — `no_run` compile-check doctest in `com_guard.rs`.
+- `ComGuard::new()` — internal-only ignored doctest in `com_guard.rs`.
 
 ### Integration / Manual
 - Tested against real OPC servers (Matrikon, ABB, Kepware) on Windows.
@@ -175,7 +175,6 @@ graph TD
     subgraph "Public API (Stable)"
         Trait["trait OpcProvider"]
         TagValue["struct TagValue"]
-        Guard["struct ComGuard"]
         Hint["fn friendly_com_hint()"]
         FmtHR["fn format_hresult()"]
     end
@@ -186,6 +185,7 @@ graph TD
     end
 
     subgraph "Internal Modules"
+        Guard["struct ComGuard"]
         ClientTraits["client::traits"]
         Defs["def.rs"]
         Utils["utils/ (memory)"]

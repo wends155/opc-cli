@@ -3,7 +3,7 @@
 > **Behavioral Source of Truth** for the `opc-da-client` library crate.
 > Defines *what* each module should do — independent of current implementation.
 >
-> Last verified against: e768239
+> Last verified against: a368133
 
 ---
 
@@ -228,7 +228,7 @@ Before calling `browse_recursive`, `browse_tags` attempts `BrowseOPCItemIDs(OPC_
 
 **Purpose:** Provide a drop guard that ensures `CoUninitialize` is called exactly once per successful `CoInitializeEx`, even on early returns or panics.
 
-#### Public API
+#### Internal API
 
 ##### `struct ComGuard`
 
@@ -250,7 +250,7 @@ Before calling `browse_recursive`, `browse_tags` attempts `BrowseOPCItemIDs(OPC_
 *   The guard is **not** `Send` or `Sync` — it must remain on the thread that created it.
 
 **Required Test Coverage:**
-- [x] Doctest: `ComGuard::new()?` compiles in a `no_run` example.
+- [x] Doctest: `ComGuard::new()?` is ignored (internal only).
 
 ---
 
@@ -390,7 +390,7 @@ Defined in § 1.1. See table above.
 ### Doc Tests
 
 - [x] `friendly_com_hint` — runnable doctest in `helpers.rs`.
-- [x] `ComGuard` — `no_run` compile-check doctest in `com_guard.rs`.
+- [x] `ComGuard` — internal-only ignored doctest in `com_guard.rs`.
 
 ### Integration / Manual Tests
 
