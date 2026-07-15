@@ -373,3 +373,17 @@ emove_group errors now logged instead of silently discarded.
 > * **New Constraints:** None.
 > * **Pruned:** Invalid parameter binding parser crash in `Git-Checkpoint.ps1`.
 
+## 2026-07-15: Divergent Branches & Clean Main Release Merges
+> 📝 **Context Update:**
+> * **Feature:** Divergent branches architecture with clean main branch releases.
+> * **Changes:**
+>   - Created [scripts/Merge-ToMain.ps1](file:///c:/Users/WSALIGAN/code/opc-cli/scripts/Merge-ToMain.ps1) to automate clean release merges from development/feature branches into the `main` branch.
+>   - Implemented an `Invoke-Git` execution wrapper in the script to bypass PowerShell native command standard error traps (e.g. `git checkout` logging progress to stderr) under `$ErrorActionPreference = 'Stop'`.
+>   - Programmed the merge utility to strip agent workflows (`.agents/`), session logs (`context.md`), dev-only documentation (`architecture.md`, `TODO.md`, `long_term_todo.md`), and build artifacts (`clippy_output.json`) from `main` during merge.
+>   - Automated stripping of agent-specific ignore rules from `.gitignore` on the `main` branch.
+>   - Renamed the local development branch from `refactor/opc-da-integration` to `dev` to act as the primary branch for all active development.
+>   - Successfully executed the first clean merge from `dev` to `main`, validating that the release branch is free of all agent-related files, metadata, and dev-only rules.
+> * **New Constraints:**
+>   - All active development and agent usage occurs on the `dev` branch.
+>   - Use the `scripts/Merge-ToMain.ps1` script to propagate changes to `main` for release tags. Do not merge `dev` directly into `main` using standard Git merge commands, as this will bleed agent metadata into the release branch.
+> * **Pruned:** Root-level `architecture.md`, `context.md`, `TODO.md`, `long_term_todo.md`, `.agents/`, and `clippy_output.json` are excluded from the `main` branch index and workspace.
