@@ -1,4 +1,15 @@
 #![forbid(unsafe_code)]
+//! # opc-cli
+//!
+//! Interactive TUI for browsing, reading, and writing OPC DA tags on Windows.
+//!
+//! ## Overview
+//!
+//! This binary crate implements the user-facing CLI and interactive TUI
+//! (Terminal User Interface) for the workspace. It initializes the OPC DA
+//! client, manages the terminal lifecycle using `ratatui` and `crossterm`,
+//! and runs the primary input-event and render loops.
+
 mod app;
 mod ui;
 
@@ -33,9 +44,7 @@ async fn main() -> Result<()> {
 
     tracing::info!("Starting OPC CLI");
 
-    // Initialize COM (MTA) for the main thread
-    // The ComGuard here was intentionally removed per connection pooling architecture.
-    // The dedicated COM worker thread will now own and manage COM initialization.
+    // COM initialization is handled transparently by the OpcDaClient worker thread.
 
     // Create OPC client BEFORE entering TUI mode so init errors are visible
     let opc_wrapper = Arc::new(OpcDaClient::new(ComConnector)?);

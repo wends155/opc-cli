@@ -1,3 +1,13 @@
+//! # ui
+//!
+//! Terminal User Interface rendering logic for the OPC DA client.
+//!
+//! ## Overview
+//!
+//! This module contains all rendering functions to draw screens, dialogs, progress bars,
+//! status logs, and input widgets onto the terminal frame. It maps the state in [`App`]
+//! to visual elements using `ratatui`.
+
 use crate::app::{App, CurrentScreen};
 use ratatui::{
     Frame,

@@ -98,7 +98,7 @@ async fn main() -> anyhow::Result<()> {
     if result.success {
         println!("✓ Write succeeded");
     } else {
-        println!("✗ Write failed: {}", result.error.unwrap_or_default());
+        println!("✗ Write failed: {}", result.error.as_deref().unwrap_or("Unknown error"));
     }
     Ok(())
 }
@@ -119,6 +119,8 @@ async fn main() -> anyhow::Result<()> {
 
     let sink = Arc::new(Mutex::new(Vec::new()));
     let progress = Arc::new(AtomicUsize::new(0));
+    // Clone these Arcs before passing if you need to monitor progress
+    // or harvest partial results from another task on timeout.
 
     let discovered_tags = client.browse_tags(
         server_progid,
