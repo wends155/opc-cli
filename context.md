@@ -458,3 +458,13 @@ emove_group errors now logged instead of silently discarded.
 >   - Validated formatting, clippy lints, unit/doc tests, and drift boundaries.
 > * **New Constraints:** None.
 > * **Pruned:** Lacking module-level doc comments in `opc-cli` TUI modules.
+
+## 2026-07-16: TARS Summary — Address Example Review Findings in README.md
+> 📝 **Context Update:**
+> * **Feature:** Remediated code examples in library README.
+> * **Changes:**
+>   - Corrected the Write example in `opc-da-client/README.md` to use `as_deref().unwrap_or("Unknown error")` on `result.error` instead of `unwrap_or_default()`, avoiding empty strings on failure.
+>   - Added clarifying comments to the Browse example in `README.md` to guide users on cloning `Arc` pointers (`progress` and `sink`) when performing concurrent tracking or timeout harvesting.
+>   - Validated that all library doc-tests compile and pass successfully under the `verify.ps1` pipeline.
+> * **New Constraints:** None.
+> * **Pruned:** Outdated/incomplete API usage patterns in library documentation examples.
