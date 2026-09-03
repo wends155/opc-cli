@@ -59,6 +59,17 @@ pub enum OpcValue {
     Bool(bool),
 }
 
+impl std::fmt::Display for OpcValue {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::String(s) => write!(f, "{s}"),
+            Self::Int(i) => write!(f, "{i}"),
+            Self::Float(fl) => write!(f, "{fl}"),
+            Self::Bool(b) => write!(f, "{b}"),
+        }
+    }
+}
+
 /// Result of a single write operation.
 ///
 /// # Examples

@@ -1,13 +1,14 @@
 #![allow(warnings)]
 #![allow(clippy::all, clippy::pedantic, clippy::restriction)]
 
-use crate::bindings::da::{OPC_DS_DEVICE, OPC_NS_FLAT, tagOPCITEMDEF};
-use crate::com::connector::{ConnectedGroup, ConnectedServer, ServerConnector};
+use crate::com::connector::{
+    ConnectedGroup, ConnectedServer, DataSource, GroupConfig, GroupItemDef, ServerConnector,
+};
 use crate::com::guard::ComGuard;
 use crate::errors::{OpcError, OpcResult};
-use crate::helpers::{filetime_to_string, format_hresult, opc_value_to_variant, variant_to_string};
+use crate::helpers::system_time_to_string;
 use crate::provider::{OpcQuality, OpcValue, TagValue, WriteResult};
-use crate::types::{BrowseDirection, BrowseType, GroupHandle, ItemHandle};
+use crate::types::{BrowseDirection, BrowseType, GroupHandle, ItemHandle, NamespaceType};
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -297,45 +298,32 @@ impl<C: ServerConnector + 'static> ComWorker<C> {
         );
         let start = std::time::Instant::now();
 
-        let mut revised_update_rate = 0u32;
-        let mut server_handle = GroupHandle::default();
-        let group = opc_server.add_group(
-            "opc-da-client-read",
-            true,
-            1000,
-            server_handle,
-            0,
-            0.0,
-            0,
-            &mut revised_update_rate,
-            &mut server_handle,
-        )?;
+        let created = opc_server.add_group(&GroupConfig {
+            name: "opc-da-client-read",
+            active: true,
+            update_rate_ms: 1000,
+            client_handle: GroupHandle::default(),
+            time_bias: 0,
+            percent_deadband: 0.0,
+            locale_id: 0,
+        })?;
+        let group = created.group;
+        let server_handle = created.server_handle;
 
-        let item_id_wides: Vec<Vec<u16>> = tag_ids
-            .iter()
-            .map(|tag_id| tag_id.encode_utf16().chain(std::iter::once(0)).collect())
-            .collect();
-
-        let item_defs: Vec<tagOPCITEMDEF> = item_id_wides
+        let item_defs: Vec<GroupItemDef> = tag_ids
             .iter()
             .enumerate()
-            .map(|(idx, wide)| tagOPCITEMDEF {
-                szAccessPath: windows::core::PWSTR::null(),
-                szItemID: windows::core::PWSTR(wide.as_ptr().cast_mut()),
-                bActive: windows::Win32::Foundation::TRUE,
+            .map(|(idx, tag_id)| GroupItemDef {
+                item_id: tag_id.clone(),
                 #[allow(clippy::cast_possible_truncation)]
-                hClient: idx as u32,
-                dwBlobSize: 0,
-                pBlob: std::ptr::null_mut(),
-                vtRequestedDataType: 0,
-                wReserved: 0,
+                client_handle: ItemHandle(idx as u32),
+                active: true,
             })
             .collect();
 
-        let (results, errors) = group.add_items(&item_defs)?;
+        let results = group.add_items(&item_defs)?;
 
-        // RemoteArray::len() returns u32; tag_ids.len() returns usize.
-        if results.len() as usize != tag_ids.len() || errors.len() as usize != tag_ids.len() {
+        if results.len() != tag_ids.len() {
             if let Err(e) = opc_server.remove_group(server_handle, true) {
                 tracing::warn!(error = ?e, operation = "read_tag_values", "Failed to remove OPC group during cleanup");
             }
@@ -357,20 +345,19 @@ impl<C: ServerConnector + 'static> ComWorker<C> {
         let mut server_handles: Vec<ItemHandle> = Vec::new();
         let mut valid_indices = Vec::new();
 
-        for (idx, (item_result, error)) in results
-            .as_slice()
-            .iter()
-            .zip(errors.as_slice().iter())
-            .enumerate()
-        {
-            if error.is_ok() {
-                server_handles.push(ItemHandle(item_result.hServer));
+        for (idx, item_result) in results.iter().enumerate() {
+            if item_result.error.is_none() {
+                server_handles.push(item_result.server_handle);
                 valid_indices.push(idx);
             } else {
-                let hint = format_hresult(*error);
+                let err_msg = item_result
+                    .error
+                    .as_ref()
+                    .map(ToString::to_string)
+                    .unwrap_or_default();
                 tracing::warn!(
                     tag = %tag_ids[idx],
-                    error = %hint,
+                    error = %err_msg,
                     "read_tag_values: add_items rejected tag"
                 );
                 tag_values[idx].quality = OpcQuality::BAD_CONFIG_ERROR;
@@ -384,36 +371,32 @@ impl<C: ServerConnector + 'static> ComWorker<C> {
             return Ok(tag_values);
         }
 
-        let (item_states, read_errors) = group.read(OPC_DS_DEVICE, &server_handles)?;
-        let item_states_slice = item_states.as_slice();
-        let read_errors_slice = read_errors.as_slice();
+        let item_states = group.read(DataSource::Device, &server_handles)?;
 
         for (i, idx) in valid_indices.iter().enumerate() {
-            let state = &item_states_slice[i];
-            let read_error = &read_errors_slice[i];
-
-            let (value_str, quality) = if read_error.is_ok() {
-                (
-                    variant_to_string(&state.vDataValue),
-                    OpcQuality::from(state.wQuality),
-                )
-            } else {
-                let full_msg = format_hresult(*read_error);
-                tracing::warn!(
-                    tag = %tag_ids[*idx],
-                    error = ?read_error,
-                    hint = %full_msg,
-                    "read_tag_values: per-item read error"
-                );
-                ("Error".to_string(), OpcQuality::BAD_COMM_FAILURE)
-            };
-
-            tag_values[*idx] = TagValue {
-                tag_id: tag_ids[*idx].clone(),
-                value: value_str,
-                quality,
-                timestamp: filetime_to_string(state.ftTimeStamp),
-            };
+            match &item_states[i] {
+                Ok(state) => {
+                    tag_values[*idx] = TagValue {
+                        tag_id: tag_ids[*idx].clone(),
+                        value: state.value.to_string(),
+                        quality: state.quality,
+                        timestamp: system_time_to_string(state.timestamp),
+                    };
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        tag = %tag_ids[*idx],
+                        error = ?e,
+                        "read_tag_values: per-item read error"
+                    );
+                    tag_values[*idx] = TagValue {
+                        tag_id: tag_ids[*idx].clone(),
+                        value: "Error".to_string(),
+                        quality: OpcQuality::BAD_COMM_FAILURE,
+                        timestamp: String::new(),
+                    };
+                }
+            }
         }
 
         tracing::info!(
@@ -449,84 +432,71 @@ impl<C: ServerConnector + 'static> ComWorker<C> {
         );
         let start = std::time::Instant::now();
 
-        let mut revised_update_rate = 0u32;
-        let mut server_handle = GroupHandle::default();
-        let group = opc_server.add_group(
-            "opc-da-client-write",
-            true,
-            1000,
-            GroupHandle(0),
-            0,
-            0.0,
-            0,
-            &mut revised_update_rate,
-            &mut server_handle,
-        )?;
+        let created = opc_server.add_group(&GroupConfig {
+            name: "opc-da-client-write",
+            active: true,
+            update_rate_ms: 1000,
+            client_handle: GroupHandle(0),
+            time_bias: 0,
+            percent_deadband: 0.0,
+            locale_id: 0,
+        })?;
+        let group = created.group;
+        let server_handle = created.server_handle;
 
-        let mut item_id_wide: Vec<u16> = tag_id.encode_utf16().chain(std::iter::once(0)).collect();
-        let item_def = tagOPCITEMDEF {
-            szAccessPath: windows::core::PWSTR::null(),
-            szItemID: windows::core::PWSTR(item_id_wide.as_mut_ptr()),
-            bActive: windows::Win32::Foundation::TRUE,
-            hClient: 0,
-            dwBlobSize: 0,
-            pBlob: std::ptr::null_mut(),
-            vtRequestedDataType: 0,
-            wReserved: 0,
+        let item_def = GroupItemDef {
+            item_id: tag_id.to_string(),
+            client_handle: ItemHandle(0),
+            active: true,
         };
 
-        let (results, errors) = group.add_items(&[item_def])?;
+        let results = group.add_items(&[item_def])?;
         let item_res = results
-            .as_slice()
             .first()
             .ok_or_else(|| OpcError::Internal("Server returned empty item results".to_string()))?;
-        let item_err = errors
-            .as_slice()
-            .first()
-            .ok_or_else(|| OpcError::Internal("Server returned empty item errors".to_string()))?;
 
-        if let Err(e) = item_err.ok() {
+        if let Some(e) = &item_res.error {
             tracing::warn!(error = ?e, "write_tag_value: failed to add tag to group");
-            if let Err(e) = opc_server.remove_group(server_handle, true) {
-                tracing::warn!(error = ?e, operation = "write_tag_value", "Failed to remove OPC group during cleanup");
+            if let Err(err) = opc_server.remove_group(server_handle, true) {
+                tracing::warn!(error = ?err, operation = "write_tag_value", "Failed to remove OPC group during cleanup");
             }
             return Ok(WriteResult {
                 tag_id: tag_id.to_string(),
                 success: false,
-                error: Some(format!("Failed to add tag: {}", format_hresult(*item_err))),
+                error: Some(format!("Failed to add tag: {e}")),
             });
         }
 
-        let item_handle = ItemHandle(item_res.hServer);
-        let variant = opc_value_to_variant(value);
-
-        let write_errors = group.write(&[item_handle], &[variant])?;
-        let write_err = write_errors
-            .as_slice()
+        let item_handle = item_res.server_handle;
+        let write_results = group.write(&[item_handle], std::slice::from_ref(value))?;
+        let write_res = write_results
             .first()
             .ok_or_else(|| OpcError::Internal("Server returned empty write errors".to_string()))?;
 
-        let write_result = if write_err.is_ok() {
-            tracing::info!(
-                elapsed_ms = u64::try_from(start.elapsed().as_millis()).unwrap_or(u64::MAX),
-                "write_tag_value completed"
-            );
-            WriteResult {
-                tag_id: tag_id.to_string(),
-                success: true,
-                error: None,
+        let write_result = match write_res {
+            Ok(()) => {
+                tracing::info!(
+                    elapsed_ms = u64::try_from(start.elapsed().as_millis()).unwrap_or(u64::MAX),
+                    "write_tag_value completed"
+                );
+                WriteResult {
+                    tag_id: tag_id.to_string(),
+                    success: true,
+                    error: None,
+                }
             }
-        } else {
-            let msg = format_hresult(*write_err);
-            tracing::warn!(
-                error = %msg,
-                elapsed_ms = u64::try_from(start.elapsed().as_millis()).unwrap_or(u64::MAX),
-                "write_tag_value: server rejected write"
-            );
-            WriteResult {
-                tag_id: tag_id.to_string(),
-                success: false,
-                error: Some(msg),
+            Err(e) => {
+                let msg = e.to_string();
+                tracing::warn!(
+                    error = %msg,
+                    elapsed_ms = u64::try_from(start.elapsed().as_millis()).unwrap_or(u64::MAX),
+                    "write_tag_value: server rejected write"
+                );
+                WriteResult {
+                    tag_id: tag_id.to_string(),
+                    success: false,
+                    error: Some(msg),
+                }
             }
         };
 
@@ -556,7 +526,7 @@ impl<C: ServerConnector + 'static> ComWorker<C> {
         let org = opc_server.query_organization()?;
         let mut tags = Vec::new();
 
-        if org == OPC_NS_FLAT.0 as u32 {
+        if org == NamespaceType::Flat as u32 {
             let string_iter = opc_server.browse_opc_item_ids(BrowseType::Leaf, Some(""), 0, 0)?;
             for tag_res in string_iter {
                 if tags.len() >= max_tags {
@@ -726,9 +696,9 @@ mod tests {
         clippy::manual_assert
     )]
     use super::*;
-    use crate::bindings::da::{tagOPCDATASOURCE, tagOPCITEMDEF, tagOPCITEMRESULT, tagOPCITEMSTATE};
     use crate::com::connector::{
-        ConnectedGroup, ConnectedServer, RemoteArray, ServerConnector, StringIterator,
+        ConnectedGroup, ConnectedServer, CreatedGroup, DataSource, GroupConfig, GroupItemDef,
+        GroupItemResult, GroupItemState, ServerConnector, StringIterator,
     };
 
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -755,61 +725,31 @@ mod tests {
     }
 
     impl ConnectedGroup for ConfigurableMockGroup {
-        fn add_items(
-            &self,
-            _items: &[tagOPCITEMDEF],
-        ) -> OpcResult<(
-            RemoteArray<tagOPCITEMRESULT>,
-            RemoteArray<windows::core::HRESULT>,
-        )> {
-            use windows::Win32::Foundation::S_OK;
-
-            let res = tagOPCITEMRESULT {
-                hServer: 1,
-                vtCanonicalDataType: 0,
-                wReserved: 0,
-                dwAccessRights: 1,
-                dwBlobSize: 0,
-                pBlob: std::ptr::null_mut(),
-            };
-
-            let res_ptr = unsafe {
-                windows::Win32::System::Com::CoTaskMemAlloc(std::mem::size_of::<tagOPCITEMRESULT>())
-            } as *mut tagOPCITEMRESULT;
-            unsafe {
-                std::ptr::write(res_ptr, res);
-            }
-            let res_array = RemoteArray::from_mut_ptr(res_ptr, 1);
-
-            let err_ptr = unsafe {
-                windows::Win32::System::Com::CoTaskMemAlloc(std::mem::size_of::<
-                    windows::core::HRESULT,
-                >())
-            } as *mut windows::core::HRESULT;
-            unsafe {
-                std::ptr::write(err_ptr, S_OK);
-            }
-            let err_array = RemoteArray::from_mut_ptr(err_ptr, 1);
-
-            Ok((res_array, err_array))
+        fn add_items(&self, items: &[GroupItemDef]) -> OpcResult<Vec<GroupItemResult>> {
+            Ok(items
+                .iter()
+                .enumerate()
+                .map(|(i, _)| GroupItemResult {
+                    server_handle: ItemHandle((i + 1) as u32),
+                    canonical_type: 8,
+                    error: None,
+                })
+                .collect())
         }
 
         fn read(
             &self,
-            _source: tagOPCDATASOURCE,
+            _source: DataSource,
             _server_handles: &[ItemHandle],
-        ) -> OpcResult<(
-            RemoteArray<tagOPCITEMSTATE>,
-            RemoteArray<windows::core::HRESULT>,
-        )> {
-            Ok((RemoteArray::empty(), RemoteArray::empty()))
+        ) -> OpcResult<Vec<Result<GroupItemState, OpcError>>> {
+            Ok(vec![])
         }
 
         fn write(
             &self,
-            _server_handles: &[ItemHandle],
-            _values: &[windows::Win32::System::Variant::VARIANT],
-        ) -> OpcResult<RemoteArray<windows::core::HRESULT>> {
+            server_handles: &[ItemHandle],
+            _values: &[OpcValue],
+        ) -> OpcResult<Vec<Result<(), OpcError>>> {
             if self
                 .state
                 .should_fail_with_connection_error
@@ -823,22 +763,20 @@ mod tests {
                 });
             }
 
-            let hr = if self.state.should_fail_write.load(Ordering::Relaxed) {
-                windows::Win32::Foundation::E_FAIL
+            if self.state.should_fail_write.load(Ordering::Relaxed) {
+                Ok(server_handles
+                    .iter()
+                    .map(|_| {
+                        Err(OpcError::Com {
+                            source: windows::core::Error::from_hresult(
+                                windows::Win32::Foundation::E_FAIL,
+                            ),
+                        })
+                    })
+                    .collect())
             } else {
-                windows::Win32::Foundation::S_OK
-            };
-
-            let hr_ptr = unsafe {
-                windows::Win32::System::Com::CoTaskMemAlloc(std::mem::size_of::<
-                    windows::core::HRESULT,
-                >())
-            } as *mut windows::core::HRESULT;
-            unsafe {
-                std::ptr::write(hr_ptr, hr);
+                Ok(server_handles.iter().map(|_| Ok(())).collect())
             }
-
-            Ok(RemoteArray::from_mut_ptr(hr_ptr, 1))
         }
     }
 
@@ -871,23 +809,16 @@ mod tests {
             Ok(String::new())
         }
 
-        fn add_group(
-            &self,
-            _name: &str,
-            _active: bool,
-            _update_rate: u32,
-            _client_handle: GroupHandle,
-            _time_bias: i32,
-            _percent_deadband: f32,
-            _locale_id: u32,
-            _revised_update_rate: &mut u32,
-            _server_handle: &mut GroupHandle,
-        ) -> OpcResult<Self::Group> {
+        fn add_group(&self, config: &GroupConfig<'_>) -> OpcResult<CreatedGroup<Self::Group>> {
             if self.state.should_panic_on_request.load(Ordering::Relaxed) {
                 panic!("Simulated worker panic");
             }
-            Ok(ConfigurableMockGroup {
-                state: self.state.clone(),
+            Ok(CreatedGroup {
+                group: ConfigurableMockGroup {
+                    state: self.state.clone(),
+                },
+                server_handle: GroupHandle(1),
+                revised_update_rate_ms: config.update_rate_ms,
             })
         }
 
@@ -924,30 +855,21 @@ mod tests {
     struct WorkerMockGroup;
 
     impl ConnectedGroup for WorkerMockGroup {
-        fn add_items(
-            &self,
-            _items: &[tagOPCITEMDEF],
-        ) -> OpcResult<(
-            RemoteArray<tagOPCITEMRESULT>,
-            RemoteArray<windows::core::HRESULT>,
-        )> {
+        fn add_items(&self, _items: &[GroupItemDef]) -> OpcResult<Vec<GroupItemResult>> {
             Err(OpcError::NotImplemented("mock".into()))
         }
         fn read(
             &self,
-            _source: tagOPCDATASOURCE,
+            _source: DataSource,
             _server_handles: &[ItemHandle],
-        ) -> OpcResult<(
-            RemoteArray<tagOPCITEMSTATE>,
-            RemoteArray<windows::core::HRESULT>,
-        )> {
+        ) -> OpcResult<Vec<Result<GroupItemState, OpcError>>> {
             Err(OpcError::NotImplemented("mock".into()))
         }
         fn write(
             &self,
             _server_handles: &[ItemHandle],
-            _values: &[windows::Win32::System::Variant::VARIANT],
-        ) -> OpcResult<RemoteArray<windows::core::HRESULT>> {
+            _values: &[OpcValue],
+        ) -> OpcResult<Vec<Result<(), OpcError>>> {
             Err(OpcError::NotImplemented("mock".into()))
         }
     }
@@ -976,18 +898,7 @@ mod tests {
         fn get_item_id(&self, _item_name: &str) -> OpcResult<String> {
             Err(OpcError::NotImplemented("mock".into()))
         }
-        fn add_group(
-            &self,
-            _name: &str,
-            _active: bool,
-            _update_rate: u32,
-            _client_handle: GroupHandle,
-            _time_bias: i32,
-            _percent_deadband: f32,
-            _locale_id: u32,
-            _revised_update_rate: &mut u32,
-            _server_handle: &mut GroupHandle,
-        ) -> OpcResult<Self::Group> {
+        fn add_group(&self, _config: &GroupConfig<'_>) -> OpcResult<CreatedGroup<Self::Group>> {
             Err(OpcError::NotImplemented("mock".into()))
         }
         fn remove_group(&self, _server_group: GroupHandle, _force: bool) -> OpcResult<()> {
@@ -1039,31 +950,22 @@ mod tests {
     struct MismatchedGroup;
 
     impl ConnectedGroup for MismatchedGroup {
-        fn add_items(
-            &self,
-            _items: &[tagOPCITEMDEF],
-        ) -> OpcResult<(
-            RemoteArray<tagOPCITEMRESULT>,
-            RemoteArray<windows::core::HRESULT>,
-        )> {
-            Ok((RemoteArray::empty(), RemoteArray::empty()))
+        fn add_items(&self, _items: &[GroupItemDef]) -> OpcResult<Vec<GroupItemResult>> {
+            Ok(vec![])
         }
         fn read(
             &self,
-            _source: tagOPCDATASOURCE,
+            _source: DataSource,
             _server_handles: &[ItemHandle],
-        ) -> OpcResult<(
-            RemoteArray<tagOPCITEMSTATE>,
-            RemoteArray<windows::core::HRESULT>,
-        )> {
-            Ok((RemoteArray::empty(), RemoteArray::empty()))
+        ) -> OpcResult<Vec<Result<GroupItemState, OpcError>>> {
+            Ok(vec![])
         }
         fn write(
             &self,
             _server_handles: &[ItemHandle],
-            _values: &[windows::Win32::System::Variant::VARIANT],
-        ) -> OpcResult<RemoteArray<windows::core::HRESULT>> {
-            Ok(RemoteArray::empty())
+            _values: &[OpcValue],
+        ) -> OpcResult<Vec<Result<(), OpcError>>> {
+            Ok(vec![])
         }
     }
 
@@ -1091,19 +993,12 @@ mod tests {
         fn get_item_id(&self, _item_name: &str) -> OpcResult<String> {
             Ok(String::new())
         }
-        fn add_group(
-            &self,
-            _name: &str,
-            _active: bool,
-            _update_rate: u32,
-            _client_handle: GroupHandle,
-            _time_bias: i32,
-            _percent_deadband: f32,
-            _locale_id: u32,
-            _revised_update_rate: &mut u32,
-            _server_handle: &mut GroupHandle,
-        ) -> OpcResult<Self::Group> {
-            Ok(MismatchedGroup)
+        fn add_group(&self, config: &GroupConfig<'_>) -> OpcResult<CreatedGroup<Self::Group>> {
+            Ok(CreatedGroup {
+                group: MismatchedGroup,
+                server_handle: GroupHandle(1),
+                revised_update_rate_ms: config.update_rate_ms,
+            })
         }
         fn remove_group(&self, _server_group: GroupHandle, _force: bool) -> OpcResult<()> {
             Ok(())
@@ -1337,117 +1232,68 @@ mod tests {
     #[tokio::test]
     async fn test_worker_read_tag_values_quality_decoding() {
         use crate::types::{QualityLimit, QualityMajor, QualitySubstatus};
-        use windows::Win32::Foundation::{E_FAIL, S_OK};
-
         struct QualityTestConnector;
         struct QualityTestServer;
         struct QualityTestGroup;
 
         impl ConnectedGroup for QualityTestGroup {
-            fn add_items(
-                &self,
-                items: &[tagOPCITEMDEF],
-            ) -> OpcResult<(
-                RemoteArray<tagOPCITEMRESULT>,
-                RemoteArray<windows::core::HRESULT>,
-            )> {
-                let count = items.len();
-                // SAFETY: CoTaskMemAlloc allocates memory managed by RemoteArray Drop.
-                let res_ptr = unsafe {
-                    windows::Win32::System::Com::CoTaskMemAlloc(
-                        count * std::mem::size_of::<tagOPCITEMRESULT>(),
-                    )
-                } as *mut tagOPCITEMRESULT;
-
-                // SAFETY: CoTaskMemAlloc allocates memory managed by RemoteArray Drop.
-                let err_ptr = unsafe {
-                    windows::Win32::System::Com::CoTaskMemAlloc(
-                        count * std::mem::size_of::<windows::core::HRESULT>(),
-                    )
-                } as *mut windows::core::HRESULT;
-
-                for i in 0..count {
-                    let (hr, server_h) = if i == 4 {
-                        (E_FAIL, 0)
-                    } else {
-                        (S_OK, (i + 1) as u32)
-                    };
-                    let res = tagOPCITEMRESULT {
-                        hServer: server_h,
-                        vtCanonicalDataType: 0,
-                        wReserved: 0,
-                        dwAccessRights: 1,
-                        dwBlobSize: 0,
-                        pBlob: std::ptr::null_mut(),
-                    };
-                    // SAFETY: Pointer offsets are strictly within allocated count.
-                    unsafe {
-                        std::ptr::write(res_ptr.add(i), res);
-                        std::ptr::write(err_ptr.add(i), hr);
-                    }
-                }
-
-                Ok((
-                    RemoteArray::from_mut_ptr(res_ptr, count as u32),
-                    RemoteArray::from_mut_ptr(err_ptr, count as u32),
-                ))
+            fn add_items(&self, items: &[GroupItemDef]) -> OpcResult<Vec<GroupItemResult>> {
+                Ok(items
+                    .iter()
+                    .enumerate()
+                    .map(|(i, _)| {
+                        if i == 4 {
+                            GroupItemResult {
+                                server_handle: ItemHandle(0),
+                                canonical_type: 0,
+                                error: Some(OpcError::Com {
+                                    source: windows::core::Error::from_hresult(
+                                        windows::Win32::Foundation::E_FAIL,
+                                    ),
+                                }),
+                            }
+                        } else {
+                            GroupItemResult {
+                                server_handle: ItemHandle((i + 1) as u32),
+                                canonical_type: 8,
+                                error: None,
+                            }
+                        }
+                    })
+                    .collect())
             }
 
             fn read(
                 &self,
-                _source: tagOPCDATASOURCE,
+                _source: DataSource,
                 server_handles: &[ItemHandle],
-            ) -> OpcResult<(
-                RemoteArray<tagOPCITEMSTATE>,
-                RemoteArray<windows::core::HRESULT>,
-            )> {
-                let count = server_handles.len();
-                // SAFETY: CoTaskMemAlloc allocates memory managed by RemoteArray Drop.
-                let state_ptr = unsafe {
-                    windows::Win32::System::Com::CoTaskMemAlloc(
-                        count * std::mem::size_of::<tagOPCITEMSTATE>(),
-                    )
-                } as *mut tagOPCITEMSTATE;
-
-                // SAFETY: CoTaskMemAlloc allocates memory managed by RemoteArray Drop.
-                let err_ptr = unsafe {
-                    windows::Win32::System::Com::CoTaskMemAlloc(
-                        count * std::mem::size_of::<windows::core::HRESULT>(),
-                    )
-                } as *mut windows::core::HRESULT;
-
+            ) -> OpcResult<Vec<Result<GroupItemState, OpcError>>> {
                 let qualities: [u16; 4] = [0x00C0, 0x00D8, 0x0018, 0x0056];
-                for i in 0..count {
-                    let mut var = windows::Win32::System::Variant::VARIANT::default();
-                    if i != 2 {
-                        var = opc_value_to_variant(&OpcValue::Int(42));
-                    }
-                    let state = tagOPCITEMSTATE {
-                        hClient: (i + 1) as u32,
-                        ftTimeStamp: windows::Win32::Foundation::FILETIME::default(),
-                        wQuality: qualities[i % qualities.len()],
-                        wReserved: 0,
-                        vDataValue: var,
-                    };
-                    // SAFETY: Pointer offsets are strictly within allocated count.
-                    unsafe {
-                        std::ptr::write(state_ptr.add(i), state);
-                        std::ptr::write(err_ptr.add(i), S_OK);
-                    }
-                }
-
-                Ok((
-                    RemoteArray::from_mut_ptr(state_ptr, count as u32),
-                    RemoteArray::from_mut_ptr(err_ptr, count as u32),
-                ))
+                Ok(server_handles
+                    .iter()
+                    .enumerate()
+                    .map(|(i, &h)| {
+                        let val = if i != 2 {
+                            OpcValue::Int(42)
+                        } else {
+                            OpcValue::String(String::new())
+                        };
+                        Ok(GroupItemState {
+                            client_handle: h,
+                            value: val,
+                            quality: OpcQuality::from(qualities[i % qualities.len()]),
+                            timestamp: std::time::SystemTime::UNIX_EPOCH,
+                        })
+                    })
+                    .collect())
             }
 
             fn write(
                 &self,
                 _server_handles: &[ItemHandle],
-                _values: &[windows::Win32::System::Variant::VARIANT],
-            ) -> OpcResult<RemoteArray<windows::core::HRESULT>> {
-                Ok(RemoteArray::empty())
+                _values: &[OpcValue],
+            ) -> OpcResult<Vec<Result<(), OpcError>>> {
+                Ok(vec![])
             }
         }
 
@@ -1471,19 +1317,12 @@ mod tests {
             fn get_item_id(&self, _n: &str) -> OpcResult<String> {
                 Ok(String::new())
             }
-            fn add_group(
-                &self,
-                _name: &str,
-                _active: bool,
-                _update_rate: u32,
-                _client_handle: GroupHandle,
-                _time_bias: i32,
-                _percent_deadband: f32,
-                _locale_id: u32,
-                _revised_update_rate: &mut u32,
-                _server_handle: &mut GroupHandle,
-            ) -> OpcResult<Self::Group> {
-                Ok(QualityTestGroup)
+            fn add_group(&self, config: &GroupConfig<'_>) -> OpcResult<CreatedGroup<Self::Group>> {
+                Ok(CreatedGroup {
+                    group: QualityTestGroup,
+                    server_handle: GroupHandle(1),
+                    revised_update_rate_ms: config.update_rate_ms,
+                })
             }
             fn remove_group(&self, _server_group: GroupHandle, _force: bool) -> OpcResult<()> {
                 Ok(())

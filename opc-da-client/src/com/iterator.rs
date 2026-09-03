@@ -235,16 +235,16 @@ impl<Group: TryFrom<windows::core::IUnknown, Error = windows::core::Error>> Iter
     }
 }
 
-// for crate::bindings::da::IEnumOPCItemAttributes
+// for crate::raw::bindings::da::IEnumOPCItemAttributes
 pub struct ItemAttributeIterator {
-    inner: crate::bindings::da::IEnumOPCItemAttributes,
-    cache: RemoteArray<crate::bindings::da::tagOPCITEMATTRIBUTES>,
+    inner: crate::raw::bindings::da::IEnumOPCItemAttributes,
+    cache: RemoteArray<crate::raw::bindings::da::tagOPCITEMATTRIBUTES>,
     index: u32,
     done: bool,
 }
 
 impl ItemAttributeIterator {
-    pub fn new(inner: crate::bindings::da::IEnumOPCItemAttributes) -> Self {
+    pub fn new(inner: crate::raw::bindings::da::IEnumOPCItemAttributes) -> Self {
         Self {
             inner,
             cache: RemoteArray::empty(),
@@ -255,7 +255,7 @@ impl ItemAttributeIterator {
 }
 
 impl Iterator for ItemAttributeIterator {
-    type Item = OpcResult<crate::types::ItemAttributes>;
+    type Item = OpcResult<crate::raw::bridge::ItemAttributes>;
 
     fn next(&mut self) -> Option<Self::Item> {
         if self.done {
@@ -291,7 +291,7 @@ impl Iterator for ItemAttributeIterator {
             }
         }
 
-        let current: windows::core::Result<crate::types::ItemAttributes> =
+        let current: windows::core::Result<crate::raw::bridge::ItemAttributes> =
             self.cache.as_slice()[self.index as usize].try_to_local();
         self.index += 1;
         Some(current.map_err(OpcError::from))

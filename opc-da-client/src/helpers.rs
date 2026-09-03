@@ -11,6 +11,7 @@ use windows::core::{BSTR, PCWSTR};
 
 #[cfg_attr(not(test), allow(unused_imports))]
 pub use crate::errors::friendly_com_hint;
+#[allow(unused_imports)]
 pub use crate::errors::{format_hresult, friendly_hresult_hint as friendly_com_hresult_hint};
 
 // Verify GUID memory layout assumption for FFI (Workstream C#3)
@@ -235,7 +236,11 @@ pub fn quality_to_string(quality: u16) -> String {
 }
 
 /// Convert FILETIME to a human-readable local time string.
-#[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
+#[allow(
+    dead_code,
+    clippy::cast_possible_truncation,
+    clippy::cast_possible_wrap
+)]
 pub fn filetime_to_string(ft: FILETIME) -> String {
     if ft.dwHighDateTime == 0 && ft.dwLowDateTime == 0 {
         return "N/A".to_string();
@@ -252,6 +257,45 @@ pub fn filetime_to_string(ft: FILETIME) -> String {
                 .to_string()
         },
     )
+}
+
+/// Convert [`std::time::SystemTime`] to a human-readable local time string.
+pub fn system_time_to_string(time: std::time::SystemTime) -> String {
+    if time == std::time::SystemTime::UNIX_EPOCH {
+        return "N/A".to_string();
+    }
+    let dt: chrono::DateTime<chrono::Local> = time.into();
+    dt.format("%Y-%m-%d %H:%M:%S").to_string()
+}
+
+/// Convert a COM [`VARIANT`] into a strongly-typed [`OpcValue`].
+#[allow(clippy::cast_possible_wrap)]
+pub fn variant_to_opc_value(variant: &VARIANT) -> OpcValue {
+    // SAFETY: Reading VARIANT union fields per vt discriminant.
+    unsafe {
+        let vt = variant.Anonymous.Anonymous.vt.0;
+        match vt {
+            16 => {
+                let val = (*variant.Anonymous.Anonymous).Anonymous.cVal;
+                OpcValue::Int(i32::from(val))
+            }
+            17 => OpcValue::Int(i32::from((*variant.Anonymous.Anonymous).Anonymous.bVal)),
+            2 => OpcValue::Int(i32::from((*variant.Anonymous.Anonymous).Anonymous.iVal)),
+            18 => OpcValue::Int(i32::from((*variant.Anonymous.Anonymous).Anonymous.uiVal)),
+            3 => OpcValue::Int((*variant.Anonymous.Anonymous).Anonymous.lVal),
+            19 => OpcValue::Int((*variant.Anonymous.Anonymous).Anonymous.ulVal as i32),
+            22 => OpcValue::Int((*variant.Anonymous.Anonymous).Anonymous.intVal),
+            23 => OpcValue::Int((*variant.Anonymous.Anonymous).Anonymous.uintVal as i32),
+            4 => OpcValue::Float(f64::from((*variant.Anonymous.Anonymous).Anonymous.fltVal)),
+            5 => OpcValue::Float((*variant.Anonymous.Anonymous).Anonymous.dblVal),
+            11 => OpcValue::Bool((*variant.Anonymous.Anonymous).Anonymous.boolVal.0 != 0),
+            8 => {
+                let bstr = &(*variant.Anonymous.Anonymous).Anonymous.bstrVal;
+                OpcValue::String(bstr.to_string())
+            }
+            _ => OpcValue::String(variant_to_string(variant)),
+        }
+    }
 }
 
 /// Convert an [`OpcValue`] into a COM [`VARIANT`] for writing.
@@ -293,7 +337,7 @@ pub fn opc_value_to_variant(value: &OpcValue) -> VARIANT {
 ///
 /// Returns `Err` if the `ProgID` cannot be resolved or the server
 /// cannot be instantiated.
-pub fn connect_server(server_name: &str) -> OpcResult<crate::bindings::da::IOPCServer> {
+pub fn connect_server(server_name: &str) -> OpcResult<crate::raw::bindings::da::IOPCServer> {
     // SAFETY: `server_wide` is null-terminated and lives until end of scope.
     let clsid_raw = unsafe {
         let server_wide: Vec<u16> = server_name
@@ -307,7 +351,7 @@ pub fn connect_server(server_name: &str) -> OpcResult<crate::bindings::da::IOPCS
         })?
     };
     // SAFETY: Calling COM function CoCreateInstance with valid CLSID to instantiate IOPCServer.
-    let server: crate::bindings::da::IOPCServer = unsafe {
+    let server: crate::raw::bindings::da::IOPCServer = unsafe {
         windows::Win32::System::Com::CoCreateInstance(
             &raw const clsid_raw,
             None,

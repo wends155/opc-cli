@@ -38,8 +38,7 @@ mod provider;
 pub mod types;
 
 #[cfg(feature = "opc-da-backend")]
-#[allow(warnings)]
-mod bindings;
+pub(crate) mod raw;
 
 #[cfg(feature = "opc-da-backend")]
 pub mod com;

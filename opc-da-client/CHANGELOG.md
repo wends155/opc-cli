@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+- **Low-Level COM / FFI Isolation**: Relocated `bindings/` and `com/memory.rs` into a strictly crate-internal module at `opc-da-client/src/raw/` (`raw::bindings`, `raw::memory`, `raw::bridge`).
+- **Canonical Types Cleansing**: Removed all dormant C/FFI bridge structs and `#![allow(warnings)]` from `types.rs`, leaving only strongly-typed pure-Rust domain definitions.
+- **Pure-Rust Connector Facade**: Refactored `ConnectedServer` and `ConnectedGroup` traits in `com::connector` to operate exclusively on pure-Rust types (`GroupItemDef`, `GroupItemResult`, `GroupItemState`, `DataSource`, `GroupConfig`, `CreatedGroup`), completely decoupling `ComWorker` from raw COM pointers and Win32 VARIANTs.
+- **Reusable Pure-Rust Mocks**: Introduced reusable `MockConnectedServer` and `MockConnectedGroup` in `com::connector` under `#[cfg(test)]`, eliminating unsafe blocks and `CoTaskMemAlloc` allocations from unit testing.
+
 ## [0.2.0] - 2026-02-23
 
 ### Added

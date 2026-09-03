@@ -11,7 +11,7 @@ pub mod client;
 pub mod connector;
 pub mod guard;
 pub mod iterator;
-pub mod memory;
+pub use crate::raw::memory;
 pub mod worker;
 
 pub use client::OpcDaClient;

@@ -1,5 +1,25 @@
 # Project Context Summary
 
+## 2026-09-03: Low-Level COM / FFI Isolation & Pure-Rust Connector Facade
+> 📝 **Context Update:**
+> * **Feature:** Reorganize `opc-da-client` COM/FFI isolation and pure-Rust connector facade
+> * **Changes:**
+>   - Relocated raw Win32 bindings (`bindings/`) and unsafe COM memory management (`com/memory.rs`) into a strictly crate-internal module at `src/raw/` (`raw::bindings`, `raw::memory`, `raw::bridge`).
+>   - Cleansed `types.rs` by moving dormant C/FFI bridge structs (`ItemDef`, `ItemState`, `ItemValue`, etc.) to `src/raw/bridge.rs` and removing `#![allow(warnings)]`.
+>   - Refactored `ConnectedServer` and `ConnectedGroup` traits in `com::connector` to use pure-Rust DTOs (`GroupItemDef`, `GroupItemResult`, `GroupItemState`, `DataSource`, `GroupConfig`, `CreatedGroup`), completely removing raw Win32 types (`tagOPCITEMDEF`, `tagOPCITEMSTATE`, `RemoteArray`, `VARIANT`) from trait boundaries.
+>   - Decoupled `ComWorker` from raw COM pointers: `handle_read` and `handle_write` now interact exclusively with pure-Rust types, with `ComGroup` handling wide strings, `tagOPCITEMDEF`, `tagOPCITEMSTATE`, and `VARIANT` conversions internally.
+>   - Replaced fragile, duplicated `CoTaskMemAlloc` mocks across `worker.rs` with reusable pure-Rust mocks (`MockConnectedServer`, `MockConnectedGroup`, `MockServerConnector`) in `com::connector` under `#[cfg(test)]`.
+>   - Implemented `std::fmt::Display` for `OpcValue` and added conversion helpers `system_time_to_string` and `variant_to_opc_value`.
+>   - Synchronized `spec.md`, `opc-da-client/CHANGELOG.md`, `CHANGELOG.md`, and `context.md`.
+> * **New Constraints:**
+>   - Types in `src/raw/` are strictly crate-internal (`pub(crate)`) and must never be exposed through public APIs or domain types.
+>   - `ConnectedServer` and `ConnectedGroup` traits must remain 100% pure Rust.
+>   - Unit tests for server/group interactions must use `MockConnectedGroup` and `MockConnectedServer` without calling `CoTaskMemAlloc` or writing `unsafe` blocks.
+> * **Pruned:**
+>   - Leaky C/COM types in `ConnectedServer` and `ConnectedGroup` trait signatures.
+>   - Dormant bridge types in `types.rs` and `#![allow(warnings)]` at `types.rs:1`.
+>   - Duplicated, unsafe `CoTaskMemAlloc` mock groups in unit test suites.
+
 ## 2026-09-03: Documentation Synchronization (Rustdoc, README, spec.md)
 > 📝 **Context Update:**
 > * **Feature:** Documentation sync for `opc-da-client` & `spec.md`

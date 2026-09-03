@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **Low-Level COM / FFI Isolation (`opc-da-client`)**: Relocated `bindings/` and `com/memory.rs` into a strictly crate-internal module at `opc-da-client/src/raw/` (`raw::bindings`, `raw::memory`, `raw::bridge`).
+- **Canonical Types Cleansing (`opc-da-client`)**: Removed all dormant C/FFI bridge structs and `#![allow(warnings)]` from `types.rs`, leaving only strongly-typed pure-Rust domain definitions.
+- **Pure-Rust Connector Facade (`opc-da-client`)**: Refactored `ConnectedServer` and `ConnectedGroup` traits in `com::connector` to operate exclusively on pure-Rust types (`GroupItemDef`, `GroupItemResult`, `GroupItemState`, `DataSource`, `GroupConfig`, `CreatedGroup`), completely decoupling `ComWorker` from raw COM pointers and Win32 VARIANTs.
+- **Reusable Pure-Rust Mocks (`opc-da-client`)**: Introduced reusable `MockConnectedServer` and `MockConnectedGroup` in `com::connector` under `#[cfg(test)]`, eliminating unsafe blocks and `CoTaskMemAlloc` allocations from unit testing.
+
 ### Changed (Breaking)
 - **Strongly-Typed Tag Quality**: `TagValue.quality` changed from `String` to strongly-typed `OpcQuality` struct decomposing the 16-bit OPC DA quality word into `QualityMajor`, `QualitySubstatus`, `QualityLimit`, and `raw: u16`. Prevents type erasure, avoids heap allocations on the polling hot-path, and enables idiomatic matching and inspection for industrial SCADA and gateway consumers.
 
