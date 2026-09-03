@@ -32,20 +32,10 @@ target/
 **/*.rs.bk
 check_*.txt
 test_*.txt
-
 # Project Governance (Local Only)
 gemini.md
 GEMINI.md
 coding_standard.md
-coding_standards.md
-
-# Agent Configuration
-# Default: ignore all agent content
-.agents/*
-!.agents/workflows/
-.agents/workflows/*
-!.agents/workflows/log-audit.md
-!.agents/workflows/prepublish.md
 
 # Agent-generated governance docs
 ORIGINAL_REQUEST.md

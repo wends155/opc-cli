@@ -83,6 +83,7 @@ Write-Output ""
 # Files to remove on main
 $removeFiles = @(
     '.agents/',
+    '.gemini/',
     'ORIGINAL_REQUEST.md',
     'context.md',
     'architecture.md',

@@ -650,7 +650,33 @@ emove_group errors now logged instead of silently discarded.
 > * **New Constraints:**
 >   - Maintain 100% alignment between root file structure and `architecture.md §4`.
 
+## 2026-09-03: TARS Summary — Governance Rules, Workflows, and Skills Ecosystem Sync
+> 📝 **Context Update:**
+> * **Feature:** Governance Rules, Workflows, and Skills Ecosystem Synchronization (`/plan-making` + `/build` + `/audit`)
+> * **Changes:**
+>   - Established `.gemini/skills/` containing 17 core procedural and Rust reference skills copied from `../flow-forge`.
+>   - Updated `.agents/rules/builder-rules.md` with `<!-- TEMPLATE_START: build-report -->` block (§7 Rule 2).
+>   - Updated `.agents/rules/ipr.md` with mandatory `### Plan Objectives` 4-column schema across all scaling tiers.
+>   - Updated `.agents/rules/coding-standard.md` with `knowledge-rag-query` in Language Dispatch Table.
+>   - Synchronized 7 standard workflows (`toolcheck.md`, `plan-making.md`, `build.md`, `audit.md`, `issue.md`, `feature.md`, `update-doc.md`) with multi-MCP orchestration and 7-check Pre-Flight Gates.
+>   - Preserved `opc-cli` project-specific workflows (`log-audit.md` and `prepublish.md`).
+>   - Upgraded root `GEMINI.md` to Unified TAR-S Cycle framework (§§1–9) with Windows COM MTA context preserved.
+>   - Updated `.gitignore` to track development governance files on `dev` while ignoring legacy root `coding_standard.md`.
+>   - Updated `scripts/Merge-ToMain.ps1` to strip `.gemini/` during clean merges to `main`.
+>   - Registered `opc-cli` in user and IDE Narsil `mcp_config.json` configurations.
+> * **New Constraints:**
+>   - All plans must include tabular `### Plan Objectives` with concrete success criteria.
+>   - `Merge-ToMain.ps1` strips both `.agents/` and `.gemini/` during release merge to `main`.
+> * **Pruned:** Outdated workflow schemas and broken skill references resolved.
 
-
-
+## 2026-09-03: Remove Redundant Repo-Root GEMINI.md
+> 📝 **Context Update:**
+> * **Feature:** Remove Redundant Workspace GEMINI.md
+> * **Changes:**
+>   - Removed untracked repository-root `GEMINI.md` to prevent duplicate system prompt rule injection (~10 KB / ~2,500–3,000 prompt tokens saved per turn).
+>   - Preserved `gemini.md` and `GEMINI.md` patterns in `.gitignore` under `# Project Governance (Local Only)` to avoid accidental git tracking.
+>   - Confirmed canonical TAR-S cycle governance remains fully enforced via user-global `~/.gemini/GEMINI.md` under `<RULE[user_global]>`.
+> * **New Constraints:**
+>   - Operational governance rules are inherited exclusively from user-global `~/.gemini/GEMINI.md`.
+> * **Pruned:** Local `GEMINI.md` file removed from workspace root.
 
