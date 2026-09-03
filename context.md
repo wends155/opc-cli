@@ -798,5 +798,14 @@ emove_group errors now logged instead of silently discarded.
 >   - `spec.md` contracts track `opc_da_client::com::*` and `opc_da_client::types` / `opc_da_client::errors`.
 > * **Pruned:** Outdated references to `opc_da::client::v2::Client`, `backend::opc_da`, and obsolete `traits/*` files removed from documentation.
 
-
-
+## 2026-09-03: Remove Obsolete rewrite.py from opc-da-client
+> 📝 **Context Update:**
+> * **Feature:** Cleanup orphaned `rewrite.py` and `Cargo.toml` exclude entry.
+> * **Changes:**
+>   - Removed obsolete scratch script `opc-da-client/rewrite.py` (legacy code-generator from commit `d2879bb`).
+>   - Removed `"rewrite.py"` from `package.exclude` in `opc-da-client/Cargo.toml`.
+>   - Verified full quality pipeline passes (rustfmt, clippy in deny mode, 101/101 workspace tests passed).
+> * **New Constraints:**
+>   - `opc-da-client` crate root is free of non-Rust scratch scripts.
+> * **Pruned:**
+>   - Orphaned Python script and stale Cargo package exclude entry removed.

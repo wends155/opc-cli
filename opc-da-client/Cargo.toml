@@ -15,7 +15,6 @@ exclude = [
     ".winmd/",
     "architecture.md",
     "spec.md",
-    "rewrite.py",
 ]
 
 [package.metadata.docs.rs]
