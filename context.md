@@ -1,5 +1,17 @@
 # Project Context Summary
 
+## 2026-09-03: Architecture Specification Synchronization (architecture.md)
+> 📝 **Context Update:**
+> * **Feature:** Synchronize `opc-da-client/architecture.md` with architectural rules
+> * **Changes:**
+>   - Restructured `opc-da-client/architecture.md` to strictly implement all 14 applicable sections from `.agents/rules/architecture-rules.md §1`.
+>   - Added Section 2 (*Project Objectives & Key Features*), Section 5 (*Module Boundaries* with explicit Owns / Does NOT own / Trait Interfaces / Mock Availability), and Section 6 (*Dependency Direction Rules* matrix table).
+>   - Updated Section 4 (*Project Layout*) reflecting the `src/raw/` isolation and `src/com/` pure-Rust facade.
+>   - Updated Section 8 (*Error Handling Strategy*) to `thiserror` domain architecture, and Section 10 (*Testing Strategy*) to include pure-Rust connector mocks.
+>   - Overhauled Section 13 (*Architecture Diagrams*) with 3 modernized Mermaid diagrams.
+> * **New Constraints:** Ensure all future crate-level architectural changes update module boundary and dependency direction declarations in `architecture.md`.
+> * **Pruned:** Stale references to `src/com/memory.rs`, `src/bindings/`, and non-existent `defs.rs`/`utils/`.
+
 ## 2026-09-03: Documentation Synchronization (spec.md hash & README)
 > 📝 **Context Update:**
 > * **Feature:** Documentation sync for `opc-da-client`
