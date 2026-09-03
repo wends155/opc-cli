@@ -1,6 +1,4 @@
 use crate::errors::{OpcError, OpcResult};
-#[cfg(feature = "opc-da-backend")]
-use crate::opc_da::client::ClientTrait;
 use crate::provider::OpcValue;
 use windows::Win32::Foundation::{FILETIME, VARIANT_BOOL};
 use windows::Win32::System::Com::{CLSIDFromProgID, CoTaskMemFree, ProgIDFromCLSID};
@@ -297,24 +295,22 @@ pub fn connect_server(server_name: &str) -> OpcResult<crate::bindings::da::IOPCS
             ))
         })?
     };
-    // SAFETY: `opc_da::GUID` and `windows::core::GUID` are binary compatible.
-    let clsid = unsafe { std::mem::transmute_copy(&clsid_raw) };
-
-    let client = crate::opc_da::client::v2::Client;
-    let server = client
-        .create_server(clsid, crate::opc_da::typedefs::ClassContext::All)
-        .map_err(|e| {
-            let hint = if let OpcError::Com { ref source } = e {
-                friendly_com_hresult_hint(source.code())
-            } else {
-                None
-            }
+    // SAFETY: Calling COM function CoCreateInstance with valid CLSID to instantiate IOPCServer.
+    let server: crate::bindings::da::IOPCServer = unsafe {
+        windows::Win32::System::Com::CoCreateInstance(
+            &clsid_raw,
+            None,
+            windows::Win32::System::Com::CLSCTX_ALL,
+        )
+    }
+    .map_err(|e| {
+        let hint = friendly_com_hresult_hint(e.code())
             .unwrap_or("Check DCOM configuration and server status");
-            tracing::error!(error = ?e, server = %server_name, hint, "create_server failed");
-            e
-        })?;
+        tracing::error!(error = ?e, server = %server_name, hint, "create_server failed");
+        OpcError::Com { source: e }
+    })?;
     tracing::debug!(server = %server_name, "Connected to OPC DA server");
-    Ok(server.server)
+    Ok(server)
 }
 
 #[cfg(test)]

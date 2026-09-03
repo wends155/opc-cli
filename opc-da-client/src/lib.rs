@@ -48,6 +48,9 @@ pub mod com_worker;
 mod opc_da;
 
 #[cfg(feature = "opc-da-backend")]
+pub mod com;
+
+#[cfg(feature = "opc-da-backend")]
 mod backend;
 
 // Stable public API
@@ -59,7 +62,7 @@ pub use types::{GroupHandle, ItemHandle};
 
 // Backend re-exports (conditional)
 #[cfg(feature = "opc-da-backend")]
-pub use backend::{connector::ComConnector, opc_da::OpcDaClient};
+pub use com::{client::OpcDaClient, connector::ComConnector};
 
 // Test support re-export
 #[cfg(feature = "test-support")]

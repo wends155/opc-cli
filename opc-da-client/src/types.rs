@@ -1,6 +1,6 @@
 #![allow(warnings)]
 
-use crate::opc_da::com_utils::{
+use crate::com::memory::{
     IntoBridge, LocalPointer, RemoteArray, ToNative, TryFromNative, TryToNative,
 };
 use crate::try_from_native;
