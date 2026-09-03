@@ -4,40 +4,62 @@
 [![Docs.rs](https://docs.rs/opc-da-client/badge.svg)](https://docs.rs/opc-da-client)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-Backend-agnostic OPC DA client library for Rust — async, trait-based, with transparent COM management.
+> Backend-agnostic OPC DA client library for Rust — async, trait-based, with transparent COM management.
+
+## Overview
+
+`opc-da-client` provides a high-performance, asynchronous Rust client for communicating with OPC Data Access (OPC DA 2.05a) servers on Windows.
+
+OPC DA is deeply coupled to Windows COM/DCOM, which poses significant architectural hurdles in modern systems: strict Multi-Threaded Apartment (MTA) threading requirements, thread affinity, raw memory allocations (`CoTaskMemAlloc`), and cryptic HRESULT error codes. 
+
+`opc-da-client` solves these challenges by isolating all Win32 COM and DCOM interactions behind a **pure-Rust connector facade** and a dedicated MTA background worker thread. Callers interact exclusively with safe, strongly-typed asynchronous Rust traits and domain models without writing a single line of `unsafe` code.
 
 ## Features
 
-- **Async/Await API**: Built for modern asynchronous Rust using `tokio` and `async-trait`.
-- **Trait-Based Abstraction**: The `OpcProvider` trait allows for easy mocking and backend swapping.
-- **Transparent COM Management**: Handles COM initialization (`CoInitializeEx`) and apartment thread affinity automatically in the background.
-- **Strongly-Typed Read & Write**: Tag values expose `Option<OpcValue>` and `Option<std::time::SystemTime>` ensuring lossless, zero-allocation typed access on read results and writes with convenient display helpers.
-- **16-Bit Quality Decomposition**: Zero-allocation, strongly-typed `OpcQuality` struct decomposing OPC DA quality into major status, substatus, and limits with rich `Display` diagnostics.
-- **Pure-Rust Facade**: Strict isolation of low-level Win32 COM/FFI types behind pure-Rust connector traits, eliminating raw COM types and unsafe memory handling from domain models.
-- **Windows COM/DCOM Support**: Native OPC DA backend via `windows-rs` — no external OPC crates needed.
-- **Robust Error Handling**: Leverages `thiserror` for the `OpcError` domain type and `friendly_com_hint()` for human-readable HRESULT explanations.
-- **Test-Friendly**: Built-in `MockOpcProvider` via the `test-support` feature.
+- **Async/Await Trait Abstraction**: Built on `tokio` and `async-trait`, using the canonical `OpcProvider` trait for zero-cost abstraction, backend flexibility, and straightforward test mocking.
+- **Pure-Rust Connector Facade**: Strict isolation of low-level Win32 COM and FFI types behind the `ConnectedServer` and `ConnectedGroup` traits, keeping raw COM types and unsafe memory handling strictly internal.
+- **Transparent COM & Thread Management**: Automatically spawns and manages a dedicated MTA worker thread, maintaining strict thread affinity and connection pooling with auto-recovery for stale proxies.
+- **Strongly-Typed Domain Models**: `TagValue` uses `Option<OpcValue>` and `Option<std::time::SystemTime>` ensuring lossless, zero-allocation typed access on read results and writes with convenient display helpers.
+- **16-Bit Quality Decomposition**: Zero-allocation `OpcQuality` struct decomposes raw OPC DA quality words into major status, substatus, and limit states with rich, human-readable diagnostics.
+- **Native Windows Backend**: Implemented natively with `windows-rs` — eliminates heavy legacy C++ binaries and external OPC crate dependencies.
+- **Context-Rich Error Handling**: Domain-specific `OpcError` via `thiserror` paired with `friendly_com_hint()` for actionable HRESULT troubleshooting.
+- **First-Class Test Support**: Includes pure-Rust mock implementations and an optional `MockOpcProvider` via the `test-support` feature flag.
+
+## Feature Flags
+
+| Flag | Default | Description |
+|:---|:---:|:---|
+| `opc-da-backend` | ✅ Yes | Compiles the native Windows COM backend (`OpcDaClient` and `ComConnector`). |
+| `test-support` | ❌ No | Enables `mockall` support and exports the `MockOpcProvider` mock struct for downstream unit tests. |
+| `dev-diagnostics` | ❌ No | Compiles verbose `TRACE`-level argument dumps into backend methods for low-level protocol debugging. |
 
 ## Installation
 
-Add this to your `Cargo.toml`:
+Add `opc-da-client` to your `Cargo.toml`:
 
 ```toml
 [dependencies]
 opc-da-client = "0.2.0"
 ```
 
+To enable test mocks for unit testing your own crates:
+
+```toml
+[dev-dependencies]
+opc-da-client = { version = "0.2.0", features = ["test-support"] }
+```
+
 ## Prerequisites
 
-- **Operating System**: Windows (COM/DCOM is a Windows-only technology).
-- **OPC DA Core Components**: Ensure the OPC DA Core Components are installed and registered on your system.
-- **DCOM Configuration**: If connecting to remote servers, appropriate DCOM permissions must be configured.
+- **Operating System**: Windows (COM/DCOM is a Windows-exclusive API).
+- **OPC Core Components**: The OPC DA Core Components redistributables must be installed and registered on the machine to resolve OPC server CLSIDs and ProgIDs.
+- **DCOM Security**: If communicating with remote OPC servers over the network, appropriate DCOM launch, activation, and access permissions must be configured via `dcomcnfg`.
 
 ## Usage Examples
 
 ### Connecting & Listing Servers
 
-Enumerate available OPC DA servers on a local or remote host.
+Enumerate available OPC DA servers registered on a local or remote host:
 
 ```rust,no_run
 use opc_da_client::{OpcDaClient, OpcProvider};
@@ -45,8 +67,8 @@ use opc_da_client::{OpcDaClient, OpcProvider};
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let client = OpcDaClient::default();
-
     let servers = client.list_servers("localhost").await?;
+
     println!("Available Servers:");
     for server in servers {
         println!("  - {}", server);
@@ -55,29 +77,49 @@ async fn main() -> anyhow::Result<()> {
 }
 ```
 
-### Reading Tags
+### Reading Tags with Typed Values & Quality
 
-Connect to a specific server and read current values for a set of tags.
+Read current tag values, inspect decomposed quality states, and extract strongly-typed values:
 
 ```rust,no_run
-use opc_da_client::{OpcDaClient, OpcProvider};
+use opc_da_client::{OpcDaClient, OpcProvider, OpcValue};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let client = OpcDaClient::default();
-    let server_progid = "Matrikon.OPC.Simulation.1";
+    let server = "Matrikon.OPC.Simulation.1";
     let tags = vec![
         "Random.Int4".to_string(),
         "Random.Real8".to_string(),
+        "Random.String".to_string(),
     ];
 
-    let values = client.read_tag_values(server_progid, tags).await?;
+    let values = client.read_tag_values(server, tags).await?;
 
     for v in values {
-        println!("Tag: {}, Value: {}, Quality: {}, Time: {}",
-            v.tag_id, v.display_value(), v.quality, v.formatted_timestamp());
+        // Ergonomic string formatting for UI tables or logs
+        println!(
+            "Tag: {:<25} | Value: {:<15} | Quality: {:<12} | Timestamp: {}",
+            v.tag_id,
+            v.display_value(),
+            v.quality,
+            v.formatted_timestamp()
+        );
+
+        // 16-bit quality inspection
         if !v.quality.is_good() {
-            println!("  ↳ Non-good quality detected: {:?}", v.quality.substatus);
+            println!("  ↳ Substatus: {:?}, Limit: {:?}", v.quality.substatus, v.quality.limit);
+        }
+
+        // Lossless pattern matching on typed domain values
+        match v.value {
+            Some(OpcValue::Int(i)) => println!("  ↳ Decoded Integer: {}", i),
+            Some(OpcValue::Float(f)) => println!("  ↳ Decoded Float: {}", f),
+            Some(OpcValue::Bool(b)) => println!("  ↳ Decoded Boolean: {}", b),
+            Some(OpcValue::String(s)) => println!("  ↳ Decoded String: {}", s),
+            Some(OpcValue::Empty) => println!("  ↳ Uninitialized Variant (VT_EMPTY)"),
+            Some(OpcValue::Null) => println!("  ↳ Null Variant (VT_NULL)"),
+            None => println!("  ↳ Read failed or tag was rejected by server"),
         }
     }
     Ok(())
@@ -86,7 +128,7 @@ async fn main() -> anyhow::Result<()> {
 
 ### Writing a Value
 
-Write a typed value to a single OPC tag.
+Write typed values (`Int`, `Float`, `Bool`, `String`) to an individual OPC tag:
 
 ```rust,no_run
 use opc_da_client::{OpcDaClient, OpcProvider, OpcValue};
@@ -111,7 +153,7 @@ async fn main() -> anyhow::Result<()> {
 
 ### Browsing the Address Space
 
-Recursively discover available tags on an OPC server.
+Recursively discover available tags in the server namespace with progress reporting and partial-result harvesting:
 
 ```rust,no_run
 use opc_da_client::{OpcDaClient, OpcProvider};
@@ -120,40 +162,87 @@ use std::sync::{Arc, Mutex, atomic::AtomicUsize};
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let client = OpcDaClient::default();
-    let server_progid = "Matrikon.OPC.Simulation.1";
+    let server = "Matrikon.OPC.Simulation.1";
 
     let sink = Arc::new(Mutex::new(Vec::new()));
     let progress = Arc::new(AtomicUsize::new(0));
-    // Clone these Arcs before passing if you need to monitor progress
-    // or harvest partial results from another task on timeout.
 
-    let discovered_tags = client.browse_tags(
-        server_progid,
-        100, // Max tags to discover
-        progress,
-        sink
-    ).await?;
+    let discovered_tags = client
+        .browse_tags(server, 1000, Arc::clone(&progress), Arc::clone(&sink))
+        .await?;
 
-    println!("Found {} tags", discovered_tags.len());
+    println!("Discovered {} tags", discovered_tags.len());
     Ok(())
 }
 ```
 
+### Mocking in Unit Tests
+
+Verify downstream business logic on any platform without requiring Windows COM runtimes:
+
+```rust,ignore
+use opc_da_client::{MockOpcProvider, OpcProvider, OpcQuality, OpcValue, TagValue};
+use std::sync::Arc;
+
+#[tokio::test]
+async fn test_telemetry_service_with_mock() {
+    let mut mock = MockOpcProvider::new();
+    mock.expect_read_tag_values()
+        .times(1)
+        .returning(|_server, tags| {
+            Ok(tags
+                .into_iter()
+                .map(|tag| TagValue {
+                    tag_id: tag,
+                    value: Some(OpcValue::Float(98.6)),
+                    quality: OpcQuality::GOOD,
+                    timestamp: Some(std::time::SystemTime::UNIX_EPOCH),
+                })
+                .collect())
+        });
+
+    let provider: Arc<dyn OpcProvider> = Arc::new(mock);
+    let values = provider
+        .read_tag_values("SimulatedServer", vec!["Sensor.Temp".into()])
+        .await
+        .unwrap();
+
+    assert_eq!(values.len(), 1);
+    assert_eq!(values[0].display_value(), "98.6");
+    assert!(values[0].is_good());
+}
+```
+
+## API Surface
+
+| Type / Trait | Kind | Purpose |
+|:---|:---|:---|
+| `OpcProvider` | `pub trait` | Async trait for OPC DA operations (`list_servers`, `browse_tags`, `read_tag_values`, `write_tag_value`). |
+| `OpcDaClient` | `pub struct` | Primary client implementation using Windows COM through a dedicated worker thread. |
+| `TagValue` | `pub struct` | Canonical read result (`tag_id`, `Option<OpcValue>`, `OpcQuality`, `Option<SystemTime>`) with display helpers. |
+| `OpcValue` | `pub enum` | Strongly-typed OPC value representation (`Int`, `Float`, `Bool`, `String`, `Empty`, `Null`). |
+| `OpcQuality` | `pub struct` | Zero-allocation decomposed 16-bit OPC DA quality word (`major`, `substatus`, `limit`, `raw`). |
+| `WriteResult` | `pub struct` | Tag write operation result (`tag_id`, `success: bool`, `error: Option<String>`). |
+| `OpcError` | `pub enum` | Domain error enum covering connection, group, item, type, and COM HRESULT failures. |
+| `friendly_com_hint` | `pub fn` | Translates raw Win32/OPC HRESULT codes into actionable human-readable explanations. |
+
 ## Architecture
 
-The library is split into a core trait layer and concrete implementations:
+The crate is architected in three decoupled layers:
 
-- **`OpcProvider`**: The primary async trait defining OPC operations (list, browse, read, write).
-- **`OpcDaClient`**: The default implementation using native `windows-rs` COM calls. Generic over `ServerConnector` for testability; defaults to `ComConnector`.
+1. **Public Domain API (`provider.rs`, `types.rs`)**: Exposes the high-level async trait (`OpcProvider`), canonical data models (`TagValue`, `OpcValue`, `WriteResult`), and zero-allocation quality word (`OpcQuality`).
+2. **COM Worker & Client Runtime (`com::client`, `com::worker`)**: The asynchronous client communicates via Tokio channels with a dedicated MTA background thread. The worker thread maintains connection pooling, proxy caching, and automatic recovery on stale connections.
+3. **Pure-Rust Connector Facade (`com::connector`, `raw::`)**: COM servers and groups are accessed strictly via pure-Rust trait interfaces (`ConnectedServer`, `ConnectedGroup`), completely isolating Win32 COM pointers, apartments, and `VARIANT` structures from domain code.
 
-See [architecture.md](https://github.com/wends155/opc-cli/blob/main/opc-da-client/architecture.md) for in-depth design details and [spec.md](https://github.com/wends155/opc-cli/blob/main/opc-da-client/spec.md) for behavioral contracts.
+See [architecture.md](./architecture.md) for in-depth architectural specifications and diagrams, and [spec.md](./spec.md) for behavioral contracts.
 
 ### COM Threading Model
 
-OPC DA relies on Windows COM, which requires per-thread initialization and strict thread affinity. `opc-da-client` handles this transparently:
-* **Dedicated Worker Thread**: All COM operations are executed on a dedicated background worker thread initialized in Multi-Threaded Apartment (MTA) mode.
-* **No Manual Init**: You do not need to call `CoInitialize` or manage COM lifecycles in your calling application.
+Windows COM requires per-thread initialization and strict apartment affinity. `opc-da-client` manages this transparently:
+- **Dedicated Worker Thread**: All COM API calls execute exclusively on a dedicated background thread initialized in Multi-Threaded Apartment (MTA) mode.
+- **Zero Manual Initialization**: Calling applications do not need to call `CoInitializeEx` or configure apartment state.
+- **Panic Isolation**: Panics on the COM thread are caught and converted into structured `OpcError::Internal` results, keeping the calling application alive.
 
 ## License
 
-This project is licensed under the MIT License.
+This project is licensed under the [MIT License](https://opensource.org/licenses/MIT).

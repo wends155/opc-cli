@@ -1,5 +1,15 @@
 # Project Context Summary
 
+## 2026-09-03: Overhaul `opc-da-client/README.md` (doc-rules.md §7)
+> 📝 **Context Update:**
+> * **Feature:** Standardize `opc-da-client/README.md` layout and API documentation
+> * **Changes:**
+>   - Overhauled `opc-da-client/README.md` per `doc-rules.md §7`: added Overview, Features, Feature Flags table, API Surface reference table, and Concurrency Architecture.
+>   - Updated usage examples with `Option<OpcValue>` matching, 16-bit `OpcQuality` status inspection, and `MockOpcProvider` test mocking.
+>   - Verified 100% doctest compilation and 8-gate verification pipeline.
+> * **New Constraints:** Ensure all README code snippets are doctest-safe (`rust,no_run` or `rust,ignore` for optional feature flags).
+> * **Pruned:** Legacy, truncated README structure.
+
 ## 2026-09-03: Documentation Synchronization (spec.md hash & README)
 > 📝 **Context Update:**
 > * **Feature:** Documentation sync for `opc-da-client`
