@@ -684,6 +684,16 @@ emove_group errors now logged instead of silently discarded.
 > * **New Constraints:**
 >   - All internal COM interop logic resides strictly under `opc_da_client::com::*`.
 >   - Protocol types and error definitions reside strictly in `opc_da_client::types` and `opc_da_client::errors`.
-> * **Pruned:** `src/opc_da/` (36 files), `src/backend/` (3 files), root `com_guard.rs` and `com_worker.rs` completely removed.
+## 2026-09-03: Documentation Sync for opc-da-client
+> 📝 **Context Update:**
+> * **Feature:** Documentation sync for opc-da-client (`/update-doc`)
+> * **Changes:**
+>   - Synchronized [`opc-da-client/spec.md`](file:///c:/Users/WSALIGAN/code/opc-cli/opc-da-client/spec.md): updated verification commit hash to `6ef7b54`, updated §1.3 (`com::client`), §1.4 (`com::guard`), §1.5 (`types`), §1.6 (`errors`), §1.7 (`com::connector`), §2 Feature Flags, §3.1 Integration Points (direct Windows COM interface mapping), and §4 test coverage (added `types.rs` browse enum roundtrip tests).
+>   - Synchronized root [`architecture.md §4`](file:///c:/Users/WSALIGAN/code/opc-cli/architecture.md#L53-L73) project layout tree with actual filesystem layout.
+>   - Verified all 8 quality gates pass (`verify.ps1`), 85 tests green.
+> * **New Constraints:**
+>   - `spec.md` contracts track `opc_da_client::com::*` and `opc_da_client::types` / `opc_da_client::errors`.
+> * **Pruned:** Outdated references to `opc_da::client::v2::Client`, `backend::opc_da`, and obsolete `traits/*` files removed from documentation.
+
 
 
