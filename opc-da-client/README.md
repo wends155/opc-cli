@@ -75,7 +75,7 @@ async fn main() -> anyhow::Result<()> {
 
     for v in values {
         println!("Tag: {}, Value: {}, Quality: {}, Time: {}",
-            v.tag_id, v.value, v.quality, v.timestamp);
+            v.tag_id, v.display_value(), v.quality, v.formatted_timestamp());
         if !v.quality.is_good() {
             println!("  ↳ Non-good quality detected: {:?}", v.quality.substatus);
         }

@@ -6,7 +6,6 @@ use crate::com::connector::{
 };
 use crate::com::guard::ComGuard;
 use crate::errors::{OpcError, OpcResult};
-use crate::helpers::system_time_to_string;
 use crate::provider::{OpcQuality, OpcValue, TagValue, WriteResult};
 use crate::types::{BrowseDirection, BrowseType, GroupHandle, ItemHandle, NamespaceType};
 use std::collections::HashMap;
@@ -336,9 +335,9 @@ impl<C: ServerConnector + 'static> ComWorker<C> {
             .iter()
             .map(|tag_id| TagValue {
                 tag_id: tag_id.clone(),
-                value: "Error".to_string(),
+                value: None,
                 quality: OpcQuality::BAD_CONFIG_ERROR,
-                timestamp: String::new(),
+                timestamp: None,
             })
             .collect();
 
@@ -378,9 +377,9 @@ impl<C: ServerConnector + 'static> ComWorker<C> {
                 Ok(state) => {
                     tag_values[*idx] = TagValue {
                         tag_id: tag_ids[*idx].clone(),
-                        value: state.value.to_string(),
+                        value: Some(state.value.clone()),
                         quality: state.quality,
-                        timestamp: system_time_to_string(state.timestamp),
+                        timestamp: Some(state.timestamp),
                     };
                 }
                 Err(e) => {
@@ -391,9 +390,9 @@ impl<C: ServerConnector + 'static> ComWorker<C> {
                     );
                     tag_values[*idx] = TagValue {
                         tag_id: tag_ids[*idx].clone(),
-                        value: "Error".to_string(),
+                        value: None,
                         quality: OpcQuality::BAD_COMM_FAILURE,
-                        timestamp: String::new(),
+                        timestamp: None,
                     };
                 }
             }
@@ -1366,15 +1365,20 @@ mod tests {
 
         // Tag 0: Good standard (0x00C0)
         assert_eq!(results[0].tag_id, "Tag.Good");
+        assert_eq!(results[0].value, Some(OpcValue::Int(42)));
+        assert_eq!(results[0].display_value(), "42");
         assert_eq!(results[0].quality.major, QualityMajor::Good);
         assert_eq!(results[0].quality.substatus, QualitySubstatus::NonSpecific);
         assert_eq!(results[0].quality.limit, QualityLimit::NotLimited);
         assert_eq!(results[0].quality.to_string(), "Good");
         assert!(results[0].quality.is_good());
         assert!(!results[0].quality.is_bad());
+        assert!(results[0].is_good());
+        assert!(!results[0].is_error());
 
         // Tag 1: Good with Local Override (0x00D8)
         assert_eq!(results[1].tag_id, "Tag.Override");
+        assert_eq!(results[1].value, Some(OpcValue::Int(42)));
         assert_eq!(results[1].quality.major, QualityMajor::Good);
         assert_eq!(
             results[1].quality.substatus,
@@ -1384,6 +1388,7 @@ mod tests {
 
         // Tag 2: Bad with Comm Failure (0x0018)
         assert_eq!(results[2].tag_id, "Tag.Comm");
+        assert_eq!(results[2].value, Some(OpcValue::String(String::new())));
         assert_eq!(results[2].quality.major, QualityMajor::Bad);
         assert_eq!(results[2].quality.substatus, QualitySubstatus::CommFailure);
         assert_eq!(results[2].quality.to_string(), "Bad (Comm Failure)");
@@ -1391,6 +1396,7 @@ mod tests {
 
         // Tag 3: Uncertain with EGU Exceeded and High Limited (0x0056)
         assert_eq!(results[3].tag_id, "Tag.Limit");
+        assert_eq!(results[3].value, Some(OpcValue::Int(42)));
         assert_eq!(results[3].quality.major, QualityMajor::Uncertain);
         assert_eq!(results[3].quality.substatus, QualitySubstatus::EguExceeded);
         assert_eq!(results[3].quality.limit, QualityLimit::HighLimited);
@@ -1403,7 +1409,11 @@ mod tests {
 
         // Tag 4: Rejected at add_items
         assert_eq!(results[4].tag_id, "Tag.Rejected");
-        assert_eq!(results[4].value, "Error");
+        assert_eq!(results[4].value, None);
+        assert_eq!(results[4].display_value(), "Error");
+        assert_eq!(results[4].timestamp, None);
+        assert_eq!(results[4].formatted_timestamp(), "N/A");
+        assert!(results[4].is_error());
         assert_eq!(results[4].quality, OpcQuality::BAD_CONFIG_ERROR);
         assert_eq!(results[4].quality.to_string(), "Bad (Configuration Error)");
     }

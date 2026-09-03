@@ -14,9 +14,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Reusable Pure-Rust Mocks (`opc-da-client`)**: Introduced reusable `MockConnectedServer` and `MockConnectedGroup` in `com::connector` under `#[cfg(test)]`, eliminating unsafe blocks and `CoTaskMemAlloc` allocations from unit testing.
 
 ### Changed (Breaking)
+- **Strongly-Typed Tag Values and Timestamps (`TagValue`)**: `TagValue.value` changed from `String` to `Option<OpcValue>`, and `TagValue.timestamp` changed from `String` to `Option<std::time::SystemTime>`. Eliminates type erasure, prevents false positives from stringly-typed `"Error"` sentinels, enables duration/freshness calculations, and removes premature string allocations on high-speed polling loops.
 - **Strongly-Typed Tag Quality**: `TagValue.quality` changed from `String` to strongly-typed `OpcQuality` struct decomposing the 16-bit OPC DA quality word into `QualityMajor`, `QualitySubstatus`, `QualityLimit`, and `raw: u16`. Prevents type erasure, avoids heap allocations on the polling hot-path, and enables idiomatic matching and inspection for industrial SCADA and gateway consumers.
 
 ### Added
+- **TagValue Helper Methods**: Added `display_value()`, `formatted_timestamp()`, `is_good()`, and `is_error()` to `TagValue` for ergonomic UI presentation and robust error detection.
+- **OpcValue Empty and Null Variants**: Added `OpcValue::Empty` and `OpcValue::Null` variants matching COM `VT_EMPTY` and `VT_NULL` with lossless roundtrip conversions.
 - **16-Bit OPC DA Quality Decomposition (`opc-da-client`)**: Added `OpcQuality`, `QualityMajor`, `QualitySubstatus`, and `QualityLimit` in `types.rs` with `From<u16>`, `From<OpcQuality> for u16`, `From<&str>`, and rich `Display` implementation formatting substatus and limits (e.g. `"Good (Local Override)"`, `"Bad (Comm Failure)"`, `"Uncertain (EGU Exceeded) [High Limited]"`).
 - **Mock Read Integration Test**: Added `test_worker_read_tag_values_quality_decoding` to `com::worker` verifying end-to-end multi-quality decoding and per-item rejection handling.
 

@@ -11,7 +11,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Low-Level COM / FFI Isolation**: Relocated `bindings/` and `com/memory.rs` into a strictly crate-internal module at `opc-da-client/src/raw/` (`raw::bindings`, `raw::memory`, `raw::bridge`).
 - **Canonical Types Cleansing**: Removed all dormant C/FFI bridge structs and `#![allow(warnings)]` from `types.rs`, leaving only strongly-typed pure-Rust domain definitions.
 - **Pure-Rust Connector Facade**: Refactored `ConnectedServer` and `ConnectedGroup` traits in `com::connector` to operate exclusively on pure-Rust types (`GroupItemDef`, `GroupItemResult`, `GroupItemState`, `DataSource`, `GroupConfig`, `CreatedGroup`), completely decoupling `ComWorker` from raw COM pointers and Win32 VARIANTs.
-- **Reusable Pure-Rust Mocks**: Introduced reusable `MockConnectedServer` and `MockConnectedGroup` in `com::connector` under `#[cfg(test)]`, eliminating unsafe blocks and `CoTaskMemAlloc` allocations from unit testing.
+### Changed (Breaking)
+- **Strongly-Typed Tag Values and Timestamps (`TagValue`)**: `TagValue.value` changed from `String` to `Option<OpcValue>`, and `TagValue.timestamp` changed from `String` to `Option<std::time::SystemTime>`. Eliminates type erasure, prevents false positives from stringly-typed `"Error"` sentinels, enables duration/freshness calculations, and removes premature string allocations on high-speed polling loops.
+
+### Added
+- **TagValue Helper Methods**: Added `display_value()`, `formatted_timestamp()`, `is_good()`, and `is_error()` to `TagValue` for ergonomic UI presentation and robust error detection.
+- **OpcValue Empty and Null Variants**: Added `OpcValue::Empty` and `OpcValue::Null` variants matching COM `VT_EMPTY` and `VT_NULL` with lossless roundtrip conversions.
 
 ## [0.2.0] - 2026-02-23
 

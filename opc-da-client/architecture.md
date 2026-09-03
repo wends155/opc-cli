@@ -30,6 +30,7 @@ The `opc-da-client` library provides an async, trait-based API that abstracts aw
 - **Async/Await Trait Abstraction**: Canonical `OpcProvider` trait built on `tokio` and `async-trait`.
 - **Pure-Rust Connector Facade**: `ConnectedServer` and `ConnectedGroup` traits operating strictly on pure-Rust DTOs (`GroupItemDef`, `GroupItemResult`, `GroupItemState`, `DataSource`).
 - **Zero-Allocation 16-Bit Quality Word**: `OpcQuality` decomposes the full OPC DA 2.05a specification into `QualityMajor`, `QualitySubstatus`, `QualityLimit`, and raw bits with rich `Display` diagnostics.
+- **Typesafe Read & Write Domain Models**: `TagValue` exposes `Option<OpcValue>` and `Option<std::time::SystemTime>` ensuring lossless, zero-allocation typed access on read results with standard `Display` formatting and helper methods (`display_value()`, `formatted_timestamp()`, `is_error()`).
 - **Thread-Affinity & Connection Pooling**: Dedicated `ComWorker` thread maintains MTA apartment state and pools active server connections with automatic eviction and retry on stale proxies.
 - **Reusable Pure-Rust Mocks**: Built-in `MockConnectedServer`, `MockConnectedGroup`, and `MockServerConnector` (under `#[cfg(test)]`) eliminating `CoTaskMemAlloc` and unsafe code from tests.
 - **Self-Healing Enumeration**: Built-in null-PWSTR filtering and batch cache zeroing preventing phantom `E_POINTER` errors in `StringIterator`.

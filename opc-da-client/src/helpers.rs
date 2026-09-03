@@ -6,7 +6,7 @@ use windows::Win32::System::Ole::{
     SafeArrayAccessData, SafeArrayGetDim, SafeArrayGetElemsize, SafeArrayGetLBound,
     SafeArrayGetUBound, SafeArrayUnaccessData,
 };
-use windows::Win32::System::Variant::{VARIANT, VT_BOOL, VT_BSTR, VT_I4, VT_R8};
+use windows::Win32::System::Variant::{VARIANT, VT_BOOL, VT_BSTR, VT_EMPTY, VT_I4, VT_NULL, VT_R8};
 use windows::core::{BSTR, PCWSTR};
 
 #[cfg_attr(not(test), allow(unused_imports))]
@@ -275,6 +275,8 @@ pub fn variant_to_opc_value(variant: &VARIANT) -> OpcValue {
     unsafe {
         let vt = variant.Anonymous.Anonymous.vt.0;
         match vt {
+            0 => OpcValue::Empty,
+            1 => OpcValue::Null,
             16 => {
                 let val = (*variant.Anonymous.Anonymous).Anonymous.cVal;
                 OpcValue::Int(i32::from(val))
@@ -322,6 +324,12 @@ pub fn opc_value_to_variant(value: &OpcValue) -> VARIANT {
                 (*variant.Anonymous.Anonymous).vt = VT_BOOL;
                 (*variant.Anonymous.Anonymous).Anonymous.boolVal =
                     VARIANT_BOOL(if *b { -1 } else { 0 });
+            }
+            OpcValue::Empty => {
+                (*variant.Anonymous.Anonymous).vt = VT_EMPTY;
+            }
+            OpcValue::Null => {
+                (*variant.Anonymous.Anonymous).vt = VT_NULL;
             }
         }
     }
@@ -539,6 +547,14 @@ mod tests {
         // String roundtrip
         let v = opc_value_to_variant(&OpcValue::String("world".into()));
         assert_eq!(variant_to_string(&v), "\"world\"");
+
+        // Empty roundtrip
+        let v = opc_value_to_variant(&OpcValue::Empty);
+        assert_eq!(variant_to_opc_value(&v), OpcValue::Empty);
+
+        // Null roundtrip
+        let v = opc_value_to_variant(&OpcValue::Null);
+        assert_eq!(variant_to_opc_value(&v), OpcValue::Null);
     }
 
     #[test]

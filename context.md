@@ -1,5 +1,18 @@
 # Project Context Summary
 
+## 2026-09-03: Concrete Domain Types for `TagValue` (Option<OpcValue> & Option<SystemTime>)
+> 📝 **Context Update:**
+> * **Feature:** Refactor `TagValue` with concrete types and eliminate magic string sentinels
+> * **Changes:**
+>   - Refactored `TagValue.value` from `String` to `Option<OpcValue>` and `TagValue.timestamp` from `String` to `Option<std::time::SystemTime>`.
+>   - Added helper methods `display_value()`, `formatted_timestamp()`, `is_good()`, and `is_error()` to `TagValue`.
+>   - Extended `OpcValue` with `Empty` (`VT_EMPTY`) and `Null` (`VT_NULL`) variants and implemented roundtrips in `helpers.rs`.
+>   - Updated `ComWorker::handle_read` to populate `Some(OpcValue)` and `Some(SystemTime)` directly without intermediate string allocations, setting `None` on errors.
+>   - Fixed downstream error detection in `opc-cli/src/app.rs` to use `tv.is_error()`, eliminating false positives from string tags holding `"Error"`.
+>   - Updated `opc-cli/src/ui.rs` to use `tv.display_value()` and `tv.formatted_timestamp()`.
+> * **New Constraints:** In `TagValue`, `value` is `Option<OpcValue>` and `timestamp` is `Option<std::time::SystemTime>`. Do not check for string `"Error"`; use `tv.is_error()`.
+> * **Pruned:** Stringly-typed `TagValue.value` and `TagValue.timestamp` representation; sentinel value `"Error"` in `TagValue.value`.
+
 ## 2026-09-03: Architecture Specification Synchronization (architecture.md)
 > 📝 **Context Update:**
 > * **Feature:** Synchronize `opc-da-client/architecture.md` with architectural rules

@@ -49,7 +49,7 @@ All methods use `#[async_trait]`.
 *   `browse_tags` **never** collects more than `max_tags` items.
 *   `browse_tags` pushes tags to `tags_sink` incrementally; on timeout the caller can harvest partial results.
 *   `browse_tags` updates `progress` atomically for each discovered tag.
-*   `read_tag_values` returns a `TagValue` entry for all requested tags, preserving the original array length and order. Items that fail to be added to the group receive quality `OpcQuality::BAD_CONFIG_ERROR`, and items that fail reading receive `OpcQuality::BAD_COMM_FAILURE` with `value` set to `"Error"`.
+*   `read_tag_values` returns a `TagValue` entry for all requested tags, preserving the original array length and order. Items that fail to be added to the group receive quality `OpcQuality::BAD_CONFIG_ERROR` with `value: None` and `timestamp: None`, and items that fail reading receive `OpcQuality::BAD_COMM_FAILURE` with `value: None` and `timestamp: None`.
 *   `write_tag_value` returns `Ok(WriteResult)` in all non-fatal cases; per-tag success/error is reported inside `WriteResult`.
 
 
@@ -62,17 +62,17 @@ All methods use `#[async_trait]`.
 | Field | Type | Required | Description | Constraints |
 | :--- | :--- | :--- | :--- | :--- |
 | `tag_id` | `String` | Yes | Fully qualified tag identifier. | Non-empty. |
-| `value` | `String` | Yes | Current value as a display string. | May be `"Empty"`, `"Null"`, or formatted number/string. |
+| `value` | `Option<OpcValue>` | Yes | Decoded typed value, or `None` on read failure. | `display_value()` formats to string (`"Error"` if `None`). |
 | `quality` | `OpcQuality` | Yes | Decomposed 16-bit OPC DA quality word. | `Copy`, `Display` formats rich human-readable status. |
-| `timestamp` | `String` | Yes | Last-change timestamp as local time. | Format `YYYY-MM-DD HH:MM:SS`, or `"N/A"` / `"Invalid"`. |
+| `timestamp` | `Option<std::time::SystemTime>` | Yes | Last-change timestamp (UTC-based), or `None`. | `formatted_timestamp()` formats to local time string. |
 
-**Derives:** `Debug`, `Clone`, `PartialEq`, `Eq`.
+**Derives:** `Debug`, `Clone`, `PartialEq`.
 
 ---
 
 ##### `enum OpcValue`
 
-**Purpose:** Typed representation of a value to be written to an OPC DA tag.
+**Purpose:** Typed representation of a value to be written to or read from an OPC DA tag.
 
 | Variant | Data Type | Description | COM VT Type |
 | :--- | :--- | :--- | :--- |
@@ -80,6 +80,8 @@ All methods use `#[async_trait]`.
 | `Int(i32)` | `i32` | 32-bit signed integer. | `VT_I4` |
 | `Float(f64)` | `f64` | 64-bit float. | `VT_R8` |
 | `Bool(bool)` | `bool` | Boolean value. | `VT_BOOL` |
+| `Empty` | N/A | Empty variant (uninitialized). | `VT_EMPTY` |
+| `Null` | N/A | Explicitly null variant. | `VT_NULL` |
 
 **Derives:** `Debug`, `Clone`, `PartialEq`.
 

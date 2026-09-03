@@ -526,11 +526,7 @@ impl App {
                     }
 
                     // Check for per-item errors and push single summary to status log
-                    let error_count = self
-                        .tag_values
-                        .iter()
-                        .filter(|tv| tv.value == "Error")
-                        .count();
+                    let error_count = self.tag_values.iter().filter(|tv| tv.is_error()).count();
 
                     if error_count > 0 {
                         self.add_message(format!(
@@ -1348,9 +1344,9 @@ mod tests {
 
         let values = vec![TagValue {
             tag_id: "Tag1".into(),
-            value: "123".into(),
-            quality: "Good".into(),
-            timestamp: "Today".into(),
+            value: Some(OpcValue::Int(123)),
+            quality: OpcQuality::GOOD,
+            timestamp: Some(std::time::SystemTime::UNIX_EPOCH),
         }];
 
         tx.send(Ok(values)).unwrap();
@@ -1358,7 +1354,8 @@ mod tests {
 
         assert_eq!(app.current_screen, CurrentScreen::TagValues);
         assert_eq!(app.tag_values.len(), 1);
-        assert_eq!(app.tag_values[0].value, "123");
+        assert_eq!(app.tag_values[0].value, Some(OpcValue::Int(123)));
+        assert_eq!(app.tag_values[0].display_value(), "123");
         assert!(app.read_result_rx.is_none());
     }
 
@@ -1392,9 +1389,9 @@ mod tests {
         app.tags = vec!["Tag1".into()];
         app.tag_values = vec![TagValue {
             tag_id: "Tag1".into(),
-            value: "100".into(),
-            quality: "Good".into(),
-            timestamp: String::new(),
+            value: Some(OpcValue::Int(100)),
+            quality: OpcQuality::GOOD,
+            timestamp: None,
         }];
 
         app.go_back();
@@ -1412,15 +1409,15 @@ mod tests {
         app.tag_values = vec![
             TagValue {
                 tag_id: "T1".into(),
-                value: "V1".into(),
+                value: Some(OpcValue::String("V1".into())),
                 quality: OpcQuality::GOOD,
-                timestamp: "T".into(),
+                timestamp: Some(std::time::SystemTime::UNIX_EPOCH),
             },
             TagValue {
                 tag_id: "T2".into(),
-                value: "V2".into(),
+                value: Some(OpcValue::String("V2".into())),
                 quality: OpcQuality::GOOD,
-                timestamp: "T".into(),
+                timestamp: Some(std::time::SystemTime::UNIX_EPOCH),
             },
         ];
         app.selected_index = Some(0);
