@@ -11,7 +11,7 @@ Backend-agnostic OPC DA client library for Rust — async, trait-based, with tra
 - **Async/Await API**: Built for modern asynchronous Rust using `tokio` and `async-trait`.
 - **Trait-Based Abstraction**: The `OpcProvider` trait allows for easy mocking and backend swapping.
 - **Transparent COM Management**: Handles COM initialization (`CoInitializeEx`) and apartment thread affinity automatically in the background.
-- **Read & Write Support**: Read tag values and write typed values (`Int`, `Float`, `Bool`, `String`) to OPC tags.
+- **Strongly-Typed Read & Write**: Tag values expose `Option<OpcValue>` and `Option<std::time::SystemTime>` ensuring lossless, zero-allocation typed access on read results and writes with convenient display helpers.
 - **16-Bit Quality Decomposition**: Zero-allocation, strongly-typed `OpcQuality` struct decomposing OPC DA quality into major status, substatus, and limits with rich `Display` diagnostics.
 - **Pure-Rust Facade**: Strict isolation of low-level Win32 COM/FFI types behind pure-Rust connector traits, eliminating raw COM types and unsafe memory handling from domain models.
 - **Windows COM/DCOM Support**: Native OPC DA backend via `windows-rs` — no external OPC crates needed.

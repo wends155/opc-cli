@@ -1,5 +1,15 @@
 # Project Context Summary
 
+## 2026-09-03: Documentation Synchronization (spec.md hash & README)
+> 📝 **Context Update:**
+> * **Feature:** Documentation sync for `opc-da-client`
+> * **Changes:**
+>   - Updated `opc-da-client/spec.md` verification metadata hash to `006cf35`.
+>   - Synchronized `opc-da-client/README.md` with strongly-typed read/write capabilities (`Option<OpcValue>` and `Option<SystemTime>`).
+>   - Verified semantic parity between `Cargo.toml [package.description]`, `lib.rs //!`, and `README.md`.
+> * **New Constraints:** Maintain `spec.md` verification hash synchronization upon domain type refactorings.
+> * **Pruned:** Outdated verification hash `1349b96`.
+
 ## 2026-09-03: Concrete Domain Types for `TagValue` (Option<OpcValue> & Option<SystemTime>)
 > 📝 **Context Update:**
 > * **Feature:** Refactor `TagValue` with concrete types and eliminate magic string sentinels
