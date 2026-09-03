@@ -3,7 +3,7 @@
 > **Behavioral Source of Truth** for the `opc-da-client` library crate.
 > Defines *what* each module should do — independent of current implementation.
 >
-> Last verified against: f3b05da
+> Last verified against: 6ef7b54
 
 ---
 
@@ -184,20 +184,21 @@ All methods use `#[async_trait]`.
 
 ---
 
-### 1.3 `backend::opc_da` — Default OPC DA Backend
+### 1.3 `com::client` — Default OPC DA Client
 
-**Purpose:** Concrete `OpcProvider` implementation using the `opc_da` crate. Handles COM MTA initialization, server connection, namespace browsing, and synchronous I/O reads.
+**Purpose:** Concrete `OpcProvider` implementation backed by the consolidated `com` subsystem. Handles COM MTA initialization, server connection, namespace browsing, and synchronous I/O reads.
 
 > [!NOTE]
 > Only compiled when feature `opc-da-backend` is enabled (default).
 
 #### Public API
 
-##### `struct OpcDaClient`
+##### `struct OpcDaClient<C = ComConnector>`
 
 | Method | Signature | Description |
 | :--- | :--- | :--- |
 | `new(connector: C)` | `fn new(connector: C) -> OpcResult<Self>` | Constructs a new wrapper, launching the dedicated COM worker thread. |
+| `default()` | `fn default() -> Self` | Constructs an `OpcDaClient<ComConnector>` with default native COM connector. |
 
 Implements `OpcProvider` for all four trait methods by dispatching to the `ComWorker`.
 
@@ -213,8 +214,8 @@ Implements `OpcProvider` for all four trait methods by dispatching to the `ComWo
 
 **Signature:**
 ```rust
-fn browse_recursive(
-    server: &Server,
+fn browse_recursive<S: ConnectedServer>(
+    server: &S,
     tags: &mut Vec<String>,
     max_tags: usize,
     progress: &Arc<AtomicUsize>,
@@ -225,19 +226,19 @@ fn browse_recursive(
 
 **Behavior:**
 1.  Terminates if `depth > 50` (MAX_DEPTH) or `tags.len() >= max_tags`.
-2.  Enumerates `OPC_BRANCH` items, descends into each via `change_browse_position(DOWN)`.
-3.  **Always** navigates back `UP` after recursing — even if recursion itself fails — to prevent position corruption. Failure to navigate `UP` is a hard error.
-4.  Enumerates `OPC_LEAF` items (soft-fail: errors logged and skipped).
+2.  Enumerates `OPC_BRANCH` items using type-safe `BrowseType::Branch`, descends into each via `change_browse_position(BrowseDirection::Down, ...)`.
+3.  **Always** navigates back `BrowseDirection::Up` after recursing — even if recursion itself fails — to prevent position corruption. Failure to navigate `Up` is a hard error.
+4.  Enumerates `OPC_LEAF` items using `BrowseType::Leaf` (soft-fail: errors logged and skipped).
 5.  Converts browse names to fully-qualified item IDs via `get_item_id()`; falls back to browse name on failure.
 6.  Each discovered tag is pushed to both `tags` and `tags_sink`, and `progress` is incremented.
 
 #### Internal: OPC_FLAT Fast Path
 
-Before calling `browse_recursive`, `browse_tags` attempts `BrowseOPCItemIDs(OPC_FLAT)` at root. If the server returns items, they are collected directly as fully-qualified IDs — skipping recursion and `get_item_id()` entirely. Falls back to `browse_recursive` on error, empty results, or first-item failure.
+Before calling `browse_recursive`, `browse_tags` attempts `browse_opc_item_ids(BrowseType::Flat, ...)` at root. If the server returns items, they are collected directly as fully-qualified IDs — skipping recursion and `get_item_id()` entirely. Falls back to `browse_recursive` on error, empty results, or first-item failure.
 
 ---
 
-### 1.4 `com_guard` — RAII COM Initialization
+### 1.4 `com::guard` — RAII COM Initialization
 
 **Purpose:** Provide a drop guard that ensures `CoUninitialize` is called exactly once per successful `CoInitializeEx`, even on early returns or panics.
 
@@ -247,7 +248,7 @@ Before calling `browse_recursive`, `browse_tags` attempts `BrowseOPCItemIDs(OPC_
 
 | Method | Signature | Description |
 | :--- | :--- | :--- |
-| `new()` | `fn new() -> anyhow::Result<Self>` | Initialize COM in Multi-Threaded Apartment (MTA) mode. Returns `Ok` on success or if already initialized (`S_FALSE`). |
+| `new()` | `fn new() -> OpcResult<Self>` | Initialize COM in Multi-Threaded Apartment (MTA) mode. Returns `Ok` on success or if already initialized (`S_FALSE`). |
 
 **Drop behavior:** Calls `CoUninitialize` only if `CoInitializeEx` returned `Ok`.
 
@@ -262,41 +263,44 @@ Before calling `browse_recursive`, `browse_tags` attempts `BrowseOPCItemIDs(OPC_
 *   `S_FALSE` (already initialized) is treated as success — the guard will still call `CoUninitialize` on drop.
 *   The guard is **not** `Send` or `Sync` — it must remain on the thread that created it.
 
-**Required Test Coverage:**
-- [x] Doctest: `ComGuard::new()?` is ignored (internal only).
+---
+
+### 1.5 `types` — Canonical Protocol Types & Handles
+
+**Purpose:** Provide canonical data structures and newtypes representing OPC DA concepts:
+
+#### Public API
+
+- `GroupHandle(pub u32)`: Opaque, type-safe newtype wrapper for server/client group handles.
+- `ItemHandle(pub u32)`: Opaque, type-safe newtype wrapper for server/client item handles.
+- `BrowseType`: Strongly-typed enum for namespace browsing (`Branch = 1`, `Leaf = 2`, `Flat = 3`). Implements zero-cost `From<BrowseType> for u32` and fallible `TryFrom<u32> for BrowseType`.
+- `BrowseDirection`: Strongly-typed enum for address space cursor movement (`Up = 1`, `Down = 2`, `To = 3`). Implements zero-cost `From<BrowseDirection> for u32` and fallible `TryFrom<u32> for BrowseDirection`.
+- `ServerStatus` / `ServerState`: Detailed server run-state and diagnostic types.
+- `GroupState`: Metadata bounding an OPC group object.
 
 ---
 
-### 1.5 `opc_da` — Internal OPC DA Module
+### 1.6 `errors` — Canonical Error Subsystem
 
-**Purpose:** Provide raw COM wrapping and lifetime management for interacting with OPC DA server, group, and item COM objects. Inherited inline from the previously vendored `opc_da` code (Phase 2), with `actix` support excluded.
+**Purpose:** Domain-specific error enumeration (`OpcError`) and `OpcResult<T>` type alias, replacing ad-hoc errors across the crate:
 
-#### Public API (Crate-Internal)
+- `OpcError::Com { source: windows::core::Error }`: Propagated Windows COM failure with HRESULT.
+- `OpcError::ConnectionFailed(String)`: Target host/server connection failure.
+- `OpcError::ServerNotFound(String)`: Unregistered or missing ProgID.
+- `OpcError::TagNotFound(String)`: Item ID missing from address space.
+- `OpcError::InvalidState(String)`: Invalid operation sequence or unexpected server state.
+- `OpcError::Conversion(String)`: Data type conversion failure.
+- `OpcError::Internal(String)`: Channel, worker thread, or internal invariant failure.
+- `OpcError::NotImplemented(String)`: Unsupported optional COM interface.
 
-##### `client::traits::*`
+---
 
-Contains the core definitions and abstractions representing OPC DA concepts:
-- `ClientTrait`: Enumerate and connect to OPC DA servers.
-- `ServerTrait`: Create OPC items and groups, introspect namespaces.
-- `ItemMgtTrait`: Manage items natively via the server-internal arrays.
-- `SyncIoTrait`: Blocking read and write operations.
-- `BrowseServerAddressSpaceTrait`: Navigation properties.
+### 1.7 `com::connector` — COM Connector & Server Traits
 
-##### `def::*`
-
-Definitions representing domain structures mapping to the `tagOPC*` struct data:
-- `ServerStatus` / `ServerState`: Enums detailing health and run-state.
-- `ItemDef` / `ItemResult`: Types detailing an item added/returned individually.
-- `GroupState`: Metadata bounding an OPC Group Object.
-- `BrowseType` / `NamespaceType`: Classification rules to discern flat from tiered namespaces.
-
-##### `utils::*`
-
-- `RemoteArray` / `RemotePointer`: Safely wrap `CoTaskMemAlloc` structures and properly route through `Drop`.
-- `LocalPointer`: Handle local allocations moving into `CoTaskMem`.
-
-**Invariants:**
-- Relies exclusively on `TryFromNative` and `ToNative` bridging to interop efficiently without unsafe footprints bleeding out.
+**Purpose:** Abstraction traits enabling unit testing and mock substitution:
+- `ServerConnector`: Discovers servers via `enumerate_servers()` and connects via `connect()`. Implemented by `ComConnector`.
+- `ConnectedServer`: Introspects server namespace and adds/removes groups. Implemented by `ComServer`.
+- `ConnectedGroup`: Adds items and performs synchronous read/write operations. Implemented by `ComGroup`.
 
 ---
 
@@ -310,7 +314,7 @@ Defined in § 1.1. See table above.
 
 | Flag | Default | Effect |
 | :--- | :--- | :--- |
-| `opc-da-backend` | ✅ Yes | Compiles the `backend::opc_da` module and exports `OpcDaClient`. |
+| `opc-da-backend` | ✅ Yes | Compiles the `com` subsystem module and exports `OpcDaClient` and `ComConnector`. |
 | `test-support` | ❌ No | Enables `mockall` and exports `MockOpcProvider`. |
 | `dev-diagnostics` | ❌ No | Compiles verbose TRACE-level operation argument dumps into backend methods. |
 
@@ -318,24 +322,24 @@ Defined in § 1.1. See table above.
 
 ## 3. Integration Points
 
-### 3.1 Internal: `opc_da` Module (merged)
+### 3.1 Internal: `com` Subsystem
 
-**Boundary:** `OpcDaClient` → `opc_da::client::v2::Client` / `Server`.
+**Boundary:** `OpcDaClient` → `com::worker::ComWorker` → `com::connector::ComServer` / `ComGroup`.
 
-| Operation | `opc_da` API Used |
-| :--- | :--- |
-| Server enumeration | `Client.get_servers()` |
-| Server connection | `Client.create_server()` |
-| Namespace detection | `Server.query_organization()` |
-| Tag browsing | `Server.browse_opc_item_ids()` (OPC_LEAF, OPC_BRANCH, OPC_FLAT), `Server.change_browse_position()`, `Server.get_item_id()` |
-| Tag reading | `Server.add_group()`, group `.add_items()`, group `.read()`, `Server.remove_group()` |
-| Tag writing | `Server.add_group()`, group `.add_items()`, group `.write()`, `Server.remove_group()` |
-| String iteration | `StringIterator::new()` |
+| Operation | COM Subsystem API Used | Underlying Windows COM Interface |
+| :--- | :--- | :--- |
+| Server enumeration | `ComConnector.enumerate_servers()` | `IOPCServerList::EnumClassesOfCategories` |
+| Server connection | `ComConnector.connect()` | `CoCreateInstance::<IOPCServer>` |
+| Namespace detection | `ComServer.query_organization()` | `IOPCBrowseServerAddressSpace::QueryOrganization` |
+| Tag browsing | `ComServer.browse_opc_item_ids()`, `change_browse_position()`, `get_item_id()` | `IOPCBrowseServerAddressSpace` |
+| Tag reading | `ComServer.add_group()`, group `read()`, `remove_group()` | `IOPCServer`, `IOPCItemMgt`, `IOPCSyncIO` |
+| Tag writing | `ComServer.add_group()`, group `write()`, `remove_group()` | `IOPCServer`, `IOPCItemMgt`, `IOPCSyncIO` |
+| String iteration | `StringIterator::new()` | `IEnumString::Next` |
 
 **Error Handling at Boundary:**
-*   All `opc_da` errors are wrapped with `anyhow::Context` to add operation context.
-*   `create_server` failures additionally log a `friendly_com_hint` before propagating.
-*   `E_POINTER` errors from `StringIterator` are now handled internally by the iterator (null-PWSTR skip + `debug!` log).
+*   All COM errors return canonical `OpcError::Com { source }`.
+*   Friendly hints (`friendly_com_hint`) and formatted HRESULTs (`format_hresult`) are available for error reporting.
+*   `E_POINTER` errors from `StringIterator` are handled internally by the iterator (null-PWSTR skip + `debug!` log).
 
 **Known Upstream Bugs:**
 
@@ -376,7 +380,7 @@ Defined in § 1.1. See table above.
 - [x] `quality_to_string` returns `"Uncertain"` for `0x40`.
 - [x] `quality_to_string` returns `"Unknown(…)"` for unrecognized bitmask.
 
-### ComWorker Thread Dispatch Unit Tests (in `com_worker.rs`)
+### ComWorker Thread Dispatch Unit Tests (in `com/worker.rs`)
 
 - [x] `test_worker_starts_and_stops` — worker thread start & stop.
 - [x] `test_worker_list_servers` — server listing dispatch.
@@ -386,21 +390,14 @@ Defined in § 1.1. See table above.
 - [x] `test_worker_panic_propagation` — worker thread panic safety & error propagation to caller.
 - [x] `test_drop_during_active_request` — graceful worker thread shutdown.
 - [x] `test_worker_init_failure` — initialization error handling.
+- [x] `test_worker_read_tag_values_mismatched_lengths` — error resilience on uneven responses.
 
-### Mock-Backend Integration Tests (in `opc_da.rs`)
+### Type-Safe Enum Unit Tests (in `types.rs`)
 
-- [x] `test_mock_list_servers` returns expected mock server enumeration.
-- [x] `test_mock_read_tags_happy` — all tags valid, correct values returned.
-- [x] `test_mock_read_tags_partial_reject` — 1 of 3 tags rejected, returns length-3 array with error sentinel.
-- [x] `test_mock_read_tags_all_reject` — all tags rejected, returns `Ok` with all error sentinels.
-- [x] `test_mock_write_tag_happy` — tag valid, `success=true`.
-- [x] `test_mock_write_tag_add_fail` — tag rejected, `success=false`, group cleaned up.
-- [x] `test_browse_tags_flat_server` — flat namespace browse collects tags correctly.
-- [x] `test_browse_tags_opc_flat_success` — OPC_FLAT fast path collects all tags.
-- [x] `test_browse_tags_opc_flat_error_fallback` — OPC_FLAT error falls back to recursive.
-- [x] `test_browse_tags_opc_flat_empty_fallback` — OPC_FLAT empty falls back to recursive.
-- [x] `test_browse_tags_hierarchical_recursive` — recursive browse traverses hierarchy.
-- [x] `test_browse_tags_max_tags_limit` — max_tags cap works on all paths.
+- [x] `browse_type_from_roundtrip` — validates `From<BrowseType> for u32` matches expected raw integers (1, 2, 3).
+- [x] `browse_type_try_from_rejects_invalid` — validates `TryFrom<u32> for BrowseType` rejects 0, 4, 99.
+- [x] `browse_direction_from_roundtrip` — validates `From<BrowseDirection> for u32` matches expected raw integers (1, 2, 3).
+- [x] `browse_direction_try_from_rejects_invalid` — validates `TryFrom<u32> for BrowseDirection` rejects 0, 4, 99.
 
 ### Mock-Based Tests (in `opc-cli`)
 
@@ -412,7 +409,7 @@ Defined in § 1.1. See table above.
 ### Doc Tests
 
 - [x] `friendly_com_hint` — runnable doctest in `helpers.rs`.
-- [x] `ComGuard` — internal-only ignored doctest in `com_guard.rs`.
+- [x] `ComGuard` — internal-only ignored doctest in `com/guard.rs`.
 
 ### Integration / Manual Tests
 

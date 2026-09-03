@@ -52,25 +52,26 @@ opc-cli/
 │       └── ui.rs               # Ratatui view render functions
 ├── opc-da-client/              # Native OPC DA Client Library Crate
 │   ├── Cargo.toml              # Library dependencies (windows, anyhow, thiserror)
+│   ├── README.md               # Crate documentation for crates.io
+│   ├── architecture.md         # Library technical architecture specification
 │   ├── spec.md                 # Library behavioral contracts
 │   └── src/
 │       ├── lib.rs              # Library root & public re-exports
 │       ├── provider.rs         # OpcProvider trait, TagValue, OpcValue, WriteResult
-│       ├── com_worker.rs       # Dedicated COM MTA worker thread & connection pool
-│       ├── com_guard.rs        # RAII CoInitializeEx / CoUninitialize guard
-│       ├── helpers.rs          # HRESULT hints, VARIANT/FILETIME formatters, log_opc_error
-│       ├── backend/            # Concrete OpcProvider implementations
-│       │   ├── connector.rs    # ServerConnector trait and ComConnector
-│       │   └── opc_da.rs       # OpcDaClient implementation
-│       └── opc_da/             # Raw COM bindings and internal wrapping module
-│           ├── errors.rs       # Error types, HRESULT mapping, and log_opc_error
-│           ├── com_utils.rs    # COM utility functions
-│           ├── typedefs.rs     # OPC DA type definitions
-│           └── client/         # Client trait interfaces, version impls, and string iterator
-│               ├── traits/     # Trait definitions for OPC DA operations
-│               ├── v1/         # OPC DA 1.0 interface bindings
-│               ├── v2/         # OPC DA 2.0 interface bindings
-│               └── v3/         # OPC DA 3.0 interface bindings
+│       ├── types.rs            # Canonical protocol types, handles, and browse enums
+│       ├── errors.rs           # Canonical OpcError, OpcResult, and HRESULT hints
+│       ├── helpers.rs          # COM utilities: format_hresult, variant/quality/time converters
+│       ├── com/                # COM subsystem (feature: opc-da-backend)
+│       │   ├── mod.rs          # COM module root
+│       │   ├── guard.rs        # RAII CoInitializeEx / CoUninitialize guard
+│       │   ├── worker.rs       # Dedicated COM MTA worker thread & request channel
+│       │   ├── connector.rs    # ServerConnector trait and ComConnector / ComServer / ComGroup
+│       │   ├── client.rs       # OpcDaClient implementation
+│       │   ├── memory.rs       # COM memory management (RemoteArray, LocalPointer)
+│       │   └── iterator.rs     # COM enumerators (StringIterator, GuidIterator)
+│       └── bindings/           # Frozen COM bindings (windgen output, read-only)
+│           ├── da/             # OPCDA.winmd interfaces
+│           └── comn/           # OPCCOMN.winmd interfaces
 ├── compat/                     # Windows 7 / NT 6.1 Polyfill DLL Crates (#![no_std])
 │   ├── bcrypt-polyfill/       # ProcessPrng -> RtlGenRandom polyfill
 │   ├── synch-polyfill/        # WaitOnAddress 1ms Sleep polling polyfill
