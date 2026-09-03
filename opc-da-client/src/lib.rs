@@ -32,8 +32,11 @@
 
 mod com_guard;
 pub(crate) use com_guard::ComGuard;
+pub mod errors;
 mod helpers;
 mod provider;
+#[cfg(feature = "opc-da-backend")]
+pub mod types;
 
 #[cfg(feature = "opc-da-backend")]
 #[allow(warnings)]
@@ -48,14 +51,11 @@ mod opc_da;
 mod backend;
 
 // Stable public API
-pub use helpers::{format_hresult, friendly_com_hint, log_opc_error};
+pub use errors::{OpcError, OpcResult, format_hresult, friendly_com_hint, log_opc_error};
 pub use provider::{OpcProvider, OpcValue, TagValue, WriteResult};
 
 #[cfg(feature = "opc-da-backend")]
-pub use opc_da::{
-    errors::{OpcError, OpcResult},
-    typedefs::{GroupHandle, ItemHandle},
-};
+pub use types::{GroupHandle, ItemHandle};
 
 // Backend re-exports (conditional)
 #[cfg(feature = "opc-da-backend")]

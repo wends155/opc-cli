@@ -1,6 +1,6 @@
+use crate::errors::{OpcError, OpcResult};
 #[cfg(feature = "opc-da-backend")]
 use crate::opc_da::client::ClientTrait;
-use crate::opc_da::errors::{OpcError, OpcResult};
 use crate::provider::OpcValue;
 use windows::Win32::Foundation::{FILETIME, VARIANT_BOOL};
 use windows::Win32::System::Com::{CLSIDFromProgID, CoTaskMemFree, ProgIDFromCLSID};
@@ -11,10 +11,9 @@ use windows::Win32::System::Ole::{
 use windows::Win32::System::Variant::{VARIANT, VT_BOOL, VT_BSTR, VT_I4, VT_R8};
 use windows::core::{BSTR, PCWSTR};
 
-pub use crate::opc_da::errors::{
-    format_hresult, friendly_com_hint, friendly_hresult_hint as friendly_com_hresult_hint,
-    log_opc_error,
-};
+#[cfg_attr(not(test), allow(unused_imports))]
+pub use crate::errors::friendly_com_hint;
+pub use crate::errors::{format_hresult, friendly_hresult_hint as friendly_com_hresult_hint};
 
 // Verify GUID memory layout assumption for FFI (Workstream C#3)
 const _: () = assert!(
