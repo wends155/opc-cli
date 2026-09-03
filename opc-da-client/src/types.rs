@@ -40,45 +40,72 @@ pub struct ItemHandle(pub u32);
 /// Major OPC DA quality status (bits 6-7, mask `0xC0`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub enum QualityMajor {
+    /// The value is good and can be trusted (`0xC0`).
     #[default]
     Good,
+    /// The value is bad and cannot be trusted (`0x00`).
     Bad,
+    /// The value is uncertain; use caution when relying on it (`0x40`).
     Uncertain,
+    /// Unrecognized or vendor-specific major quality bitmask.
     Unknown(u8),
 }
 
 /// Limit condition of an OPC DA item value (bits 0-1, mask `0x03`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub enum QualityLimit {
+    /// The value is free to move in either direction (`0x00`).
     #[default]
     NotLimited,
+    /// The value has reached its lower limit and cannot drop further (`0x01`).
     LowLimited,
+    /// The value has reached its upper limit and cannot rise further (`0x02`).
     HighLimited,
+    /// The value is constant and cannot move (`0x03`).
     Constant,
 }
 
 /// Substatus detailing the reason for a given major quality (bits 2-5, mask `0x3C`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub enum QualitySubstatus {
+    /// No specific substatus is provided.
     #[default]
     NonSpecific,
-    // Bad Substatuses (Major = Bad)
+
+    // --- Bad Substatuses (Major = Bad) ---
+    /// The server or device configuration is invalid or missing.
     ConfigurationError,
+    /// The underlying device or physical source is disconnected.
     NotConnected,
+    /// The server or device detected a catastrophic hardware/device failure.
     DeviceFailure,
+    /// The sensor reporting data has failed.
     SensorFailure,
+    /// Communications were lost; returning the last known good value.
     LastKnownValue,
+    /// A communications link to the data source has failed.
     CommFailure,
+    /// The tag or block has been placed out of service.
     OutOfService,
+    /// The server is awaiting initial data from the device.
     WaitingForInitialData,
-    // Uncertain Substatuses (Major = Uncertain)
+
+    // --- Uncertain Substatuses (Major = Uncertain) ---
+    /// The value is outside normal range; returning the last usable value.
     LastUsableValue,
+    /// The sensor requires calibration.
     SensorCalNeeded,
+    /// The engineering unit range has been exceeded.
     EguExceeded,
+    /// The value was computed from fewer sources than normal.
     SubNormal,
-    // Good Substatuses (Major = Good)
+
+    // --- Good Substatuses (Major = Good) ---
+    /// The value was manually overridden locally.
     LocalOverride,
-    // Unrecognized / vendor-specific code
+
+    // --- Fallback ---
+    /// An unrecognized or vendor-specific substatus code.
     Raw(u8),
 }
 
