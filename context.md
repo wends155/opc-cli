@@ -1,5 +1,15 @@
 # Project Context Summary
 
+## 2026-09-03: Documentation Synchronization (spec.md hash & README)
+> 📝 **Context Update:**
+> * **Feature:** Documentation sync for `opc-da-client`
+> * **Changes:**
+>   - Updated `opc-da-client/spec.md` verification metadata hash to `1349b96`.
+>   - Synchronized `opc-da-client/README.md` with Pure-Rust Facade feature highlight.
+>   - Verified semantic parity between `Cargo.toml [package.description]`, `lib.rs //!`, and `README.md`.
+> * **New Constraints:** Maintain `spec.md` verification hash synchronization upon architectural refactorings.
+> * **Pruned:** Outdated verification hash `b9a0292`.
+
 ## 2026-09-03: Low-Level COM / FFI Isolation & Pure-Rust Connector Facade
 > 📝 **Context Update:**
 > * **Feature:** Reorganize `opc-da-client` COM/FFI isolation and pure-Rust connector facade
