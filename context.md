@@ -1,5 +1,15 @@
 # Project Context Summary
 
+## 2026-09-03: Documentation Synchronization (Rustdoc, README, spec.md)
+> 📝 **Context Update:**
+> * **Feature:** Documentation sync for `opc-da-client` & `spec.md`
+> * **Changes:**
+>   - Added comprehensive rustdoc variant comments to `QualityMajor`, `QualityLimit`, and `QualitySubstatus` in `opc-da-client/src/types.rs`.
+>   - Synchronized `opc-da-client/README.md` with 16-bit quality decomposition feature highlights and code samples.
+>   - Synchronized `opc-da-client/spec.md` verification commit hash to `b9a0292`.
+> * **New Constraints:** Maintain 100% rustdoc coverage across all public enum variants and struct fields.
+> * **Pruned:** Outdated verification hash `6ef7b54`.
+
 ## 2026-09-03: Strongly-Typed Tag Quality & 16-Bit OPC DA Decomposition
 > 📝 **Context Update:**
 > * **Feature:** Option C Decomposition of `TagValue.quality` into `OpcQuality`
