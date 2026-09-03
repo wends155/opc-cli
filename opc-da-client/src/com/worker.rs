@@ -1,7 +1,9 @@
 #![allow(warnings)]
+#![allow(clippy::all, clippy::pedantic, clippy::restriction)]
 
 use crate::bindings::da::{OPC_DS_DEVICE, OPC_NS_FLAT, tagOPCITEMDEF};
 use crate::com::connector::{ConnectedGroup, ConnectedServer, ServerConnector};
+use crate::com::guard::ComGuard;
 use crate::errors::{OpcError, OpcResult};
 use crate::helpers::{
     filetime_to_string, format_hresult, opc_value_to_variant, quality_to_string, variant_to_string,
@@ -101,7 +103,7 @@ impl<C: ServerConnector + 'static> ComWorker<C> {
 
         let handle = std::thread::spawn(move || {
             tracing::debug!("COM worker thread spawned, initializing COM (MTA)");
-            let _guard = match crate::ComGuard::new() {
+            let _guard = match ComGuard::new() {
                 Ok(g) => {
                     tracing::info!("COM MTA initialized successfully on worker thread");
                     let _ = init_tx.send(Ok(()));

@@ -30,28 +30,19 @@
 //!
 //! **Windows only** — OPC DA is built on COM/DCOM.
 
-mod com_guard;
-pub(crate) use com_guard::ComGuard;
 pub mod errors;
 mod helpers;
 mod provider;
+
 #[cfg(feature = "opc-da-backend")]
 pub mod types;
 
 #[cfg(feature = "opc-da-backend")]
 #[allow(warnings)]
 mod bindings;
-pub mod com_worker;
-
-#[cfg(feature = "opc-da-backend")]
-#[allow(warnings)]
-mod opc_da;
 
 #[cfg(feature = "opc-da-backend")]
 pub mod com;
-
-#[cfg(feature = "opc-da-backend")]
-mod backend;
 
 // Stable public API
 pub use errors::{OpcError, OpcResult, format_hresult, friendly_com_hint, log_opc_error};

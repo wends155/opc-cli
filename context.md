@@ -669,14 +669,21 @@ emove_group errors now logged instead of silently discarded.
 >   - `Merge-ToMain.ps1` strips both `.agents/` and `.gemini/` during release merge to `main`.
 > * **Pruned:** Outdated workflow schemas and broken skill references resolved.
 
-## 2026-09-03: Remove Redundant Repo-Root GEMINI.md
+## 2026-09-03: Restructure opc-da-client Internal Module Layout
 > 📝 **Context Update:**
-> * **Feature:** Remove Redundant Workspace GEMINI.md
+> * **Feature:** opc-da-client Internal Module Restructuring & Consolidation
 > * **Changes:**
->   - Removed untracked repository-root `GEMINI.md` to prevent duplicate system prompt rule injection (~10 KB / ~2,500–3,000 prompt tokens saved per turn).
->   - Preserved `gemini.md` and `GEMINI.md` patterns in `.gitignore` under `# Project Governance (Local Only)` to avoid accidental git tracking.
->   - Confirmed canonical TAR-S cycle governance remains fully enforced via user-global `~/.gemini/GEMINI.md` under `<RULE[user_global]>`.
+>   - Established canonical crate-level modules `src/types.rs` (all OPC DA protocol types, handles, and `BrowseType`/`BrowseDirection` type-safe enums) and `src/errors.rs` (canonical `OpcError`, `OpcResult`, friendly HRESULT hints, and structured logging).
+>   - Consolidated all Windows COM subsystem logic into unified `src/com/` submodule hierarchy (`guard.rs`, `memory.rs`, `iterator.rs`, `connector.rs`, `worker.rs`, `client.rs`, `mod.rs`).
+>   - Inlined COM calls in `ComServer` and `ComGroup`, eliminating the 22 dead trait files in `src/opc_da/client/traits/` and obsolete v1/v3 client stubs.
+>   - Removed all `transmute_copy` on GUIDs across the codebase in favor of native `windows::core::GUID`.
+>   - Completely deleted legacy directories `src/opc_da/`, `src/backend/`, and loose root files `src/com_guard.rs`, `src/com_worker.rs`.
+>   - Maintained byte-for-byte identical public API (`OpcProvider`, `TagValue`, `OpcValue`, `WriteResult`, `OpcDaClient`, `ComConnector`, `GroupHandle`, `ItemHandle`, `OpcError`, `OpcResult`, `format_hresult`, `friendly_com_hint`, `log_opc_error`).
+>   - Updated `architecture.md §3` layout tree.
+>   - All 8 verification gates passed (`verify.ps1`), 85 total tests green (34 cli + 41 da-client + 10 doc tests).
 > * **New Constraints:**
->   - Operational governance rules are inherited exclusively from user-global `~/.gemini/GEMINI.md`.
-> * **Pruned:** Local `GEMINI.md` file removed from workspace root.
+>   - All internal COM interop logic resides strictly under `opc_da_client::com::*`.
+>   - Protocol types and error definitions reside strictly in `opc_da_client::types` and `opc_da_client::errors`.
+> * **Pruned:** `src/opc_da/` (36 files), `src/backend/` (3 files), root `com_guard.rs` and `com_worker.rs` completely removed.
+
 

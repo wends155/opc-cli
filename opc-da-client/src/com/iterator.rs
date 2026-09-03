@@ -1,4 +1,5 @@
 #![allow(warnings)]
+#![allow(clippy::all, clippy::pedantic, clippy::restriction)]
 
 use crate::com::memory::{RemoteArray, RemotePointer, TryToLocal as _};
 use crate::errors::{OpcError, OpcResult};

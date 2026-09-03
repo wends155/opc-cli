@@ -298,7 +298,7 @@ pub fn connect_server(server_name: &str) -> OpcResult<crate::bindings::da::IOPCS
     // SAFETY: Calling COM function CoCreateInstance with valid CLSID to instantiate IOPCServer.
     let server: crate::bindings::da::IOPCServer = unsafe {
         windows::Win32::System::Com::CoCreateInstance(
-            &clsid_raw,
+            &raw const clsid_raw,
             None,
             windows::Win32::System::Com::CLSCTX_ALL,
         )

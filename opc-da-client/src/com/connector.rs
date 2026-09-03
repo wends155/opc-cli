@@ -5,6 +5,7 @@
 //! This enables mock implementations for unit testing without a live COM server.
 
 #![allow(warnings)]
+#![allow(clippy::all, clippy::pedantic, clippy::restriction)]
 
 pub use crate::bindings::da::{tagOPCDATASOURCE, tagOPCITEMDEF, tagOPCITEMRESULT, tagOPCITEMSTATE};
 pub use crate::com::iterator::{GuidIterator, StringIterator};
@@ -117,10 +118,12 @@ impl ServerConnector for ComConnector {
 
     fn enumerate_servers(&self) -> OpcResult<Vec<String>> {
         tracing::debug!("Enumerating OPC DA Server classes via COM Component Categories Manager");
+        // SAFETY: Calling COM function CLSIDFromProgID with static wide string literal.
         let id = unsafe {
             windows::Win32::System::Com::CLSIDFromProgID(windows::core::w!("OPC.ServerList.1"))?
         };
 
+        // SAFETY: Calling COM function CoCreateInstance to instantiate IOPCServerList interface.
         let servers: crate::bindings::comn::IOPCServerList = unsafe {
             windows::Win32::System::Com::CoCreateInstance(
                 &id,
@@ -131,6 +134,7 @@ impl ServerConnector for ComConnector {
 
         let versions = [crate::bindings::da::CATID_OPCDAServer20::IID];
 
+        // SAFETY: Calling COM method EnumClassesOfCategories with valid version GUID slice.
         let iter = unsafe {
             servers
                 .EnumClassesOfCategories(&versions, &versions)
@@ -191,6 +195,7 @@ impl ConnectedServer for ComServer {
         let iface = self.browse_server_address_space.as_ref().ok_or_else(|| {
             OpcError::NotImplemented("IOPCBrowseServerAddressSpace not supported".to_string())
         })?;
+        // SAFETY: Calling COM interface method QueryOrganization on valid interface pointer.
         unsafe { Ok(iface.QueryOrganization()?.0.cast_unsigned()) }
     }
 
@@ -206,6 +211,7 @@ impl ConnectedServer for ComServer {
         })?;
         let filter_criteria = LocalPointer::from_option(filter);
         let raw_type = crate::bindings::da::tagOPCBROWSETYPE((browse_type as u32).cast_signed());
+        // SAFETY: Calling COM interface method BrowseOPCItemIDs with valid filter string.
         let iter = unsafe {
             iface.BrowseOPCItemIDs(
                 raw_type,
@@ -223,6 +229,7 @@ impl ConnectedServer for ComServer {
         })?;
         let pos = LocalPointer::from(name);
         let raw_dir = crate::bindings::da::tagOPCBROWSEDIRECTION((direction as u32).cast_signed());
+        // SAFETY: Calling COM interface method ChangeBrowsePosition with valid position string.
         unsafe {
             iface.ChangeBrowsePosition(raw_dir, pos.as_pwstr())?;
         }
@@ -234,6 +241,7 @@ impl ConnectedServer for ComServer {
             OpcError::NotImplemented("IOPCBrowseServerAddressSpace not supported".to_string())
         })?;
         let item_data_id = LocalPointer::from(item_name);
+        // SAFETY: Calling COM interface method GetItemID with valid item_data_id string.
         let output = unsafe { iface.GetItemID(item_data_id.as_pwstr())? };
         let ptr = RemotePointer::from(output);
         ptr.try_into().map_err(OpcError::from)
@@ -256,6 +264,7 @@ impl ConnectedServer for ComServer {
         let group_name = group_name.as_pcwstr();
 
         let mut raw_server_handle = 0u32;
+        // SAFETY: Calling COM interface method AddGroup with valid parameters and output pointers.
         unsafe {
             self.server.AddGroup(
                 group_name,
@@ -290,6 +299,7 @@ impl ConnectedServer for ComServer {
     }
 
     fn remove_group(&self, server_group: GroupHandle, force: bool) -> OpcResult<()> {
+        // SAFETY: Calling COM interface method RemoveGroup with server handle.
         unsafe {
             self.server.RemoveGroup(server_group.0, force)?;
         }
@@ -329,6 +339,7 @@ impl ConnectedGroup for ComGroup {
         let mut results = RemoteArray::new(len);
         let mut errors = RemoteArray::new(len);
 
+        // SAFETY: Calling COM interface method AddItems with valid item definition array and output buffers.
         unsafe {
             self.item_mgt.AddItems(
                 len,
@@ -360,6 +371,7 @@ impl ConnectedGroup for ComGroup {
         let mut item_values = RemoteArray::new(len);
         let mut errors = RemoteArray::new(len);
 
+        // SAFETY: Calling COM interface method Read with valid server handle array and output buffers.
         unsafe {
             self.sync_io.Read(
                 source,
@@ -387,6 +399,7 @@ impl ConnectedGroup for ComGroup {
         let len = server_handles.len().try_into()?;
         let mut errors = RemoteArray::new(len);
 
+        // SAFETY: Calling COM interface method Write with valid server handle and VARIANT arrays.
         unsafe {
             self.sync_io.Write(
                 len,

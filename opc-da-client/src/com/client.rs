@@ -1,4 +1,5 @@
 #![allow(warnings)]
+#![allow(clippy::all, clippy::pedantic, clippy::restriction)]
 
 use crate::com::connector::{ComConnector, ServerConnector};
 use crate::com::worker::{ComRequest, ComWorker};

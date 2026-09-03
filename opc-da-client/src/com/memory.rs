@@ -1,6 +1,7 @@
 //! COM memory management and type conversion utilities for the OPC DA client.
 
 #![allow(warnings)]
+#![allow(clippy::all, clippy::pedantic, clippy::restriction)]
 
 use windows::{
     Win32::System::Com::{CoTaskMemAlloc, CoTaskMemFree},

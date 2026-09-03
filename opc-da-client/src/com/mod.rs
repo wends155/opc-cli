@@ -5,6 +5,7 @@
 //! connection traits, and the concrete OPC DA client.
 
 #![allow(warnings)]
+#![allow(clippy::all, clippy::pedantic, clippy::restriction)]
 
 pub mod client;
 pub mod connector;

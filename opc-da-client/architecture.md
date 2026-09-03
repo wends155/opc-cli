@@ -35,21 +35,21 @@ opc-da-client/
 ├── spec.md                 # Behavioral contracts — Behavioral Source of Truth
 └── src/
     ├── lib.rs              # Crate root: module declarations, public re-exports
-    ├── com_guard.rs        # Internal RAII guard for COM init/teardown (ComGuard)
-    ├── provider.rs         # OpcProvider trait + TagValue struct
-    ├── helpers.rs          # COM utilities: friendly_com_hint, variant/quality/time converters
-    ├── opc_da/             # Merged from vendor/opc_da (Phase 2)
-    │   ├── mod.rs          # Module root with lint allows
-    │   ├── def.rs          # OPC DA type definitions (GroupState, ServerStatus, etc.)
-    │   ├── utils/          # COM memory management (RemoteArray, RemotePointer, etc.)
-    │   └── client/         # Client traits, versions (v1/v2/v3), iterator
-    ├── bindings/           # Frozen COM bindings (Phase 3)
-    │   ├── da/             # OPCDA.winmd bindgen output
-    │   └── comn/           # OPCCOMN.winmd bindgen output
-    └── backend/
-        ├── mod.rs          # Backend module gate (feature-conditional)
-        ├── connector.rs    # ServerConnector trait (Mock & Real COM backend decoupling)
-        └── opc_da.rs       # OpcDaClient: concrete OpcProvider using opc_da module
+    ├── provider.rs         # OpcProvider trait + TagValue, OpcValue, WriteResult
+    ├── types.rs            # OPC DA protocol types, handles, enums (GroupHandle, ItemHandle, BrowseType, ...)
+    ├── errors.rs           # OpcError, OpcResult, HRESULT hints, structured error logging
+    ├── helpers.rs          # COM utilities: variant_to_string, quality_to_string, filetime converters
+    ├── com/                # COM subsystem (feature-gated: opc-da-backend)
+    │   ├── mod.rs          # Module root
+    │   ├── guard.rs        # RAII COM initialization/teardown (ComGuard)
+    │   ├── worker.rs       # Dedicated COM worker thread, request channel (ComWorker, ComRequest)
+    │   ├── connector.rs    # Server/Group connector traits + COM-backed implementations
+    │   ├── client.rs       # OpcDaClient: concrete OpcProvider implementation
+    │   ├── memory.rs       # COM memory management (RemoteArray, RemotePointer, LocalPointer)
+    │   └── iterator.rs     # COM enumerator iterators (StringIterator, GuidIterator)
+    └── bindings/           # Frozen COM bindings (windgen output, read-only)
+        ├── da/             # OPCDA.winmd interfaces
+        └── comn/           # OPCCOMN.winmd interfaces
 ```
 
 ---

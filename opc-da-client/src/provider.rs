@@ -1,4 +1,4 @@
-use crate::opc_da::errors::OpcResult;
+use crate::errors::OpcResult;
 use async_trait::async_trait;
 use std::sync::Arc;
 use std::sync::atomic::AtomicUsize;
