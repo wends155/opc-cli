@@ -1,5 +1,23 @@
 # Project Context Summary
 
+## 2026-09-03: Strongly-Typed Tag Quality & 16-Bit OPC DA Decomposition
+> 📝 **Context Update:**
+> * **Feature:** Option C Decomposition of `TagValue.quality` into `OpcQuality`
+> * **Changes:**
+>   - Decomposed `TagValue.quality` from `String` into strongly-typed zero-allocation `OpcQuality` struct (`QualityMajor`, `QualitySubstatus`, `QualityLimit`, and raw `u16`).
+>   - Implemented `From<u16>`, `From<OpcQuality> for u16`, `From<&str>`, and rich human-readable `std::fmt::Display` (e.g. `"Good (Local Override)"`, `"Bad (Comm Failure)"`, `"Uncertain (EGU Exceeded) [High Limited]"`).
+>   - Refactored `com::worker::read_tag_values` to populate `OpcQuality::from(state.wQuality)` and protocol-accurate error constants (`OpcQuality::BAD_CONFIG_ERROR`, `OpcQuality::BAD_COMM_FAILURE`).
+>   - Deprecated `helpers::quality_to_string` with `#[deprecated(since = "0.3.0")]` and tracking marker.
+>   - Added mock integration test `test_worker_read_tag_values_quality_decoding` in `com::worker` closing the integration test gap.
+>   - Updated `opc-cli` table row rendering (`ui.rs`) and test fixtures (`app.rs`).
+>   - Synchronized `opc-da-client/spec.md` and recorded breaking changes & deprecations in `CHANGELOG.md [Unreleased]`.
+> * **New Constraints:**
+>   - In `TagValue`, `quality` is `OpcQuality` (implements `Copy`, `Display`, and predicates `is_good()`, `is_bad()`, `is_uncertain()`, `is_limited()`).
+>   - Do not pass synthetic COM error strings into `TagValue.quality`; use standard error constants and preserve structured logging.
+> * **Pruned:**
+>   - Stringly-typed `TagValue.quality: String` representation.
+>   - Heap-allocated quality strings in `read_tag_values` hot path.
+
 ## 2026-02-19: Write/Read Error Observability
 > 📝 **Context Update:**
 > * **Feature:** Write/Read Error Observability

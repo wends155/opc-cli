@@ -46,10 +46,13 @@ pub mod com;
 
 // Stable public API
 pub use errors::{OpcError, OpcResult, format_hresult, friendly_com_hint, log_opc_error};
-pub use provider::{OpcProvider, OpcValue, TagValue, WriteResult};
+pub use provider::{
+    OpcProvider, OpcQuality, OpcValue, QualityLimit, QualityMajor, QualitySubstatus, TagValue,
+    WriteResult,
+};
 
 #[cfg(feature = "opc-da-backend")]
-pub use types::{GroupHandle, ItemHandle};
+pub use types::{BrowseDirection, BrowseType, GroupHandle, ItemHandle};
 
 // Backend re-exports (conditional)
 #[cfg(feature = "opc-da-backend")]

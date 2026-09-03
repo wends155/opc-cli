@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed (Breaking)
+- **Strongly-Typed Tag Quality**: `TagValue.quality` changed from `String` to strongly-typed `OpcQuality` struct decomposing the 16-bit OPC DA quality word into `QualityMajor`, `QualitySubstatus`, `QualityLimit`, and `raw: u16`. Prevents type erasure, avoids heap allocations on the polling hot-path, and enables idiomatic matching and inspection for industrial SCADA and gateway consumers.
+
+### Added
+- **16-Bit OPC DA Quality Decomposition (`opc-da-client`)**: Added `OpcQuality`, `QualityMajor`, `QualitySubstatus`, and `QualityLimit` in `types.rs` with `From<u16>`, `From<OpcQuality> for u16`, `From<&str>`, and rich `Display` implementation formatting substatus and limits (e.g. `"Good (Local Override)"`, `"Bad (Comm Failure)"`, `"Uncertain (EGU Exceeded) [High Limited]"`).
+- **Mock Read Integration Test**: Added `test_worker_read_tag_values_quality_decoding` to `com::worker` verifying end-to-end multi-quality decoding and per-item rejection handling.
+
+### Deprecated
+- **`helpers::quality_to_string`**: Deprecated in favor of `OpcQuality::from(quality).to_string()` or direct inspection of `TagValue.quality`. Removal targeted for v0.4.0.
+
 ## [0.2.1] - 2026-08-12
 
 ### Fixed

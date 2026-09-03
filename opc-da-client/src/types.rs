@@ -37,6 +37,264 @@ pub struct GroupHandle(pub u32);
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub struct ItemHandle(pub u32);
 
+/// Major OPC DA quality status (bits 6-7, mask `0xC0`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub enum QualityMajor {
+    #[default]
+    Good,
+    Bad,
+    Uncertain,
+    Unknown(u8),
+}
+
+/// Limit condition of an OPC DA item value (bits 0-1, mask `0x03`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub enum QualityLimit {
+    #[default]
+    NotLimited,
+    LowLimited,
+    HighLimited,
+    Constant,
+}
+
+/// Substatus detailing the reason for a given major quality (bits 2-5, mask `0x3C`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub enum QualitySubstatus {
+    #[default]
+    NonSpecific,
+    // Bad Substatuses (Major = Bad)
+    ConfigurationError,
+    NotConnected,
+    DeviceFailure,
+    SensorFailure,
+    LastKnownValue,
+    CommFailure,
+    OutOfService,
+    WaitingForInitialData,
+    // Uncertain Substatuses (Major = Uncertain)
+    LastUsableValue,
+    SensorCalNeeded,
+    EguExceeded,
+    SubNormal,
+    // Good Substatuses (Major = Good)
+    LocalOverride,
+    // Unrecognized / vendor-specific code
+    Raw(u8),
+}
+
+/// Fully decomposed, zero-allocation 16-bit OPC DA quality word.
+///
+/// Encapsulates the complete 16-bit quality definition from the OPC DA 2.05a specification §6.8:
+/// - Major quality status ([`QualityMajor`]: Good, Bad, Uncertain)
+/// - Substatus ([`QualitySubstatus`]: Comm failure, sensor failure, local override, etc.)
+/// - Limit status ([`QualityLimit`]: Low limited, high limited, constant)
+/// - The raw 16-bit word (`raw: u16`)
+///
+/// Implements [`From<u16>`] for bidirectional conversion from COM native `wQuality`,
+/// and [`std::fmt::Display`] to format rich human-readable diagnostic details.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub struct OpcQuality {
+    /// Major quality status classification.
+    pub major: QualityMajor,
+    /// Substatus detailing the specific operational condition.
+    pub substatus: QualitySubstatus,
+    /// Limit condition flag.
+    pub limit: QualityLimit,
+    /// The raw 16-bit OPC DA quality word as returned by the COM server.
+    pub raw: u16,
+}
+
+impl OpcQuality {
+    /// Predefined constant for standard Good quality (`0x00C0`).
+    pub const GOOD: Self = Self {
+        major: QualityMajor::Good,
+        substatus: QualitySubstatus::NonSpecific,
+        limit: QualityLimit::NotLimited,
+        raw: 0x00C0,
+    };
+
+    /// Predefined constant for standard Bad quality (`0x0000`).
+    pub const BAD: Self = Self {
+        major: QualityMajor::Bad,
+        substatus: QualitySubstatus::NonSpecific,
+        limit: QualityLimit::NotLimited,
+        raw: 0x0000,
+    };
+
+    /// Predefined constant for standard Uncertain quality (`0x0040`).
+    pub const UNCERTAIN: Self = Self {
+        major: QualityMajor::Uncertain,
+        substatus: QualitySubstatus::NonSpecific,
+        limit: QualityLimit::NotLimited,
+        raw: 0x0040,
+    };
+
+    /// Predefined constant for Bad - Configuration Error (`0x0004`).
+    pub const BAD_CONFIG_ERROR: Self = Self {
+        major: QualityMajor::Bad,
+        substatus: QualitySubstatus::ConfigurationError,
+        limit: QualityLimit::NotLimited,
+        raw: 0x0004,
+    };
+
+    /// Predefined constant for Bad - Comm Failure (`0x0018`).
+    pub const BAD_COMM_FAILURE: Self = Self {
+        major: QualityMajor::Bad,
+        substatus: QualitySubstatus::CommFailure,
+        limit: QualityLimit::NotLimited,
+        raw: 0x0018,
+    };
+
+    /// Predefined constant for Bad - Not Connected (`0x0008`).
+    pub const BAD_NOT_CONNECTED: Self = Self {
+        major: QualityMajor::Bad,
+        substatus: QualitySubstatus::NotConnected,
+        limit: QualityLimit::NotLimited,
+        raw: 0x0008,
+    };
+
+    /// Returns `true` if the major quality is [`QualityMajor::Good`].
+    #[must_use]
+    pub const fn is_good(&self) -> bool {
+        matches!(self.major, QualityMajor::Good)
+    }
+
+    /// Returns `true` if the major quality is [`QualityMajor::Bad`].
+    #[must_use]
+    pub const fn is_bad(&self) -> bool {
+        matches!(self.major, QualityMajor::Bad)
+    }
+
+    /// Returns `true` if the major quality is [`QualityMajor::Uncertain`].
+    #[must_use]
+    pub const fn is_uncertain(&self) -> bool {
+        matches!(self.major, QualityMajor::Uncertain)
+    }
+
+    /// Returns `true` if the value has any limit condition active.
+    #[must_use]
+    pub const fn is_limited(&self) -> bool {
+        !matches!(self.limit, QualityLimit::NotLimited)
+    }
+}
+
+impl From<u16> for OpcQuality {
+    fn from(raw: u16) -> Self {
+        let major_bits = (raw & 0xC0) as u8;
+        let major = match major_bits {
+            0xC0 => QualityMajor::Good,
+            0x00 => QualityMajor::Bad,
+            0x40 => QualityMajor::Uncertain,
+            other => QualityMajor::Unknown(other >> 6),
+        };
+
+        let limit_bits = (raw & 0x03) as u8;
+        let limit = match limit_bits {
+            0x01 => QualityLimit::LowLimited,
+            0x02 => QualityLimit::HighLimited,
+            0x03 => QualityLimit::Constant,
+            _ => QualityLimit::NotLimited,
+        };
+
+        let sub_bits = (raw & 0x3C) as u8;
+        let substatus = match major {
+            QualityMajor::Bad => match sub_bits {
+                0x00 => QualitySubstatus::NonSpecific,
+                0x04 => QualitySubstatus::ConfigurationError,
+                0x08 => QualitySubstatus::NotConnected,
+                0x0C => QualitySubstatus::DeviceFailure,
+                0x10 => QualitySubstatus::SensorFailure,
+                0x14 => QualitySubstatus::LastKnownValue,
+                0x18 => QualitySubstatus::CommFailure,
+                0x1C => QualitySubstatus::OutOfService,
+                0x20 => QualitySubstatus::WaitingForInitialData,
+                other => QualitySubstatus::Raw(other),
+            },
+            QualityMajor::Uncertain => match sub_bits {
+                0x00 => QualitySubstatus::NonSpecific,
+                0x04 => QualitySubstatus::LastUsableValue,
+                0x10 => QualitySubstatus::SensorCalNeeded,
+                0x14 => QualitySubstatus::EguExceeded,
+                0x18 => QualitySubstatus::SubNormal,
+                other => QualitySubstatus::Raw(other),
+            },
+            QualityMajor::Good => match sub_bits {
+                0x00 => QualitySubstatus::NonSpecific,
+                0x18 => QualitySubstatus::LocalOverride,
+                other => QualitySubstatus::Raw(other),
+            },
+            QualityMajor::Unknown(_) => QualitySubstatus::Raw(sub_bits),
+        };
+
+        Self {
+            major,
+            substatus,
+            limit,
+            raw,
+        }
+    }
+}
+
+impl From<OpcQuality> for u16 {
+    fn from(q: OpcQuality) -> Self {
+        q.raw
+    }
+}
+
+impl From<&str> for OpcQuality {
+    fn from(s: &str) -> Self {
+        match s.to_lowercase().as_str() {
+            "good" => Self::GOOD,
+            "bad" => Self::BAD,
+            "uncertain" => Self::UNCERTAIN,
+            _ => Self::BAD,
+        }
+    }
+}
+
+impl std::fmt::Display for OpcQuality {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let major_str = match self.major {
+            QualityMajor::Good => "Good",
+            QualityMajor::Bad => "Bad",
+            QualityMajor::Uncertain => "Uncertain",
+            QualityMajor::Unknown(_) => return write!(f, "Unknown(0x{:04X})", self.raw),
+        };
+
+        let sub_str = match self.substatus {
+            QualitySubstatus::NonSpecific => None,
+            QualitySubstatus::ConfigurationError => Some("Configuration Error"),
+            QualitySubstatus::NotConnected => Some("Not Connected"),
+            QualitySubstatus::DeviceFailure => Some("Device Failure"),
+            QualitySubstatus::SensorFailure => Some("Sensor Failure"),
+            QualitySubstatus::LastKnownValue => Some("Last Known Value"),
+            QualitySubstatus::CommFailure => Some("Comm Failure"),
+            QualitySubstatus::OutOfService => Some("Out of Service"),
+            QualitySubstatus::WaitingForInitialData => Some("Waiting for Initial Data"),
+            QualitySubstatus::LastUsableValue => Some("Last Usable Value"),
+            QualitySubstatus::SensorCalNeeded => Some("Sensor Calibration Needed"),
+            QualitySubstatus::EguExceeded => Some("EGU Exceeded"),
+            QualitySubstatus::SubNormal => Some("Sub-Normal"),
+            QualitySubstatus::LocalOverride => Some("Local Override"),
+            QualitySubstatus::Raw(_) => None,
+        };
+
+        let limit_str = match self.limit {
+            QualityLimit::NotLimited => None,
+            QualityLimit::LowLimited => Some("Low Limited"),
+            QualityLimit::HighLimited => Some("High Limited"),
+            QualityLimit::Constant => Some("Constant"),
+        };
+
+        match (sub_str, limit_str) {
+            (None, None) => write!(f, "{major_str}"),
+            (Some(s), None) => write!(f, "{major_str} ({s})"),
+            (None, Some(l)) => write!(f, "{major_str} [{l}]"),
+            (Some(s), Some(l)) => write!(f, "{major_str} ({s}) [{l}]"),
+        }
+    }
+}
+
 /// Supported OPC DA Specification versions.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Version {
@@ -921,5 +1179,70 @@ mod tests {
         assert!(BrowseDirection::try_from(0u32).is_err());
         assert!(BrowseDirection::try_from(4u32).is_err());
         assert!(BrowseDirection::try_from(u32::MAX).is_err());
+    }
+
+    #[test]
+    fn test_opc_quality_good_standard() {
+        let q = OpcQuality::from(0x00C0);
+        assert_eq!(q.major, QualityMajor::Good);
+        assert_eq!(q.substatus, QualitySubstatus::NonSpecific);
+        assert_eq!(q.limit, QualityLimit::NotLimited);
+        assert_eq!(q.raw, 0x00C0);
+        assert!(q.is_good());
+        assert!(!q.is_bad());
+        assert!(!q.is_uncertain());
+        assert!(!q.is_limited());
+        assert_eq!(q.to_string(), "Good");
+    }
+
+    #[test]
+    fn test_opc_quality_good_local_override() {
+        let q = OpcQuality::from(0x00D8); // 192 | 24
+        assert_eq!(q.major, QualityMajor::Good);
+        assert_eq!(q.substatus, QualitySubstatus::LocalOverride);
+        assert_eq!(q.limit, QualityLimit::NotLimited);
+        assert_eq!(q.to_string(), "Good (Local Override)");
+    }
+
+    #[test]
+    fn test_opc_quality_bad_comm_failure() {
+        let q = OpcQuality::from(0x0018); // 0 | 24
+        assert_eq!(q.major, QualityMajor::Bad);
+        assert_eq!(q.substatus, QualitySubstatus::CommFailure);
+        assert_eq!(q.limit, QualityLimit::NotLimited);
+        assert!(q.is_bad());
+        assert_eq!(q.to_string(), "Bad (Comm Failure)");
+    }
+
+    #[test]
+    fn test_opc_quality_uncertain_limits() {
+        let q = OpcQuality::from(0x0056); // 64 (Uncertain) | 20 (EGU Exceeded) | 2 (High Limited)
+        assert_eq!(q.major, QualityMajor::Uncertain);
+        assert_eq!(q.substatus, QualitySubstatus::EguExceeded);
+        assert_eq!(q.limit, QualityLimit::HighLimited);
+        assert!(q.is_uncertain());
+        assert!(q.is_limited());
+        assert_eq!(q.to_string(), "Uncertain (EGU Exceeded) [High Limited]");
+    }
+
+    #[test]
+    fn test_opc_quality_roundtrip_u16() {
+        let words = [
+            0x00C0, 0x0000, 0x0040, 0x0004, 0x0018, 0x0008, 0x00D8, 0x0056,
+        ];
+        for &w in &words {
+            let q = OpcQuality::from(w);
+            let back: u16 = q.into();
+            assert_eq!(back, w);
+        }
+    }
+
+    #[test]
+    fn test_opc_quality_from_str() {
+        assert_eq!(OpcQuality::from("good"), OpcQuality::GOOD);
+        assert_eq!(OpcQuality::from("Good"), OpcQuality::GOOD);
+        assert_eq!(OpcQuality::from("bad"), OpcQuality::BAD);
+        assert_eq!(OpcQuality::from("uncertain"), OpcQuality::UNCERTAIN);
+        assert_eq!(OpcQuality::from("other"), OpcQuality::BAD);
     }
 }

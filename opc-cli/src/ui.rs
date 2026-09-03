@@ -226,7 +226,7 @@ fn render_tag_values(f: &mut Frame, app: &mut App, area: ratatui::layout::Rect) 
             Row::new(vec![
                 tv.tag_id.clone(),
                 tv.value.clone(),
-                tv.quality.clone(),
+                tv.quality.to_string(),
                 tv.timestamp.clone(),
             ])
         })

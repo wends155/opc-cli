@@ -5,10 +5,8 @@ use crate::bindings::da::{OPC_DS_DEVICE, OPC_NS_FLAT, tagOPCITEMDEF};
 use crate::com::connector::{ConnectedGroup, ConnectedServer, ServerConnector};
 use crate::com::guard::ComGuard;
 use crate::errors::{OpcError, OpcResult};
-use crate::helpers::{
-    filetime_to_string, format_hresult, opc_value_to_variant, quality_to_string, variant_to_string,
-};
-use crate::provider::{OpcValue, TagValue, WriteResult};
+use crate::helpers::{filetime_to_string, format_hresult, opc_value_to_variant, variant_to_string};
+use crate::provider::{OpcQuality, OpcValue, TagValue, WriteResult};
 use crate::types::{BrowseDirection, BrowseType, GroupHandle, ItemHandle};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -351,7 +349,7 @@ impl<C: ServerConnector + 'static> ComWorker<C> {
             .map(|tag_id| TagValue {
                 tag_id: tag_id.clone(),
                 value: "Error".to_string(),
-                quality: "Bad — not added to group".to_string(),
+                quality: OpcQuality::BAD_CONFIG_ERROR,
                 timestamp: String::new(),
             })
             .collect();
@@ -375,7 +373,7 @@ impl<C: ServerConnector + 'static> ComWorker<C> {
                     error = %hint,
                     "read_tag_values: add_items rejected tag"
                 );
-                tag_values[idx].quality = format!("Bad — {hint}");
+                tag_values[idx].quality = OpcQuality::BAD_CONFIG_ERROR;
             }
         }
 
@@ -394,10 +392,10 @@ impl<C: ServerConnector + 'static> ComWorker<C> {
             let state = &item_states_slice[i];
             let read_error = &read_errors_slice[i];
 
-            let (value_str, quality_str) = if read_error.is_ok() {
+            let (value_str, quality) = if read_error.is_ok() {
                 (
                     variant_to_string(&state.vDataValue),
-                    quality_to_string(state.wQuality),
+                    OpcQuality::from(state.wQuality),
                 )
             } else {
                 let full_msg = format_hresult(*read_error);
@@ -407,13 +405,13 @@ impl<C: ServerConnector + 'static> ComWorker<C> {
                     hint = %full_msg,
                     "read_tag_values: per-item read error"
                 );
-                ("Error".to_string(), format!("Bad — {full_msg}"))
+                ("Error".to_string(), OpcQuality::BAD_COMM_FAILURE)
             };
 
             tag_values[*idx] = TagValue {
                 tag_id: tag_ids[*idx].clone(),
                 value: value_str,
-                quality: quality_str,
+                quality,
                 timestamp: filetime_to_string(state.ftTimeStamp),
             };
         }
@@ -1334,5 +1332,240 @@ mod tests {
             result.is_err(),
             "ListServers request should fail when connector enumeration fails"
         );
+    }
+
+    #[tokio::test]
+    async fn test_worker_read_tag_values_quality_decoding() {
+        use crate::types::{QualityLimit, QualityMajor, QualitySubstatus};
+        use windows::Win32::Foundation::{E_FAIL, S_OK};
+
+        struct QualityTestConnector;
+        struct QualityTestServer;
+        struct QualityTestGroup;
+
+        impl ConnectedGroup for QualityTestGroup {
+            fn add_items(
+                &self,
+                items: &[tagOPCITEMDEF],
+            ) -> OpcResult<(
+                RemoteArray<tagOPCITEMRESULT>,
+                RemoteArray<windows::core::HRESULT>,
+            )> {
+                let count = items.len();
+                // SAFETY: CoTaskMemAlloc allocates memory managed by RemoteArray Drop.
+                let res_ptr = unsafe {
+                    windows::Win32::System::Com::CoTaskMemAlloc(
+                        count * std::mem::size_of::<tagOPCITEMRESULT>(),
+                    )
+                } as *mut tagOPCITEMRESULT;
+
+                // SAFETY: CoTaskMemAlloc allocates memory managed by RemoteArray Drop.
+                let err_ptr = unsafe {
+                    windows::Win32::System::Com::CoTaskMemAlloc(
+                        count * std::mem::size_of::<windows::core::HRESULT>(),
+                    )
+                } as *mut windows::core::HRESULT;
+
+                for i in 0..count {
+                    let (hr, server_h) = if i == 4 {
+                        (E_FAIL, 0)
+                    } else {
+                        (S_OK, (i + 1) as u32)
+                    };
+                    let res = tagOPCITEMRESULT {
+                        hServer: server_h,
+                        vtCanonicalDataType: 0,
+                        wReserved: 0,
+                        dwAccessRights: 1,
+                        dwBlobSize: 0,
+                        pBlob: std::ptr::null_mut(),
+                    };
+                    // SAFETY: Pointer offsets are strictly within allocated count.
+                    unsafe {
+                        std::ptr::write(res_ptr.add(i), res);
+                        std::ptr::write(err_ptr.add(i), hr);
+                    }
+                }
+
+                Ok((
+                    RemoteArray::from_mut_ptr(res_ptr, count as u32),
+                    RemoteArray::from_mut_ptr(err_ptr, count as u32),
+                ))
+            }
+
+            fn read(
+                &self,
+                _source: tagOPCDATASOURCE,
+                server_handles: &[ItemHandle],
+            ) -> OpcResult<(
+                RemoteArray<tagOPCITEMSTATE>,
+                RemoteArray<windows::core::HRESULT>,
+            )> {
+                let count = server_handles.len();
+                // SAFETY: CoTaskMemAlloc allocates memory managed by RemoteArray Drop.
+                let state_ptr = unsafe {
+                    windows::Win32::System::Com::CoTaskMemAlloc(
+                        count * std::mem::size_of::<tagOPCITEMSTATE>(),
+                    )
+                } as *mut tagOPCITEMSTATE;
+
+                // SAFETY: CoTaskMemAlloc allocates memory managed by RemoteArray Drop.
+                let err_ptr = unsafe {
+                    windows::Win32::System::Com::CoTaskMemAlloc(
+                        count * std::mem::size_of::<windows::core::HRESULT>(),
+                    )
+                } as *mut windows::core::HRESULT;
+
+                let qualities: [u16; 4] = [0x00C0, 0x00D8, 0x0018, 0x0056];
+                for i in 0..count {
+                    let mut var = windows::Win32::System::Variant::VARIANT::default();
+                    if i != 2 {
+                        var = opc_value_to_variant(&OpcValue::Int(42));
+                    }
+                    let state = tagOPCITEMSTATE {
+                        hClient: (i + 1) as u32,
+                        ftTimeStamp: windows::Win32::Foundation::FILETIME::default(),
+                        wQuality: qualities[i % qualities.len()],
+                        wReserved: 0,
+                        vDataValue: var,
+                    };
+                    // SAFETY: Pointer offsets are strictly within allocated count.
+                    unsafe {
+                        std::ptr::write(state_ptr.add(i), state);
+                        std::ptr::write(err_ptr.add(i), S_OK);
+                    }
+                }
+
+                Ok((
+                    RemoteArray::from_mut_ptr(state_ptr, count as u32),
+                    RemoteArray::from_mut_ptr(err_ptr, count as u32),
+                ))
+            }
+
+            fn write(
+                &self,
+                _server_handles: &[ItemHandle],
+                _values: &[windows::Win32::System::Variant::VARIANT],
+            ) -> OpcResult<RemoteArray<windows::core::HRESULT>> {
+                Ok(RemoteArray::empty())
+            }
+        }
+
+        impl ConnectedServer for QualityTestServer {
+            type Group = QualityTestGroup;
+            fn query_organization(&self) -> OpcResult<u32> {
+                Ok(0)
+            }
+            fn browse_opc_item_ids(
+                &self,
+                _b: BrowseType,
+                _f: Option<&str>,
+                _d: u16,
+                _a: u32,
+            ) -> OpcResult<StringIterator> {
+                Err(OpcError::NotImplemented("mock".into()))
+            }
+            fn change_browse_position(&self, _d: BrowseDirection, _n: &str) -> OpcResult<()> {
+                Ok(())
+            }
+            fn get_item_id(&self, _n: &str) -> OpcResult<String> {
+                Ok(String::new())
+            }
+            fn add_group(
+                &self,
+                _name: &str,
+                _active: bool,
+                _update_rate: u32,
+                _client_handle: GroupHandle,
+                _time_bias: i32,
+                _percent_deadband: f32,
+                _locale_id: u32,
+                _revised_update_rate: &mut u32,
+                _server_handle: &mut GroupHandle,
+            ) -> OpcResult<Self::Group> {
+                Ok(QualityTestGroup)
+            }
+            fn remove_group(&self, _server_group: GroupHandle, _force: bool) -> OpcResult<()> {
+                Ok(())
+            }
+        }
+
+        impl ServerConnector for QualityTestConnector {
+            type Server = QualityTestServer;
+            fn enumerate_servers(&self) -> OpcResult<Vec<String>> {
+                Ok(vec!["Quality.Mock.Server".into()])
+            }
+            fn connect(&self, _name: &str) -> OpcResult<Self::Server> {
+                Ok(QualityTestServer)
+            }
+        }
+
+        let worker = tokio::task::spawn_blocking(|| {
+            ComWorker::start(Arc::new(QualityTestConnector)).unwrap()
+        })
+        .await
+        .unwrap();
+
+        let tag_ids = vec![
+            "Tag.Good".to_string(),
+            "Tag.Override".to_string(),
+            "Tag.Comm".to_string(),
+            "Tag.Limit".to_string(),
+            "Tag.Rejected".to_string(),
+        ];
+
+        let results = worker
+            .send_request(|reply| ComRequest::ReadTagValues {
+                server: "Quality.Mock.Server".to_string(),
+                tag_ids,
+                reply,
+            })
+            .await
+            .unwrap();
+
+        assert_eq!(results.len(), 5);
+
+        // Tag 0: Good standard (0x00C0)
+        assert_eq!(results[0].tag_id, "Tag.Good");
+        assert_eq!(results[0].quality.major, QualityMajor::Good);
+        assert_eq!(results[0].quality.substatus, QualitySubstatus::NonSpecific);
+        assert_eq!(results[0].quality.limit, QualityLimit::NotLimited);
+        assert_eq!(results[0].quality.to_string(), "Good");
+        assert!(results[0].quality.is_good());
+        assert!(!results[0].quality.is_bad());
+
+        // Tag 1: Good with Local Override (0x00D8)
+        assert_eq!(results[1].tag_id, "Tag.Override");
+        assert_eq!(results[1].quality.major, QualityMajor::Good);
+        assert_eq!(
+            results[1].quality.substatus,
+            QualitySubstatus::LocalOverride
+        );
+        assert_eq!(results[1].quality.to_string(), "Good (Local Override)");
+
+        // Tag 2: Bad with Comm Failure (0x0018)
+        assert_eq!(results[2].tag_id, "Tag.Comm");
+        assert_eq!(results[2].quality.major, QualityMajor::Bad);
+        assert_eq!(results[2].quality.substatus, QualitySubstatus::CommFailure);
+        assert_eq!(results[2].quality.to_string(), "Bad (Comm Failure)");
+        assert!(results[2].quality.is_bad());
+
+        // Tag 3: Uncertain with EGU Exceeded and High Limited (0x0056)
+        assert_eq!(results[3].tag_id, "Tag.Limit");
+        assert_eq!(results[3].quality.major, QualityMajor::Uncertain);
+        assert_eq!(results[3].quality.substatus, QualitySubstatus::EguExceeded);
+        assert_eq!(results[3].quality.limit, QualityLimit::HighLimited);
+        assert_eq!(
+            results[3].quality.to_string(),
+            "Uncertain (EGU Exceeded) [High Limited]"
+        );
+        assert!(results[3].quality.is_uncertain());
+        assert!(results[3].quality.is_limited());
+
+        // Tag 4: Rejected at add_items
+        assert_eq!(results[4].tag_id, "Tag.Rejected");
+        assert_eq!(results[4].value, "Error");
+        assert_eq!(results[4].quality, OpcQuality::BAD_CONFIG_ERROR);
+        assert_eq!(results[4].quality.to_string(), "Bad (Configuration Error)");
     }
 }

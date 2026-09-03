@@ -49,7 +49,7 @@ All methods use `#[async_trait]`.
 *   `browse_tags` **never** collects more than `max_tags` items.
 *   `browse_tags` pushes tags to `tags_sink` incrementally; on timeout the caller can harvest partial results.
 *   `browse_tags` updates `progress` atomically for each discovered tag.
-*   `read_tag_values` returns a `TagValue` entry for all requested tags, preserving the original array length and order. Items that fail to be added to the group or read will have their `value` set to `"Error"` and `quality` set to `"Bad — <hint>"`.
+*   `read_tag_values` returns a `TagValue` entry for all requested tags, preserving the original array length and order. Items that fail to be added to the group receive quality `OpcQuality::BAD_CONFIG_ERROR`, and items that fail reading receive `OpcQuality::BAD_COMM_FAILURE` with `value` set to `"Error"`.
 *   `write_tag_value` returns `Ok(WriteResult)` in all non-fatal cases; per-tag success/error is reported inside `WriteResult`.
 
 
@@ -63,10 +63,10 @@ All methods use `#[async_trait]`.
 | :--- | :--- | :--- | :--- | :--- |
 | `tag_id` | `String` | Yes | Fully qualified tag identifier. | Non-empty. |
 | `value` | `String` | Yes | Current value as a display string. | May be `"Empty"`, `"Null"`, or formatted number/string. |
-| `quality` | `String` | Yes | OPC quality label. | One of `"Good"`, `"Bad"`, `"Uncertain"`, or `"Unknown(0xNNNN)"`. |
+| `quality` | `OpcQuality` | Yes | Decomposed 16-bit OPC DA quality word. | `Copy`, `Display` formats rich human-readable status. |
 | `timestamp` | `String` | Yes | Last-change timestamp as local time. | Format `YYYY-MM-DD HH:MM:SS`, or `"N/A"` / `"Invalid"`. |
 
-**Derives:** `Debug`, `Clone`.
+**Derives:** `Debug`, `Clone`, `PartialEq`, `Eq`.
 
 ---
 
@@ -273,6 +273,10 @@ Before calling `browse_recursive`, `browse_tags` attempts `browse_opc_item_ids(B
 
 - `GroupHandle(pub u32)`: Opaque, type-safe newtype wrapper for server/client group handles.
 - `ItemHandle(pub u32)`: Opaque, type-safe newtype wrapper for server/client item handles.
+- `OpcQuality`: Fully decomposed, zero-allocation 16-bit OPC DA quality word (`major: QualityMajor`, `substatus: QualitySubstatus`, `limit: QualityLimit`, `raw: u16`). Implements `From<u16>`, `From<OpcQuality> for u16`, `Display` (rich human-readable diagnostics), `From<&str>`, and predicates (`is_good`, `is_bad`, `is_uncertain`, `is_limited`).
+- `QualityMajor`: Major OPC DA quality status (`Good`, `Bad`, `Uncertain`, `Unknown(u8)`).
+- `QualitySubstatus`: Detailed substatus reason code (all OPC DA 2.05a codes: `NonSpecific`, `ConfigurationError`, `NotConnected`, `DeviceFailure`, `SensorFailure`, `LastKnownValue`, `CommFailure`, `OutOfService`, `WaitingForInitialData`, `LastUsableValue`, `SensorCalNeeded`, `EguExceeded`, `SubNormal`, `LocalOverride`, and `Raw(u8)`).
+- `QualityLimit`: Limit conditions on the tag value (`NotLimited`, `LowLimited`, `HighLimited`, `Constant`).
 - `BrowseType`: Strongly-typed enum for namespace browsing (`Branch = 1`, `Leaf = 2`, `Flat = 3`). Implements zero-cost `From<BrowseType> for u32` and fallible `TryFrom<u32> for BrowseType`.
 - `BrowseDirection`: Strongly-typed enum for address space cursor movement (`Up = 1`, `Down = 2`, `To = 3`). Implements zero-cost `From<BrowseDirection> for u32` and fallible `TryFrom<u32> for BrowseDirection`.
 - `ServerStatus` / `ServerState`: Detailed server run-state and diagnostic types.
@@ -391,6 +395,7 @@ Defined in § 1.1. See table above.
 - [x] `test_drop_during_active_request` — graceful worker thread shutdown.
 - [x] `test_worker_init_failure` — initialization error handling.
 - [x] `test_worker_read_tag_values_mismatched_lengths` — error resilience on uneven responses.
+- [x] `test_worker_read_tag_values_quality_decoding` — mock-driven integration test verifying end-to-end multi-quality decoding and item rejection error mapping.
 
 ### Type-Safe Enum Unit Tests (in `types.rs`)
 
@@ -398,6 +403,12 @@ Defined in § 1.1. See table above.
 - [x] `browse_type_try_from_rejects_invalid` — validates `TryFrom<u32> for BrowseType` rejects 0, 4, 99.
 - [x] `browse_direction_from_roundtrip` — validates `From<BrowseDirection> for u32` matches expected raw integers (1, 2, 3).
 - [x] `browse_direction_try_from_rejects_invalid` — validates `TryFrom<u32> for BrowseDirection` rejects 0, 4, 99.
+- [x] `test_opc_quality_good_standard` — validates standard Good (0x00C0) decoding and predicates.
+- [x] `test_opc_quality_good_local_override` — validates Good with Local Override (0x00D8) decoding and Display.
+- [x] `test_opc_quality_bad_comm_failure` — validates Bad with Comm Failure (0x0018) decoding and Display.
+- [x] `test_opc_quality_uncertain_limits` — validates Uncertain with EGU Exceeded & High Limited (0x0056) decoding and Display.
+- [x] `test_opc_quality_roundtrip_u16` — validates lossless roundtripping between u16 and OpcQuality.
+- [x] `test_opc_quality_from_str` — validates string conversion helpers.
 
 ### Mock-Based Tests (in `opc-cli`)
 

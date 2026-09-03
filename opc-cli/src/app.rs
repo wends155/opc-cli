@@ -893,7 +893,7 @@ fn parse_opc_value(s: &str) -> OpcValue {
 mod tests {
     use super::*;
     use mockall::predicate::*;
-    use opc_da_client::{MockOpcProvider, OpcResult};
+    use opc_da_client::{MockOpcProvider, OpcQuality, OpcResult};
 
     #[test]
     fn test_poll_fetch_result_success() {
@@ -1413,13 +1413,13 @@ mod tests {
             TagValue {
                 tag_id: "T1".into(),
                 value: "V1".into(),
-                quality: "Q".into(),
+                quality: OpcQuality::GOOD,
                 timestamp: "T".into(),
             },
             TagValue {
                 tag_id: "T2".into(),
                 value: "V2".into(),
-                quality: "Q".into(),
+                quality: OpcQuality::GOOD,
                 timestamp: "T".into(),
             },
         ];

@@ -213,6 +213,17 @@ fn ole_date_to_string(ole_date: f64) -> String {
 }
 
 /// Map OPC quality code to a human-readable label.
+///
+/// # Deprecation
+///
+/// Use [`OpcQuality::from(quality).to_string()`][crate::types::OpcQuality] or inspect
+/// [`TagValue::quality`][crate::provider::TagValue] directly instead.
+#[deprecated(
+    since = "0.3.0",
+    note = "Use `OpcQuality::from(quality).to_string()` or `TagValue.quality` instead"
+)]
+#[allow(dead_code)]
+// TODO(deprecation): remove quality_to_string in v0.4.0
 pub fn quality_to_string(quality: u16) -> String {
     let quality_bits = quality & 0xC0; // Top 2 bits define Good/Bad/Uncertain
     match quality_bits {
@@ -540,23 +551,27 @@ mod tests {
     }
 
     #[test]
+    #[allow(deprecated)]
     fn quality_good() {
         assert_eq!(quality_to_string(0xC0), "Good");
         assert_eq!(quality_to_string(0xC4), "Good"); // sub-status bits preserved
     }
 
     #[test]
+    #[allow(deprecated)]
     fn quality_bad() {
         assert_eq!(quality_to_string(0x00), "Bad");
         assert_eq!(quality_to_string(0x04), "Bad"); // sub-status bits preserved
     }
 
     #[test]
+    #[allow(deprecated)]
     fn quality_uncertain() {
         assert_eq!(quality_to_string(0x40), "Uncertain");
     }
 
     #[test]
+    #[allow(deprecated)]
     fn quality_unknown() {
         let result = quality_to_string(0x80);
         assert!(result.starts_with("Unknown("));

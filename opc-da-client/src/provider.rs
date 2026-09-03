@@ -1,4 +1,5 @@
 use crate::errors::OpcResult;
+pub use crate::types::{OpcQuality, QualityLimit, QualityMajor, QualitySubstatus};
 use async_trait::async_trait;
 use std::sync::Arc;
 use std::sync::atomic::AtomicUsize;
@@ -13,15 +14,16 @@ use mockall::automock;
 /// # Examples
 ///
 /// ```
-/// use opc_da_client::TagValue;
+/// use opc_da_client::{OpcQuality, TagValue};
 ///
 /// let tv = TagValue {
 ///     tag_id: "Simulation.Random.1".to_string(),
 ///     value: "42.5".to_string(),
-///     quality: "Good".to_string(),
+///     quality: OpcQuality::GOOD,
 ///     timestamp: "2026-01-01 00:00:00".to_string(),
 /// };
 /// assert_eq!(tv.tag_id, "Simulation.Random.1");
+/// assert!(tv.quality.is_good());
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TagValue {
@@ -29,8 +31,8 @@ pub struct TagValue {
     pub tag_id: String,
     /// The current value as a display string.
     pub value: String,
-    /// OPC quality indicator (e.g., `"Good"`, `"Bad"`, or `"Uncertain"`).
-    pub quality: String,
+    /// OPC quality status, decomposed into major quality, substatus, and limit bits.
+    pub quality: OpcQuality,
     /// Timestamp of the last value change, formatted as a local time string.
     pub timestamp: String,
 }
