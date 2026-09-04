@@ -9,11 +9,10 @@ use crate::com::connector::{
     ConnectedGroup, ConnectedServer, DataSource, GroupConfig, GroupItemDef, ServerConnector,
 };
 use crate::errors::{OpcError, OpcResult};
-use crate::provider::{OpcQuality, OpcValue, TagValue, WriteResult};
+use crate::provider::{OpcQuality, OpcValue, TagCollector, TagValue, WriteResult};
 use crate::types::{BrowseDirection, BrowseType, GroupHandle, ItemHandle, NamespaceType};
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
 use tokio::sync::{mpsc, oneshot};
 
 /// Represents a asynchronous request dispatched to the COM worker thread.
@@ -49,12 +48,8 @@ pub enum ComRequest {
     BrowseTags {
         /// OPC server ProgID.
         server: String,
-        /// Maximum number of tags to discover before stopping.
-        max_tags: usize,
-        /// Atomic counter tracking total tags discovered.
-        progress: Arc<AtomicUsize>,
-        /// Shared mutex-protected vector storing discovered tag names incrementally.
-        tags_sink: Arc<std::sync::Mutex<Vec<String>>>,
+        /// Configured tag collector managing capacity, progress, and cancellation.
+        collector: TagCollector,
         /// One-shot channel to send back the complete tag discovery list.
         reply: oneshot::Sender<OpcResult<Vec<String>>>,
     },
@@ -183,20 +178,14 @@ impl<C: ServerConnector + 'static> ComWorker<C> {
                     }
                     ComRequest::BrowseTags {
                         server,
-                        max_tags,
-                        progress,
-                        tags_sink,
+                        collector,
                         reply,
                     } => {
                         let result = Self::dispatch_with_retry(
                             &mut cache,
                             &connector,
                             &server,
-                            |opc_server| {
-                                Self::handle_browse(
-                                    &server, max_tags, &progress, &tags_sink, opc_server,
-                                )
-                            },
+                            |opc_server| Self::handle_browse(&server, &collector, opc_server),
                         );
                         let _ = reply.send(result);
                     }
@@ -504,62 +493,48 @@ impl<C: ServerConnector + 'static> ComWorker<C> {
 
     fn handle_browse(
         server_name: &str,
-        max_tags: usize,
-        progress: &Arc<AtomicUsize>,
-        tags_sink: &Arc<std::sync::Mutex<Vec<String>>>,
+        collector: &TagCollector,
         opc_server: &C::Server,
     ) -> OpcResult<Vec<String>> {
-        let span = tracing::info_span!("opc.browse_tags", server = %server_name, max_tags);
+        let span = tracing::info_span!("opc.browse_tags", server = %server_name, max_tags = collector.max_tags());
         let _enter = span.enter();
         #[cfg(feature = "dev-diagnostics")]
         tracing::trace!(
             server = %server_name,
-            max_tags,
+            max_tags = collector.max_tags(),
             "browse_tags: starting operation"
         );
         let start = std::time::Instant::now();
 
+        if collector.is_cancelled() || collector.is_full() {
+            return Ok(collector.snapshot());
+        }
+
         let org = opc_server.query_organization()?;
-        let mut tags = Vec::new();
 
         if org == NamespaceType::Flat as u32 {
             let string_iter = opc_server.browse_opc_item_ids(BrowseType::Leaf, Some(""), 0, 0)?;
             for tag_res in string_iter {
-                if tags.len() >= max_tags {
+                if !collector.push(tag_res?) {
                     break;
                 }
-                let tag = tag_res?;
-                tags.push(tag.clone());
-                if let Ok(mut sink) = tags_sink.lock() {
-                    sink.push(tag);
-                }
-                progress.fetch_add(1, Ordering::Relaxed);
             }
         } else {
             let use_flat = match opc_server.browse_opc_item_ids(BrowseType::Flat, Some(""), 0, 0) {
                 Ok(mut flat_enum) => match flat_enum.next() {
                     Some(Ok(first_tag)) => {
                         tracing::info!("OPC_FLAT browse supported — using fast flat enumeration");
-                        tags.push(first_tag.clone());
-                        if let Ok(mut sink) = tags_sink.lock() {
-                            sink.push(first_tag);
-                        }
-                        progress.fetch_add(1, Ordering::Relaxed);
-
-                        for tag_res in flat_enum {
-                            if tags.len() >= max_tags {
-                                break;
-                            }
-                            match tag_res {
-                                Ok(tag) => {
-                                    tags.push(tag.clone());
-                                    if let Ok(mut sink) = tags_sink.lock() {
-                                        sink.push(tag);
+                        if collector.push(first_tag) {
+                            for tag_res in flat_enum {
+                                match tag_res {
+                                    Ok(tag) => {
+                                        if !collector.push(tag) {
+                                            break;
+                                        }
                                     }
-                                    progress.fetch_add(1, Ordering::Relaxed);
-                                }
-                                Err(e) => {
-                                    tracing::warn!(error = ?e, "OPC_FLAT tag iteration error, skipping");
+                                    Err(e) => {
+                                        tracing::warn!(error = ?e, "OPC_FLAT tag iteration error, skipping");
+                                    }
                                 }
                             }
                         }
@@ -581,27 +556,25 @@ impl<C: ServerConnector + 'static> ComWorker<C> {
             };
 
             if !use_flat {
-                Self::browse_recursive(opc_server, &mut tags, max_tags, progress, tags_sink, 0)?;
+                Self::browse_recursive(opc_server, collector, 0)?;
             }
         }
+        let result = collector.snapshot();
         tracing::info!(
-            count = tags.len(),
+            count = result.len(),
             elapsed_ms = u64::try_from(start.elapsed().as_millis()).unwrap_or(u64::MAX),
             "browse_tags completed"
         );
-        Ok(tags)
+        Ok(result)
     }
 
     fn browse_recursive(
         server: &C::Server,
-        tags: &mut Vec<String>,
-        max_tags: usize,
-        progress: &Arc<AtomicUsize>,
-        tags_sink: &Arc<std::sync::Mutex<Vec<String>>>,
+        collector: &TagCollector,
         depth: usize,
     ) -> OpcResult<()> {
         const MAX_DEPTH: usize = 50;
-        if depth > MAX_DEPTH || tags.len() >= max_tags {
+        if depth > MAX_DEPTH || collector.is_cancelled() || collector.is_full() {
             if depth > MAX_DEPTH {
                 tracing::warn!(depth, "Max browse depth reached, truncating");
             }
@@ -622,7 +595,7 @@ impl<C: ServerConnector + 'static> ComWorker<C> {
 
         let leaf_enum = server.browse_opc_item_ids(BrowseType::Leaf, Some(""), 0, 0)?;
         for tag_res in leaf_enum {
-            if tags.len() >= max_tags {
+            if collector.is_cancelled() || collector.is_full() {
                 return Ok(());
             }
             let browse_name = tag_res?;
@@ -637,15 +610,13 @@ impl<C: ServerConnector + 'static> ComWorker<C> {
                     browse_name
                 }
             };
-            tags.push(tag.clone());
-            if let Ok(mut sink) = tags_sink.lock() {
-                sink.push(tag);
+            if !collector.push(tag) {
+                return Ok(());
             }
-            progress.fetch_add(1, Ordering::Relaxed);
         }
 
         for branch in branches {
-            if tags.len() >= max_tags {
+            if collector.is_cancelled() || collector.is_full() {
                 return Ok(());
             }
             if let Err(e) = server.change_browse_position(BrowseDirection::Down, &branch) {
@@ -657,9 +628,7 @@ impl<C: ServerConnector + 'static> ComWorker<C> {
                 continue;
             }
 
-            if let Err(e) =
-                Self::browse_recursive(server, tags, max_tags, progress, tags_sink, depth + 1)
-            {
+            if let Err(e) = Self::browse_recursive(server, collector, depth + 1) {
                 tracing::warn!(error = ?e, "browse_recursive error");
             }
 

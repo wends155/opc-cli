@@ -17,7 +17,6 @@ use ratatui::{
     text::{Line, Span},
     widgets::{Block, Borders, Clear, List, ListItem, Paragraph, Wrap},
 };
-use std::sync::atomic::Ordering;
 
 pub fn render(f: &mut Frame, app: &mut App) {
     let chunks = Layout::default()
@@ -296,7 +295,7 @@ fn render_write_input(f: &mut Frame, app: &App, area: Rect) {
 }
 
 fn render_loading_popup(f: &mut Frame, app: &App, area: Rect) {
-    let progress = app.browse_progress.load(Ordering::Relaxed);
+    let progress = app.browse_collector.len();
     let msg = if progress > 0 {
         format!("Browsing OPC tags... ({progress} found so far)")
     } else {

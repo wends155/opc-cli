@@ -46,8 +46,8 @@ pub mod com;
 pub use errors::{OpcError, OpcResult, format_hresult, friendly_com_hint, log_opc_error};
 pub use provider::{
     DisplayOptionOpcValue, DisplayOptionTimestamp, OpcProvider, OpcQuality, OpcValue,
-    OpcValueOptionExt, QualityLimit, QualityMajor, QualitySubstatus, SystemTimeOptionExt, TagValue,
-    WriteResult,
+    OpcValueOptionExt, QualityLimit, QualityMajor, QualitySubstatus, SystemTimeOptionExt,
+    TagCollector, TagValue, WriteResult,
 };
 
 #[cfg(feature = "opc-da-backend")]

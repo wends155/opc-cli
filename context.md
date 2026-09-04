@@ -1,5 +1,19 @@
 # Project Context Summary
 
+## 2026-09-04: Encapsulate `browse_tags` State into `TagCollector` (`opc-da-client`, `opc-cli`)
+> 📝 **Context Update:**
+> * **Feature:** Replace leaky raw Arcs, Mutexes, and scalar `max_tags` in `browse_tags` with dedicated, bounded, cancellable container `TagCollector`.
+> * **Changes:**
+>   - Introduced `TagCollector` in `opc-da-client::provider` encapsulating tag accumulation (`Mutex<Vec<String>>`), capacity capping (`max_tags: usize`), lock-free atomic length counter (`AtomicUsize`), and cooperative cancellation token (`AtomicBool`).
+>   - Simplified `OpcProvider::browse_tags` signature from 4 parameters down to 2: `async fn browse_tags(&self, server: &str, collector: TagCollector) -> OpcResult<Vec<String>>`.
+>   - Re-exported `TagCollector` at crate root `opc-da-client::TagCollector`.
+>   - Updated `ComWorker` in `opc-da-client/src/com/worker.rs`: checks `collector.is_cancelled() || collector.is_full()` to abort recursive loops early and pushes tags directly with single-allocation `collector.push(tag)` without tight-loop string cloning.
+>   - Refactored `opc-cli/src/app.rs` and `opc-cli/src/ui.rs`: replaced `browse_progress: Arc<AtomicUsize>` with `browse_collector: TagCollector`, enabling lock-free progress inspection in UI via `app.browse_collector.len()` and cooperative cancellation on timeout via `collector.cancel()`.
+>   - Added comprehensive unit tests in `opc-da-client` (lifecycle, capacity bounding, unbounded mode, cancellation, multithreaded contention) and `opc-cli` (mock-based navigation and timeout cancellation partial harvesting).
+>   - Updated `opc-da-client/README.md` and `opc-da-client/spec.md` with new `TagCollector` contracts, updated doctests, and verified 100% compliance across all 8 gates in `scripts/verify.ps1`.
+> * **New Constraints:** `OpcProvider::browse_tags` must ALWAYS use `TagCollector`. Never pass raw `Arc<Mutex<Vec<String>>>` or `Arc<AtomicUsize>` through public provider APIs.
+> * **Pruned:** Redundant 4-argument `browse_tags` signature, leaky Arc allocations in callers, tight-loop lock contention in `ComWorker`.
+
 ## 2026-09-04: Documentation Synchronization for TagValue Display Adapters (`opc-da-client`)
 > 📝 **Context Update:**
 > * **Feature:** Documentation sync for `opc-da-client` display adapters, extension traits, and `TagValue` destructuring ergonomics.

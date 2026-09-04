@@ -18,7 +18,7 @@ See **[opc-da-client architecture.md](./opc-da-client/architecture.md)** for the
 ## ✨ Features
 
 - **Server Discovery**: Enumerate OPC DA servers on local or remote hosts.
-- **Hierarchical Browsing**: Recursive exploration of complex server namespaces with partial-result harvesting on timeout.
+- **Hierarchical Browsing**: Recursive exploration of complex server namespaces with cooperative cancellation and partial-result harvesting on timeout.
 - **Real-time Monitoring**: Live tag value updates with 1-second auto-refresh.
 - **Tag Write Support**: Write typed values (int, float, bool, string) to individual tags.
 - **Search & Filter**: Substring search with `Tab`/`Shift+Tab` cycling through matches.

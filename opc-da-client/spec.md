@@ -3,7 +3,7 @@
 > **Behavioral Source of Truth** for the `opc-da-client` library crate.
 > Defines *what* each module should do — independent of current implementation.
 >
-> Last verified against: 07e1c87
+> Last verified against: ced172d
 
 ---
 
@@ -22,7 +22,7 @@ All methods use `#[async_trait]`.
 | Method | Signature | Description |
 | :--- | :--- | :--- |
 | `list_servers` | `async fn list_servers(&self, host: &str) -> OpcResult<Vec<String>>` | Enumerate OPC DA servers available on `host`. |
-| `browse_tags` | `async fn browse_tags(&self, server: &str, max_tags: usize, progress: Arc<AtomicUsize>, tags_sink: Arc<Mutex<Vec<String>>>) -> OpcResult<Vec<String>>` | Recursively discover tags on `server`, pushing each to `tags_sink` as found. |
+| `browse_tags` | `async fn browse_tags(&self, server: &str, collector: TagCollector) -> OpcResult<Vec<String>>` | Recursively discover tags on `server`, pushing each to `collector` as found. |
 | `read_tag_values` | `async fn read_tag_values(&self, server: &str, tag_ids: Vec<String>) -> OpcResult<Vec<TagValue>>` | Read current value, quality, and timestamp for the given tag IDs. |
 | `write_tag_value` | `async fn write_tag_value(&self, server: &str, tag_id: &str, value: OpcValue) -> OpcResult<WriteResult>` | Write a typed value to a single tag on `server`. |
 
@@ -46,9 +46,9 @@ All methods use `#[async_trait]`.
 
 *   All methods are `Send + Sync` safe; they are safe to call from an async context.
 *   `list_servers` returns a **sorted, deduplicated** list of ProgID strings.
-*   `browse_tags` **never** collects more than `max_tags` items.
-*   `browse_tags` pushes tags to `tags_sink` incrementally; on timeout the caller can harvest partial results.
-*   `browse_tags` updates `progress` atomically for each discovered tag.
+*   `browse_tags` **never** collects more than `collector.max_tags()` items.
+*   `browse_tags` pushes tags to `collector` incrementally; on timeout the caller can harvest partial results.
+*   `browse_tags` updates `collector` length atomically and lock-free for each discovered tag.
 *   `read_tag_values` returns a `TagValue` entry for all requested tags, preserving the original array length and order. Items that fail to be added to the group receive quality `OpcQuality::BAD_CONFIG_ERROR` with `value: None` and `timestamp: None`, and items that fail reading receive `OpcQuality::BAD_COMM_FAILURE` with `value: None` and `timestamp: None`.
 *   `write_tag_value` returns `Ok(WriteResult)` in all non-fatal cases; per-tag success or error is reported inside `WriteResult.status` as a strongly-typed `Result<(), OpcError>`.
 
@@ -125,6 +125,31 @@ All methods use `#[async_trait]`.
 
 **Derives:** `Debug`, `Clone`, `PartialEq`.
 
+
+##### `struct TagCollector`
+
+**Purpose:** Thread-safe, bounded container encapsulating thread-safe tag accumulation, lock-free progress reporting, and cooperative cancellation token for OPC tag browsing.
+
+| Method | Signature | Description |
+| :--- | :--- | :--- |
+| `new` | `pub fn new(max_tags: usize) -> Self` | Creates a collector bounded by `max_tags` (clamped to `[1, MAX_CAPACITY]`). |
+| `unbounded` | `pub fn unbounded() -> Self` | Creates an unbounded collector (`max_tags = usize::MAX`). |
+| `max_tags` | `pub fn max_tags(&self) -> usize` | Returns the configured capacity bound. |
+| `len` | `pub fn len(&self) -> usize` | Returns the current count of collected tags without locking. |
+| `is_empty` | `pub fn is_empty(&self) -> bool` | Returns `true` if no tags have been collected. |
+| `is_full` | `pub fn is_full(&self) -> bool` | Returns `true` if current count has reached or exceeded `max_tags`. |
+| `cancel` | `pub fn cancel(&self)` | Signals cooperative cancellation token across all clones. |
+| `is_cancelled` | `pub fn is_cancelled(&self) -> bool` | Checks if cancellation has been signalled. |
+| `snapshot` | `pub fn snapshot(&self) -> Vec<String>` | Returns a cloned copy of currently collected tags under lock. |
+| `harvest` | `pub fn harvest(&self) -> Vec<String>` | Drains and returns all collected tags, resetting count to 0. |
+| `push` | `pub fn push(&self, tag: String) -> bool` | Pushes a tag into collector if not full or cancelled. Returns `true` if added. |
+
+**Invariants:**
+* `Clone` performs a shallow reference-counted clone sharing the inner synchronization state.
+* `len()` and `is_cancelled()` are completely lock-free (`AtomicUsize` and `AtomicBool`).
+* `push()` will reject additions once `max_tags` is reached or if cancelled.
+
+**Derives:** `Debug`, `Clone`, `Default`.
 
 ---
 
@@ -452,6 +477,21 @@ Defined in § 1.1. See table above.
 - [x] `test_opc_quality_roundtrip_u16` — validates lossless roundtripping between u16 and OpcQuality.
 - [x] `test_opc_quality_from_str` — validates string conversion helpers.
 
+### Provider & TagCollector Unit Tests (in `provider.rs`)
+
+- [x] `test_tag_value_display` — verifies canonical Display implementation formatting.
+- [x] `test_tag_value_helpers_success` — verifies `is_good()`, `is_error()`, `display_value()`, and `formatted_timestamp()`.
+- [x] `test_tag_value_helpers_failure` — verifies error state predicates and fallback values.
+- [x] `test_opc_value_display` — validates Display for all OpcValue variants.
+- [x] `test_tag_value_destructuring_ergonomics` — verifies destructuring pattern matching with zero-allocation adapters.
+- [x] `test_opc_value_option_ext_some` and `test_opc_value_option_ext_none` — validates `OpcValueOptionExt` display formatting.
+- [x] `test_system_time_option_ext_some` and `test_system_time_option_ext_none_and_epoch` — validates `SystemTimeOptionExt` display formatting.
+- [x] `test_tag_collector_lifecycle` — verifies initialization, pushing, length tracking, snapshot, and harvest draining.
+- [x] `test_tag_collector_capacity_cap` — validates `max_tags` enforcement and overflow push rejection.
+- [x] `test_tag_collector_unbounded` — verifies unbounded collector construction and growth.
+- [x] `test_tag_collector_cancellation` — validates cooperative cancellation flag and rejection of post-cancellation pushes.
+- [x] `test_tag_collector_multithreaded` — validates concurrent multi-threaded push contention and atomic count integrity across 8 threads.
+
 ### Mock-Based Tests (in `opc-cli`)
 
 - [x] `MockOpcProvider` returns expected server list.
@@ -459,12 +499,14 @@ Defined in § 1.1. See table above.
 - [x] `MockOpcProvider` returns expected tag values.
 - [x] `MockOpcProvider` simulates error conditions for UI error handling.
 - [x] `test_destructure_tag_value_ergonomics` — verifies destructuring of `TagValue` with `v.value.display()` and `v.timestamp.display()`.
+- [x] `test_browse_tags_collector_timeout_and_cancellation` — verifies cooperative cancellation and partial harvesting on timeout in TUI task.
 
 ### Doc Tests
 
 - [x] `friendly_com_hint`, `format_hresult`, `friendly_hresult_hint` — runnable doctests in `errors.rs`.
 - [x] `OpcResult`, `OpcError` — runnable doctests in `errors.rs`.
 - [x] `TagValue`, `OpcValue`, `WriteResult`, `DisplayOption*`, `OpcValueOptionExt`, `SystemTimeOptionExt` — runnable doctests in `provider.rs`.
+- [x] `TagCollector` methods (`new`, `unbounded`, `max_tags`, `len`, `is_empty`, `is_full`, `cancel`, `is_cancelled`, `snapshot`, `harvest`, `push`) — runnable doctests in `provider.rs`.
 - [x] `OpcProvider` trait methods (`list_servers`, `browse_tags`, `read_tag_values`, `write_tag_value`) — doctests in `provider.rs`.
 - [x] `GroupHandle`, `ItemHandle`, `OpcQuality`, `BrowseType`, `BrowseDirection` — runnable doctests in `types.rs`.
 - [x] `OpcDaClient::new` — doctest in `com/client.rs`.
@@ -478,7 +520,7 @@ Defined in § 1.1. See table above.
 - [ ] `browse_tags` correctly discovers tags on a flat-namespace server.
 - [ ] `browse_tags` correctly discovers tags on a hierarchical-namespace server.
 - [ ] `browse_tags` respects `max_tags` cap.
-- [ ] `browse_tags` populates `tags_sink` incrementally (observable via progress counter).
+- [ ] `browse_tags` populates `TagCollector` incrementally (observable via lock-free len counter).
 - [ ] `read_tag_values` returns correct value/quality/timestamp for known tags.
 - [ ] `read_tag_values` gracefully handles tags that fail `add_items`.
 - [ ] `write_tag_value` returns success for a valid write to a simulation tag.

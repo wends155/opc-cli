@@ -25,6 +25,7 @@ OPC DA is deeply coupled to Windows COM/DCOM, which poses significant architectu
 - **16-Bit Quality Decomposition**: Zero-allocation `OpcQuality` struct decomposes raw OPC DA quality words into major status, substatus, and limit states with rich, human-readable diagnostics.
 - **Native Windows Backend**: Implemented natively with `windows-rs` — eliminates heavy legacy C++ binaries and external OPC crate dependencies.
 - **Context-Rich Error Handling**: Domain-specific `OpcError` via `thiserror` paired with `friendly_com_hint()` for actionable HRESULT troubleshooting.
+- **Thread-Safe Tag Collection & Cancellation**: `TagCollector` encapsulates bounded accumulation (`max_tags`), lock-free atomic length monitoring, and cooperative cancellation tokens to eliminate worker thread starvation.
 - **First-Class Test Support**: Includes pure-Rust mock implementations and an optional `MockOpcProvider` via the `test-support` feature flag.
 
 ## Feature Flags
@@ -162,19 +163,17 @@ async fn main() -> OpcResult<()> {
 Recursively discover available tags in the server namespace with progress reporting and partial-result harvesting:
 
 ```rust,no_run
-use opc_da_client::{OpcDaClient, OpcProvider, OpcResult};
-use std::sync::{Arc, Mutex, atomic::AtomicUsize};
+use opc_da_client::{OpcDaClient, OpcProvider, OpcResult, TagCollector};
 
 #[tokio::main]
 async fn main() -> OpcResult<()> {
     let client = OpcDaClient::default();
     let server = "Matrikon.OPC.Simulation.1";
 
-    let sink = Arc::new(Mutex::new(Vec::new()));
-    let progress = Arc::new(AtomicUsize::new(0));
+    let collector = TagCollector::new(1000);
 
     let discovered_tags = client
-        .browse_tags(server, 1000, Arc::clone(&progress), Arc::clone(&sink))
+        .browse_tags(server, collector)
         .await?;
 
     println!("Discovered {} tags", discovered_tags.len());
@@ -233,6 +232,7 @@ async fn test_telemetry_service_with_mock() -> OpcResult<()> {
 | `OpcValue` | `pub enum` | Strongly-typed OPC value representation (`Int`, `Float`, `Bool`, `String`, `Empty`, `Null`). |
 | `OpcQuality` | `pub struct` | Zero-allocation decomposed 16-bit OPC DA quality word (`major`, `substatus`, `limit`, `raw`). |
 | `WriteResult` | `pub struct` | Tag write operation result (`tag_id`, `status: Result<(), OpcError>`, `is_success`, `is_error`, `error`). |
+| `TagCollector` | `pub struct` | Thread-safe, bounded container encapsulating thread-safe tag accumulation, atomic progress reporting, and cooperative cancellation token. |
 | `OpcError` | `pub enum` | Domain error enum covering connection, group, item, type, and COM HRESULT failures. |
 | `friendly_com_hint` | `pub fn` | Translates raw Win32/OPC HRESULT codes into actionable human-readable explanations. |
 

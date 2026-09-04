@@ -1,10 +1,9 @@
 use crate::com::connector::{ComConnector, ServerConnector};
 use crate::com::worker::{ComRequest, ComWorker};
 use crate::errors::OpcResult;
-use crate::provider::{OpcProvider, OpcValue, TagValue, WriteResult};
+use crate::provider::{OpcProvider, OpcValue, TagCollector, TagValue, WriteResult};
 use async_trait::async_trait;
 use std::sync::Arc;
-use std::sync::atomic::AtomicUsize;
 
 /// Concrete [`OpcProvider`] implementation for Windows OPC DA.
 ///
@@ -75,20 +74,12 @@ impl<C: ServerConnector + 'static> OpcProvider for OpcDaClient<C> {
             .await
     }
 
-    async fn browse_tags(
-        &self,
-        server: &str,
-        max_tags: usize,
-        progress: Arc<AtomicUsize>,
-        tags_sink: Arc<std::sync::Mutex<Vec<String>>>,
-    ) -> OpcResult<Vec<String>> {
+    async fn browse_tags(&self, server: &str, collector: TagCollector) -> OpcResult<Vec<String>> {
         let server_owned = server.to_string();
         self.worker
             .send_request(|reply| ComRequest::BrowseTags {
                 server: server_owned,
-                max_tags,
-                progress,
-                tags_sink,
+                collector,
                 reply,
             })
             .await

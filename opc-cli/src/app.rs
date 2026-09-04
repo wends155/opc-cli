@@ -8,10 +8,11 @@
 //! ([`CurrentScreen`]) driving the TUI layout, handling user inputs, managing the list selection
 //! states, and communicating asynchronously with the background OPC DA client provider.
 
-use opc_da_client::{OpcError, OpcProvider, OpcValue, TagValue, WriteResult, friendly_com_hint};
+use opc_da_client::{
+    OpcError, OpcProvider, OpcValue, TagCollector, TagValue, WriteResult, friendly_com_hint,
+};
 use ratatui::widgets::{ListState, TableState}; // Added TableState
 use std::sync::Arc;
-use std::sync::atomic::AtomicUsize;
 use tokio::sync::oneshot;
 
 /// Default timeout for OPC operations (server listing and tag browsing).
@@ -59,7 +60,7 @@ pub struct App {
     pub messages: Vec<String>,
     pub list_state: ListState,
     pub table_state: TableState, // New field
-    pub browse_progress: Arc<AtomicUsize>,
+    pub browse_collector: TagCollector,
     pub browse_result_rx: Option<oneshot::Receiver<Result<Vec<String>, OpcError>>>,
     pub fetch_result_rx: Option<oneshot::Receiver<Result<Vec<String>, OpcError>>>,
     pub selected_tags: Vec<bool>,
@@ -115,7 +116,7 @@ impl App {
             messages: Vec::new(),
             list_state: ListState::default(),
             table_state: TableState::default(), // Initialize
-            browse_progress: Arc::new(AtomicUsize::new(0)),
+            browse_collector: TagCollector::default(),
             browse_result_rx: None,
             fetch_result_rx: None,
             selected_tags: Vec::new(),
@@ -317,13 +318,12 @@ impl App {
         self.browsed_server = Some(server.clone());
 
         self.log_transition(CurrentScreen::Loading, "start_browse_tags");
-        self.browse_progress = Arc::new(AtomicUsize::new(0));
+        let collector = TagCollector::new(MAX_BROWSE_TAGS);
+        self.browse_collector = collector.clone();
         self.add_message(format!("Browsing tags on {server}..."));
 
         let provider = Arc::clone(&self.opc_provider);
-        let progress = Arc::clone(&self.browse_progress);
-        let tags_sink = Arc::new(std::sync::Mutex::new(Vec::new()));
-        let sink_for_task = Arc::clone(&tags_sink);
+        let collector_for_task = collector.clone();
 
         let (tx, rx) = oneshot::channel();
 
@@ -331,19 +331,17 @@ impl App {
             let timeout_duration = std::time::Duration::from_secs(OPC_TIMEOUT_SECS);
             let result = tokio::time::timeout(
                 timeout_duration,
-                provider.browse_tags(&server, MAX_BROWSE_TAGS, progress, sink_for_task),
+                provider.browse_tags(&server, collector_for_task),
             )
             .await;
 
             let final_result = match result {
                 Ok(inner) => inner,
                 Err(_) => {
-                    // Timeout occurred. Harvest partial results from sink.
-                    let partial_tags = if let Ok(sink) = tags_sink.lock() {
-                        sink.clone()
-                    } else {
-                        Vec::new()
-                    };
+                    // Timeout occurred. Signal cooperative cancellation to stop background
+                    // worker threads and harvest whatever tags have been accumulated so far.
+                    collector.cancel();
+                    let partial_tags = collector.harvest();
 
                     if !partial_tags.is_empty() {
                         tracing::warn!(
@@ -1023,8 +1021,8 @@ mod tests {
     async fn test_enter_selected_server_navigation() {
         let mut mock = MockOpcProvider::new();
         mock.expect_browse_tags()
-            .with(eq("S1"), eq(MAX_BROWSE_TAGS), always(), always())
-            .returning(|_, _, _, _| Ok(vec!["T1".into()]));
+            .with(eq("S1"), always())
+            .returning(|_, _| Ok(vec!["T1".into()]));
 
         let mut app = App::new(Arc::new(mock));
         app.servers = vec!["S1".into()];
@@ -1040,6 +1038,29 @@ mod tests {
         assert!(matches!(app.current_screen, CurrentScreen::TagList));
         assert_eq!(app.tags.len(), 1);
         assert_eq!(app.selected_index, Some(0));
+    }
+
+    #[tokio::test]
+    async fn test_browse_tags_collector_timeout_and_cancellation() {
+        let collector = TagCollector::new(10);
+        assert_eq!(collector.max_tags(), 10);
+        assert_eq!(collector.len(), 0);
+        assert!(!collector.is_cancelled());
+
+        // Push partial tags
+        collector.push("Device.Tag1".into());
+        collector.push("Device.Tag2".into());
+        assert_eq!(collector.len(), 2);
+
+        // Cancel on timeout
+        collector.cancel();
+        assert!(collector.is_cancelled());
+
+        // Harvest partial results
+        let harvested = collector.harvest();
+        assert_eq!(harvested, vec!["Device.Tag1", "Device.Tag2"]);
+        assert!(collector.is_empty());
+        assert_eq!(collector.len(), 0);
     }
 
     #[test]
