@@ -1,5 +1,19 @@
 # Project Context Summary
 
+## 2026-09-04: Architecture Specification Synchronization for helpers.rs Dissolution (`opc-da-client`)
+> 📝 **Context Update:**
+> * **Feature:** Synchronize `opc-da-client/architecture.md` with active crate architecture, eliminating stale references to `helpers.rs`, documenting `com::variant` and `raw::hresult`, updating the 9-gate toolchain, and modernizing error handling and testing strategies.
+> * **Changes:**
+>   - Updated § 4 (Project Layout): removed `helpers.rs`; registered `com/variant.rs` and `raw/hresult.rs`.
+>   - Updated § 5 (Module Boundaries): excised `### helpers`; documented `com::variant` (`pub(crate)`) and `raw::hresult` (`pub(crate)`); documented `com::connector` ownership of `connect_server` and `guid_to_progid`; updated `errors` to document inherent diagnostic method `OpcError::friendly_hint(&self)`.
+>   - Updated § 6 (Dependency Direction Rules): updated Mermaid dependency diagram and table to reflect `com::variant` and `raw::hresult`, with zero references to `helpers`.
+>   - Updated § 7 (Toolchain): updated pipeline description to reflect 9-gate pipeline including Gate 4b (`Feature Independence Check`), and updated `Doc Tests` command to include `--all-features`.
+>   - Updated § 8 (Error Handling Strategy): replaced free functions `friendly_com_hint` and `format_hresult` with `OpcError::friendly_hint(&self)` and `raw::hresult::format_hresult()`.
+>   - Updated § 10 (Testing Strategy): updated co-located unit test inventory to cover `com::variant.rs`, `com::connector.rs`, `raw::hresult.rs`, and `errors.rs`.
+>   - Verified all 9 quality gates in `scripts/verify.ps1` exit 0 (123 unit + doc tests passed).
+> * **New Constraints:** `architecture.md` must remain strictly synchronized with actual crate structure and the 9-gate verification pipeline. Any future internal module additions must be registered in § 4, § 5, and § 6.
+> * **Pruned:** Stale references to `helpers.rs` and legacy free error functions across all sections of `opc-da-client/architecture.md`.
+
 ## 2026-09-04: Documentation Synchronization for helpers.rs Dissolution (`opc-da-client`)
 > 📝 **Context Update:**
 > * **Feature:** Synchronize `opc-da-client/README.md` and `opc-da-client/spec.md` with the dissolution of `helpers.rs`, encapsulation of `com::variant`, and un-gating of pure protocol domain types.
