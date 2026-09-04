@@ -3,7 +3,7 @@
 > **Behavioral Source of Truth** for the `opc-da-client` library crate.
 > Defines *what* each module should do — independent of current implementation.
 >
-> Last verified against: 544989d
+> Last verified against: bf7c7d2
 
 ---
 
@@ -163,68 +163,46 @@ All methods use `#[async_trait]`.
 
 ---
 
-### 1.2 `helpers` — COM Utility Functions
+### 1.2 `errors` — Canonical Error Handling & Hints
 
-**Purpose:** Provide reusable helpers for COM error mapping, data conversion, and OPC data formatting.
+**Purpose:** Define domain-specific error types (`OpcError`), result alias (`OpcResult<T>`), and inherent diagnostics.
 
 #### Public API
 
-##### `fn friendly_com_hint(error: &OpcError) -> Option<&'static str>`
+##### `OpcError::friendly_hint(&self) -> Option<&'static str>`
 
-**Description:** Inspects the `OpcError` instance for known COM/DCOM HRESULT patterns and returns a human-readable hint.
+**Description:** Inspects the `OpcError` instance for underlying Win32 COM/OPC HRESULT failure codes and returns an actionable plain-English diagnostic hint.
 
-**Inputs:** An `OpcError` reference.
-**Output:** `Some(hint)` if a known code is found, `None` otherwise.
+**Inputs:** Receiver `&self` on `OpcError`.
+**Output:** `Some(&'static str)` if the variant is `OpcError::Com` and matches a recognized HRESULT; `None` otherwise.
 
 **Known Mappings:**
 
-| HRESULT | Hint |
-| :--- | :--- |
-| `0x80040112` | Server license does not permit OPC client connections |
-| `0x80080005` | Server process failed to start — check if it is installed and running |
-| `0x80070005` | Access denied — DCOM launch/activation permissions not configured for this user |
-| `0x800706BA` | RPC server unavailable — the target host may be offline or blocking RPC |
-| `0x800706F4` | COM marshalling error — try restarting the OPC server |
-| `0x80040154` | Server is not registered on this machine |
-| `0x80004003` | Invalid pointer (E_POINTER) |
-| `0xC0040004` | Server rejected write — the item may be read-only (OPC_E_BADRIGHTS) |
-| `0xC0040006` | Data type mismatch — server cannot convert the written value (OPC_E_BADTYPE) |
-| `0xC0040007` | Item ID not found in server address space (OPC_E_UNKNOWNITEMID) |
-| `0xC0040008` | Item ID syntax is invalid for this server (OPC_E_INVALIDITEMID) |
-
+| HRESULT | Symbolic Name | Hint |
+| :--- | :--- | :--- |
+| `0x80040112` | `CLASS_E_NOTLICENSED` | Server license does not permit OPC client connections |
+| `0x80080005` | `CO_E_SERVER_EXEC_FAILURE` | Server process failed to start — check if it is installed and running |
+| `0x80070005` | `E_ACCESSDENIED` | Access denied — DCOM launch/activation permissions not configured for this user |
+| `0x800706BA` | `RPC_S_SERVER_UNAVAILABLE` | RPC server unavailable — the target host may be offline or blocking RPC |
+| `0x800706BE` | `RPC_S_CALL_FAILED` | RPC call failed — network or remote server connection dropped |
+| `0x800706BF` | `RPC_S_SERVER_TOO_BUSY` | RPC server is too busy to complete this operation |
+| `0x800706F4` | `RPC_S_CALL_FAILED_DNE` | COM marshalling error — try restarting the OPC server |
+| `0x80040154` | `REGDB_E_CLASSNOTREG` | Server is not registered on this machine |
+| `0x80004003` | `E_POINTER` | Invalid pointer (E_POINTER) |
+| `0xC0040004` | `OPC_E_BADRIGHTS` | Server rejected write — the item may be read-only (OPC_E_BADRIGHTS) |
+| `0xC0040006` | `OPC_E_BADTYPE` | Data type mismatch — server cannot convert the written value (OPC_E_BADTYPE) |
+| `0xC0040007` | `OPC_E_UNKNOWNITEMID` | Item ID not found in server address space (OPC_E_UNKNOWNITEMID) |
+| `0xC0040008` | `OPC_E_INVALIDITEMID` | Item ID syntax is invalid for this server (OPC_E_INVALIDITEMID) |
 
 **Invariants:**
-*   Pure function — no side effects, no I/O, no panics.
-*   Pattern matching is case-sensitive on the hex string.
+*   Pure method — no side effects, no I/O, no panics.
+*   Returns `None` for all non-`Com` variants (`ConnectFailed`, `GroupAddFailed`, `ItemAddFailed`, `TypeMismatch`, `Internal`).
 
 ---
 
-##### `fn format_hresult(hr: windows::core::HRESULT) -> String`
+#### Internal Utilities (crate-visible only, documented for completeness)
 
-**Description:** Formats a COM `HRESULT` for user-facing error messages, appending a friendly hint if one is mapped.
-
-**Inputs:** A `windows::core::HRESULT` (passed by value).
-**Output:** Format `0xHHHHHHHH: <hint>` if a hint exists, otherwise just `0xHHHHHHHH`.
-
-**Invariants:**
-*   Returns a consistently formatted upper-case hex string.
-
----
-
-##### `fn log_opc_error(error: &OpcError, operation: &str)`
-
-**Description:** Emits a structured `tracing::error!` event with machine-parseable fields for Windows COM/OPC errors.
-
-**Inputs:** An `OpcError` reference, and the operation name slice (`operation`).
-
-**Invariants:**
-*   Purely side-effecting (writes to logs).
-*   Extracts raw HRESULT code and friendly hint if available, logging them as structured named fields.
-
----
-
-#### Internal API (crate-visible only, documented for completeness)
-
+##### `helpers` Module
 
 | Function | Signature | Purpose |
 | :--- | :--- | :--- |
@@ -233,6 +211,14 @@ All methods use `#[async_trait]`.
 | `quality_to_string` | `fn(quality: u16) -> String` | Maps OPC quality bitmask to `"Good"` / `"Bad"` / `"Uncertain"`. |
 | `filetime_to_string` | `fn(ft: &FILETIME) -> String` | Converts Win32 FILETIME to local `YYYY-MM-DD HH:MM:SS` string. |
 | `opc_value_to_variant` | `fn(value: &OpcValue) -> VARIANT` | Converts an `OpcValue` to a COM `VARIANT`. |
+
+##### `raw::hresult` Module
+
+| Function / Constant | Signature | Purpose |
+| :--- | :--- | :--- |
+| `friendly_hresult_hint` | `fn(hr: HRESULT) -> Option<&'static str>` | Maps Win32 COM `HRESULT` to diagnostic hint. |
+| `format_hresult` | `fn(hr: HRESULT) -> String` | Formats `HRESULT` as `0xHHHHHHHH: <hint>` or `0xHHHHHHHH`. |
+| `is_connection_hresult` | `fn(hr: HRESULT) -> bool` | Detects connection/transport drops (`RPC_S_*`, `CO_E_SERVER_EXEC_FAILURE`). |
 
 
 ---
@@ -408,7 +394,7 @@ Defined in § 1.1. See table above.
 
 **Error Handling at Boundary:**
 *   All COM errors return canonical `OpcError::Com { source }`.
-*   Friendly hints (`friendly_com_hint`) and formatted HRESULTs (`format_hresult`) are available for error reporting.
+*   Friendly hints (`err.friendly_hint()`) and formatted HRESULTs (`raw::hresult::format_hresult`) are available for error reporting.
 *   `E_POINTER` errors from `StringIterator` are handled internally by the iterator (null-PWSTR skip + `debug!` log).
 
 **Known Upstream Bugs:**
@@ -423,18 +409,19 @@ Defined in § 1.1. See table above.
 
 *   The CLI crate depends on the `OpcProvider` trait, never on `OpcDaClient` directly in its core logic.
 *   Tests use `MockOpcProvider` (via `test-support` feature).
-*   `friendly_com_hint()` is called by the CLI to enrich error messages displayed in the TUI status bar.
+*   `e.friendly_hint()` is called by the CLI to enrich error messages displayed in the TUI status bar.
 
 ---
 
 ## 4. Required Test Coverage
 
-### Unit Tests (in `helpers.rs`)
+### Unit Tests (in `errors.rs` & `raw/hresult.rs`)
 
-- [x] `friendly_com_hint` returns correct hint for known HRESULT codes.
-- [x] `friendly_com_hint` returns `None` for unknown errors.
-- [x] `format_hresult` returns `0xHHHHHHHH: <hint>` for known codes.
-- [x] `format_hresult` returns `0xHHHHHHHH` for unknown codes.
+- [x] `OpcError::friendly_hint` returns correct hint for known HRESULT codes.
+- [x] `OpcError::friendly_hint` returns `None` for unknown errors and non-COM error variants.
+- [x] `raw::hresult::format_hresult` returns `0xHHHHHHHH: <hint>` for known codes.
+- [x] `raw::hresult::format_hresult` returns `0xHHHHHHHH` for unknown codes.
+- [x] `raw::hresult::is_connection_hresult` accurately identifies RPC and transport errors.
 - [x] `filetime_to_string` returns `"N/A"` for zero FILETIME.
 - [x] `filetime_to_string` produces valid date string for non-zero FILETIME.
 - [x] `StringIterator` skips null PWSTR entries without producing `E_POINTER`.
@@ -515,7 +502,7 @@ Defined in § 1.1. See table above.
 
 ### Doc Tests
 
-- [x] `friendly_com_hint`, `format_hresult`, `friendly_hresult_hint` — runnable doctests in `errors.rs`.
+- [x] `OpcError::friendly_hint` — runnable doctest in `errors.rs`.
 - [x] `OpcResult`, `OpcError` — runnable doctests in `errors.rs`.
 - [x] `TagValue`, `OpcValue`, `WriteResult`, `DisplayOption*`, `OpcValueOptionExt`, `SystemTimeOptionExt` — runnable doctests in `provider.rs`.
 - [x] `TagCollector` methods (`new`, `unbounded`, `max_tags`, `len`, `is_empty`, `is_full`, `cancel`, `is_cancelled`, `snapshot`, `harvest`, `push`) — runnable doctests in `provider.rs`.
