@@ -138,6 +138,24 @@ pub struct WriteResult {
 
 impl WriteResult {
     /// Creates a successful write result.
+    ///
+    /// # Arguments
+    ///
+    /// * `tag_id` - Identifier of the tag that was successfully written.
+    ///
+    /// # Returns
+    ///
+    /// A [`WriteResult`] with [`WriteResult::status`] set to `Ok(())`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use opc_da_client::WriteResult;
+    ///
+    /// let res = WriteResult::success("Channel1.Device1.Tag1");
+    /// assert!(res.is_success());
+    /// assert_eq!(res.tag_id, "Channel1.Device1.Tag1");
+    /// ```
     #[must_use]
     pub fn success(tag_id: impl Into<String>) -> Self {
         Self {
@@ -147,6 +165,25 @@ impl WriteResult {
     }
 
     /// Creates a failed write result with a domain error.
+    ///
+    /// # Arguments
+    ///
+    /// * `tag_id` - Identifier of the tag whose write operation failed.
+    /// * `error` - Concrete [`OpcError`] describing the reason for failure.
+    ///
+    /// # Returns
+    ///
+    /// A [`WriteResult`] with [`WriteResult::status`] set to `Err(error)`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use opc_da_client::{OpcError, WriteResult};
+    ///
+    /// let res = WriteResult::failure("Channel1.Device1.Tag1", OpcError::Connection("Unreachable".into()));
+    /// assert!(res.is_error());
+    /// assert_eq!(res.error(), Some(&OpcError::Connection("Unreachable".into())));
+    /// ```
     #[must_use]
     pub fn failure(tag_id: impl Into<String>, error: OpcError) -> Self {
         Self {
@@ -156,18 +193,47 @@ impl WriteResult {
     }
 
     /// Returns `true` if the write succeeded.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use opc_da_client::WriteResult;
+    ///
+    /// let res = WriteResult::success("Tag1");
+    /// assert!(res.is_success());
+    /// ```
     #[must_use]
     pub fn is_success(&self) -> bool {
         self.status.is_ok()
     }
 
     /// Returns `true` if the write failed.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use opc_da_client::{OpcError, WriteResult};
+    ///
+    /// let res = WriteResult::failure("Tag1", OpcError::Connection("Failed".into()));
+    /// assert!(res.is_error());
+    /// ```
     #[must_use]
     pub fn is_error(&self) -> bool {
         self.status.is_err()
     }
 
     /// Returns the error if the write failed, or `None` if it succeeded.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use opc_da_client::{OpcError, WriteResult};
+    ///
+    /// let res = WriteResult::failure("Tag1", OpcError::Connection("Failed".into()));
+    /// if let Some(err) = res.error() {
+    ///     assert_eq!(err.to_string(), "Connection failed: Failed");
+    /// }
+    /// ```
     #[must_use]
     pub fn error(&self) -> Option<&OpcError> {
         self.status.as_ref().err()
