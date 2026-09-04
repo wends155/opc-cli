@@ -1,5 +1,17 @@
 # Project Context Summary
 
+## 2026-09-04: Documentation Synchronization & Native Types (`opc-da-client`)
+> 📝 **Context Update:**
+> * **Feature:** Synchronize `opc-da-client` rustdoc comments and `spec.md` with native `OpcResult` and domain types
+> * **Changes:**
+>   - Added `# Arguments`, `# Returns`, `# Errors`, and runnable/no_run `# Examples` across all `OpcProvider` trait methods (`list_servers`, `browse_tags`, `read_tag_values`, `write_tag_value`), demonstrating `OpcResult`, `OpcDaClient`, `TagValue`, `OpcValue`, and `WriteResult`.
+>   - Added `# Examples` blocks in `src/errors.rs` for `OpcResult`, `OpcError`, `format_hresult`, `friendly_hresult_hint`, and `friendly_com_hint`.
+>   - Added `# Examples` in `src/types.rs` for `OpcQuality`, `BrowseType`, and `BrowseDirection`.
+>   - Added `# Examples` in `src/com/client.rs` for `OpcDaClient::new`.
+>   - Synchronized `opc-da-client/spec.md`: updated verification hash to `75871f9`, updated method tables to `OpcResult`, updated `OpcError` variant definitions, and expanded doc-test inventory from 10 to 27 active tests.
+> * **New Constraints:** Ensure all rustdoc examples use `OpcResult` and assertions or variable bindings instead of forbidden macros (`println!`, `dbg!`).
+> * **Pruned:** Outdated `spec.md` method signatures and error variants.
+
 ## 2026-09-04: Modernize Examples to OpcResult & CI Gate Hardening (`opc-da-client`)
 > 📝 **Context Update:**
 > * **Feature:** Replace `Box<dyn Error>` in `opc-da-client` doc examples and Quick Start with native `OpcResult<()>`, eliminate `.unwrap()` from tests, fix doc contracts, and enforce CI guard
