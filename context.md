@@ -1,5 +1,16 @@
 # Project Context Summary
 
+## 2026-09-04: Documentation Synchronization for TagValue Display Adapters (`opc-da-client`)
+> 📝 **Context Update:**
+> * **Feature:** Documentation sync for `opc-da-client` display adapters, extension traits, and `TagValue` destructuring ergonomics.
+> * **Changes:**
+>   - Added `# Returns` and runnable assertion-based `# Examples` across `TagValue` methods (`is_good`, `is_error`, `display_value`, `formatted_timestamp`) and extension traits `OpcValueOptionExt` and `SystemTimeOptionExt` (`display_or`, `display`), fully complying with `doc-rules.md §1`.
+>   - Synchronized `opc-da-client/README.md`: highlighted zero-allocation display adapters and canonical `TagValue` `Display` rendering in Features, updated the reading tags usage example to showcase `.value.display()` and `.timestamp.display()` with column width alignment, and expanded the API Surface table with `DisplayOptionOpcValue`, `DisplayOptionTimestamp`, `OpcValueOptionExt`, and `SystemTimeOptionExt`.
+>   - Synchronized `opc-da-client/spec.md`: updated verification baseline hash to `07e1c87` and recorded `test_destructure_tag_value_ergonomics` in the mock-based test inventory.
+>   - Verified 100% compliance across all 8 quality gates in `scripts/verify.ps1`, expanding active doc-tests to 44 tests (42 passed, 2 ignored, 0 failed).
+> * **New Constraints:** All `TagValue` display adapter methods and extension traits must maintain runnable doc-tests asserting correctness without invoking forbidden output macros (`println!`, `dbg!`).
+> * **Pruned:** Intermediate doc-test verification logs and temporary draft comments.
+
 ## 2026-09-04: Ergonomic TagValue Destructuring & Zero-Allocation Display Adapters (`opc-da-client`, `opc-cli`)
 > 📝 **Context Update:**
 > * **Feature:** Implement zero-allocation display adapters (`DisplayOptionOpcValue`, `DisplayOptionTimestamp`), extension traits (`OpcValueOptionExt`, `SystemTimeOptionExt`), and `Display` for `TagValue`.
