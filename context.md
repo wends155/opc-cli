@@ -1,5 +1,20 @@
 # Project Context Summary
 
+## 2026-09-04: Strongly-Typed WriteResult & Error Modernization (`opc-da-client`, `opc-cli`)
+> 📝 **Context Update:**
+> * **Feature:** Refactor `WriteResult` into a strongly-typed domain model (`status: Result<(), OpcError>`), eliminate eager stringification in `ComWorker`, modernize callers, and add negative failure tests.
+> * **Changes:**
+>   - Refactored `WriteResult` to replace `success: bool` and `error: Option<String>` with `pub status: Result<(), OpcError>`, eliminating unrepresentable states `(false, None)` and `(true, Some(e))`.
+>   - Added constructor methods `WriteResult::success(tag_id)` and `WriteResult::failure(tag_id, error)` alongside zero-cost accessors `is_success()`, `is_error()`, and `error(&self) -> Option<&OpcError>`.
+>   - Derived `Clone, PartialEq` on `OpcError` to enable structural equality and seamless propagation across thread boundaries.
+>   - Stopped eager stringification in `ComWorker::handle_write_tag_value`, returning concrete `OpcError` directly within `WriteResult::failure`.
+>   - Added negative unit test `test_worker_write_tag_value_failure` asserting `E_FAIL` HRESULT preservation.
+>   - Updated downstream `opc-cli/src/app.rs::poll_write_result` to pattern match on `result.status`, formatting `{e}` without risking empty error strings, and added unit tests `test_poll_write_result_failure` and `test_poll_write_result_success`.
+>   - Updated `opc-da-client/README.md` to remove `.as_deref().unwrap_or("Unknown error")` and use idiomatic `match result.status`.
+>   - Synchronized `opc-da-client/spec.md` with new `WriteResult` contract and updated test inventory.
+> * **New Constraints:** `WriteResult` must ALWAYS use `pub status: Result<(), OpcError>`. Never use primitive boolean flags and optional strings for write outcomes.
+> * **Pruned:** Primitive `WriteResult.success: bool` and `WriteResult.error: Option<String>`; ad-hoc `"Unknown error"` fallback strings in documentation.
+
 ## 2026-09-04: Documentation Synchronization & Native Types (`opc-da-client`)
 > 📝 **Context Update:**
 > * **Feature:** Synchronize `opc-da-client` rustdoc comments and `spec.md` with native `OpcResult` and domain types
