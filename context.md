@@ -1,5 +1,20 @@
 # Project Context Summary
 
+## 2026-09-04: Tier 1 COM/FFI Decoupling & helpers.rs Dissolution (`opc-da-client`, `scripts`)
+> 📝 **Context Update:**
+> * **Feature:** Dissolve `helpers.rs`, encapsulate VARIANT and SafeArray conversions into `com::variant` (`pub(crate)`), relocate server connection into `com::connector`, decouple `provider.rs` by reusing canonical `DisplayOptionTimestamp`, un-gate `types.rs`, and enforce feature independence in CI.
+> * **Changes:**
+>   - Introduced `opc-da-client/src/com/variant.rs` housing `variant_to_opc_value`, `opc_value_to_variant`, `variant_to_string`, and `ole_date_to_string`, registered as `pub(crate) mod variant;` in `com/mod.rs` with exhaustive roundtrip unit tests.
+>   - Relocated `connect_server` and `guid_to_progid` into `com::connector.rs` along with compile-time layout assertions for `windows::core::GUID`, updating `read()` and `write()` to consume `crate::com::variant`.
+>   - Refactored `TagValue::formatted_timestamp()` in `provider.rs` to delegate to `self.timestamp.display().to_string()`, fully severing Tier 1 coupling to `helpers.rs`.
+>   - Deleted `opc-da-client/src/helpers.rs` and removed `mod helpers;` from `lib.rs`; pruned dead code (`filetime_to_string`, `quality_to_string`, `system_time_to_string`).
+>   - Un-gated `pub mod types;` and `pub use types::{...};` in `lib.rs` to make pure domain types accessible without `opc-da-backend`.
+>   - Added feature fallback helper `com_error_hint` and gated `friendly_hint` in `errors.rs` so `--no-default-features` builds compile cleanly with zero warnings.
+>   - Upgraded `scripts/verify.ps1` to a 9-Gate pipeline by adding Gate 4b: `Feature Independence Check (opc-da-client --no-default-features)`.
+>   - Verified all 9 quality gates in `scripts/verify.ps1` pass with zero warnings.
+> * **New Constraints:** Win32 COM VARIANT and SafeArray marshalling is strictly private to `opc-da-client::com::variant`. Server connection FFI belongs exclusively to `com::connector`. Domain types (`types.rs`) must remain unconditionally compiled. Never add cross-tier dependencies from `provider.rs` into COM FFI modules.
+> * **Pruned:** Completely excised `src/helpers.rs`, dead FILETIME/quality conversions, redundant string formatting helpers, and compilation failures under `--no-default-features`.
+
 ## 2026-09-04: COM HRESULT Isolation & Domain Error Encapsulation (`opc-da-client`, `opc-cli`)
 > 📝 **Context Update:**
 > * **Feature:** Isolate raw Win32 COM HRESULT constants/helpers in `raw::hresult`, encapsulate error diagnostics into `OpcError::friendly_hint(&self)`, remove leaky free functions from crate exports, modernize CLI error rendering, and synchronize documentation.
