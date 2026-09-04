@@ -1,5 +1,19 @@
 # Project Context Summary
 
+## 2026-09-04: COM HRESULT Isolation & Domain Error Encapsulation (`opc-da-client`, `opc-cli`)
+> 📝 **Context Update:**
+> * **Feature:** Isolate raw Win32 COM HRESULT constants/helpers in `raw::hresult`, encapsulate error diagnostics into `OpcError::friendly_hint(&self)`, remove leaky free functions from crate exports, modernize CLI error rendering, and synchronize documentation.
+> * **Changes:**
+>   - Introduced `opc-da-client/src/raw/hresult.rs` (`pub(crate)`) housing strongly-typed Win32 HRESULT constants (`E_POINTER`, `RPC_S_*`, `OPC_E_*` via `.cast_signed()`), `friendly_hresult_hint`, `format_hresult`, and `is_connection_hresult` with co-located unit tests.
+>   - Encapsulated user-facing diagnostics as an inherent method `OpcError::friendly_hint(&self) -> Option<&'static str>` on `OpcError`, returning diagnostic hints for `OpcError::Com` while returning `None` for other variants.
+>   - Removed free functions `format_hresult`, `friendly_com_hint`, and `log_opc_error` from `opc-da-client/src/lib.rs` exports and `errors.rs` root interface.
+>   - Modernized `opc-da-client/src/com/worker.rs` and `helpers.rs` to consume `raw::hresult::is_connection_hresult` and `friendly_hresult_hint`, eliminating magic literals and clippy cast suppressions.
+>   - Modernized `opc-cli/src/app.rs` to call `e.friendly_hint()` directly and avoid redundant HRESULT string concatenation in TUI status bar messages.
+>   - Synchronized `opc-da-client/README.md` (Features and API surface table) and `opc-da-client/spec.md` (Section 1.2, Section 3 boundaries, Section 4 test inventories, baseline hash `bf7c7d2`).
+>   - Verified all 8 quality gates pass with zero warnings via `scripts/verify.ps1`.
+> * **New Constraints:** Win32 COM HRESULT constants, classification helpers, and formatters must remain internal to `opc-da-client::raw::hresult`. Error hints must be accessed exclusively through `OpcError::friendly_hint(&self)`. Do not re-export raw COM utilities in `lib.rs`.
+> * **Pruned:** Removed free functions `friendly_com_hint`, `format_hresult`, and `log_opc_error` from crate root exports; eliminated duplicate error string formatting in `opc-cli/src/app.rs`.
+
 ## 2026-09-04: Unified Pure-Rust Mock Infrastructure & Executable Doctests (`opc-da-client`)
 > 📝 **Context Update:**
 > * **Feature:** Enable pure-Rust tag browsing simulation, eliminate mock connector duplication, test `ComWorker` browse handling, and activate executable doctests.
