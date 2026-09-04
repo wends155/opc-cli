@@ -3,7 +3,7 @@
 > **Behavioral Source of Truth** for the `opc-da-client` library crate.
 > Defines *what* each module should do — independent of current implementation.
 >
-> Last verified against: bf7c7d2
+> Last verified against: c1feee3
 
 ---
 
@@ -202,15 +202,13 @@ All methods use `#[async_trait]`.
 
 #### Internal Utilities (crate-visible only, documented for completeness)
 
-##### `helpers` Module
+##### `com::variant` Module
 
 | Function | Signature | Purpose |
 | :--- | :--- | :--- |
-| `guid_to_progid` | `fn(guid: &windows::core::GUID) -> OpcResult<String>` | Converts a COM GUID to its registered ProgID string. |
 | `variant_to_string` | `fn(variant: &VARIANT) -> String` | Formats a COM VARIANT as a display string. Handles VT_EMPTY, VT_NULL, VT_I2, VT_I4, VT_R4, VT_R8, VT_CY, VT_DATE, VT_BSTR, VT_ERROR, VT_BOOL, VT_I1, VT_UI1, VT_UI2, VT_UI4, VT_I8, VT_UI8, and VT_ARRAY composites. |
-| `quality_to_string` | `fn(quality: u16) -> String` | Maps OPC quality bitmask to `"Good"` / `"Bad"` / `"Uncertain"`. |
-| `filetime_to_string` | `fn(ft: &FILETIME) -> String` | Converts Win32 FILETIME to local `YYYY-MM-DD HH:MM:SS` string. |
-| `opc_value_to_variant` | `fn(value: &OpcValue) -> VARIANT` | Converts an `OpcValue` to a COM `VARIANT`. |
+| `variant_to_opc_value` | `fn(variant: &VARIANT) -> OpcValue` | Converts a COM `VARIANT` into a strongly-typed domain `OpcValue`. |
+| `opc_value_to_variant` | `fn(value: &OpcValue) -> VARIANT` | Converts a domain `OpcValue` to a COM `VARIANT`. |
 
 ##### `raw::hresult` Module
 
@@ -346,6 +344,9 @@ Before calling `browse_recursive`, `browse_tags` attempts `browse_opc_item_ids(B
   - `add_items(&self, items: &[GroupItemDef]) -> OpcResult<Vec<GroupItemResult>>`
   - `read(&self, source: DataSource, server_handles: &[ItemHandle]) -> OpcResult<Vec<Result<GroupItemState, OpcError>>>`
   - `write(&self, server_handles: &[ItemHandle], values: &[OpcValue]) -> OpcResult<Vec<Result<(), OpcError>>>`
+- Server connection helpers:
+  - `connect_server(server_name: &str) -> OpcResult<IOPCServer>`: Resolves ProgID to CLSID via registry and creates connected COM server handle.
+  - `guid_to_progid(guid: &GUID) -> OpcResult<String>`: Converts a COM GUID to its registered ProgID string with guaranteed COM allocator cleanup.
 - `MockConnectedGroup`, `MockConnectedServer`, and `MockServerConnector`: Reusable pure-Rust mocks (under `#[cfg(any(test, feature = "test-support"))]` and exported at crate root under `test-support`) supporting pluggable closures, failure injection (`MockState`), and simulated tag browsing without native COM allocators or unsafe blocks.
 
 ---
@@ -486,10 +487,28 @@ Defined in § 1.1. See table above.
 - [x] `test_mock_group_defaults` and `test_mock_group_custom_handlers` — verifies mock group default results and custom read handlers.
 - [x] `test_mock_server_add_group_and_eviction` — verifies group handle generation and connection drop error injection.
 - [x] `test_group_item_def_and_state_cloning` — verifies DTO clone and display behavior.
+- [x] `test_guid_to_progid_zeroed_guid_returns_com_error` — verifies structured COM error preservation on zeroed GUID.
 - [x] `test_worker_browse_tags_success` — verifies `ComWorker` tag discovery over hierarchical namespace using `MockServerConnector`.
 - [x] `test_worker_browse_tags_cancelled` — verifies `ComWorker` immediate return when `TagCollector` is cancelled prior to execution.
 - [x] `test_worker_browse_tags_capacity_cap` — verifies `ComWorker` tag accumulation halts when `TagCollector` capacity is reached.
 - [x] `test_worker_browse_tags_flat_organization` — verifies fast leaf browsing when server namespace organization is flat.
+
+### COM VARIANT Unit Tests (in `com/variant.rs`)
+
+- [x] `test_opc_value_to_variant_int`, `test_opc_value_to_variant_float`, `test_opc_value_to_variant_bool_true`, `test_opc_value_to_variant_bool_false`, `test_opc_value_to_variant_string` — verifies typed `OpcValue` to COM `VARIANT` conversions.
+- [x] `test_variant_roundtrip` — validates lossless roundtrip conversions across all basic types (`Int`, `Float`, `Bool`, `String`, `Empty`, `Null`).
+- [x] `test_variant_to_string_cy` — validates 64-bit fixed-point Currency (`VT_CY`) scaling and formatting.
+- [x] `test_variant_to_string_empty` and `test_variant_to_string_null` — validates Empty and Null variant rendering.
+- [x] `test_variant_to_string_i2_and_r4` — validates 16-bit integer and single-precision float formatting.
+- [x] `test_variant_to_string_unknown_vt` — verifies fallback formatting for unrecognized VARENUM types.
+- [x] `test_variant_to_string_safearray_i4` — validates 1-D SafeArray traversal and formatting.
+- [x] `test_variant_to_string_vt_error_known` and `test_variant_to_string_vt_error_unknown` — validates `VT_ERROR` HRESULT diagnostic mapping.
+
+### Error & Diagnostic Unit Tests (in `errors.rs`)
+
+- [x] `test_opc_error_friendly_hint` — verifies `friendly_hint` returns `None` for non-COM errors and expected text for known COM errors.
+- [x] `test_friendly_hint_known_codes` — verifies HRESULT hints for known codes (`RPC_S_CALL_FAILED_DNE`, `REGDB_E_CLASSNOTREG`, `OPC_E_BADRIGHTS`, `OPC_E_BADTYPE`, `OPC_E_UNKNOWNITEMID`, `OPC_E_INVALIDITEMID`).
+- [x] `test_friendly_hint_unknown_code` — verifies `None` on unknown or internal error codes.
 
 ### Mock-Based Tests (in `opc-cli`)
 

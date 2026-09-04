@@ -233,6 +233,10 @@ async fn main() -> OpcResult<()> {
 | `OpcQuality` | `pub struct` | Zero-allocation decomposed 16-bit OPC DA quality word (`major`, `substatus`, `limit`, `raw`). |
 | `WriteResult` | `pub struct` | Tag write operation result (`tag_id`, `status: Result<(), OpcError>`, `is_success`, `is_error`, `error`). |
 | `TagCollector` | `pub struct` | Thread-safe, bounded container encapsulating thread-safe tag accumulation, atomic progress reporting, and cooperative cancellation token. |
+| `GroupHandle` | `pub struct` | Type-safe opaque handle wrapper for an OPC group. |
+| `ItemHandle` | `pub struct` | Type-safe opaque handle wrapper for an OPC item. |
+| `BrowseType` | `pub enum` | Tag namespace browsing filter (`Branch`, `Leaf`, `Flat`). |
+| `BrowseDirection` | `pub enum` | Tag namespace traversal direction (`Up`, `Down`, `To`). |
 | `OpcError` | `pub enum` | Domain error enum covering connection, group, item, type, and COM HRESULT failures. |
 | `OpcError::friendly_hint` | `pub fn` | Inherent method translating Win32 COM and OPC HRESULT codes into actionable human-readable explanations. |
 | `MockOpcProvider` | `pub struct` | Pure-Rust mock implementation of `OpcProvider` generated via `mockall` (under `feature = "test-support"`). |
@@ -242,9 +246,9 @@ async fn main() -> OpcResult<()> {
 
 The crate is architected in three decoupled layers:
 
-1. **Public Domain API (`provider.rs`, `types.rs`)**: Exposes the high-level async trait (`OpcProvider`), canonical data models (`TagValue`, `OpcValue`, `WriteResult`), and zero-allocation quality word (`OpcQuality`).
+1. **Public Domain API (`provider.rs`, `types.rs`)**: Exposes the high-level async trait (`OpcProvider`), canonical data models (`TagValue`, `OpcValue`, `WriteResult`, `TagCollector`), pure protocol types (`GroupHandle`, `ItemHandle`, `BrowseType`, `BrowseDirection`), and zero-allocation quality word (`OpcQuality`).
 2. **COM Worker & Client Runtime (`com::client`, `com::worker`)**: The asynchronous client communicates via Tokio channels with a dedicated MTA background thread. The worker thread maintains connection pooling, proxy caching, and automatic recovery on stale connections.
-3. **Pure-Rust Connector Facade (`com::connector`, `raw::`)**: COM servers and groups are accessed strictly via pure-Rust trait interfaces (`ConnectedServer`, `ConnectedGroup`), completely isolating Win32 COM pointers, apartments, and `VARIANT` structures from domain code.
+3. **Pure-Rust Connector Facade & Subsystem (`com::connector`, `com::variant`, `raw::`)**: COM servers and groups are accessed strictly via pure-Rust trait interfaces (`ConnectedServer`, `ConnectedGroup`), completely isolating Win32 COM pointers, apartments, and `VARIANT` structures from domain code.
 
 See [architecture.md](./architecture.md) for in-depth architectural specifications and diagrams, and [spec.md](./spec.md) for behavioral contracts.
 
