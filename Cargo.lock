@@ -608,7 +608,6 @@ dependencies = [
 name = "opc-da-client"
 version = "0.2.0"
 dependencies = [
- "anyhow",
  "async-trait",
  "chrono",
  "mockall",

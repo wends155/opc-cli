@@ -133,6 +133,29 @@ if (-not (Get-Command rg -ErrorAction SilentlyContinue)) {
             exit $rgExit
         }
     }
+
+    # Gate 7b: Library anyhow Guard (opc-da-client must not depend on anyhow at source level)
+    Write-Host "`n>>> Library anyhow Guard" -ForegroundColor Yellow
+    $libSrcPath = Join-Path $PSScriptRoot ".." "opc-da-client" "src"
+    if (Test-Path $libSrcPath) {
+        $anyhowMatches = rg --color=never -n -g "*.rs" "\banyhow\b" $libSrcPath 2>&1
+        $anyhowExit = $LASTEXITCODE
+        if ($anyhowExit -eq 0) {
+            Write-Host "========================================" -ForegroundColor Red
+            Write-Host " VERIFICATION FAILED" -ForegroundColor Red
+            Write-Host "========================================" -ForegroundColor Red
+            Write-Host " What : Library anyhow Guard" -ForegroundColor Red
+            Write-Host " Where: opc-da-client/src" -ForegroundColor Red
+            Write-Host " Why  : Found 'anyhow' in library crate (use thiserror instead):" -ForegroundColor Red
+            $anyhowMatches | ForEach-Object { Write-Host "   $_" -ForegroundColor Red }
+            Write-Host "========================================`n" -ForegroundColor Red
+            exit 1
+        } elseif ($anyhowExit -eq 1) {
+            Write-Host "No anyhow usage found in opc-da-client/src (library crate clean)." -ForegroundColor Green
+        } else {
+            Write-Host "[WARN] rg exited with code ${anyhowExit} scanning for anyhow." -ForegroundColor Yellow
+        }
+    }
 }
 
 # Gate 8: PowerShell Script Syntax & Strict Mode Check

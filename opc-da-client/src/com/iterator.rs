@@ -1,9 +1,15 @@
-#![allow(warnings)]
-#![allow(clippy::all, clippy::pedantic, clippy::restriction)]
+#![allow(
+    unused_mut,
+    clippy::borrow_as_ptr,
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    clippy::ignored_unit_patterns,
+    clippy::ptr_as_ptr,
+    clippy::undocumented_unsafe_blocks
+)]
 
 use crate::com::memory::{RemoteArray, RemotePointer, TryToLocal as _};
 use crate::errors::{OpcError, OpcResult};
-use windows::core::Interface as _;
 
 const MAX_CACHE_SIZE: usize = 16;
 const STRING_CACHE_SIZE: usize = 256;

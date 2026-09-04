@@ -3,6 +3,7 @@
 //! Ensures `CoUninitialize` is called exactly once per successful
 //! `CoInitializeEx`, even on early returns or panics.
 
+use crate::errors::{OpcError, OpcResult};
 use std::marker::PhantomData;
 use windows::Win32::System::Com::{COINIT_MULTITHREADED, CoInitializeEx, CoUninitialize};
 
@@ -21,14 +22,14 @@ use windows::Win32::System::Com::{COINIT_MULTITHREADED, CoInitializeEx, CoUninit
 /// # Examples
 ///
 /// ```ignore
-/// # use anyhow::Result;
-/// # use crate::ComGuard;
-/// # fn main() -> Result<()> {
-/// let _guard = ComGuard::new()?;
-/// // ... COM operations ...
-/// // CoUninitialize called automatically on drop
-/// # Ok(())
-/// # }
+/// use opc_da_client::com::guard::ComGuard;
+/// use opc_da_client::errors::OpcResult;
+/// fn initialize_com() -> OpcResult<()> {
+///     let _guard = ComGuard::new()?;
+///     // ... COM operations ...
+///     // CoUninitialize called automatically on drop
+///     Ok(())
+/// }
 /// ```
 #[derive(Debug)]
 pub struct ComGuard {
@@ -44,16 +45,16 @@ impl ComGuard {
     ///
     /// # Errors
     ///
-    /// Returns `Err` if `CoInitializeEx` fails with a fatal HRESULT.
-    pub fn new() -> anyhow::Result<Self> {
+    /// Returns `Err(OpcError::Com)` if `CoInitializeEx` fails with a fatal HRESULT.
+    pub fn new() -> OpcResult<Self> {
         // SAFETY: CoInitializeEx is a standard Win32 FFI call passing COINIT_MULTITHREADED to join MTA.
         // SAFETY: Result is checked below, and CoUninitialize is guaranteed via Drop.
         let hr = unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) };
 
-        if let Err(e) = hr.ok() {
+        hr.ok().map_err(|e| {
             tracing::error!(error = ?e, "COM MTA initialization failed");
-            return Err(anyhow::anyhow!("CoInitializeEx failed: {e}"));
-        }
+            OpcError::Com { source: e }
+        })?;
 
         tracing::debug!("COM MTA initialized");
 
@@ -74,9 +75,46 @@ impl Drop for ComGuard {
     }
 }
 
+/// Injectable COM initialization strategy — enables testing the failure path.
+///
+/// This is an internal trait. External consumers use [`ComGuard::new`] directly.
+pub(crate) trait ComInitializer: Send + 'static {
+    fn init() -> OpcResult<ComGuard>;
+}
+
+/// Production COM initializer — calls `ComGuard::new()`.
+pub(crate) struct DefaultComInit;
+
+impl ComInitializer for DefaultComInit {
+    fn init() -> OpcResult<ComGuard> {
+        ComGuard::new()
+    }
+}
+
+/// Test-only COM initializer that always fails with a synthetic HRESULT.
+#[cfg(test)]
+pub(crate) struct FailingComInit;
+
+#[cfg(test)]
+impl ComInitializer for FailingComInit {
+    fn init() -> OpcResult<ComGuard> {
+        Err(OpcError::Internal(
+            "Synthetic COM init failure (test)".into(),
+        ))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::errors::OpcResult;
+
+    #[test]
+    fn com_guard_new_returns_opc_result() {
+        // Static compile test: ComGuard::new() must return OpcResult<ComGuard>.
+        // This test will NOT compile if the return type remains an external Result.
+        let _: OpcResult<ComGuard> = ComGuard::new();
+    }
 
     #[test]
     fn com_guard_constructs_and_drops() {

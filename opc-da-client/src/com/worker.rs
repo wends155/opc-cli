@@ -1,10 +1,13 @@
-#![allow(warnings)]
-#![allow(clippy::all, clippy::pedantic, clippy::restriction)]
+#![allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_possible_wrap,
+    clippy::cast_sign_loss,
+    clippy::too_many_lines
+)]
 
 use crate::com::connector::{
     ConnectedGroup, ConnectedServer, DataSource, GroupConfig, GroupItemDef, ServerConnector,
 };
-use crate::com::guard::ComGuard;
 use crate::errors::{OpcError, OpcResult};
 use crate::provider::{OpcQuality, OpcValue, TagValue, WriteResult};
 use crate::types::{BrowseDirection, BrowseType, GroupHandle, ItemHandle, NamespaceType};
@@ -93,15 +96,23 @@ impl<C: ServerConnector + 'static> ComWorker<C> {
         }
     }
 
+    /// Starts the background COM worker thread with default MTA initialization.
+    pub fn start(connector: Arc<C>) -> Result<Self, OpcError> {
+        Self::start_with_initializer::<crate::com::guard::DefaultComInit>(connector)
+    }
+
+    /// Starts the background COM worker thread with a specified COM initialization strategy.
     #[allow(clippy::too_many_lines)]
     #[tracing::instrument(skip(connector))]
-    pub fn start(connector: Arc<C>) -> Result<Self, OpcError> {
+    pub(crate) fn start_with_initializer<I: crate::com::guard::ComInitializer>(
+        connector: Arc<C>,
+    ) -> Result<Self, OpcError> {
         let (tx, mut rx) = mpsc::channel(32);
         let (init_tx, init_rx) = std::sync::mpsc::channel();
 
         let handle = std::thread::spawn(move || {
             tracing::debug!("COM worker thread spawned, initializing COM (MTA)");
-            let _guard = match ComGuard::new() {
+            let _guard = match I::init() {
                 Ok(g) => {
                     tracing::info!("COM MTA initialized successfully on worker thread");
                     let _ = init_tx.send(Ok(()));
@@ -109,8 +120,7 @@ impl<C: ServerConnector + 'static> ComWorker<C> {
                 }
                 Err(e) => {
                     tracing::error!(error = ?e, "COM worker failed to initialize MTA");
-                    let _ =
-                        init_tx.send(Err(OpcError::Internal("COM init failed on worker".into())));
+                    let _ = init_tx.send(Err(e));
                     return;
                 }
             };
@@ -1416,5 +1426,24 @@ mod tests {
         assert!(results[4].is_error());
         assert_eq!(results[4].quality, OpcQuality::BAD_CONFIG_ERROR);
         assert_eq!(results[4].quality.to_string(), "Bad (Configuration Error)");
+    }
+
+    #[test]
+    fn test_worker_com_init_failure_propagates_opc_error() {
+        let connector = Arc::new(ConfigurableMockConnector {
+            state: Arc::new(MockState::default()),
+        });
+        let result =
+            ComWorker::start_with_initializer::<crate::com::guard::FailingComInit>(connector);
+        assert!(result.is_err());
+        let Err(err) = result else { unreachable!() };
+        assert!(
+            !err.to_string().contains("COM init failed on worker"),
+            "Expected forwarded OpcError, got hardcoded string: {err}"
+        );
+        assert!(
+            err.to_string().contains("Synthetic COM init failure"),
+            "Expected synthetic failure message, got: {err}"
+        );
     }
 }

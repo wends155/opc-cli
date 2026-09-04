@@ -5,6 +5,18 @@
 //! from concrete COM types. This enables mock implementations for unit testing
 //! without a live COM server or native Windows allocators.
 
+#![allow(
+    clippy::borrow_as_ptr,
+    clippy::cast_sign_loss,
+    clippy::cast_possible_truncation,
+    clippy::cast_possible_wrap,
+    clippy::type_complexity,
+    clippy::derivable_impls,
+    clippy::field_reassign_with_default,
+    clippy::approx_constant,
+    clippy::unreadable_literal
+)]
+
 use windows::core::Interface;
 
 pub use crate::com::iterator::{GuidIterator, StringIterator};
@@ -229,6 +241,7 @@ impl ServerConnector for ComConnector {
 }
 
 /// COM-backed [`ConnectedServer`].
+#[allow(dead_code)]
 pub struct ComServer {
     pub(crate) server: crate::raw::bindings::da::IOPCServer,
     pub(crate) common: crate::raw::bindings::comn::IOPCCommon,
@@ -351,6 +364,7 @@ impl ConnectedServer for ComServer {
 }
 
 /// COM-backed [`ConnectedGroup`].
+#[allow(dead_code)]
 pub struct ComGroup {
     pub(crate) item_mgt: crate::raw::bindings::da::IOPCItemMgt,
     pub(crate) group_state_mgt: crate::raw::bindings::da::IOPCGroupStateMgt,

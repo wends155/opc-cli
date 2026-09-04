@@ -1,7 +1,5 @@
 //! Error types and HRESULT formatting utilities for OPC DA operations.
 
-#![allow(warnings)]
-
 use thiserror::Error;
 use windows::core::HRESULT;
 
@@ -47,12 +45,6 @@ pub enum OpcError {
     Internal(String),
 }
 
-impl From<anyhow::Error> for OpcError {
-    fn from(err: anyhow::Error) -> Self {
-        Self::Internal(err.to_string())
-    }
-}
-
 impl From<tokio::task::JoinError> for OpcError {
     fn from(err: tokio::task::JoinError) -> Self {
         Self::Internal(format!("Async task join failed: {err}"))
@@ -61,13 +53,13 @@ impl From<tokio::task::JoinError> for OpcError {
 
 impl From<std::num::TryFromIntError> for OpcError {
     fn from(err: std::num::TryFromIntError) -> Self {
-        OpcError::Conversion(format!("Integer conversion error: {err}"))
+        Self::Conversion(format!("Integer conversion error: {err}"))
     }
 }
 
 /// Helper to format HRESULT with friendly hints.
 pub fn format_hresult(hr: HRESULT) -> String {
-    let hex = format!("0x{:08X}", hr.0 as u32);
+    let hex = format!("0x{:08X}", hr.0.cast_unsigned());
     match friendly_hresult_hint(hr) {
         Some(hint) => format!("{hex}: {hint}"),
         None => hex,
@@ -76,24 +68,26 @@ pub fn format_hresult(hr: HRESULT) -> String {
 
 /// Maps known COM/DCOM error codes to actionable user hints.
 pub fn friendly_hresult_hint(hr: HRESULT) -> Option<&'static str> {
-    match hr.0 as u32 {
-        0x80040112 => Some("Server license does not permit OPC client connections"),
-        0x80080005 => Some("Server process failed to start — check if it is installed and running"),
-        0x80070005 => {
+    match hr.0.cast_unsigned() {
+        0x8004_0112 => Some("Server license does not permit OPC client connections"),
+        0x8008_0005 => {
+            Some("Server process failed to start — check if it is installed and running")
+        }
+        0x8007_0005 => {
             Some("Access denied — DCOM launch/activation permissions not configured for this user")
         }
-        0x800706BA => {
+        0x8007_06BA => {
             Some("RPC server unavailable — the target host may be offline or blocking RPC")
         }
-        0x800706F4 => Some("COM marshalling error — try restarting the OPC server"),
-        0x80040154 => Some("Server is not registered on this machine"),
-        0x80004003 => Some("Invalid pointer (E_POINTER)"),
-        0xC0040004 => Some("Server rejected write — the item may be read-only (OPC_E_BADRIGHTS)"),
-        0xC0040006 => {
+        0x8007_06F4 => Some("COM marshalling error — try restarting the OPC server"),
+        0x8004_0154 => Some("Server is not registered on this machine"),
+        0x8000_4003 => Some("Invalid pointer (E_POINTER)"),
+        0xC004_0004 => Some("Server rejected write — the item may be read-only (OPC_E_BADRIGHTS)"),
+        0xC004_0006 => {
             Some("Data type mismatch — server cannot convert the written value (OPC_E_BADTYPE)")
         }
-        0xC0040007 => Some("Item ID not found in server address space (OPC_E_UNKNOWNITEMID)"),
-        0xC0040008 => Some("Item ID syntax is invalid for this server (OPC_E_INVALIDITEMID)"),
+        0xC004_0007 => Some("Item ID not found in server address space (OPC_E_UNKNOWNITEMID)"),
+        0xC004_0008 => Some("Item ID syntax is invalid for this server (OPC_E_INVALIDITEMID)"),
         _ => None,
     }
 }
@@ -116,7 +110,7 @@ pub fn friendly_com_hint(error: &OpcError) -> Option<&'static str> {
 /// * `operation` - Name of the operation that failed (e.g., "read_tag_values")
 pub fn log_opc_error(error: &OpcError, operation: &str) {
     let hresult = match error {
-        OpcError::Com { source: e } => Some(format!("0x{:08X}", e.code().0 as u32)),
+        OpcError::Com { source: e } => Some(format!("0x{:08X}", e.code().0.cast_unsigned())),
         _ => None,
     };
     let hint = friendly_com_hint(error);

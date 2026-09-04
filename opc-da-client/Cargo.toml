@@ -33,7 +33,6 @@ dev-diagnostics = []
 
 [dependencies]
 # Core (always included)
-anyhow = { workspace = true }
 async-trait = "0.1.86"
 chrono = "0.4.43"
 tokio = { workspace = true }

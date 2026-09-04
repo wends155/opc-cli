@@ -1,5 +1,20 @@
 # Project Context Summary
 
+## 2026-09-04: Error Architecture Refactor & Code Quality Hardening (`opc-da-client`)
+> 📝 **Context Update:**
+> * **Feature:** Eliminate `anyhow` from `opc-da-client`, seal internal COM types, fix COM task memory leak, and remove blanket warning suppressions
+> * **Changes:**
+>   - Replaced `anyhow::Result` return type in `ComGuard::new()` with `OpcResult<Self>`, mapping `windows::core::Error` directly to `OpcError::Com { source: e }`.
+>   - Forwarded concrete `OpcError` directly in `ComWorker::start` MTA init failure branch instead of discarding it as a generic `OpcError::Internal`.
+>   - Deleted dead `impl From<anyhow::Error> for OpcError` bridge in `errors.rs` and removed `anyhow` workspace dependency from `opc-da-client/Cargo.toml`.
+>   - Introduced injectable `ComInitializer` trait (`DefaultComInit`, `FailingComInit`) to enable 100% deterministic unit testing of MTA initialization failure paths without altering public APIs.
+>   - Removed file-level blanket `#![allow(warnings)]` and blanket clippy suppressions from all non-frozen modules (`errors.rs`, `com/mod.rs`, `com/worker.rs`, `com/client.rs`, `com/iterator.rs`), resolving uncovered lints (`clippy::unreadable_literal`, `clippy::use_self`, `clippy::cast_sign_loss`, unused imports) with idiomatic code or targeted attributes.
+>   - Sealed internal COM types (`ComGuard`, `ComRequest`, `ComWorker`, `RemoteArray`, `RemotePointer`, `LocalPointer`) as `pub(crate)` within `com/mod.rs`.
+>   - Fixed COM task memory leak in `guid_to_progid` by ensuring `CoTaskMemFree` is called on both Err and Ok paths; upgraded error mapping to `OpcError::Com { source: e }` and fixed error message typo.
+>   - Added Gate 7b ("Library anyhow Guard") to `scripts/verify.ps1` to prevent `anyhow` from ever re-entering the `opc-da-client` library crate.
+> * **New Constraints:** `opc-da-client` must NEVER depend on or import `anyhow`. All library errors must use `thiserror` via `OpcError`. Non-frozen source files must NOT use blanket `#![allow(warnings)]`.
+> * **Pruned:** `anyhow` dependency in `opc-da-client/Cargo.toml`, `From<anyhow::Error>` in `errors.rs`, and blanket warning suppressions in `com/*.rs`.
+
 ## 2026-09-03: Overhaul `opc-da-client/README.md` (doc-rules.md §7)
 > 📝 **Context Update:**
 > * **Feature:** Standardize `opc-da-client/README.md` layout and API documentation

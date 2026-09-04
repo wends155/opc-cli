@@ -65,7 +65,7 @@ Enumerate available OPC DA servers registered on a local or remote host:
 use opc_da_client::{OpcDaClient, OpcProvider};
 
 #[tokio::main]
-async fn main() -> anyhow::Result<()> {
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let client = OpcDaClient::default();
     let servers = client.list_servers("localhost").await?;
 
@@ -85,7 +85,7 @@ Read current tag values, inspect decomposed quality states, and extract strongly
 use opc_da_client::{OpcDaClient, OpcProvider, OpcValue};
 
 #[tokio::main]
-async fn main() -> anyhow::Result<()> {
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let client = OpcDaClient::default();
     let server = "Matrikon.OPC.Simulation.1";
     let tags = vec![
@@ -134,7 +134,7 @@ Write typed values (`Int`, `Float`, `Bool`, `String`) to an individual OPC tag:
 use opc_da_client::{OpcDaClient, OpcProvider, OpcValue};
 
 #[tokio::main]
-async fn main() -> anyhow::Result<()> {
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let client = OpcDaClient::default();
     let server = "Matrikon.OPC.Simulation.1";
 
@@ -160,7 +160,7 @@ use opc_da_client::{OpcDaClient, OpcProvider};
 use std::sync::{Arc, Mutex, atomic::AtomicUsize};
 
 #[tokio::main]
-async fn main() -> anyhow::Result<()> {
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let client = OpcDaClient::default();
     let server = "Matrikon.OPC.Simulation.1";
 

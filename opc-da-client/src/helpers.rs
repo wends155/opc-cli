@@ -1,4 +1,4 @@
-use crate::errors::{OpcError, OpcResult};
+use crate::errors::{OpcError, OpcResult, friendly_hresult_hint as friendly_com_hresult_hint};
 use crate::provider::OpcValue;
 use windows::Win32::Foundation::{FILETIME, VARIANT_BOOL};
 use windows::Win32::System::Com::{CLSIDFromProgID, CoTaskMemFree, ProgIDFromCLSID};
@@ -8,11 +8,6 @@ use windows::Win32::System::Ole::{
 };
 use windows::Win32::System::Variant::{VARIANT, VT_BOOL, VT_BSTR, VT_EMPTY, VT_I4, VT_NULL, VT_R8};
 use windows::core::{BSTR, PCWSTR};
-
-#[cfg_attr(not(test), allow(unused_imports))]
-pub use crate::errors::friendly_com_hint;
-#[allow(unused_imports)]
-pub use crate::errors::{format_hresult, friendly_hresult_hint as friendly_com_hresult_hint};
 
 // Verify GUID memory layout assumption for FFI (Workstream C#3)
 const _: () = assert!(
@@ -27,23 +22,21 @@ const _: () = assert!(
 /// Helper to convert GUID to `ProgID` using Windows API
 pub fn guid_to_progid(guid: &windows::core::GUID) -> OpcResult<String> {
     // SAFETY: `ProgIDFromCLSID` is a Win32 FFI call that allocates a PWSTR via COM allocator.
-    // SAFETY: We read it and free it with `CoTaskMemFree` before returning.
+    // SAFETY: We read it and ensure `CoTaskMemFree` is always called before returning.
     unsafe {
-        let progid = ProgIDFromCLSID(guid)
-            .map_err(|e| OpcError::Internal(format!("Failed to get ProgID from CLSID: {e}")))?;
+        let progid = ProgIDFromCLSID(guid).map_err(|e| OpcError::Com { source: e })?;
 
-        let result = if progid.is_null() {
-            String::new()
-        } else {
-            progid
-                .to_string()
-                .map_err(|e| OpcError::Conversion(format!("Failed into convert PWSTR: {e}")))?
-        };
-
-        if !progid.is_null() {
-            CoTaskMemFree(Some(progid.as_ptr() as *const _));
+        if progid.is_null() {
+            return Ok(String::new());
         }
 
+        let result = progid.to_string().map_err(|e| {
+            // SAFETY: Must free allocated PWSTR before returning Err to prevent COM task memory leak.
+            CoTaskMemFree(Some(progid.as_ptr().cast()));
+            OpcError::Conversion(format!("Failed to convert PWSTR: {e}"))
+        })?;
+
+        CoTaskMemFree(Some(progid.as_ptr().cast()));
         Ok(result)
     }
 }
@@ -387,6 +380,7 @@ mod tests {
         clippy::unreadable_literal
     )]
     use super::*;
+    use crate::errors::{format_hresult, friendly_com_hint};
 
     #[test]
     fn test_friendly_com_hint_known_codes() {
@@ -818,7 +812,7 @@ mod tests {
         // 0x80040154 is REGDB_E_CLASSNOTREG
         let hr = windows::core::HRESULT(0x8004_0154_u32 as i32);
         assert_eq!(
-            super::format_hresult(hr),
+            format_hresult(hr),
             "0x80040154: Server is not registered on this machine"
         );
     }
@@ -826,6 +820,18 @@ mod tests {
     #[test]
     fn test_format_hresult_unknown() {
         let hr = windows::core::HRESULT(0x1234_5678_u32 as i32);
-        assert_eq!(super::format_hresult(hr), "0x12345678");
+        assert_eq!(format_hresult(hr), "0x12345678");
+    }
+
+    #[test]
+    fn guid_to_progid_zeroed_guid_returns_com_error() {
+        let zeroed = windows::core::GUID::zeroed();
+        let result = guid_to_progid(&zeroed);
+        assert!(result.is_err());
+        if let Err(OpcError::Com { .. }) = result {
+            // Expected: structured COM error preserved
+        } else {
+            panic!("Expected OpcError::Com, got: {result:?}");
+        }
     }
 }
