@@ -62,10 +62,10 @@ opc-da-client = { version = "0.2.0", features = ["test-support"] }
 Enumerate available OPC DA servers registered on a local or remote host:
 
 ```rust,no_run
-use opc_da_client::{OpcDaClient, OpcProvider};
+use opc_da_client::{OpcDaClient, OpcProvider, OpcResult};
 
 #[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
+async fn main() -> OpcResult<()> {
     let client = OpcDaClient::default();
     let servers = client.list_servers("localhost").await?;
 
@@ -82,10 +82,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 Read current tag values, inspect decomposed quality states, and extract strongly-typed values:
 
 ```rust,no_run
-use opc_da_client::{OpcDaClient, OpcProvider, OpcValue};
+use opc_da_client::{OpcDaClient, OpcProvider, OpcResult, OpcValue};
 
 #[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
+async fn main() -> OpcResult<()> {
     let client = OpcDaClient::default();
     let server = "Matrikon.OPC.Simulation.1";
     let tags = vec![
@@ -131,10 +131,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 Write typed values (`Int`, `Float`, `Bool`, `String`) to an individual OPC tag:
 
 ```rust,no_run
-use opc_da_client::{OpcDaClient, OpcProvider, OpcValue};
+use opc_da_client::{OpcDaClient, OpcProvider, OpcResult, OpcValue};
 
 #[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
+async fn main() -> OpcResult<()> {
     let client = OpcDaClient::default();
     let server = "Matrikon.OPC.Simulation.1";
 
@@ -156,11 +156,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 Recursively discover available tags in the server namespace with progress reporting and partial-result harvesting:
 
 ```rust,no_run
-use opc_da_client::{OpcDaClient, OpcProvider};
+use opc_da_client::{OpcDaClient, OpcProvider, OpcResult};
 use std::sync::{Arc, Mutex, atomic::AtomicUsize};
 
 #[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
+async fn main() -> OpcResult<()> {
     let client = OpcDaClient::default();
     let server = "Matrikon.OPC.Simulation.1";
 
@@ -181,11 +181,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 Verify downstream business logic on any platform without requiring Windows COM runtimes:
 
 ```rust,ignore
-use opc_da_client::{MockOpcProvider, OpcProvider, OpcQuality, OpcValue, TagValue};
+use opc_da_client::{MockOpcProvider, OpcProvider, OpcQuality, OpcResult, OpcValue, TagValue};
 use std::sync::Arc;
 
 #[tokio::test]
-async fn test_telemetry_service_with_mock() {
+async fn test_telemetry_service_with_mock() -> OpcResult<()> {
     let mut mock = MockOpcProvider::new();
     mock.expect_read_tag_values()
         .times(1)
@@ -204,12 +204,12 @@ async fn test_telemetry_service_with_mock() {
     let provider: Arc<dyn OpcProvider> = Arc::new(mock);
     let values = provider
         .read_tag_values("SimulatedServer", vec!["Sensor.Temp".into()])
-        .await
-        .unwrap();
+        .await?;
 
     assert_eq!(values.len(), 1);
     assert_eq!(values[0].display_value(), "98.6");
     assert!(values[0].is_good());
+    Ok(())
 }
 ```
 

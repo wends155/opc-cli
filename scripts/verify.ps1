@@ -156,6 +156,28 @@ if (-not (Get-Command rg -ErrorAction SilentlyContinue)) {
             Write-Host "[WARN] rg exited with code ${anyhowExit} scanning for anyhow." -ForegroundColor Yellow
         }
     }
+
+    # Gate 7c: Library Box<dyn Error> Guard (opc-da-client examples and src must use OpcResult, not Box<dyn Error>)
+    Write-Host "`n>>> Library Box<dyn Error> Guard" -ForegroundColor Yellow
+    $libReadmePath = Join-Path $PSScriptRoot ".." "opc-da-client" "README.md"
+    $libTargets = @($libSrcPath, $libReadmePath)
+    $boxErrorMatches = rg --color=never -n "Box\s*<\s*dyn\s+(?:std::error::)?Error\s*>" $libTargets 2>&1
+    $boxErrorExit = $LASTEXITCODE
+    if ($boxErrorExit -eq 0) {
+        Write-Host "========================================" -ForegroundColor Red
+        Write-Host " VERIFICATION FAILED" -ForegroundColor Red
+        Write-Host "========================================" -ForegroundColor Red
+        Write-Host " What : Library Box<dyn Error> Guard" -ForegroundColor Red
+        Write-Host " Where: opc-da-client (src and README.md)" -ForegroundColor Red
+        Write-Host " Why  : Found 'Box<dyn Error>' in opc-da-client (use OpcResult / OpcError instead):" -ForegroundColor Red
+        $boxErrorMatches | ForEach-Object { Write-Host "   $_" -ForegroundColor Red }
+        Write-Host "========================================`n" -ForegroundColor Red
+        exit 1
+    } elseif ($boxErrorExit -eq 1) {
+        Write-Host "No Box<dyn Error> usage found in opc-da-client (clean typesafe domain)." -ForegroundColor Green
+    } else {
+        Write-Host "[WARN] rg exited with code ${boxErrorExit} scanning for Box<dyn Error>." -ForegroundColor Yellow
+    }
 }
 
 # Gate 8: PowerShell Script Syntax & Strict Mode Check

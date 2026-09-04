@@ -8,11 +8,10 @@
 //! ## Quick Start
 //!
 //! ```no_run
-//! # use std::error::Error;
-//! use opc_da_client::{OpcDaClient, OpcProvider};
+//! use opc_da_client::{OpcDaClient, OpcProvider, OpcResult};
 //!
 //! # #[tokio::main]
-//! # async fn main() -> Result<(), Box<dyn Error>> {
+//! # async fn main() -> OpcResult<()> {
 //! let client = OpcDaClient::default();
 //! let servers = client.list_servers("localhost").await?;
 //! # Ok(())

@@ -15,11 +15,12 @@ pub struct OpcDaClient<C: ServerConnector + 'static = ComConnector> {
 
 /// Returns the default `OpcDaClient` using native COM settings.
 ///
-/// # Panics
+/// If the background COM worker thread cannot be started or COM
+/// Multi-Threaded Apartment (MTA) initialization fails on the worker thread,
+/// this logs an error and returns a closed client whose operations will fail
+/// cleanly with [`crate::errors::OpcError::Connection`].
 ///
-/// Panics if the background COM worker thread cannot be started or COM
-/// Multi-Threaded Apartment (MTA) initialization fails on the worker thread.
-/// Use [`OpcDaClient::new`] for fallible construction.
+/// Use [`OpcDaClient::new`] for explicit fallible construction.
 impl Default for OpcDaClient<ComConnector> {
     fn default() -> Self {
         match Self::new(ComConnector) {
