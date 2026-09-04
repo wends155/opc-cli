@@ -1,5 +1,15 @@
 # Project Context Summary
 
+## 2026-09-04: Documentation Synchronization for helpers.rs Dissolution (`opc-da-client`)
+> 📝 **Context Update:**
+> * **Feature:** Synchronize `opc-da-client/README.md` and `opc-da-client/spec.md` with the dissolution of `helpers.rs`, encapsulation of `com::variant`, and un-gating of pure protocol domain types.
+> * **Changes:**
+>   - Updated `opc-da-client/README.md` API surface table to include public domain types `GroupHandle`, `ItemHandle`, `BrowseType`, and `BrowseDirection`, and updated Architecture Layer 3 description to declare `com::variant`.
+>   - Updated `opc-da-client/spec.md`: bumped verification hash to `c1feee3`; replaced `helpers` internal module specification with `com::variant` (`variant_to_string`, `variant_to_opc_value`, `opc_value_to_variant`); documented `connect_server` and `guid_to_progid` in `com::connector`; and expanded Section 4 unit test inventory with `com::variant`, `errors.rs`, and `com::connector` checklists.
+>   - Verified all 9 quality gates in `scripts/verify.ps1` exit 0.
+> * **New Constraints:** `spec.md` internal utilities section must remain synchronized with `com::variant`. All public protocol types in `types.rs` are documented in both `README.md` API surface and `spec.md`.
+> * **Pruned:** Outdated references to `helpers` module and deprecated conversion signatures in `spec.md`.
+
 ## 2026-09-04: Tier 1 COM/FFI Decoupling & helpers.rs Dissolution (`opc-da-client`, `scripts`)
 > 📝 **Context Update:**
 > * **Feature:** Dissolve `helpers.rs`, encapsulate VARIANT and SafeArray conversions into `com::variant` (`pub(crate)`), relocate server connection into `com::connector`, decouple `provider.rs` by reusing canonical `DisplayOptionTimestamp`, un-gate `types.rs`, and enforce feature independence in CI.
