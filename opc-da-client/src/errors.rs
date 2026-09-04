@@ -4,9 +4,29 @@ use thiserror::Error;
 use windows::core::HRESULT;
 
 /// Result type alias for OPC DA operations.
+///
+/// # Examples
+///
+/// ```
+/// use opc_da_client::OpcResult;
+///
+/// fn check_health() -> OpcResult<()> {
+///     Ok(())
+/// }
+/// assert!(check_health().is_ok());
+/// ```
 pub type OpcResult<T> = Result<T, OpcError>;
 
 /// Centralized error enum for the OPC DA client.
+///
+/// # Examples
+///
+/// ```
+/// use opc_da_client::OpcError;
+///
+/// let err = OpcError::Connection("Server unreachable".to_string());
+/// assert_eq!(err.to_string(), "Connection failed: Server unreachable");
+/// ```
 #[derive(Debug, Error)]
 #[non_exhaustive]
 pub enum OpcError {
@@ -58,6 +78,17 @@ impl From<std::num::TryFromIntError> for OpcError {
 }
 
 /// Helper to format HRESULT with friendly hints.
+///
+/// # Examples
+///
+/// ```
+/// use opc_da_client::format_hresult;
+/// use windows::core::HRESULT;
+///
+/// let formatted = format_hresult(HRESULT(0x8000_4003u32 as i32));
+/// assert!(formatted.contains("0x80004003"));
+/// assert!(formatted.contains("Invalid pointer"));
+/// ```
 pub fn format_hresult(hr: HRESULT) -> String {
     let hex = format!("0x{:08X}", hr.0.cast_unsigned());
     match friendly_hresult_hint(hr) {
@@ -67,6 +98,16 @@ pub fn format_hresult(hr: HRESULT) -> String {
 }
 
 /// Maps known COM/DCOM error codes to actionable user hints.
+///
+/// # Examples
+///
+/// ```
+/// use opc_da_client::errors::friendly_hresult_hint;
+/// use windows::core::HRESULT;
+///
+/// let hint = friendly_hresult_hint(HRESULT(0x8004_0154u32 as i32));
+/// assert_eq!(hint, Some("Server is not registered on this machine"));
+/// ```
 pub fn friendly_hresult_hint(hr: HRESULT) -> Option<&'static str> {
     match hr.0.cast_unsigned() {
         0x8004_0112 => Some("Server license does not permit OPC client connections"),
@@ -93,6 +134,15 @@ pub fn friendly_hresult_hint(hr: HRESULT) -> Option<&'static str> {
 }
 
 /// Maps an [`OpcError`] to a friendly COM hint if it is a COM error.
+///
+/// # Examples
+///
+/// ```
+/// use opc_da_client::{friendly_com_hint, OpcError};
+///
+/// let err = OpcError::Connection("host unreachable".into());
+/// assert_eq!(friendly_com_hint(&err), None);
+/// ```
 pub fn friendly_com_hint(error: &OpcError) -> Option<&'static str> {
     match error {
         OpcError::Com { source: e } => friendly_hresult_hint(e.code()),

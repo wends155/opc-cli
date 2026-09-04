@@ -3,7 +3,7 @@
 > **Behavioral Source of Truth** for the `opc-da-client` library crate.
 > Defines *what* each module should do — independent of current implementation.
 >
-> Last verified against: 006cf35
+> Last verified against: 75871f9
 
 ---
 
@@ -21,10 +21,10 @@ All methods use `#[async_trait]`.
 
 | Method | Signature | Description |
 | :--- | :--- | :--- |
-| `list_servers` | `async fn list_servers(&self, host: &str) -> Result<Vec<String>>` | Enumerate OPC DA servers available on `host`. |
-| `browse_tags` | `async fn browse_tags(&self, server: &str, max_tags: usize, progress: Arc<AtomicUsize>, tags_sink: Arc<Mutex<Vec<String>>>) -> Result<Vec<String>>` | Recursively discover tags on `server`, pushing each to `tags_sink` as found. |
-| `read_tag_values` | `async fn read_tag_values(&self, server: &str, tag_ids: Vec<String>) -> Result<Vec<TagValue>>` | Read current value, quality, and timestamp for the given tag IDs. |
-| `write_tag_value` | `async fn write_tag_value(&self, server: &str, tag_id: &str, value: OpcValue) -> Result<WriteResult>` | Write a typed value to a single tag on `server`. |
+| `list_servers` | `async fn list_servers(&self, host: &str) -> OpcResult<Vec<String>>` | Enumerate OPC DA servers available on `host`. |
+| `browse_tags` | `async fn browse_tags(&self, server: &str, max_tags: usize, progress: Arc<AtomicUsize>, tags_sink: Arc<Mutex<Vec<String>>>) -> OpcResult<Vec<String>>` | Recursively discover tags on `server`, pushing each to `tags_sink` as found. |
+| `read_tag_values` | `async fn read_tag_values(&self, server: &str, tag_ids: Vec<String>) -> OpcResult<Vec<TagValue>>` | Read current value, quality, and timestamp for the given tag IDs. |
+| `write_tag_value` | `async fn write_tag_value(&self, server: &str, tag_id: &str, value: OpcValue) -> OpcResult<WriteResult>` | Write a typed value to a single tag on `server`. |
 
 **Error Conditions:**
 
@@ -177,7 +177,7 @@ All methods use `#[async_trait]`.
 
 | Function | Signature | Purpose |
 | :--- | :--- | :--- |
-| `guid_to_progid` | `fn(guid: &GUID) -> Result<String>` | Converts a COM GUID to its registered ProgID string. |
+| `guid_to_progid` | `fn(guid: &windows::core::GUID) -> OpcResult<String>` | Converts a COM GUID to its registered ProgID string. |
 | `variant_to_string` | `fn(variant: &VARIANT) -> String` | Formats a COM VARIANT as a display string. Handles VT_EMPTY, VT_NULL, VT_I2, VT_I4, VT_R4, VT_R8, VT_CY, VT_DATE, VT_BSTR, VT_ERROR, VT_BOOL, VT_I1, VT_UI1, VT_UI2, VT_UI4, VT_I8, VT_UI8, and VT_ARRAY composites. |
 | `quality_to_string` | `fn(quality: u16) -> String` | Maps OPC quality bitmask to `"Good"` / `"Bad"` / `"Uncertain"`. |
 | `filetime_to_string` | `fn(ft: &FILETIME) -> String` | Converts Win32 FILETIME to local `YYYY-MM-DD HH:MM:SS` string. |
@@ -223,7 +223,7 @@ fn browse_recursive<S: ConnectedServer>(
     progress: &Arc<AtomicUsize>,
     tags_sink: &Arc<Mutex<Vec<String>>>,
     depth: usize,
-) -> Result<()>
+) -> OpcResult<()>
 ```
 
 **Behavior:**
@@ -291,13 +291,12 @@ Before calling `browse_recursive`, `browse_tags` attempts `browse_opc_item_ids(B
 **Purpose:** Domain-specific error enumeration (`OpcError`) and `OpcResult<T>` type alias, replacing ad-hoc errors across the crate:
 
 - `OpcError::Com { source: windows::core::Error }`: Propagated Windows COM failure with HRESULT.
-- `OpcError::ConnectionFailed(String)`: Target host/server connection failure.
-- `OpcError::ServerNotFound(String)`: Unregistered or missing ProgID.
-- `OpcError::TagNotFound(String)`: Item ID missing from address space.
-- `OpcError::InvalidState(String)`: Invalid operation sequence or unexpected server state.
+- `OpcError::Connection(String)`: Target host/server connection failure.
+- `OpcError::Server(String, u32)`: Server-specific error reported via status code.
 - `OpcError::Conversion(String)`: Data type conversion failure.
+- `OpcError::InvalidState(String)`: Invalid operation sequence or unexpected server state.
+- `OpcError::NotImplemented(String)`: Unsupported optional COM interface or feature.
 - `OpcError::Internal(String)`: Channel, worker thread, or internal invariant failure.
-- `OpcError::NotImplemented(String)`: Unsupported optional COM interface.
 
 ---
 
@@ -435,8 +434,15 @@ Defined in § 1.1. See table above.
 
 ### Doc Tests
 
-- [x] `friendly_com_hint` — runnable doctest in `helpers.rs`.
+- [x] `friendly_com_hint`, `format_hresult`, `friendly_hresult_hint` — runnable doctests in `errors.rs`.
+- [x] `OpcResult`, `OpcError` — runnable doctests in `errors.rs`.
+- [x] `TagValue`, `OpcValue`, `WriteResult` — runnable doctests in `provider.rs`.
+- [x] `OpcProvider` trait methods (`list_servers`, `browse_tags`, `read_tag_values`, `write_tag_value`) — doctests in `provider.rs`.
+- [x] `GroupHandle`, `ItemHandle`, `OpcQuality`, `BrowseType`, `BrowseDirection` — runnable doctests in `types.rs`.
+- [x] `OpcDaClient::new` — doctest in `com/client.rs`.
 - [x] `ComGuard` — internal-only ignored doctest in `com/guard.rs`.
+- [x] Quick Start — runnable doctest in `lib.rs`.
+- [x] Usage Examples (Listing, Reading, Writing, Browsing) — compiled doctests in `README.md`.
 
 ### Integration / Manual Tests
 

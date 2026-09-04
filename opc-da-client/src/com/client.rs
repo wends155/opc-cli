@@ -37,6 +37,23 @@ impl Default for OpcDaClient<ComConnector> {
 
 impl<C: ServerConnector + 'static> OpcDaClient<C> {
     /// Creates a new `OpcDaClient` with the given connector.
+    ///
+    /// # Arguments
+    /// * `connector` - Backend connector implementing [`ServerConnector`].
+    ///
+    /// # Errors
+    /// Returns [`crate::errors::OpcError::Connection`] if the background COM worker thread
+    /// fails to spawn or MTA apartment initialization fails.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,no_run
+    /// use opc_da_client::{ComConnector, OpcDaClient, OpcResult};
+    ///
+    /// fn init_client() -> OpcResult<OpcDaClient> {
+    ///     OpcDaClient::new(ComConnector)
+    /// }
+    /// ```
     pub fn new(connector: C) -> OpcResult<Self> {
         tracing::info!("Initializing OpcDaClient...");
         let worker = ComWorker::start(Arc::new(connector))?;

@@ -100,6 +100,18 @@ pub enum QualitySubstatus {
 /// - **Substatus** (bits 2-5): Detailed reason (e.g. `CommFailure`, `OutOfService`, `EguExceeded`).
 /// - **Limit** (bits 0-1): Limit status (e.g. `LowLimited`, `HighLimited`, `Constant`).
 /// - **Raw** (`u16`): The complete 16-bit quality word received from the OPC server.
+///
+/// # Examples
+///
+/// ```
+/// use opc_da_client::{OpcQuality, QualityMajor, QualitySubstatus};
+///
+/// let quality = OpcQuality::from(0x00C0);
+/// assert!(quality.is_good());
+/// assert_eq!(quality.major, QualityMajor::Good);
+/// assert_eq!(quality.substatus, QualitySubstatus::NonSpecific);
+/// assert_eq!(quality.to_string(), "Good");
+/// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub struct OpcQuality {
     /// Major quality category.
@@ -349,6 +361,16 @@ pub struct ServerStatus {
 }
 
 /// OPC DA address space browse type — replaces raw u32 constants.
+///
+/// # Examples
+///
+/// ```
+/// use opc_da_client::BrowseType;
+///
+/// let b = BrowseType::Branch;
+/// assert_eq!(u32::from(b), 1);
+/// assert_eq!(BrowseType::try_from(2).ok(), Some(BrowseType::Leaf));
+/// ```
 #[repr(u32)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum BrowseType {
@@ -380,6 +402,16 @@ impl TryFrom<u32> for BrowseType {
 }
 
 /// OPC DA browse direction — replaces raw u32 constants.
+///
+/// # Examples
+///
+/// ```
+/// use opc_da_client::BrowseDirection;
+///
+/// let dir = BrowseDirection::Up;
+/// assert_eq!(u32::from(dir), 1);
+/// assert_eq!(BrowseDirection::try_from(2).ok(), Some(BrowseDirection::Down));
+/// ```
 #[repr(u32)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum BrowseDirection {

@@ -144,16 +144,62 @@ pub struct WriteResult {
 pub trait OpcProvider: Send + Sync {
     /// List available OPC DA servers on the given host.
     ///
+    /// # Arguments
+    /// * `host` - Hostname or IP address to target (e.g., `"localhost"`).
+    ///
+    /// # Returns
+    /// A list of server ProgIDs sorted alphabetically.
+    ///
     /// # Errors
-    /// Returns `Err` if COM initialization fails or the server registry
-    /// cannot be enumerated.
+    /// Returns [`crate::errors::OpcError`] if COM initialization fails or the server
+    /// registry cannot be enumerated.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,no_run
+    /// use opc_da_client::{OpcDaClient, OpcProvider, OpcResult};
+    ///
+    /// # #[tokio::main]
+    /// # async fn main() -> OpcResult<()> {
+    /// let client = OpcDaClient::default();
+    /// let servers = client.list_servers("localhost").await?;
+    /// assert!(servers.is_empty() || !servers.is_empty());
+    /// # Ok(())
+    /// # }
+    /// ```
     async fn list_servers(&self, host: &str) -> OpcResult<Vec<String>>;
 
     /// Browse tags recursively, pushing discoveries to `tags_sink`.
     ///
+    /// # Arguments
+    /// * `server` - ProgID of the OPC server.
+    /// * `max_tags` - Maximum number of tags to discover before terminating.
+    /// * `progress` - Atomic counter updated with each discovered tag count.
+    /// * `tags_sink` - Shared mutex-protected vector storing discovered tag names.
+    ///
+    /// # Returns
+    /// The complete list of discovered tag identifiers.
+    ///
     /// # Errors
-    /// Returns `Err` if the server connection fails, the `ProgID` cannot be
-    /// resolved, or the namespace walk encounters an unrecoverable error.
+    /// Returns [`crate::errors::OpcError`] if the server connection fails, the `ProgID`
+    /// cannot be resolved, or the namespace walk encounters an unrecoverable error.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,no_run
+    /// use opc_da_client::{OpcDaClient, OpcProvider, OpcResult};
+    /// use std::sync::{Arc, Mutex, atomic::AtomicUsize};
+    ///
+    /// # #[tokio::main]
+    /// # async fn main() -> OpcResult<()> {
+    /// let client = OpcDaClient::default();
+    /// let sink = Arc::new(Mutex::new(Vec::new()));
+    /// let progress = Arc::new(AtomicUsize::new(0));
+    /// let tags = client.browse_tags("Matrikon.OPC.Simulation.1", 100, progress, sink).await?;
+    /// assert!(tags.len() <= 100);
+    /// # Ok(())
+    /// # }
+    /// ```
     async fn browse_tags(
         &self,
         server: &str,
@@ -164,17 +210,65 @@ pub trait OpcProvider: Send + Sync {
 
     /// Read current values for the given tag IDs.
     ///
+    /// # Arguments
+    /// * `server` - ProgID of the OPC server.
+    /// * `tag_ids` - List of fully qualified tag identifiers to read.
+    ///
+    /// # Returns
+    /// A vector of [`TagValue`] items preserving input tag order.
+    ///
     /// # Errors
-    /// Returns `Err` if the server connection fails, no items can be added
-    /// to the OPC group, or the synchronous read operation fails.
+    /// Returns [`crate::errors::OpcError`] if the server connection fails, no items
+    /// can be added to the OPC group, or the synchronous read operation fails.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,no_run
+    /// use opc_da_client::{OpcDaClient, OpcProvider, OpcResult, TagValue};
+    ///
+    /// # #[tokio::main]
+    /// # async fn main() -> OpcResult<()> {
+    /// let client = OpcDaClient::default();
+    /// let tags = vec!["Random.Int4".to_string(), "Random.Real8".to_string()];
+    /// let values = client.read_tag_values("Matrikon.OPC.Simulation.1", tags).await?;
+    /// for v in &values {
+    ///     let _val = v.display_value();
+    /// }
+    /// # Ok(())
+    /// # }
+    /// ```
     async fn read_tag_values(&self, server: &str, tag_ids: Vec<String>)
     -> OpcResult<Vec<TagValue>>;
 
     /// Write a value to a single OPC DA tag.
     ///
+    /// # Arguments
+    /// * `server` - ProgID of the OPC server.
+    /// * `tag_id` - Tag identifier to write to.
+    /// * `value` - Strongly-typed [`OpcValue`] to write.
+    ///
+    /// # Returns
+    /// A [`WriteResult`] indicating per-tag write success or failure.
+    ///
     /// # Errors
-    /// Returns `Err` if the server connection fails, the tag cannot be added
-    /// to the OPC group, or the synchronous write operation fails.
+    /// Returns [`crate::errors::OpcError`] if the server connection fails, the tag
+    /// cannot be added to the OPC group, or the synchronous write operation fails.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,no_run
+    /// use opc_da_client::{OpcDaClient, OpcProvider, OpcResult, OpcValue, WriteResult};
+    ///
+    /// # #[tokio::main]
+    /// # async fn main() -> OpcResult<()> {
+    /// let client = OpcDaClient::default();
+    /// let result = client
+    ///     .write_tag_value("Matrikon.OPC.Simulation.1", "Bucket Brigade.Int4", OpcValue::Int(42))
+    ///     .await?;
+    /// let _success = result.success;
+    /// # Ok(())
+    /// # }
+    /// ```
     async fn write_tag_value(
         &self,
         server: &str,
