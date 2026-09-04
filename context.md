@@ -1,5 +1,18 @@
 # Project Context Summary
 
+## 2026-09-04: Architecture Documentation Synchronization (`architecture.md`, `opc-da-client`)
+> 📝 **Context Update:**
+> * **Feature:** Synchronize workspace and crate architecture specifications with active 3-tier COM pipeline, `TagCollector` domain model, updated test metrics, and cooperative cancellation pattern.
+> * **Changes:**
+>   - Updated root `architecture.md §4`, `§5`, and `§6` to declare `TagCollector` under `provider.rs` ownership and permit import by `opc-cli`.
+>   - Modernized root `architecture.md §13` Mermaid diagrams: Data Flow now shows `com::client (OpcDaClient)` → `com::worker (ComWorker MTA)` → `com::connector (ComConnector)` → `raw::bindings (OPCDA/OPCCOMN)`; Error Propagation Flow now shows native `OpcResult<T>` (`Err(OpcError::Com { source })`) propagation instead of `anyhow::Error`.
+>   - Updated root `architecture.md §10` test metrics to reflect 70 unit tests in `opc-da-client`, 54 doc-tests, and 38+ unit tests in `opc-cli`.
+>   - Documented cooperative cancellation pattern in root `architecture.md §14 Known Constraints`.
+>   - Synchronized crate `opc-da-client/architecture.md §1`, `§4`, and `§5` to declare `TagCollector` as part of the Public Domain API and owned by `provider`.
+>   - Verified all 8 quality gates in `scripts/verify.ps1` exit 0.
+> * **New Constraints:** Architectural diagrams and module ownership in `architecture.md` must strictly match the 3-tier COM design and native error types.
+> * **Pruned:** Outdated references to legacy `backend::opc_da`, stale test counts, and legacy `anyhow` diagram errors.
+
 ## 2026-09-04: Encapsulate `browse_tags` State into `TagCollector` (`opc-da-client`, `opc-cli`)
 > 📝 **Context Update:**
 > * **Feature:** Replace leaky raw Arcs, Mutexes, and scalar `max_tags` in `browse_tags` with dedicated, bounded, cancellable container `TagCollector`.

@@ -11,7 +11,7 @@
 | **Status** | ✅ 0.2.0 baseline (Crates.io) |
 
 The `opc-da-client` library provides an async, trait-based API that abstracts away the complexities of Windows COM/DCOM and legacy OPC Data Access 2.05a / 3.0 protocols. It follows a strict 3-tier decoupled architecture:
-1. **Public Domain API (`provider.rs`, `types.rs`)**: High-level async trait (`OpcProvider`), canonical types (`TagValue`, `OpcValue`, `WriteResult`), and zero-allocation quality word (`OpcQuality`).
+1. **Public Domain API (`provider.rs`, `types.rs`)**: High-level async trait (`OpcProvider`), canonical types (`TagValue`, `OpcValue`, `WriteResult`, `TagCollector`), and zero-allocation quality word (`OpcQuality`).
 2. **Pure-Rust Facade & Worker (`com::client`, `com::worker`, `com::connector`)**: Dedicated background COM worker thread with request/response channels, connection pooling, and pure-Rust connector traits (`ConnectedServer`, `ConnectedGroup`).
 3. **Crate-Internal Low-Level FFI Subsystem (`raw/`)**: Frozen Win32 COM bindings, unsafe COM allocators, and dormant bridge types sealed behind `pub(crate) mod raw;`.
 
@@ -70,7 +70,7 @@ opc-da-client/
 ├── spec.md                 # Behavioral contracts — Behavioral Source of Truth
 └── src/
     ├── lib.rs              # Crate root: module declarations, public re-exports
-    ├── provider.rs         # OpcProvider trait + TagValue, OpcValue, WriteResult
+    ├── provider.rs         # OpcProvider trait + TagValue, OpcValue, WriteResult, TagCollector
     ├── types.rs            # Canonical domain types & handles (GroupHandle, ItemHandle, OpcQuality, ...)
     ├── errors.rs           # OpcError, OpcResult, HRESULT hints, structured error logging
     ├── helpers.rs          # Formatters & conversions: variant_to_opc_value, filetime_to_string, etc.
@@ -93,7 +93,7 @@ opc-da-client/
 ## 5. Module Boundaries
 
 ### `provider`
-- **Owns**: The primary public `OpcProvider` async trait, canonical DTOs (`TagValue`, `OpcValue`, `WriteResult`).
+- **Owns**: The primary public `OpcProvider` async trait, canonical DTOs (`TagValue`, `OpcValue`, `WriteResult`), tag accumulation container (`TagCollector`).
 - **Does NOT own**: COM apartment management, channel dispatching, Win32 VARIANTs, or protocol encoding.
 - **Trait Interfaces**: `OpcProvider`.
 - **Mock Availability**: `MockOpcProvider` (exported under `test-support` feature via `mockall`).

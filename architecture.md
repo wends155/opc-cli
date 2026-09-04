@@ -57,7 +57,7 @@ opc-cli/
 │   ├── spec.md                 # Library behavioral contracts
 │   └── src/
 │       ├── lib.rs              # Library root & public re-exports
-│       ├── provider.rs         # OpcProvider trait, TagValue, OpcValue, WriteResult
+│       ├── provider.rs         # OpcProvider trait, TagValue, OpcValue, WriteResult, TagCollector
 │       ├── types.rs            # Canonical protocol types, handles, and browse enums
 │       ├── errors.rs           # Canonical OpcError, OpcResult, and HRESULT hints
 │       ├── helpers.rs          # COM utilities: format_hresult, variant/quality/time converters
@@ -94,7 +94,7 @@ opc-cli/
 - **Mock Availability**: Fully mockable via `MockOpcProvider` (compiled when `feature = "test-support"` is active in `opc-da-client`).
 
 ### `opc-da-client` (Core Client Library)
-- **Owns**: Public API (`OpcProvider`), data structs (`TagValue`, `OpcValue`, `WriteResult`), error definitions (`OpcError`), COM hint engine (`friendly_com_hint`).
+- **Owns**: Public API (`OpcProvider`), data structs (`TagValue`, `OpcValue`, `WriteResult`, `TagCollector`), error definitions (`OpcError`), COM hint engine (`friendly_com_hint`).
 - **Does NOT Own**: Terminal rendering, direct COM worker loop implementation.
 - **Trait Interfaces**: Exports `OpcProvider`.
 - **Mock Availability**: Provides `MockOpcProvider` via `mockall`.
@@ -115,9 +115,9 @@ opc-cli/
 
 | Module | May Import | Must NOT Import |
 |:---|:---|:---|
-| `opc-cli` (TUI App) | `opc-da-client` (`OpcProvider` trait, `OpcValue`, `TagValue`, `WriteResult`, `OpcError`), `ratatui`, `crossterm`, `tokio`, `tracing` | Direct Windows COM APIs (`windows::Win32::System::Com`), `backend::opc_da` concrete types |
+| `opc-cli` (TUI App) | `opc-da-client` (`OpcProvider` trait, `OpcValue`, `TagValue`, `WriteResult`, `TagCollector`, `OpcError`), `ratatui`, `crossterm`, `tokio`, `tracing` | Direct Windows COM APIs (`windows::Win32::System::Com`), `com::client` / `com::worker` concrete types |
 | `opc-da-client::provider` | `thiserror`, `chrono`, `serde` | `windows`, `ratatui`, `crossterm`, `tokio` |
-| `opc-da-client::com_worker` | `windows`, `windows-core`, `provider` types, `helpers`, `tokio::sync` | `opc-cli`, `ratatui`, `crossterm` |
+| `opc-da-client::com` | `windows`, `windows-core`, `provider` types, `helpers`, `tokio::sync` | `opc-cli`, `ratatui`, `crossterm` |
 | `compat/*` (Polyfills) | `core`, `windows-sys` / raw Win32 FFI | `std`, `tokio`, `opc-cli`, `opc-da-client` |
 
 ## 7. Toolchain
@@ -169,9 +169,9 @@ The project uses a unified dual-interface build system:
 
 ## 10. Testing Strategy
 
-- **Unit Testing**: Mock-based testing using `MockOpcProvider` (`mockall`). TUI navigation flow, state transitions, search cycling, and ring-buffer logic are verified without Windows COM dependencies (34 unit tests in `opc-cli`).
-- **COM Worker Testing**: `ComWorker` unit tests (`opc-da-client/src/com_worker.rs`) use `ConfigurableMockConnector` to test write paths, server connection pooling (`connect_count == 1`), stale connection eviction (`connect_count == 2`), thread panic safety, and worker drop behaviors (37 unit tests in `opc-da-client`).
-- **Doc Testing**: Public API items include runnable doc tests (`cargo test --doc`).
+- **Unit Testing**: Mock-based testing using `MockOpcProvider` (`mockall`). TUI navigation flow, state transitions, search cycling, and ring-buffer logic are verified without Windows COM dependencies (38+ unit tests in `opc-cli`).
+- **COM Worker Testing**: `ComWorker` unit tests (`opc-da-client/src/com/worker.rs`) use `ConfigurableMockConnector` to test write paths, server connection pooling (`connect_count == 1`), stale connection eviction (`connect_count == 2`), thread panic safety, and worker drop behaviors (70 unit tests in `opc-da-client`).
+- **Doc Testing**: Public API items include runnable doc tests (`cargo test --doc`, 54 doc-tests).
 - **Polyfill Build Gates**: Independent compilation of `compat/*` polyfill crates inside `scripts/verify.ps1`.
 - **AST-Grep Structural Safety Gates**: `sg scan` enforcement of zero unwrap/expect in production library code and mandatory `// SAFETY:` rationale on all unsafe blocks. Rules are validated via ast-grep unit tests before static scans.
 - **Forbidden Macro Scanner**: Automated `rg` scan ensuring zero `println!`, `dbg!`, or `todo!` macros in `opc-da-client/src/`.
@@ -257,12 +257,13 @@ graph TD
     CLI["opc-cli"]
     subgraph "opc-da-client"
         Provider["trait OpcProvider"]
-        Backend["backend::opc_da"]
-        OpcDaInternal["opc_da (merged)"]
-        Bindings["bindings (merged)"]
+        Client["com::client (OpcDaClient)"]
+        Worker["com::worker (ComWorker MTA)"]
+        Connector["com::connector (ComConnector)"]
+        Bindings["raw::bindings (OPCDA/OPCCOMN)"]
     end
-    CLI --> Provider --> Backend --> OpcDaInternal
-    OpcDaInternal --> Bindings --> WinCOM["Windows COM/DCOM"]
+    CLI --> Provider --> Client --> Worker --> Connector
+    Connector --> Bindings --> WinCOM["Windows COM/DCOM"]
     
     subgraph Rendering
         AppState --> |Read| View[UI Render Functions]
@@ -288,9 +289,9 @@ sequenceDiagram
 
     Server-->>Worker: COM Failure (e.g. HRESULT 0x800706BA)
     Worker->>Worker: Check is_connection_error() -> Evict stale server handle
-    Worker-->>Client: OpcError::Com { source }
+    Worker-->>Client: Err(OpcError::Com { source })
     Client->>Client: friendly_com_hint(&err) -> "RPC server unavailable..."
-    Client-->>App: Err(anyhow::Error with context)
+    Client-->>App: Err(OpcError::Com { source })
     App->>App: Format error chain {:#}
     App-->>UI: Display friendly hint & breadcrumb on Status Bar
 ```
@@ -300,6 +301,7 @@ sequenceDiagram
 - **NT 6.1 Import Patching**: Windows 7 lacks `GetSystemTimePreciseAsFileTime`. `scripts/package-win7.ps1` binary-patches the import table to `GetSystemTimeAsFileTime`.
 - **StringIterator Bug Workaround (OPC-BUG-001)**: Handled internally by `StringIterator` zeroing cache and skipping null `PWSTR` entries.
 - **Windows COM Single-Threaded Apartment Constraints**: Managed by routing all COM operations through `ComWorker` on a dedicated MTA thread.
+- **Tag Browsing Cooperative Cancellation**: Long-running tag browses cooperatively check `TagCollector::is_cancelled()` across recursion and chunk boundaries, preventing async timeout worker thread starvation.
 
 ## 15. Data Model
 - Application state is managed in-memory via `App` struct model. No persistent database or SQL storage is required.
