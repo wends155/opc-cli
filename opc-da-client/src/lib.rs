@@ -43,7 +43,7 @@ pub(crate) mod raw;
 pub mod com;
 
 // Stable public API
-pub use errors::{OpcError, OpcResult, format_hresult, friendly_com_hint, log_opc_error};
+pub use errors::{OpcError, OpcResult};
 pub use provider::{
     DisplayOptionOpcValue, DisplayOptionTimestamp, OpcProvider, OpcQuality, OpcValue,
     OpcValueOptionExt, QualityLimit, QualityMajor, QualitySubstatus, SystemTimeOptionExt,

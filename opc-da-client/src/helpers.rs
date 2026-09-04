@@ -1,5 +1,6 @@
-use crate::errors::{OpcError, OpcResult, friendly_hresult_hint as friendly_com_hresult_hint};
+use crate::errors::{OpcError, OpcResult};
 use crate::provider::OpcValue;
+use crate::raw::hresult::friendly_hresult_hint as friendly_com_hresult_hint;
 use windows::Win32::Foundation::{FILETIME, VARIANT_BOOL};
 use windows::Win32::System::Com::{CLSIDFromProgID, CoTaskMemFree, ProgIDFromCLSID};
 use windows::Win32::System::Ole::{
@@ -380,75 +381,75 @@ mod tests {
         clippy::unreadable_literal
     )]
     use super::*;
-    use crate::errors::{format_hresult, friendly_com_hint};
+    use crate::raw::hresult::format_hresult;
 
     #[test]
-    fn test_friendly_com_hint_known_codes() {
+    fn test_friendly_hint_known_codes() {
         let err = OpcError::Com {
             source: windows::core::Error::from_hresult(windows::core::HRESULT(
-                0x800706F4_u32 as i32,
+                0x8007_06F4_u32.cast_signed(),
             )),
         };
         assert_eq!(
-            friendly_com_hint(&err),
+            err.friendly_hint(),
             Some("COM marshalling error — try restarting the OPC server")
         );
 
         let err = OpcError::Com {
             source: windows::core::Error::from_hresult(windows::core::HRESULT(
-                0x80040154_u32 as i32,
+                0x8004_0154_u32.cast_signed(),
             )),
         };
         assert_eq!(
-            friendly_com_hint(&err),
+            err.friendly_hint(),
             Some("Server is not registered on this machine")
         );
 
         let err = OpcError::Com {
             source: windows::core::Error::from_hresult(windows::core::HRESULT(
-                0xC0040004_u32 as i32,
+                0xC004_0004_u32.cast_signed(),
             )),
         };
         assert_eq!(
-            friendly_com_hint(&err),
+            err.friendly_hint(),
             Some("Server rejected write — the item may be read-only (OPC_E_BADRIGHTS)"),
         );
 
         let err = OpcError::Com {
             source: windows::core::Error::from_hresult(windows::core::HRESULT(
-                0xC0040006_u32 as i32,
+                0xC004_0006_u32.cast_signed(),
             )),
         };
         assert_eq!(
-            friendly_com_hint(&err),
+            err.friendly_hint(),
             Some("Data type mismatch — server cannot convert the written value (OPC_E_BADTYPE)"),
         );
 
         let err = OpcError::Com {
             source: windows::core::Error::from_hresult(windows::core::HRESULT(
-                0xC0040007_u32 as i32,
+                0xC004_0007_u32.cast_signed(),
             )),
         };
         assert_eq!(
-            friendly_com_hint(&err),
+            err.friendly_hint(),
             Some("Item ID not found in server address space (OPC_E_UNKNOWNITEMID)"),
         );
 
         let err = OpcError::Com {
             source: windows::core::Error::from_hresult(windows::core::HRESULT(
-                0xC0040008_u32 as i32,
+                0xC004_0008_u32.cast_signed(),
             )),
         };
         assert_eq!(
-            friendly_com_hint(&err),
+            err.friendly_hint(),
             Some("Item ID syntax is invalid for this server (OPC_E_INVALIDITEMID)"),
         );
     }
 
     #[test]
-    fn test_friendly_com_hint_unknown_code() {
+    fn test_friendly_hint_unknown_code() {
         let err = OpcError::Internal("Some other error".to_string());
-        assert_eq!(friendly_com_hint(&err), None);
+        assert_eq!(err.friendly_hint(), None);
     }
 
     #[test]
@@ -810,7 +811,7 @@ mod tests {
     #[test]
     fn test_format_hresult_known() {
         // 0x80040154 is REGDB_E_CLASSNOTREG
-        let hr = windows::core::HRESULT(0x8004_0154_u32 as i32);
+        let hr = windows::core::HRESULT(0x8004_0154_u32.cast_signed());
         assert_eq!(
             format_hresult(hr),
             "0x80040154: Server is not registered on this machine"
@@ -819,7 +820,7 @@ mod tests {
 
     #[test]
     fn test_format_hresult_unknown() {
-        let hr = windows::core::HRESULT(0x1234_5678_u32 as i32);
+        let hr = windows::core::HRESULT(0x1234_5678_u32.cast_signed());
         assert_eq!(format_hresult(hr), "0x12345678");
     }
 

@@ -67,14 +67,9 @@ pub struct ComWorker<C: ServerConnector + 'static> {
     _phantom: std::marker::PhantomData<C>,
 }
 
-#[allow(clippy::cast_possible_wrap)]
 fn is_connection_error(err: &OpcError) -> bool {
     if let OpcError::Com { source } = err {
-        let code = source.code().0;
-        code == windows::core::HRESULT(0x8007_06BA_u32 as i32).0
-            || code == windows::core::HRESULT(0x8007_06BF_u32 as i32).0
-            || code == windows::core::HRESULT(0x8007_06BE_u32 as i32).0
-            || code == windows::core::HRESULT(0x8008_0005_u32 as i32).0
+        crate::raw::hresult::is_connection_hresult(source.code())
     } else {
         false
     }

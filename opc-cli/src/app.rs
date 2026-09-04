@@ -8,9 +8,7 @@
 //! ([`CurrentScreen`]) driving the TUI layout, handling user inputs, managing the list selection
 //! states, and communicating asynchronously with the background OPC DA client provider.
 
-use opc_da_client::{
-    OpcError, OpcProvider, OpcValue, TagCollector, TagValue, WriteResult, friendly_com_hint,
-};
+use opc_da_client::{OpcError, OpcProvider, OpcValue, TagCollector, TagValue, WriteResult};
 use ratatui::widgets::{ListState, TableState}; // Added TableState
 use std::sync::Arc;
 use tokio::sync::oneshot;
@@ -390,10 +388,9 @@ impl App {
                 Ok(Err(e)) => {
                     self.log_transition(CurrentScreen::ServerList, "browse_result_error");
                     tracing::error!(error = %e, error_chain = ?e, "Browse tags failed");
-                    let hint = friendly_com_hint(&e);
-                    let msg = match hint {
-                        Some(h) => format!("Error: {} ({})", h, e),
-                        None => format!("Error: {:#}", e),
+                    let msg = match e.friendly_hint() {
+                        Some(h) => format!("Error: {h}"),
+                        None => format!("Error: {e:#}"),
                     };
                     self.add_message(msg);
                     self.browse_result_rx = None;
@@ -542,10 +539,9 @@ impl App {
                 Ok(Err(e)) => {
                     self.log_transition(CurrentScreen::TagList, "read_result_error");
                     tracing::error!(error = %e, error_chain = ?e, "Read tag values failed");
-                    let hint = friendly_com_hint(&e);
-                    let msg = match hint {
-                        Some(h) => format!("Error reading values: {} ({})", h, e),
-                        None => format!("Error reading values: {:#}", e),
+                    let msg = match e.friendly_hint() {
+                        Some(h) => format!("Error reading values: {h}"),
+                        None => format!("Error reading values: {e:#}"),
                     };
                     self.add_message(msg);
                     self.read_result_rx = None;

@@ -5,4 +5,5 @@
 
 pub mod bindings;
 pub mod bridge;
+pub mod hresult;
 pub mod memory;

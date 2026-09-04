@@ -1,7 +1,6 @@
-//! Error types and HRESULT formatting utilities for OPC DA operations.
+//! Error types for OPC DA operations.
 
 use thiserror::Error;
-use windows::core::HRESULT;
 
 /// Result type alias for OPC DA operations.
 ///
@@ -34,7 +33,7 @@ pub enum OpcError {
     ///
     /// This variant wraps a [`windows::core::Error`] and provides a friendly
     /// hint for common OPC-related HRESULT codes.
-    #[error("COM error: {source} ({})", friendly_hresult_hint(.source.code()).unwrap_or("No hint available"))]
+    #[error("COM error: {source} ({})", crate::raw::hresult::friendly_hresult_hint(.source.code()).unwrap_or("No hint available"))]
     Com {
         #[from]
         source: windows::core::Error,
@@ -77,76 +76,26 @@ impl From<std::num::TryFromIntError> for OpcError {
     }
 }
 
-/// Helper to format HRESULT with friendly hints.
-///
-/// # Examples
-///
-/// ```
-/// use opc_da_client::format_hresult;
-/// use windows::core::HRESULT;
-///
-/// let formatted = format_hresult(HRESULT(0x8000_4003u32 as i32));
-/// assert!(formatted.contains("0x80004003"));
-/// assert!(formatted.contains("Invalid pointer"));
-/// ```
-pub fn format_hresult(hr: HRESULT) -> String {
-    let hex = format!("0x{:08X}", hr.0.cast_unsigned());
-    match friendly_hresult_hint(hr) {
-        Some(hint) => format!("{hex}: {hint}"),
-        None => hex,
-    }
-}
-
-/// Maps known COM/DCOM error codes to actionable user hints.
-///
-/// # Examples
-///
-/// ```
-/// use opc_da_client::errors::friendly_hresult_hint;
-/// use windows::core::HRESULT;
-///
-/// let hint = friendly_hresult_hint(HRESULT(0x8004_0154u32 as i32));
-/// assert_eq!(hint, Some("Server is not registered on this machine"));
-/// ```
-pub fn friendly_hresult_hint(hr: HRESULT) -> Option<&'static str> {
-    match hr.0.cast_unsigned() {
-        0x8004_0112 => Some("Server license does not permit OPC client connections"),
-        0x8008_0005 => {
-            Some("Server process failed to start — check if it is installed and running")
+impl OpcError {
+    /// Returns an actionable user-friendly hint if this error is caused by a known COM or OPC failure.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use opc_da_client::OpcError;
+    ///
+    /// let err = OpcError::Connection("host unreachable".into());
+    /// assert_eq!(err.friendly_hint(), None);
+    /// ```
+    #[must_use]
+    pub fn friendly_hint(&self) -> Option<&'static str> {
+        match self {
+            Self::Com { source } => crate::raw::hresult::friendly_hresult_hint(source.code()),
+            Self::Server(_, code) => crate::raw::hresult::friendly_hresult_hint(
+                windows::core::HRESULT((*code).cast_signed()),
+            ),
+            _ => None,
         }
-        0x8007_0005 => {
-            Some("Access denied — DCOM launch/activation permissions not configured for this user")
-        }
-        0x8007_06BA => {
-            Some("RPC server unavailable — the target host may be offline or blocking RPC")
-        }
-        0x8007_06F4 => Some("COM marshalling error — try restarting the OPC server"),
-        0x8004_0154 => Some("Server is not registered on this machine"),
-        0x8000_4003 => Some("Invalid pointer (E_POINTER)"),
-        0xC004_0004 => Some("Server rejected write — the item may be read-only (OPC_E_BADRIGHTS)"),
-        0xC004_0006 => {
-            Some("Data type mismatch — server cannot convert the written value (OPC_E_BADTYPE)")
-        }
-        0xC004_0007 => Some("Item ID not found in server address space (OPC_E_UNKNOWNITEMID)"),
-        0xC004_0008 => Some("Item ID syntax is invalid for this server (OPC_E_INVALIDITEMID)"),
-        _ => None,
-    }
-}
-
-/// Maps an [`OpcError`] to a friendly COM hint if it is a COM error.
-///
-/// # Examples
-///
-/// ```
-/// use opc_da_client::{friendly_com_hint, OpcError};
-///
-/// let err = OpcError::Connection("host unreachable".into());
-/// assert_eq!(friendly_com_hint(&err), None);
-/// ```
-pub fn friendly_com_hint(error: &OpcError) -> Option<&'static str> {
-    match error {
-        OpcError::Com { source: e } => friendly_hresult_hint(e.code()),
-        _ => None,
     }
 }
 
@@ -158,12 +107,12 @@ pub fn friendly_com_hint(error: &OpcError) -> Option<&'static str> {
 /// # Arguments
 /// * `error` - The OPC error to log
 /// * `operation` - Name of the operation that failed (e.g., "read_tag_values")
-pub fn log_opc_error(error: &OpcError, operation: &str) {
+pub(crate) fn log_opc_error(error: &OpcError, operation: &str) {
     let hresult = match error {
         OpcError::Com { source: e } => Some(format!("0x{:08X}", e.code().0.cast_unsigned())),
         _ => None,
     };
-    let hint = friendly_com_hint(error);
+    let hint = error.friendly_hint();
     let chain = format!("{error:#}");
 
     tracing::error!(
@@ -173,4 +122,25 @@ pub fn log_opc_error(error: &OpcError, operation: &str) {
         chain = %chain,
         "OPC operation failed"
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_opc_error_friendly_hint() {
+        let err = OpcError::Connection("host unreachable".into());
+        assert_eq!(err.friendly_hint(), None);
+
+        let com_err = OpcError::Com {
+            source: windows::core::Error::from_hresult(windows::core::HRESULT(
+                0x8004_0154_u32.cast_signed(),
+            )),
+        };
+        assert_eq!(
+            com_err.friendly_hint(),
+            Some("Server is not registered on this machine")
+        );
+    }
 }
