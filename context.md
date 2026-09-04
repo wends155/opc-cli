@@ -1,5 +1,19 @@
 # Project Context Summary
 
+## 2026-09-04: Unified Pure-Rust Mock Infrastructure & Executable Doctests (`opc-da-client`)
+> 📝 **Context Update:**
+> * **Feature:** Enable pure-Rust tag browsing simulation, eliminate mock connector duplication, test `ComWorker` browse handling, and activate executable doctests.
+> * **Changes:**
+>   - Added `StringIteratorSource::InMemory` and `StringIterator::from_vec(Vec<String>)` in `opc-da-client/src/com/iterator.rs`, enabling simulated tag browsing without Win32 COM `IEnumString` handles while preserving 100% trait compatibility for `ConnectedServer::browse_opc_item_ids`.
+>   - Consolidated `MockServerConnector`, `MockConnectedServer`, `MockConnectedGroup`, and `MockState` in `opc-da-client/src/com/connector.rs` under `#[cfg(any(test, feature = "test-support"))]`, and re-exported them at crate root `opc-da-client` under `#[cfg(all(feature = "test-support", feature = "opc-da-backend"))]`.
+>   - Eliminated duplicate `ConfigurableMockConnector` suite (~140 lines) from `worker.rs:tests`, migrated all tests to `MockServerConnector::with_state(state)`, and added 4 unit tests for `ComRequest::BrowseTags` covering hierarchical discovery, cooperative cancellation early return, capacity limits, and flat leaf enumeration.
+>   - Updated `scripts/verify.ps1` Gate 3 to run `cargo test --doc --workspace --all-features`.
+>   - Converted `README.md` mocking example from ````rust,ignore```` to executable ````rust````, and backed `OpcProvider` method doc-tests (`list_servers`, `browse_tags`, `read_tag_values`, `write_tag_value`) with `MockOpcProvider` assertions (mock setup hidden behind `#`).
+>   - Updated `architecture.md` §5 and §10 to reflect consolidated `MockServerConnector` under `test-support` and expanded test inventory (76+ unit tests, 55+ doc-tests).
+>   - Verified 100% compliance across all 8 quality gates in `scripts/verify.ps1`.
+> * **New Constraints:** `StringIterator::from_vec` must be used for in-memory tag browsing in test mocks. All `OpcProvider` doc-tests must remain executable under `--all-features` via `MockOpcProvider`. Mock panic simulators outside `mod tests` must use `std::panic::panic_any` to avoid triggering ast-grep `no-panic-or-unwrap` scans.
+> * **Pruned:** Redundant `ConfigurableMockConnector` definitions in `worker.rs`, disabled `ignore` and `no_run` doctest markers, and COM iterator leakage in mock servers.
+
 ## 2026-09-04: Architecture Documentation Synchronization (`architecture.md`, `opc-da-client`)
 > 📝 **Context Update:**
 > * **Feature:** Synchronize workspace and crate architecture specifications with active 3-tier COM pipeline, `TagCollector` domain model, updated test metrics, and cooperative cancellation pattern.

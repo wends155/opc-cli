@@ -63,7 +63,7 @@ Invoke-Gate -GateName "Formatter Check" -Command { cargo fmt --all -- --check }
 Invoke-Gate -GateName "Linter Check" -Command { cargo clippy --workspace --all-targets --all-features -- -D warnings }
 
 # Gate 3: Doc Compilation Check
-Invoke-Gate -GateName "Doc Compilation Check" -Command { cargo test --doc --workspace }
+Invoke-Gate -GateName "Doc Compilation Check" -Command { cargo test --doc --workspace --all-features }
 
 # Gate 4: Unit & Integration Tests
 Invoke-Gate -GateName "Unit & Integration Tests" -Command { cargo test --workspace }

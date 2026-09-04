@@ -3,7 +3,7 @@
 > **Behavioral Source of Truth** for the `opc-da-client` library crate.
 > Defines *what* each module should do — independent of current implementation.
 >
-> Last verified against: ced172d
+> Last verified against: 544989d
 
 ---
 
@@ -355,12 +355,12 @@ Before calling `browse_recursive`, `browse_tags` attempts `browse_opc_item_ids(B
 
 **Purpose:** Pure-Rust facade traits and DTOs that completely decouple `ComWorker` and consumers from raw Win32 COM / FFI types:
 - `ServerConnector`: Discovers servers via `enumerate_servers()` and connects via `connect()`. Implemented by `ComConnector` and `MockServerConnector`.
-- `ConnectedServer`: Introspects server namespace and adds/removes groups using `GroupConfig` and `CreatedGroup`. Implemented by `ComServer` and `MockConnectedServer`.
+- `ConnectedServer`: Introspects server namespace and adds/removes groups using `GroupConfig` and `CreatedGroup`. Implemented by `ComServer` and `MockConnectedServer`. Supports in-memory tag browsing via `StringIterator::from_vec`.
 - `ConnectedGroup`: Pure-Rust facade over OPC DA groups:
   - `add_items(&self, items: &[GroupItemDef]) -> OpcResult<Vec<GroupItemResult>>`
   - `read(&self, source: DataSource, server_handles: &[ItemHandle]) -> OpcResult<Vec<Result<GroupItemState, OpcError>>>`
   - `write(&self, server_handles: &[ItemHandle], values: &[OpcValue]) -> OpcResult<Vec<Result<(), OpcError>>>`
-- `MockConnectedGroup` & `MockConnectedServer`: Reusable pure-Rust mocks (under `#[cfg(test)]`) supporting pluggable closures without native COM allocators or unsafe blocks.
+- `MockConnectedGroup`, `MockConnectedServer`, and `MockServerConnector`: Reusable pure-Rust mocks (under `#[cfg(any(test, feature = "test-support"))]` and exported at crate root under `test-support`) supporting pluggable closures, failure injection (`MockState`), and simulated tag browsing without native COM allocators or unsafe blocks.
 
 ---
 
@@ -385,7 +385,7 @@ Defined in § 1.1. See table above.
 | Flag | Default | Effect |
 | :--- | :--- | :--- |
 | `opc-da-backend` | ✅ Yes | Compiles the `com` subsystem module and exports `OpcDaClient` and `ComConnector`. |
-| `test-support` | ❌ No | Enables `mockall` and exports `MockOpcProvider`. |
+| `test-support` | ❌ No | Enables `mockall` and exports `MockOpcProvider`, `MockServerConnector`, `MockConnectedServer`, and `MockConnectedGroup`. |
 | `dev-diagnostics` | ❌ No | Compiles verbose TRACE-level operation argument dumps into backend methods. |
 
 ---
@@ -404,7 +404,7 @@ Defined in § 1.1. See table above.
 | Tag browsing | `ComServer.browse_opc_item_ids()`, `change_browse_position()`, `get_item_id()` | `IOPCBrowseServerAddressSpace` |
 | Tag reading | `ComServer.add_group()`, group `read()`, `remove_group()` | `IOPCServer`, `IOPCItemMgt`, `IOPCSyncIO` |
 | Tag writing | `ComServer.add_group()`, group `write()`, `remove_group()` | `IOPCServer`, `IOPCItemMgt`, `IOPCSyncIO` |
-| String iteration | `StringIterator::new()` | `IEnumString::Next` |
+| String iteration | `StringIterator::new()` (native COM), `StringIterator::from_vec()` (in-memory simulation) | `IEnumString::Next` (native COM) |
 
 **Error Handling at Boundary:**
 *   All COM errors return canonical `OpcError::Com { source }`.
@@ -492,6 +492,18 @@ Defined in § 1.1. See table above.
 - [x] `test_tag_collector_cancellation` — validates cooperative cancellation flag and rejection of post-cancellation pushes.
 - [x] `test_tag_collector_multithreaded` — validates concurrent multi-threaded push contention and atomic count integrity across 8 threads.
 
+### Connector & Worker Unit Tests (in `com/connector.rs` and `com/worker.rs`)
+
+- [x] `test_string_iterator_from_vec` — verifies in-memory `StringIterator` collection and equality without COM interfaces.
+- [x] `test_mock_connector_browse` — verifies `MockConnectedServer::browse_opc_item_ids` returns in-memory simulated tags.
+- [x] `test_mock_group_defaults` and `test_mock_group_custom_handlers` — verifies mock group default results and custom read handlers.
+- [x] `test_mock_server_add_group_and_eviction` — verifies group handle generation and connection drop error injection.
+- [x] `test_group_item_def_and_state_cloning` — verifies DTO clone and display behavior.
+- [x] `test_worker_browse_tags_success` — verifies `ComWorker` tag discovery over hierarchical namespace using `MockServerConnector`.
+- [x] `test_worker_browse_tags_cancelled` — verifies `ComWorker` immediate return when `TagCollector` is cancelled prior to execution.
+- [x] `test_worker_browse_tags_capacity_cap` — verifies `ComWorker` tag accumulation halts when `TagCollector` capacity is reached.
+- [x] `test_worker_browse_tags_flat_organization` — verifies fast leaf browsing when server namespace organization is flat.
+
 ### Mock-Based Tests (in `opc-cli`)
 
 - [x] `MockOpcProvider` returns expected server list.
@@ -507,20 +519,21 @@ Defined in § 1.1. See table above.
 - [x] `OpcResult`, `OpcError` — runnable doctests in `errors.rs`.
 - [x] `TagValue`, `OpcValue`, `WriteResult`, `DisplayOption*`, `OpcValueOptionExt`, `SystemTimeOptionExt` — runnable doctests in `provider.rs`.
 - [x] `TagCollector` methods (`new`, `unbounded`, `max_tags`, `len`, `is_empty`, `is_full`, `cancel`, `is_cancelled`, `snapshot`, `harvest`, `push`) — runnable doctests in `provider.rs`.
-- [x] `OpcProvider` trait methods (`list_servers`, `browse_tags`, `read_tag_values`, `write_tag_value`) — doctests in `provider.rs`.
+- [x] `OpcProvider` trait methods (`list_servers`, `browse_tags`, `read_tag_values`, `write_tag_value`) — runnable doctests in `provider.rs` backed by `MockOpcProvider` assertions.
 - [x] `GroupHandle`, `ItemHandle`, `OpcQuality`, `BrowseType`, `BrowseDirection` — runnable doctests in `types.rs`.
 - [x] `OpcDaClient::new` — doctest in `com/client.rs`.
 - [x] `ComGuard` — internal-only ignored doctest in `com/guard.rs`.
 - [x] Quick Start — runnable doctest in `lib.rs`.
 - [x] Usage Examples (Listing, Reading, Writing, Browsing) — compiled doctests in `README.md`.
+- [x] Mocking in Unit Tests — runnable doctest in `lib.rs` / `README.md` under `--all-features`.
 
 ### Integration / Manual Tests
 
 - [ ] `list_servers("localhost")` returns non-empty list on a machine with OPC servers installed.
-- [ ] `browse_tags` correctly discovers tags on a flat-namespace server.
-- [ ] `browse_tags` correctly discovers tags on a hierarchical-namespace server.
-- [ ] `browse_tags` respects `max_tags` cap.
-- [ ] `browse_tags` populates `TagCollector` incrementally (observable via lock-free len counter).
+- [x] `browse_tags` correctly discovers tags on a flat-namespace server (verified via `test_worker_browse_tags_flat_organization`).
+- [x] `browse_tags` correctly discovers tags on a hierarchical-namespace server (verified via `test_worker_browse_tags_success`).
+- [x] `browse_tags` respects `max_tags` cap (verified via `test_worker_browse_tags_capacity_cap`).
+- [x] `browse_tags` populates `TagCollector` incrementally (observable via lock-free len counter) (verified via `test_worker_browse_tags_success` and `test_tag_collector_lifecycle`).
 - [ ] `read_tag_values` returns correct value/quality/timestamp for known tags.
 - [ ] `read_tag_values` gracefully handles tags that fail `add_items`.
 - [ ] `write_tag_value` returns success for a valid write to a simulation tag.

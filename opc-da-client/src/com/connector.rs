@@ -575,8 +575,30 @@ impl TryFrom<windows::core::IUnknown> for ComGroup {
 
 // ── Reusable Pure-Rust Mock Infrastructure ──────────────────────────
 
-#[cfg(test)]
+/// Shared state flags controlling mock failure injection and connection monitoring.
+#[cfg(any(test, feature = "test-support"))]
+#[derive(Default)]
+pub struct MockState {
+    /// Number of successful connection invocations.
+    pub connect_count: std::sync::atomic::AtomicUsize,
+    /// Injects failure on server connection and server enumeration.
+    pub should_fail_connect: std::sync::atomic::AtomicBool,
+    /// Injects write errors on item write operations.
+    pub should_fail_write: std::sync::atomic::AtomicBool,
+    /// Simulates general connection drop errors.
+    pub should_fail_connection: std::sync::atomic::AtomicBool,
+    /// Simulates RPC server unavailable error (0x800706BA) triggering connection eviction.
+    pub should_fail_with_connection_error: std::sync::atomic::AtomicBool,
+    /// Simulates worker thread panic on request handling.
+    pub should_panic_on_request: std::sync::atomic::AtomicBool,
+}
+
+/// Pure-Rust mock implementation of [`ConnectedGroup`] for testing.
+///
+/// Supports customizable closures for `add_items`, `read`, and `write` operations.
+#[cfg(any(test, feature = "test-support"))]
 pub struct MockConnectedGroup {
+    pub state: std::sync::Arc<MockState>,
     pub add_items_fn:
         Option<Box<dyn Fn(&[GroupItemDef]) -> OpcResult<Vec<GroupItemResult>> + Send + Sync>>,
     pub read_fn: Option<
@@ -595,10 +617,11 @@ pub struct MockConnectedGroup {
     >,
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 impl Default for MockConnectedGroup {
     fn default() -> Self {
         Self {
+            state: std::sync::Arc::new(MockState::default()),
             add_items_fn: None,
             read_fn: None,
             write_fn: None,
@@ -606,7 +629,7 @@ impl Default for MockConnectedGroup {
     }
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 impl ConnectedGroup for MockConnectedGroup {
     fn add_items(&self, items: &[GroupItemDef]) -> OpcResult<Vec<GroupItemResult>> {
         if let Some(f) = &self.add_items_fn {
@@ -651,6 +674,40 @@ impl ConnectedGroup for MockConnectedGroup {
         server_handles: &[ItemHandle],
         values: &[OpcValue],
     ) -> OpcResult<Vec<Result<(), OpcError>>> {
+        if self
+            .state
+            .should_fail_connection
+            .load(std::sync::atomic::Ordering::Relaxed)
+            || self
+                .state
+                .should_fail_with_connection_error
+                .load(std::sync::atomic::Ordering::Relaxed)
+        {
+            // RPC server unavailable (0x800706BA) triggers connection eviction
+            return Err(OpcError::Com {
+                source: windows::core::Error::from_hresult(windows::core::HRESULT(
+                    0x800706BA_u32 as i32,
+                )),
+            });
+        }
+
+        if self
+            .state
+            .should_fail_write
+            .load(std::sync::atomic::Ordering::Relaxed)
+        {
+            return Ok(server_handles
+                .iter()
+                .map(|_| {
+                    Err(OpcError::Com {
+                        source: windows::core::Error::from_hresult(
+                            windows::Win32::Foundation::E_FAIL,
+                        ),
+                    })
+                })
+                .collect());
+        }
+
         if let Some(f) = &self.write_fn {
             f(server_handles, values)
         } else {
@@ -659,7 +716,7 @@ impl ConnectedGroup for MockConnectedGroup {
     }
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 impl ConnectedGroup for std::sync::Arc<MockConnectedGroup> {
     fn add_items(&self, items: &[GroupItemDef]) -> OpcResult<Vec<GroupItemResult>> {
         (**self).add_items(items)
@@ -682,28 +739,52 @@ impl ConnectedGroup for std::sync::Arc<MockConnectedGroup> {
     }
 }
 
-#[cfg(test)]
+/// Pure-Rust mock implementation of [`ConnectedServer`] for testing.
+///
+/// Supports in-memory tag browsing via [`StringIterator::from_vec`] and configurable group handling.
+#[cfg(any(test, feature = "test-support"))]
 pub struct MockConnectedServer {
+    /// Mock group associated with this server instance.
     pub group: std::sync::Arc<MockConnectedGroup>,
+    /// Shared failure injection state.
+    pub state: std::sync::Arc<MockState>,
+    /// Flag indicating if connection drop should be simulated.
     pub should_fail_connection: std::sync::atomic::AtomicBool,
+    /// Simulated tag IDs yielded during browse operations.
+    pub tags: std::sync::Arc<std::sync::Mutex<Vec<String>>>,
+    /// Namespace organization type (1 = Hierarchical, 2 = Flat).
+    pub organization: std::sync::atomic::AtomicU32,
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 impl Default for MockConnectedServer {
     fn default() -> Self {
+        let state = std::sync::Arc::new(MockState::default());
         Self {
-            group: std::sync::Arc::new(MockConnectedGroup::default()),
+            group: std::sync::Arc::new(MockConnectedGroup {
+                state: state.clone(),
+                add_items_fn: None,
+                read_fn: None,
+                write_fn: None,
+            }),
+            state,
             should_fail_connection: std::sync::atomic::AtomicBool::new(false),
+            tags: std::sync::Arc::new(std::sync::Mutex::new(vec![
+                "Random.Int4".to_string(),
+                "Random.Real8".to_string(),
+                "Random.String".to_string(),
+            ])),
+            organization: std::sync::atomic::AtomicU32::new(1),
         }
     }
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 impl ConnectedServer for MockConnectedServer {
     type Group = std::sync::Arc<MockConnectedGroup>;
 
     fn query_organization(&self) -> OpcResult<u32> {
-        Ok(1)
+        Ok(self.organization.load(std::sync::atomic::Ordering::Relaxed))
     }
 
     fn browse_opc_item_ids(
@@ -713,7 +794,11 @@ impl ConnectedServer for MockConnectedServer {
         _data_type: u16,
         _access_rights: u32,
     ) -> OpcResult<StringIterator> {
-        Err(OpcError::NotImplemented("mock".into()))
+        let tags = self
+            .tags
+            .lock()
+            .map_err(|_| OpcError::Internal("Mock tags lock poisoned".into()))?;
+        Ok(StringIterator::from_vec(tags.clone()))
     }
 
     fn change_browse_position(&self, _direction: BrowseDirection, _name: &str) -> OpcResult<()> {
@@ -726,8 +811,24 @@ impl ConnectedServer for MockConnectedServer {
 
     fn add_group(&self, config: &GroupConfig<'_>) -> OpcResult<CreatedGroup<Self::Group>> {
         if self
+            .state
+            .should_panic_on_request
+            .load(std::sync::atomic::Ordering::Relaxed)
+        {
+            std::panic::panic_any("Simulated worker panic");
+        }
+
+        if self
             .should_fail_connection
             .load(std::sync::atomic::Ordering::Relaxed)
+            || self
+                .state
+                .should_fail_connection
+                .load(std::sync::atomic::Ordering::Relaxed)
+            || self
+                .state
+                .should_fail_with_connection_error
+                .load(std::sync::atomic::Ordering::Relaxed)
         {
             // RPC server unavailable (0x800706BA) triggers connection eviction
             return Err(OpcError::Com {
@@ -749,34 +850,148 @@ impl ConnectedServer for MockConnectedServer {
     }
 }
 
-#[cfg(test)]
+/// Pure-Rust mock implementation of [`ServerConnector`] for testing and test-support.
+///
+/// Exports configurable server enumeration and mock server connections without Windows COM interfaces.
+#[cfg(any(test, feature = "test-support"))]
 pub struct MockServerConnector {
+    /// Mock server yielded on connection.
     pub server: std::sync::Arc<MockConnectedServer>,
+    /// Shared failure injection state.
+    pub state: std::sync::Arc<MockState>,
+    /// Simulated server ProgIDs returned by server enumeration.
+    pub servers: std::sync::Arc<std::sync::Mutex<Vec<String>>>,
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 impl Default for MockServerConnector {
     fn default() -> Self {
+        let state = std::sync::Arc::new(MockState::default());
+        let server = std::sync::Arc::new(MockConnectedServer {
+            group: std::sync::Arc::new(MockConnectedGroup {
+                state: state.clone(),
+                add_items_fn: None,
+                read_fn: None,
+                write_fn: None,
+            }),
+            state: state.clone(),
+            should_fail_connection: std::sync::atomic::AtomicBool::new(false),
+            tags: std::sync::Arc::new(std::sync::Mutex::new(vec![
+                "Random.Int4".to_string(),
+                "Random.Real8".to_string(),
+                "Random.String".to_string(),
+            ])),
+            organization: std::sync::atomic::AtomicU32::new(1),
+        });
         Self {
-            server: std::sync::Arc::new(MockConnectedServer::default()),
+            server,
+            state,
+            servers: std::sync::Arc::new(std::sync::Mutex::new(vec![
+                "Matrikon.OPC.Simulation.1".to_string(),
+            ])),
         }
     }
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
+impl MockServerConnector {
+    /// Creates a new `MockServerConnector` with default simulation settings.
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Creates a new `MockServerConnector` with the provided shared mock state.
+    ///
+    /// # Arguments
+    /// * `state` - Shared atomic flags controlling mock failure injection.
+    #[must_use]
+    pub fn with_state(state: std::sync::Arc<MockState>) -> Self {
+        let server = std::sync::Arc::new(MockConnectedServer {
+            group: std::sync::Arc::new(MockConnectedGroup {
+                state: state.clone(),
+                add_items_fn: None,
+                read_fn: None,
+                write_fn: None,
+            }),
+            state: state.clone(),
+            should_fail_connection: std::sync::atomic::AtomicBool::new(false),
+            tags: std::sync::Arc::new(std::sync::Mutex::new(vec![
+                "Random.Int4".to_string(),
+                "Random.Real8".to_string(),
+                "Random.String".to_string(),
+            ])),
+            organization: std::sync::atomic::AtomicU32::new(1),
+        });
+        Self {
+            server,
+            state,
+            servers: std::sync::Arc::new(std::sync::Mutex::new(vec!["Mock.Server.1".to_string()])),
+        }
+    }
+
+    /// Overrides simulated tag IDs returned during browse operations.
+    ///
+    /// # Arguments
+    /// * `tags` - Vector of tag identifier strings.
+    #[must_use]
+    pub fn with_tags(self, tags: Vec<String>) -> Self {
+        if let Ok(mut guard) = self.server.tags.lock() {
+            *guard = tags;
+        }
+        self
+    }
+
+    /// Overrides simulated server ProgIDs returned during enumeration.
+    ///
+    /// # Arguments
+    /// * `servers` - Vector of server ProgID strings.
+    #[must_use]
+    pub fn with_servers(self, servers: Vec<String>) -> Self {
+        if let Ok(mut guard) = self.servers.lock() {
+            *guard = servers;
+        }
+        self
+    }
+}
+
+#[cfg(any(test, feature = "test-support"))]
 impl ServerConnector for MockServerConnector {
     type Server = std::sync::Arc<MockConnectedServer>;
 
     fn enumerate_servers(&self) -> OpcResult<Vec<String>> {
-        Ok(vec!["Matrikon.OPC.Simulation.1".to_string()])
+        if self
+            .state
+            .should_fail_connect
+            .load(std::sync::atomic::Ordering::Relaxed)
+        {
+            return Err(OpcError::Internal("Server enumeration failed".into()));
+        }
+
+        let servers = self
+            .servers
+            .lock()
+            .map_err(|_| OpcError::Internal("Mock servers lock poisoned".into()))?;
+        Ok(servers.clone())
     }
 
     fn connect(&self, _server_name: &str) -> OpcResult<Self::Server> {
+        if self
+            .state
+            .should_fail_connect
+            .load(std::sync::atomic::Ordering::Relaxed)
+        {
+            return Err(OpcError::Connection("Mock connection failed".into()));
+        }
+
+        self.state
+            .connect_count
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         Ok(self.server.clone())
     }
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 impl ConnectedServer for std::sync::Arc<MockConnectedServer> {
     type Group = std::sync::Arc<MockConnectedGroup>;
 
@@ -921,5 +1136,15 @@ mod tests {
         let cloned_state = state.clone();
         assert_eq!(state, cloned_state);
         assert_eq!(state.value.to_string(), "true");
+    }
+
+    #[test]
+    fn test_mock_connector_browse() {
+        let server = MockConnectedServer::default();
+        let iter = server
+            .browse_opc_item_ids(BrowseType::Leaf, None, 0, 0)
+            .expect("MockConnectedServer should support browse");
+        let tags: Vec<String> = iter.collect::<Result<Vec<_>, _>>().unwrap();
+        assert!(!tags.is_empty(), "Mock browse should return simulated tags");
     }
 }

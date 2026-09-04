@@ -103,7 +103,7 @@ opc-cli/
 - **Owns**: Dedicated OS background thread, `CoInitializeEx(MTA)` lifecycle (`ComGuard`), connection pool caching (`HashMap<ProgID, Server>`), transparent stale connection eviction on RPC errors (`0x800706BA`), tag browse walking.
 - **Does NOT Own**: TUI state, UI rendering, high-level task timeouts.
 - **Trait Interfaces**: Uses internal `ServerConnector` trait.
-- **Mock Availability**: Fully unit-tested via `ConfigurableMockConnector`.
+- **Mock Availability**: Fully unit-tested via consolidated `MockServerConnector` (exported under `feature = "test-support"`).
 
 ### `compat/*` (NT 6.1 Polyfill Crates)
 - **Owns**: C-ABI DLL exports for missing Windows 8+ APIs (`WaitOnAddress`, `ProcessPrng`, `RoOriginateError`).
@@ -170,8 +170,8 @@ The project uses a unified dual-interface build system:
 ## 10. Testing Strategy
 
 - **Unit Testing**: Mock-based testing using `MockOpcProvider` (`mockall`). TUI navigation flow, state transitions, search cycling, and ring-buffer logic are verified without Windows COM dependencies (38+ unit tests in `opc-cli`).
-- **COM Worker Testing**: `ComWorker` unit tests (`opc-da-client/src/com/worker.rs`) use `ConfigurableMockConnector` to test write paths, server connection pooling (`connect_count == 1`), stale connection eviction (`connect_count == 2`), thread panic safety, and worker drop behaviors (70 unit tests in `opc-da-client`).
-- **Doc Testing**: Public API items include runnable doc tests (`cargo test --doc`, 54 doc-tests).
+- **COM Worker Testing**: `ComWorker` unit tests (`opc-da-client/src/com/worker.rs`) use the consolidated `MockServerConnector` to test write paths, tag browsing (flat, hierarchical, cancellation, capacity limits), server connection pooling (`connect_count == 1`), stale connection eviction (`connect_count == 2`), thread panic safety, and worker drop behaviors (76+ unit tests in `opc-da-client`).
+- **Doc Testing**: Public API items include runnable doc tests verified via `cargo test --doc --workspace --all-features` (55+ doc-tests, including pure-Rust mocking examples in `README.md` and `provider.rs`).
 - **Polyfill Build Gates**: Independent compilation of `compat/*` polyfill crates inside `scripts/verify.ps1`.
 - **AST-Grep Structural Safety Gates**: `sg scan` enforcement of zero unwrap/expect in production library code and mandatory `// SAFETY:` rationale on all unsafe blocks. Rules are validated via ast-grep unit tests before static scans.
 - **Forbidden Macro Scanner**: Automated `rg` scan ensuring zero `println!`, `dbg!`, or `todo!` macros in `opc-da-client/src/`.

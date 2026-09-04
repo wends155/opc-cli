@@ -77,21 +77,57 @@ impl Iterator for GuidIterator {
     }
 }
 
+enum StringIteratorSource {
+    Com {
+        inner: windows::Win32::System::Com::IEnumString,
+        cache: Box<[windows::core::PWSTR; STRING_CACHE_SIZE]>,
+        index: u32,
+        count: u32,
+    },
+    InMemory {
+        items: std::vec::IntoIter<String>,
+    },
+}
+
+/// Iterator over strings yielding tag names or item identifiers.
+///
+/// Backed either by a native COM `IEnumString` interface with batch caching
+/// or an in-memory string vector for simulated test environments.
 pub struct StringIterator {
-    inner: windows::Win32::System::Com::IEnumString,
-    cache: Box<[windows::core::PWSTR; STRING_CACHE_SIZE]>,
-    index: u32,
-    count: u32,
+    source: StringIteratorSource,
     done: bool,
 }
 
 impl StringIterator {
+    /// Creates a new `StringIterator` wrapping a native COM `IEnumString` interface.
+    ///
+    /// # Arguments
+    /// * `inner` - Windows COM `IEnumString` interface instance.
+    #[must_use]
     pub fn new(inner: windows::Win32::System::Com::IEnumString) -> Self {
         Self {
-            inner,
-            cache: Box::new([windows::core::PWSTR::null(); STRING_CACHE_SIZE]),
-            index: STRING_CACHE_SIZE as u32,
-            count: 0,
+            source: StringIteratorSource::Com {
+                inner,
+                cache: Box::new([windows::core::PWSTR::null(); STRING_CACHE_SIZE]),
+                index: STRING_CACHE_SIZE as u32,
+                count: 0,
+            },
+            done: false,
+        }
+    }
+
+    /// Creates an in-memory `StringIterator` from a vector of strings.
+    ///
+    /// Enables pure-Rust testing and mocking without physical Windows COM interfaces.
+    ///
+    /// # Arguments
+    /// * `items` - Vector of tag or item identifier strings to yield.
+    #[must_use]
+    pub fn from_vec(items: Vec<String>) -> Self {
+        Self {
+            source: StringIteratorSource::InMemory {
+                items: items.into_iter(),
+            },
             done: false,
         }
     }
@@ -101,73 +137,80 @@ impl Iterator for StringIterator {
     type Item = OpcResult<String>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        loop {
-            if self.done {
-                return None;
-            }
+        if self.done {
+            return None;
+        }
 
-            if self.index >= self.count {
-                // Zero the cache to prevent stale freed pointers (OPC-BUG-001)
-                self.cache.fill(windows::core::PWSTR::null());
+        match &mut self.source {
+            StringIteratorSource::InMemory { items } => items.next().map(Ok),
+            StringIteratorSource::Com {
+                inner,
+                cache,
+                index,
+                count,
+            } => {
+                loop {
+                    if *index >= *count {
+                        // Zero the cache to prevent stale freed pointers (OPC-BUG-001)
+                        cache.fill(windows::core::PWSTR::null());
 
-                // SAFETY: Calling IEnumString::Next COM interface method with valid mutable cache slice and count pointer.
-                let code = unsafe {
-                    self.inner
-                        .Next(self.cache.as_mut_slice(), Some(&mut self.count))
-                };
+                        // SAFETY: Calling IEnumString::Next COM interface method with valid mutable cache slice and count pointer.
+                        let code = unsafe { inner.Next(cache.as_mut_slice(), Some(count)) };
 
-                tracing::debug!(
-                    hresult = format_args!("{:#010X}", code.0),
-                    celt = self.cache.len(),
-                    fetched = self.count,
-                    "StringIterator::Next completed"
-                );
-
-                if code.is_ok() {
-                    if self.count == 0 {
-                        self.done = true;
-                        return None;
-                    }
-
-                    // Detect null entries in the fetched range
-                    let null_count = self.cache[..self.count as usize]
-                        .iter()
-                        .filter(|p| p.is_null())
-                        .count();
-                    if null_count > 0 {
-                        tracing::warn!(
-                            null_count,
-                            fetched = self.count,
-                            "StringIterator: null PWSTR entries in fetched range"
+                        tracing::debug!(
+                            hresult = format_args!("{:#010X}", code.0),
+                            celt = cache.len(),
+                            fetched = *count,
+                            "StringIterator::Next completed"
                         );
+
+                        if code.is_ok() {
+                            if *count == 0 {
+                                self.done = true;
+                                return None;
+                            }
+
+                            // Detect null entries in the fetched range
+                            let null_count = cache[..*count as usize]
+                                .iter()
+                                .filter(|p| p.is_null())
+                                .count();
+                            if null_count > 0 {
+                                tracing::warn!(
+                                    null_count,
+                                    fetched = *count,
+                                    "StringIterator: null PWSTR entries in fetched range"
+                                );
+                            }
+
+                            *index = 0;
+                        } else {
+                            self.done = true;
+                            return Some(Err(windows::core::Error::new(
+                                code,
+                                "Failed to get next string",
+                            )
+                            .into()));
+                        }
                     }
 
-                    self.index = 0;
-                } else {
-                    self.done = true;
-                    return Some(Err(windows::core::Error::new(
-                        code,
-                        "Failed to get next string",
-                    )
-                    .into()));
+                    // Skip null PWSTR entries instead of producing E_POINTER (OPC-BUG-001)
+                    let pwstr = cache[*index as usize];
+                    *index += 1;
+
+                    if pwstr.is_null() {
+                        tracing::debug!(
+                            index = *index - 1,
+                            count = *count,
+                            "StringIterator: skipping null PWSTR entry"
+                        );
+                        continue; // Loop back to try the next entry
+                    }
+
+                    let current = RemotePointer::from(pwstr);
+                    return Some(current.try_into().map_err(OpcError::from));
                 }
             }
-
-            // Skip null PWSTR entries instead of producing E_POINTER (OPC-BUG-001)
-            let pwstr = self.cache[self.index as usize];
-            self.index += 1;
-
-            if pwstr.is_null() {
-                tracing::debug!(
-                    index = self.index - 1,
-                    count = self.count,
-                    "StringIterator: skipping null PWSTR entry"
-                );
-                continue; // Loop back to try the next entry
-            }
-
-            let current = RemotePointer::from(pwstr);
-            return Some(current.try_into().map_err(OpcError::from));
         }
     }
 }
@@ -511,5 +554,21 @@ mod tests {
         let iter = StringIterator::new(mock_enum);
         let results: Vec<_> = iter.collect::<Result<Vec<_>, _>>().unwrap();
         assert!(results.is_empty(), "Empty iterator should yield no items");
+    }
+
+    #[test]
+    fn test_string_iterator_from_vec() {
+        let items = vec![
+            "Tag.A".to_string(),
+            "Tag.B".to_string(),
+            "Tag.C".to_string(),
+        ];
+        let iter = StringIterator::from_vec(items.clone());
+        let results: Vec<String> = iter.collect::<Result<Vec<_>, _>>().unwrap();
+        assert_eq!(results, items);
+
+        let empty_iter = StringIterator::from_vec(Vec::new());
+        let empty_results: Vec<String> = empty_iter.collect::<Result<Vec<_>, _>>().unwrap();
+        assert!(empty_results.is_empty());
     }
 }

@@ -784,14 +784,16 @@ pub trait OpcProvider: Send + Sync {
     ///
     /// # Examples
     ///
-    /// ```rust,no_run
-    /// use opc_da_client::{OpcDaClient, OpcProvider, OpcResult};
-    ///
+    /// ```rust
     /// # #[tokio::main]
-    /// # async fn main() -> OpcResult<()> {
-    /// let client = OpcDaClient::default();
+    /// # async fn main() -> opc_da_client::OpcResult<()> {
+    /// # let mut mock = opc_da_client::MockOpcProvider::new();
+    /// # mock.expect_list_servers().returning(|_| Ok(vec!["Matrikon.OPC.Simulation.1".into()]));
+    /// # let client: &dyn opc_da_client::OpcProvider = &mock;
+    /// use opc_da_client::{OpcProvider, OpcResult};
+    ///
     /// let servers = client.list_servers("localhost").await?;
-    /// assert!(servers.is_empty() || !servers.is_empty());
+    /// assert_eq!(servers, vec!["Matrikon.OPC.Simulation.1"]);
     /// # Ok(())
     /// # }
     /// ```
@@ -815,15 +817,20 @@ pub trait OpcProvider: Send + Sync {
     ///
     /// # Examples
     ///
-    /// ```rust,no_run
-    /// use opc_da_client::{OpcDaClient, OpcProvider, OpcResult, TagCollector};
-    ///
+    /// ```rust
     /// # #[tokio::main]
-    /// # async fn main() -> OpcResult<()> {
-    /// let client = OpcDaClient::default();
+    /// # async fn main() -> opc_da_client::OpcResult<()> {
+    /// # let mut mock = opc_da_client::MockOpcProvider::new();
+    /// # mock.expect_browse_tags().returning(|_, collector| {
+    /// #     let _ = collector.push("Random.Int4".into());
+    /// #     Ok(collector.snapshot())
+    /// # });
+    /// # let client: &dyn opc_da_client::OpcProvider = &mock;
+    /// use opc_da_client::{OpcProvider, OpcResult, TagCollector};
+    ///
     /// let collector = TagCollector::new(100);
     /// let tags = client.browse_tags("Matrikon.OPC.Simulation.1", collector).await?;
-    /// assert!(tags.len() <= 100);
+    /// assert_eq!(tags, vec!["Random.Int4"]);
     /// # Ok(())
     /// # }
     /// ```
@@ -844,12 +851,21 @@ pub trait OpcProvider: Send + Sync {
     ///
     /// # Examples
     ///
-    /// ```rust,no_run
-    /// use opc_da_client::{OpcDaClient, OpcProvider, OpcResult, TagValue};
-    ///
+    /// ```rust
     /// # #[tokio::main]
-    /// # async fn main() -> OpcResult<()> {
-    /// let client = OpcDaClient::default();
+    /// # async fn main() -> opc_da_client::OpcResult<()> {
+    /// # let mut mock = opc_da_client::MockOpcProvider::new();
+    /// # mock.expect_read_tag_values().returning(|_, tags| {
+    /// #     Ok(tags.into_iter().map(|id| opc_da_client::TagValue {
+    /// #         tag_id: id,
+    /// #         value: Some(opc_da_client::OpcValue::Int(42)),
+    /// #         quality: opc_da_client::OpcQuality::GOOD,
+    /// #         timestamp: None,
+    /// #     }).collect())
+    /// # });
+    /// # let client: &dyn opc_da_client::OpcProvider = &mock;
+    /// use opc_da_client::{OpcProvider, OpcResult, TagValue};
+    ///
     /// let tags = vec!["Random.Int4".to_string(), "Random.Real8".to_string()];
     /// let values = client.read_tag_values("Matrikon.OPC.Simulation.1", tags).await?;
     /// for v in &values {
@@ -877,16 +893,20 @@ pub trait OpcProvider: Send + Sync {
     ///
     /// # Examples
     ///
-    /// ```rust,no_run
-    /// use opc_da_client::{OpcDaClient, OpcProvider, OpcResult, OpcValue, WriteResult};
-    ///
+    /// ```rust
     /// # #[tokio::main]
-    /// # async fn main() -> OpcResult<()> {
-    /// let client = OpcDaClient::default();
+    /// # async fn main() -> opc_da_client::OpcResult<()> {
+    /// # let mut mock = opc_da_client::MockOpcProvider::new();
+    /// # mock.expect_write_tag_value().returning(|_, id, _| {
+    /// #     Ok(opc_da_client::WriteResult::success(id.to_string()))
+    /// # });
+    /// # let client: &dyn opc_da_client::OpcProvider = &mock;
+    /// use opc_da_client::{OpcProvider, OpcResult, OpcValue, WriteResult};
+    ///
     /// let result = client
     ///     .write_tag_value("Matrikon.OPC.Simulation.1", "Bucket Brigade.Int4", OpcValue::Int(42))
     ///     .await?;
-    /// let _success = result.is_success();
+    /// assert!(result.is_success());
     /// # Ok(())
     /// # }
     /// ```

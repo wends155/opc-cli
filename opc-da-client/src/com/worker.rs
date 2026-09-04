@@ -663,157 +663,11 @@ mod tests {
     use super::*;
     use crate::com::connector::{
         ConnectedGroup, ConnectedServer, CreatedGroup, DataSource, GroupConfig, GroupItemDef,
-        GroupItemResult, GroupItemState, ServerConnector, StringIterator,
+        GroupItemResult, GroupItemState, MockConnectedServer, MockServerConnector, MockState,
+        ServerConnector, StringIterator,
     };
 
-    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-
-    #[derive(Default)]
-    struct MockState {
-        connect_count: AtomicUsize,
-        should_fail_connect: AtomicBool,
-        should_fail_write: AtomicBool,
-        should_fail_with_connection_error: AtomicBool,
-        should_panic_on_request: AtomicBool,
-    }
-
-    struct ConfigurableMockConnector {
-        state: Arc<MockState>,
-    }
-
-    struct ConfigurableMockServer {
-        state: Arc<MockState>,
-    }
-
-    struct ConfigurableMockGroup {
-        state: Arc<MockState>,
-    }
-
-    impl ConnectedGroup for ConfigurableMockGroup {
-        fn add_items(&self, items: &[GroupItemDef]) -> OpcResult<Vec<GroupItemResult>> {
-            Ok(items
-                .iter()
-                .enumerate()
-                .map(|(i, _)| GroupItemResult {
-                    server_handle: ItemHandle((i + 1) as u32),
-                    canonical_type: 8,
-                    error: None,
-                })
-                .collect())
-        }
-
-        fn read(
-            &self,
-            _source: DataSource,
-            _server_handles: &[ItemHandle],
-        ) -> OpcResult<Vec<Result<GroupItemState, OpcError>>> {
-            Ok(vec![])
-        }
-
-        fn write(
-            &self,
-            server_handles: &[ItemHandle],
-            _values: &[OpcValue],
-        ) -> OpcResult<Vec<Result<(), OpcError>>> {
-            if self
-                .state
-                .should_fail_with_connection_error
-                .load(Ordering::Relaxed)
-            {
-                // RPC server unavailable (0x800706BA) triggers connection eviction
-                return Err(OpcError::Com {
-                    source: windows::core::Error::from_hresult(windows::core::HRESULT(
-                        0x800706BA_u32 as i32,
-                    )),
-                });
-            }
-
-            if self.state.should_fail_write.load(Ordering::Relaxed) {
-                Ok(server_handles
-                    .iter()
-                    .map(|_| {
-                        Err(OpcError::Com {
-                            source: windows::core::Error::from_hresult(
-                                windows::Win32::Foundation::E_FAIL,
-                            ),
-                        })
-                    })
-                    .collect())
-            } else {
-                Ok(server_handles.iter().map(|_| Ok(())).collect())
-            }
-        }
-    }
-
-    impl ConnectedServer for ConfigurableMockServer {
-        type Group = ConfigurableMockGroup;
-
-        fn query_organization(&self) -> OpcResult<u32> {
-            Ok(0)
-        }
-
-        fn browse_opc_item_ids(
-            &self,
-            _browse_type: BrowseType,
-            _filter: Option<&str>,
-            _data_type: u16,
-            _access_rights: u32,
-        ) -> OpcResult<StringIterator> {
-            Err(OpcError::NotImplemented("mock".into()))
-        }
-
-        fn change_browse_position(
-            &self,
-            _direction: BrowseDirection,
-            _name: &str,
-        ) -> OpcResult<()> {
-            Ok(())
-        }
-
-        fn get_item_id(&self, _item_name: &str) -> OpcResult<String> {
-            Ok(String::new())
-        }
-
-        fn add_group(&self, config: &GroupConfig<'_>) -> OpcResult<CreatedGroup<Self::Group>> {
-            if self.state.should_panic_on_request.load(Ordering::Relaxed) {
-                panic!("Simulated worker panic");
-            }
-            Ok(CreatedGroup {
-                group: ConfigurableMockGroup {
-                    state: self.state.clone(),
-                },
-                server_handle: GroupHandle(1),
-                revised_update_rate_ms: config.update_rate_ms,
-            })
-        }
-
-        fn remove_group(&self, _server_group: GroupHandle, _force: bool) -> OpcResult<()> {
-            Ok(())
-        }
-    }
-
-    impl ServerConnector for ConfigurableMockConnector {
-        type Server = ConfigurableMockServer;
-
-        fn enumerate_servers(&self) -> OpcResult<Vec<String>> {
-            if self.state.should_fail_connect.load(Ordering::Relaxed) {
-                Err(OpcError::Internal("Server enumeration failed".into()))
-            } else {
-                Ok(vec!["Mock.Server.1".into()])
-            }
-        }
-
-        fn connect(&self, _server_name: &str) -> OpcResult<Self::Server> {
-            if self.state.should_fail_connect.load(Ordering::Relaxed) {
-                Err(OpcError::Internal("Connection failed".into()))
-            } else {
-                self.state.connect_count.fetch_add(1, Ordering::Relaxed);
-                Ok(ConfigurableMockServer {
-                    state: self.state.clone(),
-                })
-            }
-        }
-    }
+    use std::sync::atomic::Ordering;
 
     struct WorkerMockConnector;
     struct WorkerMockServer;
@@ -1010,9 +864,7 @@ mod tests {
     #[tokio::test]
     async fn test_worker_write_tag_value() {
         let state = Arc::new(MockState::default());
-        let connector = Arc::new(ConfigurableMockConnector {
-            state: state.clone(),
-        });
+        let connector = Arc::new(MockServerConnector::with_state(state.clone()));
         let worker = tokio::task::spawn_blocking(move || ComWorker::start(connector).unwrap())
             .await
             .unwrap();
@@ -1036,9 +888,7 @@ mod tests {
     async fn test_worker_write_tag_value_failure() {
         let state = Arc::new(MockState::default());
         state.should_fail_write.store(true, Ordering::Relaxed);
-        let connector = Arc::new(ConfigurableMockConnector {
-            state: state.clone(),
-        });
+        let connector = Arc::new(MockServerConnector::with_state(state.clone()));
         let worker = tokio::task::spawn_blocking(move || ComWorker::start(connector).unwrap())
             .await
             .unwrap();
@@ -1066,9 +916,7 @@ mod tests {
     #[tokio::test]
     async fn test_connection_cache_reuse() {
         let state = Arc::new(MockState::default());
-        let connector = Arc::new(ConfigurableMockConnector {
-            state: state.clone(),
-        });
+        let connector = Arc::new(MockServerConnector::with_state(state.clone()));
         let worker = tokio::task::spawn_blocking(move || ComWorker::start(connector).unwrap())
             .await
             .unwrap();
@@ -1103,9 +951,7 @@ mod tests {
     #[tokio::test]
     async fn test_stale_connection_eviction() {
         let state = Arc::new(MockState::default());
-        let connector = Arc::new(ConfigurableMockConnector {
-            state: state.clone(),
-        });
+        let connector = Arc::new(MockServerConnector::with_state(state.clone()));
         let worker = tokio::task::spawn_blocking(move || ComWorker::start(connector).unwrap())
             .await
             .unwrap();
@@ -1149,9 +995,7 @@ mod tests {
     async fn test_worker_panic_propagation() {
         let state = Arc::new(MockState::default());
         state.should_panic_on_request.store(true, Ordering::Relaxed);
-        let connector = Arc::new(ConfigurableMockConnector {
-            state: state.clone(),
-        });
+        let connector = Arc::new(MockServerConnector::with_state(state.clone()));
         let worker = tokio::task::spawn_blocking(move || ComWorker::start(connector).unwrap())
             .await
             .unwrap();
@@ -1182,9 +1026,7 @@ mod tests {
     #[tokio::test]
     async fn test_drop_during_active_request() {
         let state = Arc::new(MockState::default());
-        let connector = Arc::new(ConfigurableMockConnector {
-            state: state.clone(),
-        });
+        let connector = Arc::new(MockServerConnector::with_state(state.clone()));
         let worker = tokio::task::spawn_blocking(move || ComWorker::start(connector).unwrap())
             .await
             .unwrap();
@@ -1197,7 +1039,7 @@ mod tests {
     async fn test_worker_init_failure() {
         struct FailingInitConnector;
         impl ServerConnector for FailingInitConnector {
-            type Server = ConfigurableMockServer;
+            type Server = std::sync::Arc<MockConnectedServer>;
             fn enumerate_servers(&self) -> OpcResult<Vec<String>> {
                 Err(OpcError::Internal("COM subsystem failed".into()))
             }
@@ -1417,9 +1259,7 @@ mod tests {
 
     #[test]
     fn test_worker_com_init_failure_propagates_opc_error() {
-        let connector = Arc::new(ConfigurableMockConnector {
-            state: Arc::new(MockState::default()),
-        });
+        let connector = Arc::new(MockServerConnector::default());
         let result =
             ComWorker::start_with_initializer::<crate::com::guard::FailingComInit>(connector);
         assert!(result.is_err());
@@ -1432,5 +1272,93 @@ mod tests {
             err.to_string().contains("Synthetic COM init failure"),
             "Expected synthetic failure message, got: {err}"
         );
+    }
+
+    #[tokio::test]
+    async fn test_worker_browse_tags_success() {
+        let connector = Arc::new(MockServerConnector::default());
+        let worker = tokio::task::spawn_blocking(move || ComWorker::start(connector).unwrap())
+            .await
+            .unwrap();
+
+        let collector = TagCollector::new(100);
+        let result = worker
+            .send_request(|reply| ComRequest::BrowseTags {
+                server: "Mock.Server.1".to_string(),
+                collector: collector.clone(),
+                reply,
+            })
+            .await
+            .expect("BrowseTags request should succeed");
+
+        assert_eq!(result.len(), 3);
+        assert_eq!(result, vec!["Random.Int4", "Random.Real8", "Random.String"]);
+        assert_eq!(collector.len(), 3);
+    }
+
+    #[tokio::test]
+    async fn test_worker_browse_tags_cancelled() {
+        let connector = Arc::new(MockServerConnector::default());
+        let worker = tokio::task::spawn_blocking(move || ComWorker::start(connector).unwrap())
+            .await
+            .unwrap();
+
+        let collector = TagCollector::new(100);
+        collector.cancel();
+        let result = worker
+            .send_request(|reply| ComRequest::BrowseTags {
+                server: "Mock.Server.1".to_string(),
+                collector: collector.clone(),
+                reply,
+            })
+            .await
+            .expect("BrowseTags request should succeed when cancelled");
+
+        assert_eq!(result.len(), 0);
+        assert_eq!(collector.len(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_worker_browse_tags_capacity_cap() {
+        let connector = Arc::new(MockServerConnector::default());
+        let worker = tokio::task::spawn_blocking(move || ComWorker::start(connector).unwrap())
+            .await
+            .unwrap();
+
+        let collector = TagCollector::new(2);
+        let result = worker
+            .send_request(|reply| ComRequest::BrowseTags {
+                server: "Mock.Server.1".to_string(),
+                collector: collector.clone(),
+                reply,
+            })
+            .await
+            .expect("BrowseTags request should succeed up to capacity");
+
+        assert_eq!(result.len(), 2);
+        assert_eq!(result, vec!["Random.Int4", "Random.Real8"]);
+        assert!(collector.is_full());
+    }
+
+    #[tokio::test]
+    async fn test_worker_browse_tags_flat_organization() {
+        let connector = Arc::new(MockServerConnector::default());
+        connector.server.organization.store(2, Ordering::Relaxed); // NamespaceType::Flat = 2
+        let worker = tokio::task::spawn_blocking(move || ComWorker::start(connector).unwrap())
+            .await
+            .unwrap();
+
+        let collector = TagCollector::new(100);
+        let result = worker
+            .send_request(|reply| ComRequest::BrowseTags {
+                server: "Mock.Server.1".to_string(),
+                collector: collector.clone(),
+                reply,
+            })
+            .await
+            .expect("BrowseTags request should succeed on flat namespace");
+
+        assert_eq!(result.len(), 3);
+        assert_eq!(result, vec!["Random.Int4", "Random.Real8", "Random.String"]);
     }
 }

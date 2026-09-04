@@ -185,12 +185,12 @@ async fn main() -> OpcResult<()> {
 
 Verify downstream business logic on any platform without requiring Windows COM runtimes:
 
-```rust,ignore
+```rust
 use opc_da_client::{MockOpcProvider, OpcProvider, OpcQuality, OpcResult, OpcValue, TagValue};
 use std::sync::Arc;
 
-#[tokio::test]
-async fn test_telemetry_service_with_mock() -> OpcResult<()> {
+#[tokio::main]
+async fn main() -> OpcResult<()> {
     let mut mock = MockOpcProvider::new();
     mock.expect_read_tag_values()
         .times(1)
@@ -235,6 +235,8 @@ async fn test_telemetry_service_with_mock() -> OpcResult<()> {
 | `TagCollector` | `pub struct` | Thread-safe, bounded container encapsulating thread-safe tag accumulation, atomic progress reporting, and cooperative cancellation token. |
 | `OpcError` | `pub enum` | Domain error enum covering connection, group, item, type, and COM HRESULT failures. |
 | `friendly_com_hint` | `pub fn` | Translates raw Win32/OPC HRESULT codes into actionable human-readable explanations. |
+| `MockOpcProvider` | `pub struct` | Pure-Rust mock implementation of `OpcProvider` generated via `mockall` (under `feature = "test-support"`). |
+| `MockServerConnector` | `pub struct` | Pure-Rust mock implementation of `ServerConnector` providing simulated server enumeration and tag browsing (under `feature = "test-support"`). |
 
 ## Architecture
 

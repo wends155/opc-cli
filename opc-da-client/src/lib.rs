@@ -23,7 +23,7 @@
 //! | Flag | Default | Effect |
 //! |------|---------|--------|
 //! | `opc-da-backend` | ✅ | Native OPC DA backend via `windows-rs` |
-//! | `test-support` | ❌ | Enables `MockOpcProvider` via `mockall` |
+//! | `test-support` | ❌ | Enables `MockOpcProvider` and `MockServerConnector` mock suites |
 //!
 //! ## Platform
 //!
@@ -60,3 +60,6 @@ pub use com::{client::OpcDaClient, connector::ComConnector};
 // Test support re-export
 #[cfg(feature = "test-support")]
 pub use provider::MockOpcProvider;
+
+#[cfg(all(feature = "test-support", feature = "opc-da-backend"))]
+pub use com::connector::{MockConnectedGroup, MockConnectedServer, MockServerConnector};
