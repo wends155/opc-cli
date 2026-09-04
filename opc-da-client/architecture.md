@@ -72,18 +72,19 @@ opc-da-client/
     ├── lib.rs              # Crate root: module declarations, public re-exports
     ├── provider.rs         # OpcProvider trait + TagValue, OpcValue, WriteResult, TagCollector
     ├── types.rs            # Canonical domain types & handles (GroupHandle, ItemHandle, OpcQuality, ...)
-    ├── errors.rs           # OpcError, OpcResult, HRESULT hints, structured error logging
-    ├── helpers.rs          # Formatters & conversions: variant_to_opc_value, filetime_to_string, etc.
+    ├── errors.rs           # OpcError, OpcResult, inherent friendly_hint diagnostics
     ├── com/                # COM subsystem (feature-gated: opc-da-backend)
     │   ├── mod.rs          # Module declarations & internal re-exports
     │   ├── client.rs       # OpcDaClient: concrete OpcProvider implementation
-    │   ├── connector.rs    # Pure-Rust connector traits, ComServer/ComGroup, and test mocks
+    │   ├── connector.rs    # Pure-Rust connector traits, ComServer/ComGroup, connect_server, test mocks
     │   ├── guard.rs        # RAII COM initialization/teardown (ComGuard)
     │   ├── iterator.rs     # Safe wrappers for IEnumString and IEnumGUID
+    │   ├── variant.rs      # Win32 VARIANT & SafeArray conversion to/from OpcValue and string
     │   └── worker.rs       # Dedicated worker thread & request state machine (ComWorker)
     └── raw/                # STRICTLY CRATE-INTERNAL (pub(crate) mod raw;)
         ├── mod.rs          # Module declarations
         ├── bindings/       # Frozen Win32 COM interfaces (da, comn)
+        ├── hresult.rs      # Strongly-typed Win32 HRESULT constants, classification helpers, hints
         ├── memory.rs       # Unsafe COM memory management (RemoteArray, RemotePointer, LocalPointer)
         └── bridge.rs       # Preserved dormant COM bridge structures (ItemDef, ItemState, etc.)
 ```
@@ -105,28 +106,34 @@ opc-da-client/
 - **Mock Availability**: N/A (data types).
 
 ### `errors`
-- **Owns**: Canonical error enumeration `OpcError`, `OpcResult<T>` type alias, formatted HRESULT helpers (`format_hresult`), user-friendly hints (`friendly_com_hint`), and structured error logging (`log_opc_error`).
-- **Does NOT own**: Upstream business logic or retry policy.
+- **Owns**: Canonical error enumeration `OpcError`, `OpcResult<T>` type alias, and user-facing diagnostic method `OpcError::friendly_hint(&self)`.
+- **Does NOT own**: Raw Win32 HRESULT formatting (`raw::hresult`), upstream business logic, or retry policy.
 - **Trait Interfaces**: `std::error::Error`.
 - **Mock Availability**: N/A.
 
-### `helpers`
-- **Owns**: Safe utility conversions between Win32 types (`FILETIME`, `VARIANT`) and pure-Rust types (`SystemTime`, `OpcValue`, `String`).
-- **Does NOT own**: Direct COM interface dispatching or memory allocation.
-- **Trait Interfaces**: Pure conversion functions.
-- **Mock Availability**: N/A.
-
 ### `com`
-- **Owns**: COM apartment lifecycle (`ComGuard`), dedicated background worker thread (`ComWorker`), request channels (`ComRequest`), connector traits and pure-Rust DTOs (`ConnectedServer`, `ConnectedGroup`, `GroupItemDef`, `GroupItemState`), and string iterators (`StringIterator`).
-- **Does NOT own**: Domain DTO definitions (`provider`), low-level raw FFI structs (`raw`).
+- **Owns**: COM apartment lifecycle (`ComGuard`), dedicated background worker thread (`ComWorker`), request channels (`ComRequest`), connector traits and pure-Rust DTOs (`ConnectedServer`, `ConnectedGroup`, `GroupItemDef`, `GroupItemState`), string iterators (`StringIterator`), Win32 server connection instantiation (`connect_server`), and CLSID/ProgID resolution (`guid_to_progid`).
+- **Does NOT own**: Domain DTO definitions (`provider`), low-level raw FFI memory allocators or dormant C-struct bridges (`raw`).
 - **Trait Interfaces**: `ServerConnector`, `ConnectedServer`, `ConnectedGroup`.
-- **Mock Availability**: `MockServerConnector`, `MockConnectedServer`, `MockConnectedGroup` (`#[cfg(test)]` in `connector.rs`).
+- **Mock Availability**: `MockServerConnector`, `MockConnectedServer`, `MockConnectedGroup` (`#[cfg(any(test, feature = "test-support"))]` in `connector.rs`, re-exported under `feature = "test-support"`).
+
+### `com::variant`
+- **Owns**: Safe conversion routines between Win32 `VARIANT` / `SafeArray` buffers and pure-Rust types (`variant_to_opc_value`, `opc_value_to_variant`, `variant_to_string`, `ole_date_to_string`).
+- **Does NOT own**: Direct COM interface dispatching, memory allocation, or public domain exports (`pub(crate)` only).
+- **Trait Interfaces**: Pure conversion functions.
+- **Mock Availability**: N/A (tested via exhaustive co-located unit tests).
 
 ### `raw`
-- **Owns**: Crate-internal Win32 COM interface bindings (`da`, `comn`), low-level COM memory allocators (`memory.rs`), and legacy dormant bridge types (`bridge.rs`).
+- **Owns**: Crate-internal Win32 COM interface bindings (`da`, `comn`), low-level COM memory allocators (`memory.rs`), dormant bridge types (`bridge.rs`), and Win32 HRESULT subsystem (`hresult.rs`).
 - **Does NOT own**: Any public API exposure, high-level business logic, or domain error mapping.
 - **Trait Interfaces**: `IntoBridge`, `TryFromNative`, `TryToNative`.
 - **Mock Availability**: N/A (sealed low-level FFI; mocked cleanly at the `com::connector` boundary).
+
+### `raw::hresult`
+- **Owns**: Strongly-typed Win32 HRESULT constants (`E_POINTER`, `RPC_S_*`, `OPC_E_*`), HRESULT classification (`is_connection_hresult`), diagnostic hint lookup (`friendly_hresult_hint`), and hex string formatting (`format_hresult`).
+- **Does NOT own**: Public domain errors (`errors::OpcError`) or high-level error logging.
+- **Trait Interfaces**: Pure helper functions and constants (`pub(crate)` only).
+- **Mock Availability**: N/A (tested via co-located unit tests).
 
 ---
 
@@ -139,20 +146,22 @@ The codebase strictly enforces unidirectional dependency flow:
     ▲             ▲             ▲
     │             │             │
 [com::client] ──► [com::worker] ──► [com::connector] ──► [raw]
-                                           ▲
-                                    [helpers]
+                        │                  │               ▲
+                        ▼                  ▼               │
+                  [com::variant] ──────────────────────────┘
 ```
 
 | Module | May Import | Must NOT Import | Rationale |
 | :--- | :--- | :--- | :--- |
-| `provider` | `types`, `errors` | `com`, `raw`, `helpers` | Public domain interface must be backend-agnostic |
-| `types` | `errors` | `provider`, `com`, `raw`, `helpers` | Canonical domain models must never depend on implementation details |
-| `errors` | `windows-core` (for HRESULT) | `provider`, `types`, `com`, `raw` | Domain errors are foundational and self-contained |
-| `helpers` | `types`, `errors`, `raw` | `com`, `provider` | Pure conversion helpers between raw and domain types |
+| `provider` | `types`, `errors` | `com`, `raw` | Public domain interface must be backend-agnostic |
+| `types` | `errors` | `provider`, `com`, `raw` | Canonical domain models must never depend on implementation details |
+| `errors` | `windows-core` (for HRESULT), `raw::hresult` (internal) | `provider`, `types`, `com` | Domain errors are foundational and self-contained |
 | `com::client` | `provider`, `types`, `errors`, `com::worker` | `raw` | Consumer facade dispatches requests to the worker |
-| `com::worker` | `types`, `errors`, `com::connector`, `helpers` | `raw` | Worker communicates exclusively via pure-Rust connector facade |
-| `com::connector` | `types`, `errors`, `helpers`, `raw` | `provider` | Encapsulates all raw Win32 COM FFI marshalling |
+| `com::worker` | `types`, `errors`, `com::connector`, `com::variant` | `raw` | Worker communicates exclusively via pure-Rust connector facade |
+| `com::connector` | `types`, `errors`, `com::variant`, `raw` | `provider` | Encapsulates all raw Win32 COM FFI marshalling |
+| `com::variant` | `provider` (`OpcValue`), `raw::hresult`, `windows` | `com::client`, `com::worker`, `com::connector` | Pure Win32 VARIANT marshaling helper for COM connector |
 | `raw` | `windows-core`, `types` | `com`, `provider` | Crate-internal low-level FFI subsystem |
+| `raw::hresult` | `windows-core` | `provider`, `types`, `com` | Foundational Win32 HRESULT constants and formatters |
 
 ---
 
@@ -165,12 +174,12 @@ All commands are run from the **workspace root** (`opc-cli/`).
 | Formatter | `cargo fmt --all -- --check` | Verify standard rustfmt formatting |
 | Linter | `cargo clippy --workspace --all-targets -- -D warnings` | Strict lint gating (zero warnings allowed) |
 | Tests | `cargo test --workspace` | Execute all workspace unit & integration tests |
-| Doc Tests | `cargo test --doc -p opc-da-client` | Verify runnable documentation code samples |
-| Verification Script | `pwsh -File scripts/verify.ps1` | Automated 8-gate compliance pipeline |
+| Doc Tests | `cargo test --doc -p opc-da-client --all-features` | Verify runnable documentation code samples |
+| Verification Script | `pwsh -File scripts/verify.ps1` | Automated 9-gate compliance pipeline (incorporating Gate 4b Feature Independence Check) |
 | Release Merge Script | `powershell -File scripts/Merge-ToMain.ps1` | Clean release merging into `main` |
 | Documentation | `cargo doc --no-deps --package opc-da-client` | Render crate rustdocs |
 
-The verification script ([verify.ps1](file:///c:/Users/WSALIGAN/code/opc-cli/scripts/verify.ps1)) sequentially runs format checks, strict clippy, doctests, unit/integration tests, polyfill builds, AST-grep rules, forbidden pattern scans, and PowerShell syntax validation.
+The verification script ([verify.ps1](file:///c:/Users/WSALIGAN/code/opc-cli/scripts/verify.ps1)) sequentially runs format checks, strict clippy, doctests, unit/integration tests, feature independence check (`--no-default-features`), polyfill builds, AST-grep rules, forbidden pattern scans, and PowerShell syntax validation.
 
 ---
 
@@ -180,7 +189,7 @@ The verification script ([verify.ps1](file:///c:/Users/WSALIGAN/code/opc-cli/scr
 | :--- | :--- |
 | Primary Return Type | `OpcResult<T>` (`Result<T, OpcError>`) across all fallible boundaries |
 | Domain Error Enum | `thiserror` based `OpcError` with structured variants (`Com`, `ConnectionFailed`, `ServerNotFound`, `TagNotFound`, `InvalidState`, `Conversion`, `Internal`, `NotImplemented`) |
-| HRESULT Hints | `friendly_com_hint(hresult)` translates raw Windows error codes into human-readable hints; `format_hresult()` yields standard `0xHHHHHHHH: <hint>` strings |
+| HRESULT Hints | Inherent method `OpcError::friendly_hint(&self)` translates raw Windows error codes into human-readable hints; `raw::hresult::format_hresult()` yields standard `0xHHHHHHHH: <hint>` strings |
 | Structured Logging | `log_opc_error(operation, error)` logs errors at `warn!` (per-item) or `error!` (fatal) with structured metadata |
 | Prohibited Patterns | `unwrap()`, `expect()`, and raw panics in production code |
 
@@ -208,9 +217,12 @@ The verification script ([verify.ps1](file:///c:/Users/WSALIGAN/code/opc-cli/scr
 ## 10. Testing Strategy
 
 ### 1. Co-Located Unit Tests
-- **`helpers.rs`**: FILETIME conversions, VARIANT parsing, string conversions, currency (VT_CY) formatting.
+- **`com::variant.rs`**: SafeArray 1D/2D conversion, VARIANT types (integers, floats, bools, strings, VT_DATE, VT_CY), error decoding, and roundtrip serialization.
+- **`com::connector.rs`**: Win32 GUID layout static assertions, `guid_to_progid` lookup, pure-Rust server connection mocks.
+- **`raw::hresult.rs`**: Strongly-typed Win32 HRESULT constants, signed cast verification, `is_connection_hresult` classification, and `format_hresult` output.
+- **`errors.rs`**: `OpcError::friendly_hint(&self)` mapping across known COM error codes, non-COM variants returning `None`, and no-default-features fallback hints.
 - **`types.rs`**: 16-bit `OpcQuality` decomposition, major/substatus/limit roundtrips, string parsing, handle semantics.
-- **`com::iterator`**: `StringIterator` null-PWSTR skipping, empty streams, error handling.
+- **`com::iterator`**: `StringIterator` null-PWSTR skipping, empty streams, error handling, and in-memory test vectors.
 
 ### 2. Pure-Rust Connector Mocks
 - **Location**: Co-located in `com/connector.rs` under `#[cfg(test)]`.
