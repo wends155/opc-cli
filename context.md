@@ -1,5 +1,19 @@
 # Project Context Summary
 
+## 2026-09-04: Ergonomic TagValue Destructuring & Zero-Allocation Display Adapters (`opc-da-client`, `opc-cli`)
+> 📝 **Context Update:**
+> * **Feature:** Implement zero-allocation display adapters (`DisplayOptionOpcValue`, `DisplayOptionTimestamp`), extension traits (`OpcValueOptionExt`, `SystemTimeOptionExt`), and `Display` for `TagValue`.
+> * **Changes:**
+>   - Added `DisplayOptionOpcValue<'a>` and `DisplayOptionTimestamp<'a>` implementing `std::fmt::Display` to format optional tag values and timestamps with zero heap allocations, with `f.pad(&str)` support for column width formatting.
+>   - Added extension traits `OpcValueOptionExt` and `SystemTimeOptionExt` providing `.display_or("fallback")` and default `.display()`, resolving destructuring friction on `Option<OpcValue>` and `Option<SystemTime>` without orphan rule violations.
+>   - Implemented `std::fmt::Display for TagValue` rendering `"{tag_id} = {value} [{quality}] @ {timestamp}"` while preserving 100% backward compatibility for `display_value()` and `formatted_timestamp()`.
+>   - Modernized `opc-cli/src/ui.rs` table row formatting to use `tv.value.display()` and `tv.timestamp.display()`, achieving uniform formatting across all table cells.
+>   - Updated `OpcQuality::fmt` in `opc-da-client/src/types.rs` to support `f.width()` via `f.pad`.
+>   - Added comprehensive unit tests in `opc-da-client` and `opc-cli` confirming destructuring pattern matching ergonomics.
+>   - Updated `opc-da-client/spec.md` with behavioral contracts and hash `3743dba`.
+> * **New Constraints:** Use `.display_or("fallback")` or `.display()` on `Option<OpcValue>` and `Option<SystemTime>` when destructuring `TagValue`. Do not allocate strings eagerly when streaming to formatters.
+> * **Pruned:** Manual `match` boilerplate and duplicate `"Error"` / `"N/A"` fallback handling on extracted `TagValue` fields.
+
 ## 2026-09-04: Documentation Synchronization for Strongly-Typed WriteResult (`opc-da-client`)
 > 📝 **Context Update:**
 > * **Feature:** Synchronize `opc-da-client` rustdoc comments and `spec.md` with strongly-typed `WriteResult` methods and baseline hash.
