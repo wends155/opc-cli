@@ -1539,4 +1539,37 @@ mod tests {
         assert!(app.write_result_rx.is_none());
         assert!(app.messages.iter().any(|m| m.contains("succeeded")));
     }
+
+    #[test]
+    fn test_destructure_tag_value_ergonomics() {
+        use opc_da_client::{OpcQuality, OpcValueOptionExt, SystemTimeOptionExt};
+
+        let tv = TagValue {
+            tag_id: "Plant.Sensor1".to_string(),
+            value: Some(OpcValue::Int(100)),
+            quality: OpcQuality::GOOD,
+            timestamp: None,
+        };
+
+        // Validate destructuring ergonomics as reported in review_report.md
+        let TagValue {
+            tag_id,
+            value,
+            quality,
+            timestamp,
+        } = tv;
+
+        let log_line = format!(
+            "Tag: {} | Value: {} | Quality: {} | Timestamp: {}",
+            tag_id,
+            value.display(),
+            quality,
+            timestamp.display_or("N/A")
+        );
+
+        assert_eq!(
+            log_line,
+            "Tag: Plant.Sensor1 | Value: 100 | Quality: Good | Timestamp: N/A"
+        );
+    }
 }

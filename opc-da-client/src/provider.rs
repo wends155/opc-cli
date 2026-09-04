@@ -108,7 +108,7 @@ pub struct DisplayOptionOpcValue<'a> {
     fallback: &'a str,
 }
 
-impl<'a> std::fmt::Display for DisplayOptionOpcValue<'a> {
+impl std::fmt::Display for DisplayOptionOpcValue<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self.opt {
             Some(v) => {
@@ -145,7 +145,7 @@ pub struct DisplayOptionTimestamp<'a> {
     fallback: &'a str,
 }
 
-impl<'a> std::fmt::Display for DisplayOptionTimestamp<'a> {
+impl std::fmt::Display for DisplayOptionTimestamp<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self.opt {
             Some(ts) if ts != std::time::SystemTime::UNIX_EPOCH => {
@@ -205,7 +205,7 @@ impl OpcValueOptionExt for Option<OpcValue> {
     }
 }
 
-impl<'b> OpcValueOptionExt for Option<&'b OpcValue> {
+impl OpcValueOptionExt for Option<&OpcValue> {
     fn display_or<'a>(&'a self, fallback: &'a str) -> DisplayOptionOpcValue<'a> {
         DisplayOptionOpcValue {
             opt: *self,

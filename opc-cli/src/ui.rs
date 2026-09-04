@@ -9,6 +9,7 @@
 //! to visual elements using `ratatui`.
 
 use crate::app::{App, CurrentScreen};
+use opc_da_client::{OpcValueOptionExt, SystemTimeOptionExt};
 use ratatui::{
     Frame,
     layout::{Constraint, Direction, Layout, Rect},
@@ -225,9 +226,9 @@ fn render_tag_values(f: &mut Frame, app: &mut App, area: ratatui::layout::Rect) 
         .map(|tv| {
             Row::new(vec![
                 tv.tag_id.clone(),
-                tv.display_value(),
+                tv.value.display().to_string(),
                 tv.quality.to_string(),
-                tv.formatted_timestamp(),
+                tv.timestamp.display().to_string(),
             ])
         })
         .collect();

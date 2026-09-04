@@ -3,7 +3,7 @@
 > **Behavioral Source of Truth** for the `opc-da-client` library crate.
 > Defines *what* each module should do — independent of current implementation.
 >
-> Last verified against: 1a27687
+> Last verified against: 3743dba
 
 ---
 
@@ -66,7 +66,27 @@ All methods use `#[async_trait]`.
 | `quality` | `OpcQuality` | Yes | Decomposed 16-bit OPC DA quality word. | `Copy`, `Display` formats rich human-readable status. |
 | `timestamp` | `Option<std::time::SystemTime>` | Yes | Last-change timestamp (UTC-based), or `None`. | `formatted_timestamp()` formats to local time string. |
 
+**Methods & Traits:**
+* `display_value(&self) -> String`: Returns formatted value string or `"Error"`.
+* `formatted_timestamp(&self) -> String`: Returns local formatted time string or `"N/A"`.
+* `is_good(&self) -> bool`: Returns `true` if quality is good and value is present.
+* `is_error(&self) -> bool`: Returns `true` if quality is bad or value is absent.
+* `Display`: Canonical formatting rendering `"{tag_id} = {value} [{quality}] @ {timestamp}"`.
+
 **Derives:** `Debug`, `Clone`, `PartialEq`.
+
+---
+
+##### `Display Adapters & Extension Traits`
+
+**Purpose:** Provide zero-allocation, ergonomic formatting helpers for destructured or standalone option fields.
+
+| Type / Trait | Target | Default Fallback | Description |
+| :--- | :--- | :--- | :--- |
+| `struct DisplayOptionOpcValue<'a>` | `Option<&'a OpcValue>` | Custom | Zero-allocation `Display` adapter streaming inner value or fallback directly into formatter. |
+| `struct DisplayOptionTimestamp<'a>` | `Option<SystemTime>` | Custom | Zero-allocation `Display` adapter streaming local datetime or fallback directly into formatter. |
+| `trait OpcValueOptionExt` | `Option<OpcValue>`, `Option<&OpcValue>` | `"Error"` | Extends options with `.display_or(fallback)` and `.display()`. |
+| `trait SystemTimeOptionExt` | `Option<SystemTime>` | `"N/A"` | Extends timestamp options with `.display_or(fallback)` and `.display()`. |
 
 ---
 
@@ -443,7 +463,7 @@ Defined in § 1.1. See table above.
 
 - [x] `friendly_com_hint`, `format_hresult`, `friendly_hresult_hint` — runnable doctests in `errors.rs`.
 - [x] `OpcResult`, `OpcError` — runnable doctests in `errors.rs`.
-- [x] `TagValue`, `OpcValue`, `WriteResult` — runnable doctests in `provider.rs`.
+- [x] `TagValue`, `OpcValue`, `WriteResult`, `DisplayOption*`, `OpcValueOptionExt`, `SystemTimeOptionExt` — runnable doctests in `provider.rs`.
 - [x] `OpcProvider` trait methods (`list_servers`, `browse_tags`, `read_tag_values`, `write_tag_value`) — doctests in `provider.rs`.
 - [x] `GroupHandle`, `ItemHandle`, `OpcQuality`, `BrowseType`, `BrowseDirection` — runnable doctests in `types.rs`.
 - [x] `OpcDaClient::new` — doctest in `com/client.rs`.
