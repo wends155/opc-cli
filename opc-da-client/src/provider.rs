@@ -41,18 +41,75 @@ pub struct TagValue {
 
 impl TagValue {
     /// Returns `true` if quality is good and a value is present.
+    ///
+    /// # Returns
+    ///
+    /// `true` if [`TagValue::quality`] satisfies [`OpcQuality::is_good`] and [`TagValue::value`] is `Some`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use opc_da_client::{OpcQuality, OpcValue, TagValue};
+    ///
+    /// let tv = TagValue {
+    ///     tag_id: "Tag1".into(),
+    ///     value: Some(OpcValue::Int(10)),
+    ///     quality: OpcQuality::GOOD,
+    ///     timestamp: None,
+    /// };
+    /// assert!(tv.is_good());
+    /// ```
     #[must_use]
     pub fn is_good(&self) -> bool {
         self.quality.is_good() && self.value.is_some()
     }
 
     /// Returns `true` if quality is bad or value is missing.
+    ///
+    /// # Returns
+    ///
+    /// `true` if the tag read encountered an error or quality is bad; `false` otherwise.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use opc_da_client::{OpcQuality, TagValue};
+    ///
+    /// let tv = TagValue {
+    ///     tag_id: "Tag1".into(),
+    ///     value: None,
+    ///     quality: OpcQuality::BAD_COMM_FAILURE,
+    ///     timestamp: None,
+    /// };
+    /// assert!(tv.is_error());
+    /// ```
     #[must_use]
     pub fn is_error(&self) -> bool {
         !self.is_good()
     }
 
     /// Returns a human-readable display string for the value (or `"Error"` if missing).
+    ///
+    /// For zero-allocation formatting into a formatter or stream, prefer using
+    /// [`OpcValueOptionExt::display`] or [`OpcValueOptionExt::display_or`] on [`TagValue::value`].
+    ///
+    /// # Returns
+    ///
+    /// A newly allocated [`String`] representation of the value, or `"Error"` if [`TagValue::value`] is `None`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use opc_da_client::{OpcQuality, OpcValue, TagValue};
+    ///
+    /// let tv = TagValue {
+    ///     tag_id: "Tag1".into(),
+    ///     value: Some(OpcValue::Float(23.4)),
+    ///     quality: OpcQuality::GOOD,
+    ///     timestamp: None,
+    /// };
+    /// assert_eq!(tv.display_value(), "23.4");
+    /// ```
     #[must_use]
     pub fn display_value(&self) -> String {
         match &self.value {
@@ -62,6 +119,27 @@ impl TagValue {
     }
 
     /// Returns a human-readable formatted local timestamp string (or `"N/A"` if missing).
+    ///
+    /// For zero-allocation formatting into a formatter or stream, prefer using
+    /// [`SystemTimeOptionExt::display`] or [`SystemTimeOptionExt::display_or`] on [`TagValue::timestamp`].
+    ///
+    /// # Returns
+    ///
+    /// A [`String`] formatted as `"YYYY-MM-DD HH:MM:SS"` in local time, or `"N/A"` if missing or epoch.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use opc_da_client::{OpcQuality, TagValue};
+    ///
+    /// let tv = TagValue {
+    ///     tag_id: "Tag1".into(),
+    ///     value: None,
+    ///     quality: OpcQuality::BAD_COMM_FAILURE,
+    ///     timestamp: None,
+    /// };
+    /// assert_eq!(tv.formatted_timestamp(), "N/A");
+    /// ```
     #[must_use]
     pub fn formatted_timestamp(&self) -> String {
         match self.timestamp {
@@ -171,6 +249,10 @@ pub trait OpcValueOptionExt {
     ///
     /// * `fallback` - Text to render when the option is `None`.
     ///
+    /// # Returns
+    ///
+    /// A [`DisplayOptionOpcValue`] adapter that implements [`std::fmt::Display`].
+    ///
     /// # Examples
     ///
     /// ```
@@ -182,6 +264,10 @@ pub trait OpcValueOptionExt {
     fn display_or<'a>(&'a self, fallback: &'a str) -> DisplayOptionOpcValue<'a>;
 
     /// Returns a zero-allocation display adapter with the canonical default fallback (`"Error"`).
+    ///
+    /// # Returns
+    ///
+    /// A [`DisplayOptionOpcValue`] adapter configured with `"Error"` fallback.
     ///
     /// # Examples
     ///
@@ -222,6 +308,10 @@ pub trait SystemTimeOptionExt {
     ///
     /// * `fallback` - Text to render when the timestamp is `None` or [`std::time::SystemTime::UNIX_EPOCH`].
     ///
+    /// # Returns
+    ///
+    /// A [`DisplayOptionTimestamp`] adapter that implements [`std::fmt::Display`].
+    ///
     /// # Examples
     ///
     /// ```
@@ -234,6 +324,10 @@ pub trait SystemTimeOptionExt {
     fn display_or<'a>(&'a self, fallback: &'a str) -> DisplayOptionTimestamp<'a>;
 
     /// Returns a zero-allocation display adapter with the canonical default fallback (`"N/A"`).
+    ///
+    /// # Returns
+    ///
+    /// A [`DisplayOptionTimestamp`] adapter configured with `"N/A"` fallback.
     ///
     /// # Examples
     ///

@@ -3,7 +3,7 @@
 > **Behavioral Source of Truth** for the `opc-da-client` library crate.
 > Defines *what* each module should do — independent of current implementation.
 >
-> Last verified against: 3743dba
+> Last verified against: 07e1c87
 
 ---
 
@@ -458,6 +458,7 @@ Defined in § 1.1. See table above.
 - [x] `MockOpcProvider` returns expected browse results.
 - [x] `MockOpcProvider` returns expected tag values.
 - [x] `MockOpcProvider` simulates error conditions for UI error handling.
+- [x] `test_destructure_tag_value_ergonomics` — verifies destructuring of `TagValue` with `v.value.display()` and `v.timestamp.display()`.
 
 ### Doc Tests
 

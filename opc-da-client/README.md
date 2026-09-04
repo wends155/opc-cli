@@ -19,7 +19,9 @@ OPC DA is deeply coupled to Windows COM/DCOM, which poses significant architectu
 - **Async/Await Trait Abstraction**: Built on `tokio` and `async-trait`, using the canonical `OpcProvider` trait for zero-cost abstraction, backend flexibility, and straightforward test mocking.
 - **Pure-Rust Connector Facade**: Strict isolation of low-level Win32 COM and FFI types behind the `ConnectedServer` and `ConnectedGroup` traits, keeping raw COM types and unsafe memory handling strictly internal.
 - **Transparent COM & Thread Management**: Automatically spawns and manages a dedicated MTA worker thread, maintaining strict thread affinity and connection pooling with auto-recovery for stale proxies.
-- **Strongly-Typed Domain Models**: `TagValue` uses `Option<OpcValue>` and `Option<std::time::SystemTime>` ensuring lossless, zero-allocation typed access on read results and writes with convenient display helpers.
+- **Strongly-Typed Domain Models**: `TagValue` uses `Option<OpcValue>` and `Option<std::time::SystemTime>` ensuring lossless, zero-allocation typed access on read results and writes.
+- **Zero-Allocation Display Adapters**: `DisplayOptionOpcValue` and `DisplayOptionTimestamp` adapters with extension traits `OpcValueOptionExt` and `SystemTimeOptionExt` enable zero-allocation formatted streaming with width-padded table alignment.
+- **Canonical Display Formatting**: `TagValue` implements `std::fmt::Display` rendering `"{tag_id} = {value} [{quality}] @ {timestamp}"` for clean, single-line logging and diagnostics.
 - **16-Bit Quality Decomposition**: Zero-allocation `OpcQuality` struct decomposes raw OPC DA quality words into major status, substatus, and limit states with rich, human-readable diagnostics.
 - **Native Windows Backend**: Implemented natively with `windows-rs` — eliminates heavy legacy C++ binaries and external OPC crate dependencies.
 - **Context-Rich Error Handling**: Domain-specific `OpcError` via `thiserror` paired with `friendly_com_hint()` for actionable HRESULT troubleshooting.
@@ -82,7 +84,9 @@ async fn main() -> OpcResult<()> {
 Read current tag values, inspect decomposed quality states, and extract strongly-typed values:
 
 ```rust,no_run
-use opc_da_client::{OpcDaClient, OpcProvider, OpcResult, OpcValue};
+use opc_da_client::{
+    OpcDaClient, OpcProvider, OpcResult, OpcValue, OpcValueOptionExt, SystemTimeOptionExt,
+};
 
 #[tokio::main]
 async fn main() -> OpcResult<()> {
@@ -97,13 +101,16 @@ async fn main() -> OpcResult<()> {
     let values = client.read_tag_values(server, tags).await?;
 
     for v in values {
-        // Ergonomic string formatting for UI tables or logs
+        // Direct Display rendering: "Tag1 = 42.5 [Good] @ 2026-09-04 10:00:00"
+        println!("{v}");
+
+        // Zero-allocation field formatting for UI tables or logs with column width padding
         println!(
             "Tag: {:<25} | Value: {:<15} | Quality: {:<12} | Timestamp: {}",
             v.tag_id,
-            v.display_value(),
+            v.value.display(),
             v.quality,
-            v.formatted_timestamp()
+            v.timestamp.display()
         );
 
         // 16-bit quality inspection
@@ -218,7 +225,11 @@ async fn test_telemetry_service_with_mock() -> OpcResult<()> {
 |:---|:---|:---|
 | `OpcProvider` | `pub trait` | Async trait for OPC DA operations (`list_servers`, `browse_tags`, `read_tag_values`, `write_tag_value`). |
 | `OpcDaClient` | `pub struct` | Primary client implementation using Windows COM through a dedicated worker thread. |
-| `TagValue` | `pub struct` | Canonical read result (`tag_id`, `Option<OpcValue>`, `OpcQuality`, `Option<SystemTime>`) with display helpers. |
+| `TagValue` | `pub struct` | Canonical read result (`tag_id`, `Option<OpcValue>`, `OpcQuality`, `Option<SystemTime>`) with `Display` and display helpers. |
+| `DisplayOptionOpcValue` | `pub struct` | Zero-allocation `Display` adapter streaming inner `OpcValue` or fallback directly into formatter. |
+| `DisplayOptionTimestamp` | `pub struct` | Zero-allocation `Display` adapter streaming formatted timestamp or fallback directly into formatter. |
+| `OpcValueOptionExt` | `pub trait` | Extension trait providing `.display()` and `.display_or("fallback")` for `Option<OpcValue>`. |
+| `SystemTimeOptionExt` | `pub trait` | Extension trait providing `.display()` and `.display_or("fallback")` for `Option<SystemTime>`. |
 | `OpcValue` | `pub enum` | Strongly-typed OPC value representation (`Int`, `Float`, `Bool`, `String`, `Empty`, `Null`). |
 | `OpcQuality` | `pub struct` | Zero-allocation decomposed 16-bit OPC DA quality word (`major`, `substatus`, `limit`, `raw`). |
 | `WriteResult` | `pub struct` | Tag write operation result (`tag_id`, `status: Result<(), OpcError>`, `is_success`, `is_error`, `error`). |
