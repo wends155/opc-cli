@@ -94,8 +94,14 @@ All methods use `#[async_trait]`.
 | Field | Type | Required | Description |
 | :--- | :--- | :--- | :--- |
 | `tag_id` | `String` | Yes | The tag identifier that was written to. |
-| `success` | `bool` | Yes | Whether the write operation succeeded. |
-| `error` | `Option<String>` | No | Error message or hint if `success` is `false`. |
+| `status` | `Result<(), OpcError>` | Yes | Outcome of the write operation: `Ok(())` on success, or `Err(OpcError)` on failure. |
+
+**Methods:**
+* `success(tag_id)`: Constructs a successful write result.
+* `failure(tag_id, error)`: Constructs a failed write result with domain error.
+* `is_success()`: Returns `true` if write succeeded.
+* `is_error()`: Returns `true` if write failed.
+* `error()`: Returns `Option<&OpcError>`.
 
 **Derives:** `Debug`, `Clone`, `PartialEq`.
 
@@ -404,6 +410,7 @@ Defined in § 1.1. See table above.
 - [x] `test_worker_starts_and_stops` — worker thread start & stop.
 - [x] `test_worker_list_servers` — server listing dispatch.
 - [x] `test_worker_write_tag_value` — write path dispatch & `WriteResult`.
+- [x] `test_worker_write_tag_value_failure` — write rejection error propagation & `OpcError::Com`.
 - [x] `test_connection_cache_reuse` — server connection pooling across requests (`connect_count == 1`).
 - [x] `test_stale_connection_eviction` — auto-eviction & transparent reconnect on COM/RPC error (`connect_count == 2`).
 - [x] `test_worker_panic_propagation` — worker thread panic safety & error propagation to caller.

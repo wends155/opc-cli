@@ -469,11 +469,7 @@ impl<C: ServerConnector + 'static> ComWorker<C> {
             if let Err(err) = opc_server.remove_group(server_handle, true) {
                 tracing::warn!(error = ?err, operation = "write_tag_value", "Failed to remove OPC group during cleanup");
             }
-            return Ok(WriteResult {
-                tag_id: tag_id.to_string(),
-                success: false,
-                error: Some(format!("Failed to add tag: {e}")),
-            });
+            return Ok(WriteResult::failure(tag_id, e.clone()));
         }
 
         let item_handle = item_res.server_handle;
@@ -488,24 +484,15 @@ impl<C: ServerConnector + 'static> ComWorker<C> {
                     elapsed_ms = u64::try_from(start.elapsed().as_millis()).unwrap_or(u64::MAX),
                     "write_tag_value completed"
                 );
-                WriteResult {
-                    tag_id: tag_id.to_string(),
-                    success: true,
-                    error: None,
-                }
+                WriteResult::success(tag_id)
             }
             Err(e) => {
-                let msg = e.to_string();
                 tracing::warn!(
-                    error = %msg,
+                    error = %e,
                     elapsed_ms = u64::try_from(start.elapsed().as_millis()).unwrap_or(u64::MAX),
                     "write_tag_value: server rejected write"
                 );
-                WriteResult {
-                    tag_id: tag_id.to_string(),
-                    success: false,
-                    error: Some(msg),
-                }
+                WriteResult::failure(tag_id, e.clone())
             }
         };
 
@@ -1072,8 +1059,39 @@ mod tests {
             .expect("Request should succeed");
 
         assert_eq!(result.tag_id, "Random.Int4");
-        assert!(result.success, "Write should be successful");
-        assert!(result.error.is_none());
+        assert!(result.is_success(), "Write should be successful");
+        assert!(result.error().is_none());
+    }
+
+    #[tokio::test]
+    async fn test_worker_write_tag_value_failure() {
+        let state = Arc::new(MockState::default());
+        state.should_fail_write.store(true, Ordering::Relaxed);
+        let connector = Arc::new(ConfigurableMockConnector {
+            state: state.clone(),
+        });
+        let worker = tokio::task::spawn_blocking(move || ComWorker::start(connector).unwrap())
+            .await
+            .unwrap();
+
+        let result = worker
+            .send_request(|reply| ComRequest::WriteTagValue {
+                server: "Mock.Server.1".to_string(),
+                tag_id: "Random.Int4".to_string(),
+                value: OpcValue::Int(42),
+                reply,
+            })
+            .await
+            .expect("Request should complete");
+
+        assert_eq!(result.tag_id, "Random.Int4");
+        assert!(result.is_error(), "Write should fail");
+        match result.status {
+            Err(OpcError::Com { source }) => {
+                assert_eq!(source.code(), windows::Win32::Foundation::E_FAIL);
+            }
+            other => panic!("Expected OpcError::Com, got {:?}", other),
+        }
     }
 
     #[tokio::test]

@@ -142,10 +142,9 @@ async fn main() -> OpcResult<()> {
         .write_tag_value(server, "Bucket Brigade.Int4", OpcValue::Int(42))
         .await?;
 
-    if result.success {
-        println!("✓ Write succeeded");
-    } else {
-        println!("✗ Write failed: {}", result.error.as_deref().unwrap_or("Unknown error"));
+    match result.status {
+        Ok(()) => println!("✓ Write succeeded"),
+        Err(e) => println!("✗ Write failed: {e}"),
     }
     Ok(())
 }
@@ -222,7 +221,7 @@ async fn test_telemetry_service_with_mock() -> OpcResult<()> {
 | `TagValue` | `pub struct` | Canonical read result (`tag_id`, `Option<OpcValue>`, `OpcQuality`, `Option<SystemTime>`) with display helpers. |
 | `OpcValue` | `pub enum` | Strongly-typed OPC value representation (`Int`, `Float`, `Bool`, `String`, `Empty`, `Null`). |
 | `OpcQuality` | `pub struct` | Zero-allocation decomposed 16-bit OPC DA quality word (`major`, `substatus`, `limit`, `raw`). |
-| `WriteResult` | `pub struct` | Tag write operation result (`tag_id`, `success: bool`, `error: Option<String>`). |
+| `WriteResult` | `pub struct` | Tag write operation result (`tag_id`, `status: Result<(), OpcError>`, `is_success`, `is_error`, `error`). |
 | `OpcError` | `pub enum` | Domain error enum covering connection, group, item, type, and COM HRESULT failures. |
 | `friendly_com_hint` | `pub fn` | Translates raw Win32/OPC HRESULT codes into actionable human-readable explanations. |
 

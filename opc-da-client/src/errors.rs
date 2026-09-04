@@ -27,7 +27,7 @@ pub type OpcResult<T> = Result<T, OpcError>;
 /// let err = OpcError::Connection("Server unreachable".to_string());
 /// assert_eq!(err.to_string(), "Connection failed: Server unreachable");
 /// ```
-#[derive(Debug, Error)]
+#[derive(Debug, Clone, PartialEq, Error)]
 #[non_exhaustive]
 pub enum OpcError {
     /// Standard Windows COM/DCOM error.

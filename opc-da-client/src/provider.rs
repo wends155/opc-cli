@@ -1,4 +1,4 @@
-use crate::errors::OpcResult;
+use crate::errors::{OpcError, OpcResult};
 pub use crate::types::{OpcQuality, QualityLimit, QualityMajor, QualitySubstatus};
 use async_trait::async_trait;
 use std::sync::Arc;
@@ -116,23 +116,62 @@ impl std::fmt::Display for OpcValue {
 /// # Examples
 ///
 /// ```
-/// use opc_da_client::WriteResult;
+/// use opc_da_client::{OpcError, WriteResult};
 ///
-/// let wr = WriteResult {
-///     tag_id: "Tag1".to_string(),
-///     success: true,
-///     error: None,
-/// };
-/// assert!(wr.success);
+/// let ok_res = WriteResult::success("Tag1");
+/// assert!(ok_res.is_success());
+/// assert!(ok_res.status.is_ok());
+/// assert!(ok_res.error().is_none());
+///
+/// let err_res = WriteResult::failure("Tag2", OpcError::Connection("Lost".into()));
+/// assert!(err_res.is_error());
+/// assert!(err_res.status.is_err());
+/// assert_eq!(err_res.error(), Some(&OpcError::Connection("Lost".into())));
 /// ```
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct WriteResult {
     /// The tag that was written to.
     pub tag_id: String,
-    /// Whether the write succeeded.
-    pub success: bool,
-    /// Error message if the write failed, `None` on success.
-    pub error: Option<String>,
+    /// Outcome of the write operation: `Ok(())` on success, or `Err(OpcError)` on failure.
+    pub status: Result<(), OpcError>,
+}
+
+impl WriteResult {
+    /// Creates a successful write result.
+    #[must_use]
+    pub fn success(tag_id: impl Into<String>) -> Self {
+        Self {
+            tag_id: tag_id.into(),
+            status: Ok(()),
+        }
+    }
+
+    /// Creates a failed write result with a domain error.
+    #[must_use]
+    pub fn failure(tag_id: impl Into<String>, error: OpcError) -> Self {
+        Self {
+            tag_id: tag_id.into(),
+            status: Err(error),
+        }
+    }
+
+    /// Returns `true` if the write succeeded.
+    #[must_use]
+    pub fn is_success(&self) -> bool {
+        self.status.is_ok()
+    }
+
+    /// Returns `true` if the write failed.
+    #[must_use]
+    pub fn is_error(&self) -> bool {
+        self.status.is_err()
+    }
+
+    /// Returns the error if the write failed, or `None` if it succeeded.
+    #[must_use]
+    pub fn error(&self) -> Option<&OpcError> {
+        self.status.as_ref().err()
+    }
 }
 
 /// Async trait for OPC DA operations.
@@ -265,7 +304,7 @@ pub trait OpcProvider: Send + Sync {
     /// let result = client
     ///     .write_tag_value("Matrikon.OPC.Simulation.1", "Bucket Brigade.Int4", OpcValue::Int(42))
     ///     .await?;
-    /// let _success = result.success;
+    /// let _success = result.is_success();
     /// # Ok(())
     /// # }
     /// ```

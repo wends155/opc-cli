@@ -658,15 +658,15 @@ impl App {
         if let Some(rx) = &mut self.write_result_rx {
             match rx.try_recv() {
                 Ok(Ok(result)) => {
-                    if result.success {
-                        tracing::info!(tag = %result.tag_id, "poll_write_result: write succeeded");
-                        self.add_message(format!("✓ Write to '{}' succeeded", result.tag_id));
-                    } else {
-                        let err_msg = result.error.unwrap_or_default();
-                        self.add_message(format!(
-                            "✗ Write to '{}' failed: {}",
-                            result.tag_id, err_msg
-                        ));
+                    match &result.status {
+                        Ok(()) => {
+                            tracing::info!(tag = %result.tag_id, "poll_write_result: write succeeded");
+                            self.add_message(format!("✓ Write to '{}' succeeded", result.tag_id));
+                        }
+                        Err(e) => {
+                            tracing::warn!(tag = %result.tag_id, error = %e, "poll_write_result: write failed");
+                            self.add_message(format!("✗ Write to '{}' failed: {e}", result.tag_id));
+                        }
                     }
                     self.log_transition(CurrentScreen::TagValues, "write_result_success");
                     self.write_result_rx = None;
@@ -889,7 +889,7 @@ fn parse_opc_value(s: &str) -> OpcValue {
 mod tests {
     use super::*;
     use mockall::predicate::*;
-    use opc_da_client::{MockOpcProvider, OpcQuality, OpcResult};
+    use opc_da_client::{MockOpcProvider, OpcError, OpcQuality, OpcResult, WriteResult};
 
     #[test]
     fn test_poll_fetch_result_success() {
@@ -1501,5 +1501,42 @@ mod tests {
 
         app.exit_search_mode();
         assert!(!app.search_mode);
+    }
+
+    #[test]
+    fn test_poll_write_result_failure() {
+        let mock = MockOpcProvider::new();
+        let mut app = App::new(Arc::new(mock));
+        let (tx, rx) = oneshot::channel();
+        app.write_result_rx = Some(rx);
+
+        let failed_res = WriteResult::failure(
+            "Channel1.Device1.Tag1",
+            OpcError::Connection("Lost connection".into()),
+        );
+        let _ = tx.send(Ok(failed_res));
+
+        app.poll_write_result();
+        assert!(app.write_result_rx.is_none());
+        assert!(
+            app.messages
+                .iter()
+                .any(|m| m.contains("failed: Connection failed: Lost connection"))
+        );
+    }
+
+    #[test]
+    fn test_poll_write_result_success() {
+        let mock = MockOpcProvider::new();
+        let mut app = App::new(Arc::new(mock));
+        let (tx, rx) = oneshot::channel();
+        app.write_result_rx = Some(rx);
+
+        let ok_res = WriteResult::success("Channel1.Device1.Tag1");
+        let _ = tx.send(Ok(ok_res));
+
+        app.poll_write_result();
+        assert!(app.write_result_rx.is_none());
+        assert!(app.messages.iter().any(|m| m.contains("succeeded")));
     }
 }
