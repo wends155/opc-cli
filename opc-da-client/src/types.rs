@@ -286,11 +286,21 @@ impl fmt::Display for OpcQuality {
             QualityLimit::Constant => Some("Constant"),
         };
 
-        match (sub_str, limit_str) {
-            (None, None) => write!(f, "{major_str}"),
-            (Some(s), None) => write!(f, "{major_str} ({s})"),
-            (None, Some(l)) => write!(f, "{major_str} [{l}]"),
-            (Some(s), Some(l)) => write!(f, "{major_str} ({s}) [{l}]"),
+        if f.width().is_none() {
+            match (sub_str, limit_str) {
+                (None, None) => write!(f, "{major_str}"),
+                (Some(s), None) => write!(f, "{major_str} ({s})"),
+                (None, Some(l)) => write!(f, "{major_str} [{l}]"),
+                (Some(s), Some(l)) => write!(f, "{major_str} ({s}) [{l}]"),
+            }
+        } else {
+            let formatted = match (sub_str, limit_str) {
+                (None, None) => major_str.to_string(),
+                (Some(s), None) => format!("{major_str} ({s})"),
+                (None, Some(l)) => format!("{major_str} [{l}]"),
+                (Some(s), Some(l)) => format!("{major_str} ({s}) [{l}]"),
+            };
+            f.pad(&formatted)
         }
     }
 }
