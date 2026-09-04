@@ -1,9 +1,9 @@
 <#
 .SYNOPSIS
-    Universal Quality Gate for opc-cli (8-Gate Pipeline).
+    Universal Quality Gate for opc-cli (9-Gate Pipeline).
 .DESCRIPTION
-    Runs cargo fmt, clippy, doc tests, workspace tests, polyfill compilation,
-    AST-grep scan, forbidden pattern scanner, and PowerShell syntax checks.
+    Runs cargo fmt, clippy, doc tests, workspace tests, feature independence check,
+    polyfill compilation, AST-grep scan, forbidden pattern scanner, and PowerShell syntax checks.
     Halts execution strictly on any non-zero exit code.
     Reports What/Where/Why on failure for human and AI diagnostics.
 .PARAMETER Verbose
@@ -67,6 +67,9 @@ Invoke-Gate -GateName "Doc Compilation Check" -Command { cargo test --doc --work
 
 # Gate 4: Unit & Integration Tests
 Invoke-Gate -GateName "Unit & Integration Tests" -Command { cargo test --workspace }
+
+# Gate 4b: Feature Independence Check (--no-default-features)
+Invoke-Gate -GateName "Feature Independence Check (opc-da-client --no-default-features)" -Command { cargo check -p opc-da-client --no-default-features }
 
 # Gate 5: Polyfill Compilation Gate
 $compatDir = Join-Path $PSScriptRoot ".." "compat"

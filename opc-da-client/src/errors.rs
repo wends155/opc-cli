@@ -33,7 +33,7 @@ pub enum OpcError {
     ///
     /// This variant wraps a [`windows::core::Error`] and provides a friendly
     /// hint for common OPC-related HRESULT codes.
-    #[error("COM error: {source} ({})", crate::raw::hresult::friendly_hresult_hint(.source.code()).unwrap_or("No hint available"))]
+    #[error("COM error: {source} ({})", com_error_hint(.source))]
     Com {
         #[from]
         source: windows::core::Error,
@@ -76,6 +76,18 @@ impl From<std::num::TryFromIntError> for OpcError {
     }
 }
 
+fn com_error_hint(source: &windows::core::Error) -> &'static str {
+    #[cfg(feature = "opc-da-backend")]
+    {
+        crate::raw::hresult::friendly_hresult_hint(source.code()).unwrap_or("No hint available")
+    }
+    #[cfg(not(feature = "opc-da-backend"))]
+    {
+        let _ = source;
+        "No hint available"
+    }
+}
+
 impl OpcError {
     /// Returns an actionable user-friendly hint if this error is caused by a known COM or OPC failure.
     ///
@@ -89,12 +101,19 @@ impl OpcError {
     /// ```
     #[must_use]
     pub fn friendly_hint(&self) -> Option<&'static str> {
-        match self {
-            Self::Com { source } => crate::raw::hresult::friendly_hresult_hint(source.code()),
-            Self::Server(_, code) => crate::raw::hresult::friendly_hresult_hint(
-                windows::core::HRESULT((*code).cast_signed()),
-            ),
-            _ => None,
+        #[cfg(feature = "opc-da-backend")]
+        {
+            match self {
+                Self::Com { source } => crate::raw::hresult::friendly_hresult_hint(source.code()),
+                Self::Server(_, code) => crate::raw::hresult::friendly_hresult_hint(
+                    windows::core::HRESULT((*code).cast_signed()),
+                ),
+                _ => None,
+            }
+        }
+        #[cfg(not(feature = "opc-da-backend"))]
+        {
+            None
         }
     }
 }
@@ -107,6 +126,7 @@ impl OpcError {
 /// # Arguments
 /// * `error` - The OPC error to log
 /// * `operation` - Name of the operation that failed (e.g., "read_tag_values")
+#[allow(dead_code)]
 pub(crate) fn log_opc_error(error: &OpcError, operation: &str) {
     let hresult = match error {
         OpcError::Com { source: e } => Some(format!("0x{:08X}", e.code().0.cast_unsigned())),
@@ -133,14 +153,87 @@ mod tests {
         let err = OpcError::Connection("host unreachable".into());
         assert_eq!(err.friendly_hint(), None);
 
-        let com_err = OpcError::Com {
+        #[cfg(feature = "opc-da-backend")]
+        {
+            let com_err = OpcError::Com {
+                source: windows::core::Error::from_hresult(windows::core::HRESULT(
+                    0x8004_0154_u32.cast_signed(),
+                )),
+            };
+            assert_eq!(
+                com_err.friendly_hint(),
+                Some("Server is not registered on this machine")
+            );
+        }
+    }
+
+    #[test]
+    #[cfg(feature = "opc-da-backend")]
+    fn test_friendly_hint_known_codes() {
+        let err = OpcError::Com {
+            source: windows::core::Error::from_hresult(windows::core::HRESULT(
+                0x8007_06F4_u32.cast_signed(),
+            )),
+        };
+        assert_eq!(
+            err.friendly_hint(),
+            Some("COM marshalling error — try restarting the OPC server")
+        );
+
+        let err = OpcError::Com {
             source: windows::core::Error::from_hresult(windows::core::HRESULT(
                 0x8004_0154_u32.cast_signed(),
             )),
         };
         assert_eq!(
-            com_err.friendly_hint(),
+            err.friendly_hint(),
             Some("Server is not registered on this machine")
         );
+
+        let err = OpcError::Com {
+            source: windows::core::Error::from_hresult(windows::core::HRESULT(
+                0xC004_0004_u32.cast_signed(),
+            )),
+        };
+        assert_eq!(
+            err.friendly_hint(),
+            Some("Server rejected write — the item may be read-only (OPC_E_BADRIGHTS)"),
+        );
+
+        let err = OpcError::Com {
+            source: windows::core::Error::from_hresult(windows::core::HRESULT(
+                0xC004_0006_u32.cast_signed(),
+            )),
+        };
+        assert_eq!(
+            err.friendly_hint(),
+            Some("Data type mismatch — server cannot convert the written value (OPC_E_BADTYPE)"),
+        );
+
+        let err = OpcError::Com {
+            source: windows::core::Error::from_hresult(windows::core::HRESULT(
+                0xC004_0007_u32.cast_signed(),
+            )),
+        };
+        assert_eq!(
+            err.friendly_hint(),
+            Some("Item ID not found in server address space (OPC_E_UNKNOWNITEMID)"),
+        );
+
+        let err = OpcError::Com {
+            source: windows::core::Error::from_hresult(windows::core::HRESULT(
+                0xC004_0008_u32.cast_signed(),
+            )),
+        };
+        assert_eq!(
+            err.friendly_hint(),
+            Some("Item ID syntax is invalid for this server (OPC_E_INVALIDITEMID)"),
+        );
+    }
+
+    #[test]
+    fn test_friendly_hint_unknown_code() {
+        let err = OpcError::Internal("Some other error".to_string());
+        assert_eq!(err.friendly_hint(), None);
     }
 }

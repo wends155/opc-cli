@@ -30,10 +30,7 @@
 //! **Windows only** — OPC DA is built on COM/DCOM.
 
 pub mod errors;
-mod helpers;
 mod provider;
-
-#[cfg(feature = "opc-da-backend")]
 pub mod types;
 
 #[cfg(feature = "opc-da-backend")]
@@ -49,8 +46,6 @@ pub use provider::{
     OpcValueOptionExt, QualityLimit, QualityMajor, QualitySubstatus, SystemTimeOptionExt,
     TagCollector, TagValue, WriteResult,
 };
-
-#[cfg(feature = "opc-da-backend")]
 pub use types::{BrowseDirection, BrowseType, GroupHandle, ItemHandle};
 
 // Backend re-exports (conditional)

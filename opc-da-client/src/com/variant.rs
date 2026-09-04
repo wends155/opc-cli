@@ -1,46 +1,20 @@
-use crate::errors::{OpcError, OpcResult};
+//! Windows COM VARIANT and SafeArray conversions.
+//!
+//! Provides conversion utilities between Win32 COM [`VARIANT`] structures
+//! and strongly-typed pure-Rust [`OpcValue`] instances.
+//!
+//! This module is private to the `com` subsystem (`pub(crate)`) ensuring
+//! low-level COM FFI structures do not leak into Tier 1 domain code.
+
 use crate::provider::OpcValue;
 use crate::raw::hresult::friendly_hresult_hint as friendly_com_hresult_hint;
-use windows::Win32::Foundation::{FILETIME, VARIANT_BOOL};
-use windows::Win32::System::Com::{CLSIDFromProgID, CoTaskMemFree, ProgIDFromCLSID};
+use windows::Win32::Foundation::VARIANT_BOOL;
 use windows::Win32::System::Ole::{
     SafeArrayAccessData, SafeArrayGetDim, SafeArrayGetElemsize, SafeArrayGetLBound,
     SafeArrayGetUBound, SafeArrayUnaccessData,
 };
 use windows::Win32::System::Variant::{VARIANT, VT_BOOL, VT_BSTR, VT_EMPTY, VT_I4, VT_NULL, VT_R8};
-use windows::core::{BSTR, PCWSTR};
-
-// Verify GUID memory layout assumption for FFI (Workstream C#3)
-const _: () = assert!(
-    std::mem::size_of::<windows::core::GUID>() == 16,
-    "windows::core::GUID must be 16 bytes for COM compatibility"
-);
-const _: () = assert!(
-    std::mem::align_of::<windows::core::GUID>() >= 4,
-    "windows::core::GUID must be at least 4-byte aligned"
-);
-
-/// Helper to convert GUID to `ProgID` using Windows API
-pub fn guid_to_progid(guid: &windows::core::GUID) -> OpcResult<String> {
-    // SAFETY: `ProgIDFromCLSID` is a Win32 FFI call that allocates a PWSTR via COM allocator.
-    // SAFETY: We read it and ensure `CoTaskMemFree` is always called before returning.
-    unsafe {
-        let progid = ProgIDFromCLSID(guid).map_err(|e| OpcError::Com { source: e })?;
-
-        if progid.is_null() {
-            return Ok(String::new());
-        }
-
-        let result = progid.to_string().map_err(|e| {
-            // SAFETY: Must free allocated PWSTR before returning Err to prevent COM task memory leak.
-            CoTaskMemFree(Some(progid.as_ptr().cast()));
-            OpcError::Conversion(format!("Failed to convert PWSTR: {e}"))
-        })?;
-
-        CoTaskMemFree(Some(progid.as_ptr().cast()));
-        Ok(result)
-    }
-}
+use windows::core::BSTR;
 
 /// Convert OPC DA VARIANT to a displayable string.
 #[allow(clippy::too_many_lines)]
@@ -207,61 +181,6 @@ fn ole_date_to_string(ole_date: f64) -> String {
     )
 }
 
-/// Map OPC quality code to a human-readable label.
-///
-/// # Deprecation
-///
-/// Use [`OpcQuality::from(quality).to_string()`][crate::types::OpcQuality] or inspect
-/// [`TagValue::quality`][crate::provider::TagValue] directly instead.
-#[deprecated(
-    since = "0.3.0",
-    note = "Use `OpcQuality::from(quality).to_string()` or `TagValue.quality` instead"
-)]
-#[allow(dead_code)]
-// TODO(deprecation): remove quality_to_string in v0.4.0
-pub fn quality_to_string(quality: u16) -> String {
-    let quality_bits = quality & 0xC0; // Top 2 bits define Good/Bad/Uncertain
-    match quality_bits {
-        0xC0 => "Good".to_string(),
-        0x00 => "Bad".to_string(),
-        0x40 => "Uncertain".to_string(),
-        _ => format!("Unknown(0x{quality:04X})"),
-    }
-}
-
-/// Convert FILETIME to a human-readable local time string.
-#[allow(
-    dead_code,
-    clippy::cast_possible_truncation,
-    clippy::cast_possible_wrap
-)]
-pub fn filetime_to_string(ft: FILETIME) -> String {
-    if ft.dwHighDateTime == 0 && ft.dwLowDateTime == 0 {
-        return "N/A".to_string();
-    }
-    let intervals = (u64::from(ft.dwHighDateTime) << 32) | u64::from(ft.dwLowDateTime);
-    let unix_secs = (intervals / 10_000_000).saturating_sub(11_644_473_600);
-    let nanos = ((intervals % 10_000_000) * 100) as u32;
-
-    chrono::DateTime::from_timestamp(unix_secs as i64, nanos).map_or_else(
-        || "Invalid".to_string(),
-        |utc| {
-            utc.with_timezone(&chrono::Local)
-                .format("%Y-%m-%d %H:%M:%S")
-                .to_string()
-        },
-    )
-}
-
-/// Convert [`std::time::SystemTime`] to a human-readable local time string.
-pub fn system_time_to_string(time: std::time::SystemTime) -> String {
-    if time == std::time::SystemTime::UNIX_EPOCH {
-        return "N/A".to_string();
-    }
-    let dt: chrono::DateTime<chrono::Local> = time.into();
-    dt.format("%Y-%m-%d %H:%M:%S").to_string()
-}
-
 /// Convert a COM [`VARIANT`] into a strongly-typed [`OpcValue`].
 #[allow(clippy::cast_possible_wrap)]
 pub fn variant_to_opc_value(variant: &VARIANT) -> OpcValue {
@@ -330,46 +249,6 @@ pub fn opc_value_to_variant(value: &OpcValue) -> VARIANT {
     variant
 }
 
-/// Resolve an OPC DA server `ProgID` to a connected `opc_da` Server instance.
-///
-/// Converts the `ProgID` string to a `CLSID` via the Windows registry,
-/// then creates and returns a connected server handle.
-///
-/// # Errors
-///
-/// Returns `Err` if the `ProgID` cannot be resolved or the server
-/// cannot be instantiated.
-pub fn connect_server(server_name: &str) -> OpcResult<crate::raw::bindings::da::IOPCServer> {
-    // SAFETY: `server_wide` is null-terminated and lives until end of scope.
-    let clsid_raw = unsafe {
-        let server_wide: Vec<u16> = server_name
-            .encode_utf16()
-            .chain(std::iter::once(0))
-            .collect();
-        CLSIDFromProgID(PCWSTR(server_wide.as_ptr())).map_err(|e| {
-            OpcError::Connection(format!(
-                "Failed to resolve ProgID '{server_name}' to CLSID: {e}"
-            ))
-        })?
-    };
-    // SAFETY: Calling COM function CoCreateInstance with valid CLSID to instantiate IOPCServer.
-    let server: crate::raw::bindings::da::IOPCServer = unsafe {
-        windows::Win32::System::Com::CoCreateInstance(
-            &raw const clsid_raw,
-            None,
-            windows::Win32::System::Com::CLSCTX_ALL,
-        )
-    }
-    .map_err(|e| {
-        let hint = friendly_com_hresult_hint(e.code())
-            .unwrap_or("Check DCOM configuration and server status");
-        tracing::error!(error = ?e, server = %server_name, hint, "create_server failed");
-        OpcError::Com { source: e }
-    })?;
-    tracing::debug!(server = %server_name, "Connected to OPC DA server");
-    Ok(server)
-}
-
 #[cfg(test)]
 mod tests {
     #![allow(
@@ -378,102 +257,14 @@ mod tests {
         clippy::ptr_as_ptr,
         clippy::borrow_as_ptr,
         clippy::mixed_attributes_style,
-        clippy::unreadable_literal
+        clippy::unreadable_literal,
+        clippy::undocumented_unsafe_blocks
     )]
     use super::*;
-    use crate::raw::hresult::format_hresult;
 
-    #[test]
-    fn test_friendly_hint_known_codes() {
-        let err = OpcError::Com {
-            source: windows::core::Error::from_hresult(windows::core::HRESULT(
-                0x8007_06F4_u32.cast_signed(),
-            )),
-        };
-        assert_eq!(
-            err.friendly_hint(),
-            Some("COM marshalling error — try restarting the OPC server")
-        );
-
-        let err = OpcError::Com {
-            source: windows::core::Error::from_hresult(windows::core::HRESULT(
-                0x8004_0154_u32.cast_signed(),
-            )),
-        };
-        assert_eq!(
-            err.friendly_hint(),
-            Some("Server is not registered on this machine")
-        );
-
-        let err = OpcError::Com {
-            source: windows::core::Error::from_hresult(windows::core::HRESULT(
-                0xC004_0004_u32.cast_signed(),
-            )),
-        };
-        assert_eq!(
-            err.friendly_hint(),
-            Some("Server rejected write — the item may be read-only (OPC_E_BADRIGHTS)"),
-        );
-
-        let err = OpcError::Com {
-            source: windows::core::Error::from_hresult(windows::core::HRESULT(
-                0xC004_0006_u32.cast_signed(),
-            )),
-        };
-        assert_eq!(
-            err.friendly_hint(),
-            Some("Data type mismatch — server cannot convert the written value (OPC_E_BADTYPE)"),
-        );
-
-        let err = OpcError::Com {
-            source: windows::core::Error::from_hresult(windows::core::HRESULT(
-                0xC004_0007_u32.cast_signed(),
-            )),
-        };
-        assert_eq!(
-            err.friendly_hint(),
-            Some("Item ID not found in server address space (OPC_E_UNKNOWNITEMID)"),
-        );
-
-        let err = OpcError::Com {
-            source: windows::core::Error::from_hresult(windows::core::HRESULT(
-                0xC004_0008_u32.cast_signed(),
-            )),
-        };
-        assert_eq!(
-            err.friendly_hint(),
-            Some("Item ID syntax is invalid for this server (OPC_E_INVALIDITEMID)"),
-        );
-    }
-
-    #[test]
-    fn test_friendly_hint_unknown_code() {
-        let err = OpcError::Internal("Some other error".to_string());
-        assert_eq!(err.friendly_hint(), None);
-    }
-
-    #[test]
-    fn test_filetime_to_string_zero() {
-        let ft = FILETIME {
-            dwHighDateTime: 0,
-            dwLowDateTime: 0,
-        };
-        assert_eq!(filetime_to_string(ft), "N/A");
-    }
-
-    #[test]
-    fn test_filetime_to_string_nonzero() {
-        let ft = FILETIME {
-            dwHighDateTime: 0x01DC_9EF1,
-            dwLowDateTime: 0x0A3B_DF80,
-        };
-        let result = filetime_to_string(ft);
-        assert!(result.contains("-"));
-    }
     #[test]
     fn test_opc_value_to_variant_int() {
         let v = opc_value_to_variant(&OpcValue::Int(42));
-        // SAFETY: The bytes vector length matches the chunk size and element boundaries.
         unsafe {
             assert_eq!(v.Anonymous.Anonymous.vt, VT_I4);
             assert_eq!(v.Anonymous.Anonymous.Anonymous.lVal, 42);
@@ -483,7 +274,6 @@ mod tests {
     #[test]
     fn test_opc_value_to_variant_float() {
         let v = opc_value_to_variant(&OpcValue::Float(3.5));
-        // SAFETY: The bytes vector contains standard memory representation for elements.
         unsafe {
             assert_eq!(v.Anonymous.Anonymous.vt, VT_R8);
             assert!((v.Anonymous.Anonymous.Anonymous.dblVal - 3.5).abs() < f64::EPSILON);
@@ -493,7 +283,6 @@ mod tests {
     #[test]
     fn test_opc_value_to_variant_bool_true() {
         let v = opc_value_to_variant(&OpcValue::Bool(true));
-        // SAFETY: Same as above.
         unsafe {
             assert_eq!(v.Anonymous.Anonymous.vt, VT_BOOL);
             assert_eq!(v.Anonymous.Anonymous.Anonymous.boolVal.0, -1);
@@ -503,7 +292,6 @@ mod tests {
     #[test]
     fn test_opc_value_to_variant_bool_false() {
         let v = opc_value_to_variant(&OpcValue::Bool(false));
-        // SAFETY: Creating variant union from safe array requires unsafe blocks
         unsafe {
             assert_eq!(v.Anonymous.Anonymous.vt, VT_BOOL);
             assert_eq!(v.Anonymous.Anonymous.Anonymous.boolVal.0, 0);
@@ -513,7 +301,6 @@ mod tests {
     #[test]
     fn test_opc_value_to_variant_string() {
         let v = opc_value_to_variant(&OpcValue::String("hello".into()));
-        // SAFETY: Same as above.
         unsafe {
             assert_eq!(v.Anonymous.Anonymous.vt, VT_BSTR);
             let bstr = &v.Anonymous.Anonymous.Anonymous.bstrVal;
@@ -606,33 +393,6 @@ mod tests {
     }
 
     #[test]
-    #[allow(deprecated)]
-    fn quality_good() {
-        assert_eq!(quality_to_string(0xC0), "Good");
-        assert_eq!(quality_to_string(0xC4), "Good"); // sub-status bits preserved
-    }
-
-    #[test]
-    #[allow(deprecated)]
-    fn quality_bad() {
-        assert_eq!(quality_to_string(0x00), "Bad");
-        assert_eq!(quality_to_string(0x04), "Bad"); // sub-status bits preserved
-    }
-
-    #[test]
-    #[allow(deprecated)]
-    fn quality_uncertain() {
-        assert_eq!(quality_to_string(0x40), "Uncertain");
-    }
-
-    #[test]
-    #[allow(deprecated)]
-    fn quality_unknown() {
-        let result = quality_to_string(0x80);
-        assert!(result.starts_with("Unknown("));
-    }
-
-    #[test]
     fn test_variant_to_string_null() {
         use std::mem::ManuallyDrop;
         use windows::Win32::System::Variant::{
@@ -714,10 +474,10 @@ mod tests {
         let result = variant_to_string(&v);
         assert!(
             result.starts_with("(VT "),
-            "Expected '(VT ...)' but got: {}",
-            result
+            "Expected '(VT ...)' but got: {result}"
         );
     }
+
     #[test]
     fn test_variant_to_string_safearray_i4() {
         use std::ffi::c_void;
@@ -727,12 +487,11 @@ mod tests {
         };
         use windows::Win32::System::Variant::{VARIANT, VARIANT_0, VARIANT_0_0, VT_ARRAY, VT_I4};
 
-        // SAFETY: Array creation and access follow standard COM patterns
         unsafe {
             let parray = SafeArrayCreateVector(VT_I4, 0, 3);
             let mut ptr: *mut c_void = std::ptr::null_mut();
-            SafeArrayAccessData(parray, &mut ptr).unwrap();
-            let slice = std::slice::from_raw_parts_mut(ptr as *mut i32, 3);
+            SafeArrayAccessData(parray, &raw mut ptr).unwrap();
+            let slice = std::slice::from_raw_parts_mut(ptr.cast::<i32>(), 3);
             slice[0] = 10;
             slice[1] = 20;
             slice[2] = 30;
@@ -778,7 +537,7 @@ mod tests {
         let v = VARIANT { Anonymous: outer };
 
         assert_eq!(
-            super::variant_to_string(&v),
+            variant_to_string(&v),
             "Error: Item ID not found in server address space (OPC_E_UNKNOWNITEMID) (0xC0040007)"
         );
     }
@@ -805,34 +564,6 @@ mod tests {
         };
         let v = VARIANT { Anonymous: outer };
 
-        assert_eq!(super::variant_to_string(&v), "Error (0xDEADBEEF)");
-    }
-
-    #[test]
-    fn test_format_hresult_known() {
-        // 0x80040154 is REGDB_E_CLASSNOTREG
-        let hr = windows::core::HRESULT(0x8004_0154_u32.cast_signed());
-        assert_eq!(
-            format_hresult(hr),
-            "0x80040154: Server is not registered on this machine"
-        );
-    }
-
-    #[test]
-    fn test_format_hresult_unknown() {
-        let hr = windows::core::HRESULT(0x1234_5678_u32.cast_signed());
-        assert_eq!(format_hresult(hr), "0x12345678");
-    }
-
-    #[test]
-    fn guid_to_progid_zeroed_guid_returns_com_error() {
-        let zeroed = windows::core::GUID::zeroed();
-        let result = guid_to_progid(&zeroed);
-        assert!(result.is_err());
-        if let Err(OpcError::Com { .. }) = result {
-            // Expected: structured COM error preserved
-        } else {
-            panic!("Expected OpcError::Com, got: {result:?}");
-        }
+        assert_eq!(variant_to_string(&v), "Error (0xDEADBEEF)");
     }
 }

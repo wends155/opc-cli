@@ -17,7 +17,17 @@
     clippy::unreadable_literal
 )]
 
-use windows::core::Interface;
+use windows::Win32::System::Com::{CLSIDFromProgID, CoTaskMemFree, ProgIDFromCLSID};
+use windows::core::{Interface, PCWSTR};
+
+const _: () = assert!(
+    std::mem::size_of::<windows::core::GUID>() == 16,
+    "windows::core::GUID must be 16 bytes for COM compatibility"
+);
+const _: () = assert!(
+    std::mem::align_of::<windows::core::GUID>() >= 4,
+    "windows::core::GUID must be at least 4-byte aligned"
+);
 
 pub use crate::com::iterator::{GuidIterator, StringIterator};
 pub use crate::errors::{OpcError, OpcResult};
@@ -167,6 +177,68 @@ pub trait ConnectedGroup {
 
 // ── COM-backed implementations ──────────────────────────────────────
 
+/// Helper to convert GUID to `ProgID` using Windows API
+pub(crate) fn guid_to_progid(guid: &windows::core::GUID) -> OpcResult<String> {
+    // SAFETY: `ProgIDFromCLSID` is a Win32 FFI call that allocates a PWSTR via COM allocator.
+    // SAFETY: We read it and ensure `CoTaskMemFree` is always called before returning.
+    unsafe {
+        let progid = ProgIDFromCLSID(guid).map_err(|e| OpcError::Com { source: e })?;
+
+        if progid.is_null() {
+            return Ok(String::new());
+        }
+
+        let result = progid.to_string().map_err(|e| {
+            // SAFETY: Must free allocated PWSTR before returning Err to prevent COM task memory leak.
+            CoTaskMemFree(Some(progid.as_ptr().cast()));
+            OpcError::Conversion(format!("Failed to convert PWSTR: {e}"))
+        })?;
+
+        CoTaskMemFree(Some(progid.as_ptr().cast()));
+        Ok(result)
+    }
+}
+
+/// Resolve an OPC DA server `ProgID` to a connected `opc_da` Server instance.
+///
+/// Converts the `ProgID` string to a `CLSID` via the Windows registry,
+/// then creates and returns a connected server handle.
+///
+/// # Errors
+///
+/// Returns `Err` if the `ProgID` cannot be resolved or the server
+/// cannot be instantiated.
+pub(crate) fn connect_server(server_name: &str) -> OpcResult<crate::raw::bindings::da::IOPCServer> {
+    // SAFETY: `server_wide` is null-terminated and lives until end of scope.
+    let clsid_raw = unsafe {
+        let server_wide: Vec<u16> = server_name
+            .encode_utf16()
+            .chain(std::iter::once(0))
+            .collect();
+        CLSIDFromProgID(PCWSTR(server_wide.as_ptr())).map_err(|e| {
+            OpcError::Connection(format!(
+                "Failed to resolve ProgID '{server_name}' to CLSID: {e}"
+            ))
+        })?
+    };
+    // SAFETY: Calling COM function CoCreateInstance with valid CLSID to instantiate IOPCServer.
+    let server: crate::raw::bindings::da::IOPCServer = unsafe {
+        windows::Win32::System::Com::CoCreateInstance(
+            &raw const clsid_raw,
+            None,
+            windows::Win32::System::Com::CLSCTX_ALL,
+        )
+    }
+    .map_err(|e| {
+        let hint = crate::raw::hresult::friendly_hresult_hint(e.code())
+            .unwrap_or("Check DCOM configuration and server status");
+        tracing::error!(error = ?e, server = %server_name, hint, "create_server failed");
+        OpcError::Com { source: e }
+    })?;
+    tracing::debug!(server = %server_name, "Connected to OPC DA server");
+    Ok(server)
+}
+
 /// Real COM-backed server connector implementation.
 pub struct ComConnector;
 
@@ -208,7 +280,7 @@ impl ServerConnector for ComConnector {
                 continue;
             }
 
-            if let Ok(progid) = crate::helpers::guid_to_progid(&guid)
+            if let Ok(progid) = guid_to_progid(&guid)
                 && !progid.is_empty()
             {
                 servers.push(progid);
@@ -220,7 +292,7 @@ impl ServerConnector for ComConnector {
     }
 
     fn connect(&self, server_name: &str) -> OpcResult<Self::Server> {
-        let server = crate::helpers::connect_server(server_name)?;
+        let server = connect_server(server_name)?;
 
         let common: crate::raw::bindings::comn::IOPCCommon = server.cast()?;
         let item_properties: crate::raw::bindings::da::IOPCItemProperties = server.cast()?;
@@ -488,7 +560,7 @@ impl ConnectedGroup for ComGroup {
             let err = errors_slice[i];
             if err.is_ok() {
                 let state = &values_slice[i];
-                let value = crate::helpers::variant_to_opc_value(&state.vDataValue);
+                let value = crate::com::variant::variant_to_opc_value(&state.vDataValue);
                 let quality = OpcQuality::from(state.wQuality);
                 let timestamp =
                     crate::raw::memory::TryFromNative::try_from_native(&state.ftTimeStamp)
@@ -524,7 +596,7 @@ impl ConnectedGroup for ComGroup {
         let len = server_handles.len().try_into()?;
         let variants: Vec<windows::Win32::System::Variant::VARIANT> = values
             .iter()
-            .map(crate::helpers::opc_value_to_variant)
+            .map(crate::com::variant::opc_value_to_variant)
             .collect();
         let mut errors = RemoteArray::new(len);
 
@@ -1146,5 +1218,17 @@ mod tests {
             .expect("MockConnectedServer should support browse");
         let tags: Vec<String> = iter.collect::<Result<Vec<_>, _>>().unwrap();
         assert!(!tags.is_empty(), "Mock browse should return simulated tags");
+    }
+
+    #[test]
+    fn test_guid_to_progid_zeroed_guid_returns_com_error() {
+        let zeroed = windows::core::GUID::zeroed();
+        let result = guid_to_progid(&zeroed);
+        assert!(result.is_err());
+        if let Err(OpcError::Com { .. }) = result {
+            // Expected: structured COM error preserved
+        } else {
+            panic!("Expected OpcError::Com, got: {result:?}");
+        }
     }
 }

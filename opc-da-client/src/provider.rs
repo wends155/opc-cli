@@ -142,10 +142,7 @@ impl TagValue {
     /// ```
     #[must_use]
     pub fn formatted_timestamp(&self) -> String {
-        match self.timestamp {
-            Some(ts) => crate::helpers::system_time_to_string(ts),
-            None => "N/A".to_string(),
-        }
+        self.timestamp.display().to_string()
     }
 }
 
@@ -989,7 +986,8 @@ mod tests {
         // Non-epoch time
         let ts = SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1_700_000_000);
         let ts_opt = Some(ts);
-        let expected = crate::helpers::system_time_to_string(ts);
+        let dt: chrono::DateTime<chrono::Local> = ts.into();
+        let expected = dt.format("%Y-%m-%d %H:%M:%S").to_string();
         assert_eq!(format!("{}", ts_opt.display()), expected);
         assert_eq!(format!("{}", ts_opt.display_or("Custom")), expected);
     }
