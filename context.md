@@ -1,5 +1,17 @@
 # Project Context Summary
 
+## 2026-09-04: Modernize Examples to OpcResult & CI Gate Hardening (`opc-da-client`)
+> 📝 **Context Update:**
+> * **Feature:** Replace `Box<dyn Error>` in `opc-da-client` doc examples and Quick Start with native `OpcResult<()>`, eliminate `.unwrap()` from tests, fix doc contracts, and enforce CI guard
+> * **Changes:**
+>   - Replaced `Result<(), Box<dyn std::error::Error>>` in all 4 `README.md` usage examples with native `OpcResult<()>`, importing `OpcResult`.
+>   - Eliminated hidden `# use std::error::Error;` boilerplate from `src/lib.rs` Quick Start doc-test, updating entry point to `# async fn main() -> OpcResult<()>`.
+>   - Refactored `README.md` unit test mocking example to return `OpcResult<()>` and propagate errors with `?` rather than calling `.unwrap()`.
+>   - Corrected false `# Panics` contract in `src/com/client.rs` on `Default for OpcDaClient` to document graceful closed-client fallback.
+>   - Added Gate 7c ("Library Box<dyn Error> Guard") to `scripts/verify.ps1` to prevent `Box<dyn Error>` from regressing into `opc-da-client/src` or `opc-da-client/README.md`.
+> * **New Constraints:** `opc-da-client` documentation examples and library code must NEVER use `Box<dyn Error>`. All operations must return and propagate native `OpcResult<T>`.
+> * **Pruned:** `Box<dyn std::error::Error>` trait object allocations in examples and hidden std error boilerplate in doc-tests.
+
 ## 2026-09-04: Error Architecture Refactor & Code Quality Hardening (`opc-da-client`)
 > 📝 **Context Update:**
 > * **Feature:** Eliminate `anyhow` from `opc-da-client`, seal internal COM types, fix COM task memory leak, and remove blanket warning suppressions
