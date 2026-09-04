@@ -1,5 +1,15 @@
 # Project Context Summary
 
+## 2026-09-04: Documentation Synchronization for Strongly-Typed WriteResult (`opc-da-client`)
+> 📝 **Context Update:**
+> * **Feature:** Synchronize `opc-da-client` rustdoc comments and `spec.md` with strongly-typed `WriteResult` methods and baseline hash.
+> * **Changes:**
+>   - Added comprehensive rustdoc comments, `# Arguments`, `# Returns`, and runnable `# Examples` (with assertion-based contracts) across all 5 `WriteResult` methods (`success`, `failure`, `is_success`, `is_error`, `error`) in `opc-da-client/src/provider.rs`.
+>   - Synchronized `opc-da-client/spec.md` verification baseline hash to `1a27687` and clarified `write_tag_value` behavioral invariant regarding `WriteResult.status: Result<(), OpcError>`.
+>   - Verified 100% compliance across all 8 quality gates in `scripts/verify.ps1`, expanding doctests to 32 active tests.
+> * **New Constraints:** All `WriteResult` methods must have runnable rustdoc examples asserting correctness without invoking forbidden output macros (`println!`, `dbg!`).
+> * **Pruned:** Intermediate doc-test verification logs and temporary draft comments.
+
 ## 2026-09-04: Strongly-Typed WriteResult & Error Modernization (`opc-da-client`, `opc-cli`)
 > 📝 **Context Update:**
 > * **Feature:** Refactor `WriteResult` into a strongly-typed domain model (`status: Result<(), OpcError>`), eliminate eager stringification in `ComWorker`, modernize callers, and add negative failure tests.
