@@ -1,5 +1,22 @@
 # Project Context Summary
 
+## 2026-09-05: Win32 Registry FFI Consolidation, Dynamic Buffer Resizing & Environment Variable Expansion (`opc-da-client`)
+> 📝 **Context Update:**
+> * **Feature:** Consolidate duplicated Win32 registry FFI calls, harden registry value buffers against `ERROR_MORE_DATA` (234), expand `REG_EXPAND_SZ` environment variable strings, replace magic numbers with canonical constants, deduplicate bracketed GUID formatting, and synchronize documentation.
+> * **Changes:**
+>   - Implemented private `open_reg_key(hkey, subkey, sam)` in `opc-da-client/src/com/discovery.rs` consolidating `RegOpenKeyExW` with `None` for `uloptions`; refactored `open_clsid_key` and `read_default_string` to delegate to it.
+>   - Implemented `expand_environment_string` calling `kernel32::ExpandEnvironmentStringsW` via zero-dependency `unsafe extern "system"` with a stack buffer fast path and two-phase dynamic allocation fallback.
+>   - Hardened `read_default_string` and `read_string_from_key`: added two-phase dynamic buffer query on `ERROR_MORE_DATA` (234) reallocating a sized `Vec<u16>`; checked `val_type` and resolved `REG_EXPAND_SZ` strings using `expand_environment_string`.
+>   - Replaced magic number `0x8004_0154` in `inspect_local_registration` with canonical `crate::raw::hresult::REGDB_E_CLASSNOTREG.0.cast_unsigned()`.
+>   - Implemented `format_guid_bracketed(guid: &GUID) -> String` in `opc-da-client/src/types.rs` and refactored `ServerIdentifier::fmt` and `inspect_local_registration` to delegate to it.
+>   - Cleaned up unused imports (`OpcServerEndpoint`, `ServerIdentifier`) in `discovery.rs` to prevent domain bleed.
+>   - Added 4 new unit tests (`test_format_guid_bracketed` in `types.rs`; `test_open_reg_key_invalid`, `test_expand_environment_string`, and `test_inspect_local_registration_nonexistent_returns_classnotreg` in `discovery.rs`), increasing `opc-da-client` unit test count from 93 to 97 (total workspace tests: 135 unit tests, 55 doc-tests, 0 regressions).
+>   - Synchronized `opc-da-client/spec.md` (bumped verification hash to `2a8e41c`, updated Section 1.7 contract and Section 4 test checklists) and `opc-da-client/architecture.md` (updated §5, §8, and §10 test metrics).
+>   - Verified full 9-gate quality pipeline (`pwsh -File scripts/verify.ps1`) passing with exit code 0 across both checkpoints.
+>   - Committed code as checkpoint `2a8e41c` and documentation as checkpoint `dc8360e`.
+> * **New Constraints:** All Win32 registry key lookups in `discovery.rs` must route through `open_reg_key`. Registry string value queries must handle `ERROR_MORE_DATA` with dynamic reallocation and expand `REG_EXPAND_SZ` environment variable tokens. Bracketed GUID formatting must delegate to `types::format_guid_bracketed`.
+> * **Pruned:** Duplicated `RegOpenKeyExW` FFI calls, magic number `0x8004_0154`, duplicate 15-line GUID formatting in `discovery.rs`, and unused imports.
+
 ## 2026-09-05: Architecture Synchronization for Structured Server Discovery and 16-Section Standards (`architecture.md`, `opc-da-client`)
 > 📝 **Context Update:**
 > * **Feature:** Synchronize `opc-da-client/architecture.md` and workspace root `architecture.md` with active codebase architecture following structured server discovery and CLSID connectivity implementation.
