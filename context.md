@@ -1,5 +1,22 @@
 # Project Context Summary
 
+## 2026-09-05: Connector Decomposition, VARIANT Memory Leak Eradication, and Blanket Lint Elimination (`opc-da-client`)
+> 📝 **Context Update:**
+> * **Feature:** Decompose `opc-da-client/src/com/connector.rs` into modular submodules (`com::connector::{traits, server, group, mock}`), implement RAII `ScopedVariant` and `ItemStatesGuard` for leak-free COM `VARIANT` lifecycle, eliminate all 9 blanket file-level Clippy lints, canonically relocate `guid_to_progid` to `com/discovery.rs`, eliminate dead code `connect_server`, and export `MockOpcDaClient`.
+> * **Changes:**
+>   - Implemented `ScopedVariant` (`#[repr(transparent)]`) and `ItemStatesGuard` in `opc-da-client/src/com/variant.rs` guaranteeing deterministic `VariantClear` invocations on both write (`ComGroup::write`) and read (`ComGroup::read`) paths. Added `Deref` for `ItemStatesGuard` and 4 unit tests verifying drop semantics and disarm behavior.
+>   - Relocated `guid_to_progid` canonically into `opc-da-client/src/com/discovery.rs` and deleted dead function `connect_server` (`#[allow(dead_code)]`).
+>   - Created `opc-da-client/src/com/connector/traits.rs`: Extracted pure-Rust DTOs (`GroupItemDef`, `GroupItemResult`, `GroupItemState`, `DataSource`, `GroupConfig`, `CreatedGroup`) and core abstraction traits (`ServerConnector`, `ConnectedServer`, `ConnectedGroup`), adopting `types::format_guid_bracketed`.
+>   - Created `opc-da-client/src/com/connector/server.rs`: Extracted Win32 COM server connectivity and namespace navigation (`ComConnector`, `ComServer`), replacing manual UTF-16 loops with `LocalPointer` and using `&raw const` FFI.
+>   - Created `opc-da-client/src/com/connector/group.rs`: Extracted Win32 COM group item registration and synchronous I/O (`ComGroup`), eliminating `VARIANT` leaks via `ScopedVariant` and `ItemStatesGuard`. Added `test_com_group_preconditions` with static non-null dummy COM object.
+>   - Created `opc-da-client/src/com/connector/mock.rs`: Extracted pure-Rust mock infrastructure (`MockServerConnector`, `MockConnectedServer`, `MockConnectedGroup`) with strongly-typed closure aliases (`MockAddItemsFn`, `MockReadFn`, `MockWriteFn`) and 7 unit tests.
+>   - Replaced `opc-da-client/src/com/connector.rs` with a 43-line coordinator facade re-exporting all submodules, completely eliminating all 9 blanket file-level `#![allow(...)]` headers.
+>   - Exported `MockOpcDaClient` type alias in `opc-da-client/src/lib.rs` under `#[cfg(all(feature = "test-support", feature = "opc-da-backend"))]`.
+>   - Verified full 8-gate quality pipeline (`scripts/verify.ps1`) with exit code 0 (107 unit tests in `opc-da-client`, 55 doc-tests, zero clippy warnings with `-D warnings`, zero AST-grep/forbidden pattern violations).
+>   - Committed changes as checkpoints `1ffc5e1`, `6c4c5c4`, and `66f26a8`.
+> * **New Constraints:** `connector.rs` must remain a slim coordinator under 70 lines; all connector implementations must reside in single-responsibility submodules under `src/com/connector/`. Never re-introduce `#![allow(...)]` blanket suppression headers. All Win32 COM `VARIANT` allocations across read/write operations must be guarded by `ScopedVariant` or `ItemStatesGuard`.
+> * **Pruned:** Monolithic 1,400-line `connector.rs` blob, 9 blanket Clippy suppression lints, dead code `connect_server`, duplicate GUID formatting, and COM `VARIANT` heap leaks.
+
 ## 2026-09-05: Architecture Synchronization for Worker Decomposition and RAII Guards (`architecture.md`)
 > 📝 **Context Update:**
 > * **Feature:** Synchronize workspace root `architecture.md` with active `opc-da-client` architecture following worker decomposition into modular submodules and RAII browse position guards.
