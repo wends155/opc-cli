@@ -122,7 +122,7 @@ opc-da-client/
 - **Mock Availability**: `MockServerConnector`, `MockConnectedServer`, `MockConnectedGroup` (`#[cfg(any(test, feature = "test-support"))]` in `connector.rs`, re-exported under `feature = "test-support"`).
 
 ### `com::discovery`
-- **Owns**: 3-tier server catalog query adapter (`OpcServerListCatalog` adapting `IOPCServerList2` and `IOPCServerList`), dual-view Windows Registry inspection (`inspect_local_registration` via native and `KEY_WOW64_32KEY` with consolidated `open_reg_key`), dynamic buffer reallocation on `ERROR_MORE_DATA`, environment variable expansion (`ExpandEnvironmentStringsW` for `REG_EXPAND_SZ`), server execution model classification (`OpcServerType`, `OpcServerRegistration`), and binary path sanitization (`sanitize_binary_path`).
+- **Owns**: 3-tier server catalog query adapter (`OpcServerListCatalog` adapting `IOPCServerList2` and `IOPCServerList`), dual-view Windows Registry inspection (`inspect_local_registration` via native and `KEY_WOW64_32KEY` with consolidated `open_reg_key`), dynamic buffer reallocation on `ERROR_MORE_DATA`, environment variable expansion (`windows::Win32::System::Environment::ExpandEnvironmentStringsW` for `REG_EXPAND_SZ` with slice bounds checking), server execution model classification (`OpcServerType`, `OpcServerRegistration`), and binary path sanitization (`sanitize_binary_path`).
 - **Does NOT own**: Direct COM worker lifecycle management, group operations, tag reading/writing, or public domain trait definitions.
 - **Trait Interfaces**: Internal catalog adapter; feeds into `ServerConnector::enumerate_server_details`.
 - **Mock Availability**: Fully mocked via `MockServerConnector::with_server_details` and `MockServerConnector::enumerate_server_details`.
@@ -233,7 +233,7 @@ Strongly-typed `OpcOperation` enum and `log_opc_err!` macro emit unified machine
 | Level | Usage |
 | :--- | :--- |
 | `error!` | Fatal COM failures, thread panics, browse position corruption, failed worker requests |
-| `warn!` | Handled per-item read/write rejections, skipped unresolvable server classes, connection retry attempts |
+| `warn!` | Handled per-item read/write rejections, skipped unresolvable server classes, connection retry attempts, failed environment string expansion in registry |
 | `info!` | High-level milestones (server connected, browse completed, group created, client initialized) |
 | `debug!` | Internal state transitions, ProgID/GUID resolutions, null iterator entry skips |
 | `trace!` | Granular buffer offsets and verbose COM parameter dumps |
@@ -243,7 +243,7 @@ Strongly-typed `OpcOperation` enum and `log_opc_err!` macro emit unified machine
 ## 10. Testing Strategy
 
 ### 1. Co-Located Unit Tests
-- **`com::discovery.rs`**: Remote host rejection, quote and trailing flag path sanitization (`sanitize_binary_path`), `OpcServerType` display formatting, invalid registry key query failure (`test_open_reg_key_invalid`), environment variable token expansion (`test_expand_environment_string`), and local registration non-existent CLSID mapping to `REGDB_E_CLASSNOTREG` (`test_inspect_local_registration_nonexistent_returns_classnotreg`).
+- **`com::discovery.rs`**: Remote host rejection, quote and trailing flag path sanitization (`sanitize_binary_path`), `OpcServerType` display formatting, invalid registry key query failure (`test_open_reg_key_invalid`), environment variable token expansion and comprehensive stress testing with dynamic allocation fallback (`test_expand_environment_string`), and local registration non-existent CLSID mapping to `REGDB_E_CLASSNOTREG` (`test_inspect_local_registration_nonexistent_returns_classnotreg`).
 - **`com::client.rs`**: `OpcDaClient::list_server_details` dispatch and mock record verification.
 - **`com::variant.rs`**: SafeArray 1D/2D conversion, VARIANT types (integers, floats, bools, strings, VT_DATE, VT_CY), error decoding, and roundtrip serialization.
 - **`com::connector.rs`**: Win32 GUID layout static assertions, `guid_to_progid` lookup, rich metadata enumeration (`enumerate_server_details`), and pure-Rust server connection mocks.
@@ -291,7 +291,7 @@ Strongly-typed `OpcOperation` enum and `log_opc_err!` macro emit unified machine
 | `chrono` | 0.4.43 | FILETIME → local time conversions |
 | `tokio` | 1.43.0 | Async runtime (`rt`, `sync`, `rt-multi-thread`) |
 | `tracing` | 0.1.41 | Structured diagnostics and logging |
-| `windows` | 0.61.3 | Win32 COM, OLE, Variant, and Foundation APIs |
+| `windows` | 0.61.3 | Win32 COM, OLE, Variant, Foundation, Registry, and Environment APIs |
 | `windows-core` | 0.61.2 | Core Windows COM runtime types (HRESULT, PWSTR) |
 
 ### Backend Subsystem (`opc-da-backend`)

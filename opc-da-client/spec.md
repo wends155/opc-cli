@@ -3,7 +3,7 @@
 > **Behavioral Source of Truth** for the `opc-da-client` library crate.
 > Defines *what* each module should do — independent of current implementation.
 >
-> Last verified against: 2a8e41c
+> Last verified against: 3d38109
 
 ---
 
@@ -472,7 +472,7 @@ Before calling `browse_recursive`, `browse_tags` attempts `browse_opc_item_ids(B
 
 ##### `inspect_local_registration(clsid: &GUID, host: Option<&str>) -> OpcResult<OpcServerRegistration>`
 
-**Description:** Inspects the local machine Windows registry for an OPC DA server's registration details by querying `HKCR\CLSID\{...}` across both native and 32-bit (`KEY_WOW64_32KEY`) views. Registry key traversal is consolidated through a private `open_reg_key` helper wrapping `RegOpenKeyExW` with `KEY_READ`. Registry value reading incorporates two-phase dynamic buffer reallocation on `ERROR_MORE_DATA` (234) and resolves `REG_EXPAND_SZ` strings using `ExpandEnvironmentStringsW`.
+**Description:** Inspects the local machine Windows registry for an OPC DA server's registration details by querying `HKCR\CLSID\{...}` across both native and 32-bit (`KEY_WOW64_32KEY`) views. Registry key traversal is consolidated through a private `open_reg_key` helper wrapping `RegOpenKeyExW` with `KEY_READ`. Registry value reading incorporates two-phase dynamic buffer reallocation on `ERROR_MORE_DATA` (234) and resolves `REG_EXPAND_SZ` strings using `windows::Win32::System::Environment::ExpandEnvironmentStringsW` with safe slice bounds checking.
 
 **Inputs:**
 * `clsid`: Reference to the 128-bit COM Class ID.
@@ -677,7 +677,7 @@ Defined in § 1.1. See table above.
 - [x] `test_sanitize_binary_path_unquoted_with_flag` — verifies `sanitize_binary_path` strips trailing CLI flags (`-Embedding`, `/automation`).
 - [x] `test_opc_server_type_display` — verifies `OpcServerType` Display formatting (`LocalServer32 (Executable)` vs `InprocServer32 (DLL)`).
 - [x] `test_open_reg_key_invalid` — verifies `open_reg_key` returns Windows error code when querying a non-existent registry subkey.
-- [x] `test_expand_environment_string` — verifies `expand_environment_string` resolves embedded `%VAR%` tokens against Windows environment variables.
+- [x] `test_expand_environment_string` — verifies `expand_environment_string` resolves embedded `%VAR%` tokens via `windows::Win32::System::Environment::ExpandEnvironmentStringsW`, preserves unassigned tokens and unmatched `%`, handles empty strings, and dynamically reallocates on oversized paths (> 512 wide chars).
 - [x] `test_inspect_local_registration_nonexistent_returns_classnotreg` — verifies `inspect_local_registration` maps non-existent CLSIDs to canonical `OpcError::Com(REGDB_E_CLASSNOTREG)`.
 
 ### COM VARIANT Unit Tests (in `com/variant.rs`)
