@@ -144,7 +144,7 @@ impl<S: ConnectedServer> Drop for GroupGuard<'_, S> {
         if let Err(e) = self.server.remove_group(self.handle, true) {
             tracing::warn!(
                 error = ?e,
-                handle = self.handle.0,
+                handle = self.handle.as_raw(),
                 "Failed to remove OPC group during RAII drop cleanup"
             );
         }
@@ -220,8 +220,8 @@ mod tests {
         let server = MockConnectedServer::default();
         assert_eq!(server.state.remove_group_count.load(Ordering::Relaxed), 0);
         {
-            let guard = GroupGuard::new(&server, GroupHandle(42));
-            assert_eq!(guard.handle(), GroupHandle(42));
+            let guard = GroupGuard::new(&server, GroupHandle::new(42));
+            assert_eq!(guard.handle(), GroupHandle::new(42));
         }
         assert_eq!(server.state.remove_group_count.load(Ordering::Relaxed), 1);
     }
@@ -230,7 +230,7 @@ mod tests {
     fn test_group_guard_disarm_prevents_cleanup() {
         let server = MockConnectedServer::default();
         {
-            let mut guard = GroupGuard::new(&server, GroupHandle(42));
+            let mut guard = GroupGuard::new(&server, GroupHandle::new(42));
             guard.disarm();
         }
         assert_eq!(server.state.remove_group_count.load(Ordering::Relaxed), 0);

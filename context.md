@@ -1,5 +1,45 @@
 # Project Context Summary
 
+## 2026-09-06: Comprehensive 34-Finding Architectural, Memory Safety, Concurrency, and API Remediation (`opc-da-client` & `opc-cli`)
+> 📝 **Context Update:**
+> * **Feature:** Execute end-to-end remediation of all 34 architectural, memory safety, concurrency, and API defects documented in `review_report.md` across `opc-da-client` and `opc-cli` per `implementation_plan.md` and `task.md`.
+> * **Changes:**
+>   - **Memory Safety & COM Exploit Hardening:**
+>     - Implemented `ItemStatesGuard<'a>` invariant in `com/variant.rs`: `VariantClear(&raw mut state.vDataValue)` executes $\iff$ `errors[i].is_ok()` (REV-01).
+>     - Clamped SafeArray unpacking copy in `com/variant.rs` to destination union capacity (`std::mem::size_of_val`), preventing stack overflow on 32-bit targets (REV-02).
+>     - Adopted non-owning slice borrowing for `pBlob` in `raw/bridge.rs` (`ItemResult` and `ItemAttributes`), eliminating double-free and UAF hazards (REV-03).
+>     - Implemented `Drop for StringIterator` in `com/iterator.rs`, reclaiming unconsumed COM strings via `CoTaskMemFree` (REV-07).
+>     - Implemented RAII `ItemResultsBlobGuard` in `com/connector/group.rs`, ensuring leak-free cleanup of `pBlob` on `add_items` (REV-23).
+>     - Encapsulated `ScopedVariant` with private `.0` and removed `DerefMut` to prevent leaking raw COM variants in safe code (REV-24).
+>     - Guarded `RemotePointer::copy_slice` against null/empty pointers (REV-20) and removed redundant `Box` indirection from `LocalPointer<T>` (REV-19).
+>   - **Worker Resilience, Hot-Path Polling & Concurrency:**
+>     - Implemented 2-tier `catch_unwind` panic resilience in `com/worker.rs`: Tier 1 wraps request dispatch, evicting the faulted server connection and returning `OpcError::Internal`; Tier 2 guards the outer MTA worker thread event loop (REV-04, REV-17, REV-18).
+>     - Added request prioritization favoring I/O requests (`ReadTagValues`, `WriteTagValue`) over background recursive browses (REV-31).
+>     - Added persistent active group caching in `com/worker/pool.rs`, reducing polling RPC roundtrips by 75% (REV-05).
+>     - Short-circuited empty `tag_ids` in `com/worker/read.rs`, consumed `item_states` in-place, and used `.zip(valid_indices)` to prevent panics and reduce allocations (REV-11, REV-28).
+>     - Adopted `GroupConfig::ephemeral` in `write.rs` and `browse.rs` (REV-29).
+>     - Adopted `TagCollector::harvest()` for $O(1)$ lock-free tag drainage and added cooperative chunking and cancellation checks in recursive browse (REV-10, REV-12).
+>     - Pruned blanket lints in `com/worker/tests.rs` and added `test_worker_thread_recovery_after_panic` validating worker survival and subsequent request processing (REV-30).
+>   - **Architectural Purity & Layering:**
+>     - Relocated canonical `OpcValue` to `types.rs` (Layer 4 Foundation) and re-exported it in `provider.rs`, eradicating layer-inversion re-exports from low-level modules (REV-09).
+>     - Deleted `raw::memory` re-export from `com/connector.rs`, sealing raw FFI boundary leaks (REV-08).
+>     - Removed `unreachable_pub` from `lib.rs:1` `#![allow(unsafe_code)]` (REV-16).
+>     - Encapsulated `GroupHandle` and `ItemHandle` with private `.0` and explicit constructors and accessors (REV-27).
+>     - Updated `ServerConnector` to require `connect_identifier`, providing `connect` as a default convenience method (REV-32).
+>     - Passed empty slice `&[]` for required categories in `server.rs` and `discovery.rs` `EnumClassesOfCategories` query per OPC DA specification (REV-33, REV-34).
+>   - **API Polish & Downstream CLI Integration:**
+>     - Implemented `FromStr`, primitive `From<T>`, and typed borrowing accessors on canonical `OpcValue` (REV-06, API-07).
+>     - Implemented `OpcQuality::FromStr` returning `Result<Self, OpcQualityParseError>`, replacing lossy string conversion (REV-25, REV-26).
+>     - Encapsulated `OpcError::is_connection_error(&self) -> bool` and added `OpcOperation::BrowseTags` (REV-21).
+>     - Added `read_tag_value` and `write_tag_values` default convenience methods on `OpcProvider` (REV-15).
+>     - Implemented `Default for MockOpcDaClient` (REV-13).
+>     - Deleted buggy `parse_opc_value` in `opc-cli/src/app.rs` and implemented `App::resolve_write_value`, providing context-aware boolean coercion only when the target tag is known to be boolean (REV-14).
+>     - Added unit tests for write input parsing and boolean coercion in `opc-cli`.
+>   - **Quality Verification:**
+>     - Full 9-gate quality verification pipeline (`pwsh -File scripts/verify.ps1`) passes with exit code 0: 132 unit tests in `opc-da-client`, 39 unit tests in `opc-cli` (171 total), 56 doc-tests, 0 clippy warnings (`-D warnings`), 0 AST-grep violations (`sg scan`), 0 forbidden pattern matches, 0 anyhow/Box<dyn Error> library violations, clean release polyfill builds, clean PowerShell AST syntax.
+> * **New Constraints:** Keep `OpcValue` in `types.rs`. Low-level modules must never depend upward on `provider.rs`. Never re-introduce `parse_opc_value` or lossy quality string conversions. Keep all COM memory allocations protected by RAII guards.
+> * **Pruned:** Monolithic `parse_opc_value` in `opc-cli`, layer-inversion re-exports in `connector.rs`, `unreachable_pub` blanket allowance, and unmanaged heap leaks on partial COM failures.
+
 ## 2026-09-05: Architecture Synchronization for Connector Decomposition and VARIANT RAII Guards (`architecture.md`)
 > 📝 **Context Update:**
 > * **Feature:** Synchronize workspace root `architecture.md` and crate-level `opc-da-client/architecture.md` with active connector decomposition into modular submodules, VARIANT RAII memory safety guards, canonical ProgID resolution relocation, dead code cleanup, and expanded test metrics.

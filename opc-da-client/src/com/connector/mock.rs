@@ -9,10 +9,10 @@ use crate::com::connector::traits::{
 };
 use crate::com::iterator::StringIterator;
 use crate::errors::{OpcError, OpcResult};
-use crate::provider::{OpcQuality, OpcValue};
 use crate::raw::hresult::RPC_S_SERVER_UNAVAILABLE;
 use crate::types::{
-    BrowseDirection, BrowseType, GroupHandle, ItemHandle, OpcServerInfo, ServerIdentifier,
+    BrowseDirection, BrowseType, GroupHandle, ItemHandle, OpcQuality, OpcServerInfo, OpcValue,
+    ServerIdentifier,
 };
 
 /// Type alias for mock `add_items` closure.
@@ -56,6 +56,8 @@ pub struct MockState {
 pub struct MockConnectedGroup {
     /// Shared atomic state for mock failure injection and counters.
     pub state: std::sync::Arc<MockState>,
+    /// Preconfigured values returned on read when no custom read_fn is set.
+    pub tag_values: std::sync::Arc<std::sync::Mutex<Vec<OpcValue>>>,
     /// Optional custom handler for adding items to the mock group.
     pub add_items_fn: Option<MockAddItemsFn>,
     /// Optional custom handler for reading items from the mock group.
@@ -66,6 +68,10 @@ pub struct MockConnectedGroup {
 
 impl ConnectedGroup for MockConnectedGroup {
     fn add_items(&self, items: &[GroupItemDef]) -> OpcResult<Vec<GroupItemResult>> {
+        if items.is_empty() {
+            return Err(OpcError::InvalidState("items cannot be empty".to_string()));
+        }
+
         if let Some(f) = &self.add_items_fn {
             f(items)
         } else {
@@ -75,7 +81,7 @@ impl ConnectedGroup for MockConnectedGroup {
                 .map(|(i, _)| {
                     let handle_val = u32::try_from(i + 1).unwrap_or(u32::MAX);
                     GroupItemResult {
-                        server_handle: ItemHandle(handle_val),
+                        server_handle: ItemHandle::new(handle_val),
                         canonical_type: windows::Win32::System::Variant::VT_BSTR.0,
                         error: None,
                     }
@@ -89,15 +95,24 @@ impl ConnectedGroup for MockConnectedGroup {
         source: DataSource,
         server_handles: &[ItemHandle],
     ) -> OpcResult<Vec<Result<GroupItemState, OpcError>>> {
+        if server_handles.is_empty() {
+            return Err(OpcError::InvalidState(
+                "server_handles cannot be empty".to_string(),
+            ));
+        }
+
         if let Some(f) = &self.read_fn {
             f(source, server_handles)
         } else {
+            let configured = self.tag_values.lock()?;
             Ok(server_handles
                 .iter()
-                .map(|&h| {
+                .enumerate()
+                .map(|(i, &h)| {
+                    let val = configured.get(i).cloned().unwrap_or(OpcValue::Int(42));
                     Ok(GroupItemState {
                         client_handle: h,
-                        value: OpcValue::Int(42),
+                        value: val,
                         quality: OpcQuality::GOOD,
                         timestamp: std::time::SystemTime::UNIX_EPOCH,
                     })
@@ -111,6 +126,17 @@ impl ConnectedGroup for MockConnectedGroup {
         server_handles: &[ItemHandle],
         values: &[OpcValue],
     ) -> OpcResult<Vec<Result<(), OpcError>>> {
+        if server_handles.is_empty() {
+            return Err(OpcError::InvalidState(
+                "server_handles cannot be empty".to_string(),
+            ));
+        }
+        if server_handles.len() != values.len() {
+            return Err(OpcError::InvalidState(
+                "server_handles and values must have the same length".to_string(),
+            ));
+        }
+
         if self
             .state
             .should_fail_connection
@@ -183,8 +209,10 @@ pub struct MockConnectedServer {
     pub state: std::sync::Arc<MockState>,
     /// Flag indicating if connection drop should be simulated.
     pub should_fail_connection: std::sync::atomic::AtomicBool,
-    /// Simulated tag IDs yielded during browse operations.
+    /// Simulated tag IDs yielded during browse operations (leaf / flat).
     pub tags: std::sync::Arc<std::sync::Mutex<Vec<String>>>,
+    /// Simulated branch tags yielded during branch browse operations.
+    pub branch_tags: std::sync::Arc<std::sync::Mutex<Vec<String>>>,
     /// Namespace organization type (1 = Hierarchical, 2 = Flat).
     pub organization: std::sync::atomic::AtomicU32,
 }
@@ -204,6 +232,10 @@ impl Default for MockConnectedServer {
                 "Random.Real8".to_string(),
                 "Random.String".to_string(),
             ])),
+            branch_tags: std::sync::Arc::new(std::sync::Mutex::new(vec![
+                "Random".to_string(),
+                "Simulation".to_string(),
+            ])),
             organization: std::sync::atomic::AtomicU32::new(1),
         }
     }
@@ -218,13 +250,22 @@ impl ConnectedServer for MockConnectedServer {
 
     fn browse_opc_item_ids(
         &self,
-        _browse_type: BrowseType,
+        browse_type: BrowseType,
         _filter: Option<&str>,
         _data_type: u16,
         _access_rights: u32,
     ) -> OpcResult<StringIterator> {
-        let tags = self.tags.lock()?;
-        Ok(StringIterator::from_vec(tags.clone()))
+        let items = match browse_type {
+            BrowseType::Branch => {
+                let branches = self.branch_tags.lock()?;
+                branches.clone()
+            }
+            BrowseType::Leaf | BrowseType::Flat => {
+                let tags = self.tags.lock()?;
+                tags.clone()
+            }
+        };
+        Ok(StringIterator::from_vec(items))
     }
 
     fn change_browse_position(&self, _direction: BrowseDirection, _name: &str) -> OpcResult<()> {
@@ -264,7 +305,7 @@ impl ConnectedServer for MockConnectedServer {
 
         Ok(CreatedGroup {
             group: self.group.clone(),
-            server_handle: GroupHandle(1),
+            server_handle: GroupHandle::new(1),
             revised_update_rate_ms: config.update_rate_ms,
         })
     }
@@ -300,13 +341,7 @@ impl Default for MockServerConnector {
                 ..Default::default()
             }),
             state: state.clone(),
-            should_fail_connection: std::sync::atomic::AtomicBool::new(false),
-            tags: std::sync::Arc::new(std::sync::Mutex::new(vec![
-                "Random.Int4".to_string(),
-                "Random.Real8".to_string(),
-                "Random.String".to_string(),
-            ])),
-            organization: std::sync::atomic::AtomicU32::new(1),
+            ..Default::default()
         });
         let default_details = vec![OpcServerInfo {
             prog_id: "Matrikon.OPC.Simulation.1".to_string(),
@@ -344,13 +379,7 @@ impl MockServerConnector {
                 ..Default::default()
             }),
             state: state.clone(),
-            should_fail_connection: std::sync::atomic::AtomicBool::new(false),
-            tags: std::sync::Arc::new(std::sync::Mutex::new(vec![
-                "Random.Int4".to_string(),
-                "Random.Real8".to_string(),
-                "Random.String".to_string(),
-            ])),
-            organization: std::sync::atomic::AtomicU32::new(1),
+            ..Default::default()
         });
         let default_details = vec![OpcServerInfo {
             prog_id: "Mock.Server.1".to_string(),
@@ -421,6 +450,27 @@ impl MockServerConnector {
         }
         self
     }
+
+    /// Overrides simulated tag values returned during read operations.
+    #[must_use]
+    pub fn with_tag_values<I>(self, values: I) -> Self
+    where
+        I: IntoIterator<Item = OpcValue>,
+    {
+        if let Ok(mut guard) = self.server.group.tag_values.lock() {
+            *guard = values.into_iter().collect();
+        }
+        self
+    }
+
+    /// Overrides simulated branch tag names returned during branch browsing.
+    #[must_use]
+    pub fn with_branch_tags(self, branches: Vec<String>) -> Self {
+        if let Ok(mut guard) = self.server.branch_tags.lock() {
+            *guard = branches;
+        }
+        self
+    }
 }
 
 impl ServerConnector for MockServerConnector {
@@ -452,11 +502,7 @@ impl ServerConnector for MockServerConnector {
         Ok(details.clone())
     }
 
-    fn connect_identifier(&self, identifier: &ServerIdentifier) -> OpcResult<Self::Server> {
-        self.connect(&identifier.to_string())
-    }
-
-    fn connect(&self, _server_name: &str) -> OpcResult<Self::Server> {
+    fn connect_identifier(&self, _identifier: &ServerIdentifier) -> OpcResult<Self::Server> {
         if self
             .state
             .should_fail_connect
@@ -516,33 +562,39 @@ mod tests {
         let defs = vec![
             GroupItemDef {
                 item_id: "Random.Int4".to_string(),
-                client_handle: ItemHandle(0),
+                client_handle: ItemHandle::new(0),
                 active: true,
             },
             GroupItemDef {
                 item_id: "Random.Real8".to_string(),
-                client_handle: ItemHandle(1),
+                client_handle: ItemHandle::new(1),
                 active: true,
             },
         ];
 
         let results = group.add_items(&defs).unwrap();
         assert_eq!(results.len(), 2);
-        assert_eq!(results[0].server_handle, ItemHandle(1));
+        assert_eq!(results[0].server_handle, ItemHandle::new(1));
         assert!(results[0].error.is_none());
-        assert_eq!(results[1].server_handle, ItemHandle(2));
+        assert_eq!(results[1].server_handle, ItemHandle::new(2));
         assert!(results[1].error.is_none());
 
         let states = group
-            .read(DataSource::Device, &[ItemHandle(1), ItemHandle(2)])
+            .read(
+                DataSource::Device,
+                &[ItemHandle::new(1), ItemHandle::new(2)],
+            )
             .unwrap();
         assert_eq!(states.len(), 2);
-        assert_eq!(states[0].as_ref().unwrap().client_handle, ItemHandle(1));
+        assert_eq!(
+            states[0].as_ref().unwrap().client_handle,
+            ItemHandle::new(1)
+        );
         assert_eq!(states[0].as_ref().unwrap().value, OpcValue::Int(42));
         assert_eq!(states[0].as_ref().unwrap().quality, OpcQuality::GOOD);
 
         let write_res = group
-            .write(&[ItemHandle(1)], &[OpcValue::Int(100)])
+            .write(&[ItemHandle::new(1)], &[OpcValue::Int(100)])
             .unwrap();
         assert_eq!(write_res.len(), 1);
         assert!(write_res[0].is_ok());
@@ -568,10 +620,12 @@ mod tests {
             ..Default::default()
         };
 
-        let states = group.read(DataSource::Cache, &[ItemHandle(99)]).unwrap();
+        let states = group
+            .read(DataSource::Cache, &[ItemHandle::new(99)])
+            .unwrap();
         assert_eq!(states.len(), 1);
         let s = states[0].as_ref().unwrap();
-        assert_eq!(s.client_handle, ItemHandle(99));
+        assert_eq!(s.client_handle, ItemHandle::new(99));
         assert_eq!(s.value, OpcValue::Float(42.5));
         assert_eq!(s.quality, OpcQuality::UNCERTAIN);
     }
@@ -595,11 +649,11 @@ mod tests {
         let res = group
             .add_items(&[GroupItemDef {
                 item_id: "test".into(),
-                client_handle: ItemHandle(7),
+                client_handle: ItemHandle::new(7),
                 active: true,
             }])
             .unwrap();
-        assert_eq!(res[0].server_handle, ItemHandle(7));
+        assert_eq!(res[0].server_handle, ItemHandle::new(7));
     }
 
     #[test]
@@ -609,14 +663,14 @@ mod tests {
             name: "test_group",
             active: true,
             update_rate_ms: 500,
-            client_handle: GroupHandle(10),
+            client_handle: GroupHandle::new(10),
             time_bias: 0,
             percent_deadband: 0.0,
             locale_id: 0,
         };
 
         let created = server.add_group(&config).unwrap();
-        assert_eq!(created.server_handle, GroupHandle(1));
+        assert_eq!(created.server_handle, GroupHandle::new(1));
         assert_eq!(created.revised_update_rate_ms, 500);
 
         server
@@ -629,14 +683,14 @@ mod tests {
     fn test_group_item_def_and_state_cloning() {
         let def = GroupItemDef {
             item_id: "Tag1".to_string(),
-            client_handle: ItemHandle(42),
+            client_handle: ItemHandle::new(42),
             active: true,
         };
         let cloned_def = def.clone();
         assert_eq!(def, cloned_def);
 
         let state = GroupItemState {
-            client_handle: ItemHandle(42),
+            client_handle: ItemHandle::new(42),
             value: OpcValue::Bool(true),
             quality: OpcQuality::GOOD,
             timestamp: std::time::SystemTime::UNIX_EPOCH,
@@ -668,5 +722,76 @@ mod tests {
         let details = mock.enumerate_server_details("localhost").unwrap();
         assert_eq!(details.len(), 1);
         assert_eq!(details[0].display_name(), "Custom Mock Title");
+    }
+
+    #[test]
+    fn test_mock_group_preconditions() {
+        let group = MockConnectedGroup::default();
+
+        assert!(matches!(
+            group.add_items(&[]),
+            Err(OpcError::InvalidState(_))
+        ));
+
+        assert!(matches!(
+            group.read(DataSource::Device, &[]),
+            Err(OpcError::InvalidState(_))
+        ));
+
+        assert!(matches!(
+            group.write(&[], &[]),
+            Err(OpcError::InvalidState(_))
+        ));
+
+        assert!(matches!(
+            group.write(&[ItemHandle::new(1)], &[]),
+            Err(OpcError::InvalidState(_))
+        ));
+    }
+
+    #[test]
+    fn test_mock_browse_branch_vs_leaf() {
+        let server = MockConnectedServer::default();
+        let branch_iter = server
+            .browse_opc_item_ids(BrowseType::Branch, None, 0, 0)
+            .unwrap();
+        let branches: Vec<String> = branch_iter.collect::<Result<Vec<_>, _>>().unwrap();
+        assert_eq!(
+            branches,
+            vec!["Random".to_string(), "Simulation".to_string()]
+        );
+
+        let leaf_iter = server
+            .browse_opc_item_ids(BrowseType::Leaf, None, 0, 0)
+            .unwrap();
+        let leaves: Vec<String> = leaf_iter.collect::<Result<Vec<_>, _>>().unwrap();
+        assert_eq!(
+            leaves,
+            vec![
+                "Random.Int4".to_string(),
+                "Random.Real8".to_string(),
+                "Random.String".to_string()
+            ]
+        );
+    }
+
+    #[test]
+    fn test_mock_connector_with_tag_values() {
+        let connector = MockServerConnector::new()
+            .with_tag_values(vec![OpcValue::Int(123), OpcValue::Float(99.9)]);
+        let server = connector.connect("Mock.Server").unwrap();
+        let group = server
+            .add_group(&GroupConfig::ephemeral("g1"))
+            .unwrap()
+            .group;
+        let states = group
+            .read(
+                DataSource::Device,
+                &[ItemHandle::new(1), ItemHandle::new(2)],
+            )
+            .unwrap();
+        assert_eq!(states.len(), 2);
+        assert_eq!(states[0].as_ref().unwrap().value, OpcValue::Int(123));
+        assert_eq!(states[1].as_ref().unwrap().value, OpcValue::Float(99.9));
     }
 }

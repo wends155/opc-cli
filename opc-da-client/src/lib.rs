@@ -1,4 +1,4 @@
-#![allow(unsafe_code, unreachable_pub)]
+#![allow(unsafe_code)]
 #![doc = include_str!("../README.md")]
 //! # opc-da-client
 //!
@@ -12,7 +12,7 @@
 //!
 //! # #[tokio::main]
 //! # async fn main() -> OpcResult<()> {
-//! let client = OpcDaClient::default();
+//! let client: OpcDaClient = OpcDaClient::default();
 //! let servers = client.list_servers("localhost").await?;
 //! # Ok(())
 //! # }
@@ -69,3 +69,23 @@ pub use com::connector::{MockConnectedGroup, MockConnectedServer, MockServerConn
 /// Type alias for an [`OpcDaClient`] instantiated with [`MockServerConnector`].
 #[cfg(all(feature = "test-support", feature = "opc-da-backend"))]
 pub type MockOpcDaClient = com::client::OpcDaClient<com::connector::MockServerConnector>;
+
+#[cfg(all(feature = "test-support", feature = "opc-da-backend"))]
+impl Default for com::client::OpcDaClient<com::connector::MockServerConnector> {
+    fn default() -> Self {
+        match Self::new(com::connector::MockServerConnector::default()) {
+            Ok(client) => client,
+            Err(e) => unreachable!("mock client initializes successfully: {e:?}"),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[cfg(all(feature = "test-support", feature = "opc-da-backend"))]
+    #[test]
+    fn test_mock_opc_da_client_default() {
+        use super::MockOpcDaClient;
+        let _client = MockOpcDaClient::default();
+    }
+}

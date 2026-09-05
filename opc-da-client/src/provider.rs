@@ -349,45 +349,7 @@ impl SystemTimeOptionExt for Option<std::time::SystemTime> {
     }
 }
 
-/// Typed value to write to or read from an OPC DA tag.
-///
-/// # Examples
-///
-/// ```
-/// use opc_da_client::OpcValue;
-///
-/// let v = OpcValue::Float(3.14);
-/// assert_eq!(v, OpcValue::Float(3.14));
-/// assert_eq!(v.to_string(), "3.14");
-/// ```
-#[derive(Debug, Clone, PartialEq)]
-pub enum OpcValue {
-    /// String value (`VT_BSTR`) — server may coerce to target type.
-    String(String),
-    /// 32-bit integer (`VT_I4`).
-    Int(i32),
-    /// 64-bit float (`VT_R8`).
-    Float(f64),
-    /// Boolean (`VT_BOOL`).
-    Bool(bool),
-    /// Empty value (`VT_EMPTY`) — uninitialized or absent variant.
-    Empty,
-    /// Null value (`VT_NULL`) — explicitly null variant.
-    Null,
-}
-
-impl std::fmt::Display for OpcValue {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::String(s) => write!(f, "{s}"),
-            Self::Int(i) => write!(f, "{i}"),
-            Self::Float(fl) => write!(f, "{fl}"),
-            Self::Bool(b) => write!(f, "{b}"),
-            Self::Empty => write!(f, "Empty"),
-            Self::Null => write!(f, "Null"),
-        }
-    }
-}
+pub use crate::types::OpcValue;
 
 /// Result of a single write operation.
 ///
@@ -947,6 +909,48 @@ pub trait OpcProvider: Send + Sync {
         tag_id: &str,
         value: OpcValue,
     ) -> OpcResult<WriteResult>;
+
+    /// Read a value from a single OPC DA tag.
+    ///
+    /// Default implementation delegates to [`OpcProvider::read_tag_values`].
+    ///
+    /// # Arguments
+    /// * `server` - ProgID of the OPC server.
+    /// * `tag_id` - Tag identifier to read.
+    ///
+    /// # Errors
+    /// Returns [`crate::errors::OpcError`] if the underlying read fails or returns empty results.
+    async fn read_tag_value(&self, server: &str, tag_id: &str) -> OpcResult<TagValue> {
+        let mut results = self
+            .read_tag_values(server, vec![tag_id.to_string()])
+            .await?;
+        results.pop().ok_or_else(|| {
+            crate::errors::OpcError::Internal("Server returned empty tag values".to_string())
+        })
+    }
+
+    /// Write typed values to multiple OPC DA tags in a batch.
+    ///
+    /// Default implementation iteratively invokes [`OpcProvider::write_tag_value`].
+    ///
+    /// # Arguments
+    /// * `server` - ProgID of the OPC server.
+    /// * `writes` - Slice of `(tag_id, value)` pairs to write.
+    ///
+    /// # Errors
+    /// Returns [`crate::errors::OpcError`] if any individual write fails.
+    async fn write_tag_values(
+        &self,
+        server: &str,
+        writes: &[(String, OpcValue)],
+    ) -> OpcResult<Vec<WriteResult>> {
+        let mut results = Vec::with_capacity(writes.len());
+        for (tag_id, value) in writes {
+            let res = self.write_tag_value(server, tag_id, value.clone()).await?;
+            results.push(res);
+        }
+        Ok(results)
+    }
 }
 
 #[cfg(test)]
@@ -1205,5 +1209,61 @@ mod tests {
         assert_eq!(details[0].clsid, windows::core::GUID::zeroed());
         assert_eq!(details[0].user_type, None);
         assert_eq!(details[0].host, None);
+    }
+
+    #[tokio::test]
+    async fn test_provider_default_read_tag_value() {
+        struct TestProvider;
+        #[async_trait::async_trait]
+        impl OpcProvider for TestProvider {
+            async fn list_servers(&self, _host: &str) -> OpcResult<Vec<String>> {
+                Ok(vec![])
+            }
+            async fn browse_tags(&self, _s: &str, _c: TagCollector) -> OpcResult<Vec<String>> {
+                Ok(vec![])
+            }
+            async fn read_tag_values(
+                &self,
+                _s: &str,
+                tags: Vec<String>,
+            ) -> OpcResult<Vec<TagValue>> {
+                Ok(tags
+                    .into_iter()
+                    .map(|t| TagValue {
+                        tag_id: t,
+                        value: Some(OpcValue::Int(42)),
+                        quality: OpcQuality::GOOD,
+                        timestamp: None,
+                    })
+                    .collect())
+            }
+            async fn write_tag_value(
+                &self,
+                _s: &str,
+                tag: &str,
+                _v: OpcValue,
+            ) -> OpcResult<WriteResult> {
+                Ok(WriteResult::success(tag))
+            }
+        }
+
+        let p = TestProvider;
+        let val = p.read_tag_value("Server.A", "Tag.1").await.unwrap();
+        assert_eq!(val.tag_id, "Tag.1");
+        assert_eq!(val.value, Some(OpcValue::Int(42)));
+
+        let batch_write = p
+            .write_tag_values(
+                "Server.A",
+                &[
+                    ("Tag.1".into(), OpcValue::Int(10)),
+                    ("Tag.2".into(), OpcValue::Int(20)),
+                ],
+            )
+            .await
+            .unwrap();
+        assert_eq!(batch_write.len(), 2);
+        assert!(batch_write[0].is_success());
+        assert!(batch_write[1].is_success());
     }
 }

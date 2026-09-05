@@ -607,8 +607,8 @@ impl App {
             return;
         }
 
-        // Parse the value string into OpcValue (try int -> float -> bool -> string)
-        let opc_value = parse_opc_value(&value_str);
+        // Parse the value string into OpcValue with context-aware boolean coercion (REV-14)
+        let opc_value = self.resolve_write_value(&tag_id, &value_str);
 
         tracing::info!(tag = %tag_id, value = %value_str, parsed_type = ?opc_value, "start_write_value: initiating write");
 
@@ -859,28 +859,33 @@ impl App {
             _ => {}
         }
     }
-}
 
-/// Helper to parse a user string into a typed [`OpcValue`].
-fn parse_opc_value(s: &str) -> OpcValue {
-    // Try integer first
-    if let Ok(i) = s.parse::<i32>() {
-        return OpcValue::Int(i);
+    /// Resolves and parses user write input into an [`OpcValue`] with context-aware type coercion.
+    ///
+    /// If the existing tag is known to be a boolean, `"1"` and `"0"` are coerced to `OpcValue::Bool(true)`
+    /// and `OpcValue::Bool(false)` respectively (REV-14). Otherwise, canonical [`OpcValue::from_str`]
+    /// parsing rules apply.
+    pub fn resolve_write_value(&self, tag_id: &str, value_str: &str) -> OpcValue {
+        let mut opc_value = value_str
+            .parse::<OpcValue>()
+            .unwrap_or_else(|_| OpcValue::String(value_str.to_string()));
+
+        let is_bool = self
+            .tag_values
+            .iter()
+            .find(|tv| tv.tag_id == tag_id)
+            .is_some_and(|tv| matches!(tv.value, Some(OpcValue::Bool(_))));
+
+        if is_bool {
+            if value_str == "1" {
+                opc_value = OpcValue::Bool(true);
+            } else if value_str == "0" {
+                opc_value = OpcValue::Bool(false);
+            }
+        }
+
+        opc_value
     }
-    // Then float
-    if let Ok(f) = s.parse::<f64>() {
-        return OpcValue::Float(f);
-    }
-    // Then boolean
-    match s.to_lowercase().as_str() {
-        "true" | "1" => return OpcValue::Bool(true),
-        "false" | "0" => return OpcValue::Bool(false),
-        _ => {}
-    }
-    // Default to string
-    let result = OpcValue::String(s.to_string());
-    tracing::debug!(input = %s, parsed = ?result, "parse_opc_value: detected type");
-    result
 }
 
 #[cfg(test)]
@@ -1592,5 +1597,56 @@ mod tests {
             log_line,
             "Tag: Plant.Sensor1 | Value: 100 | Quality: Good | Timestamp: N/A"
         );
+    }
+
+    #[test]
+    fn test_write_value_parsing_and_boolean_coercion() {
+        let mock = MockOpcProvider::new();
+        let mut app = App::new(Arc::new(mock));
+
+        app.tag_values.push(TagValue {
+            tag_id: "Device.PumpRunning".to_string(),
+            value: Some(OpcValue::Bool(false)),
+            quality: OpcQuality::GOOD,
+            timestamp: None,
+        });
+
+        app.tag_values.push(TagValue {
+            tag_id: "Device.SpeedRpm".to_string(),
+            value: Some(OpcValue::Int(1000)),
+            quality: OpcQuality::GOOD,
+            timestamp: None,
+        });
+
+        // Canonical OpcValue::from_str tests
+        assert_eq!("true".parse::<OpcValue>().unwrap(), OpcValue::Bool(true));
+        assert_eq!("TRUE".parse::<OpcValue>().unwrap(), OpcValue::Bool(true));
+        assert_eq!("false".parse::<OpcValue>().unwrap(), OpcValue::Bool(false));
+        assert_eq!("FALSE".parse::<OpcValue>().unwrap(), OpcValue::Bool(false));
+        assert_eq!("42".parse::<OpcValue>().unwrap(), OpcValue::Int(42));
+        assert_eq!("2.5".parse::<OpcValue>().unwrap(), OpcValue::Float(2.5));
+        assert_eq!(
+            "Running".parse::<OpcValue>().unwrap(),
+            OpcValue::String("Running".to_string())
+        );
+
+        // Context-aware coercion tests (REV-14)
+        assert_eq!(
+            app.resolve_write_value("Device.PumpRunning", "1"),
+            OpcValue::Bool(true)
+        );
+        assert_eq!(
+            app.resolve_write_value("Device.PumpRunning", "0"),
+            OpcValue::Bool(false)
+        );
+        assert_eq!(
+            app.resolve_write_value("Device.SpeedRpm", "1"),
+            OpcValue::Int(1)
+        );
+        assert_eq!(
+            app.resolve_write_value("Device.SpeedRpm", "0"),
+            OpcValue::Int(0)
+        );
+        assert_eq!(app.resolve_write_value("UnknownTag", "1"), OpcValue::Int(1));
     }
 }

@@ -164,7 +164,9 @@ fn open_clsid_key(
 
 fn read_string_from_key(target: windows::Win32::System::Registry::HKEY) -> Option<String> {
     use windows::Win32::Foundation::{ERROR_MORE_DATA, ERROR_SUCCESS};
-    use windows::Win32::System::Registry::{REG_EXPAND_SZ, REG_VALUE_TYPE, RegQueryValueExW};
+    use windows::Win32::System::Registry::{
+        REG_EXPAND_SZ, REG_SZ, REG_VALUE_TYPE, RegQueryValueExW,
+    };
     use windows::core::PCWSTR;
 
     let mut buf = [0u16; 512];
@@ -182,6 +184,10 @@ fn read_string_from_key(target: windows::Win32::System::Registry::HKEY) -> Optio
             Some(&raw mut len),
         )
     };
+
+    if val_type != REG_SZ && val_type != REG_EXPAND_SZ {
+        return None;
+    }
 
     let raw_string = if status == ERROR_SUCCESS && len > 1 {
         let valid_u16_count = (len as usize) / std::mem::size_of::<u16>();
@@ -379,7 +385,7 @@ impl OpcServerListCatalog {
         // SAFETY: Calling EnumClassesOfCategories via IOPCServerList (v1) returning standard IEnumGUID.
         let iter = unsafe {
             self.v1
-                .EnumClassesOfCategories(&versions, &versions)
+                .EnumClassesOfCategories(&versions, &[])
                 .inspect_err(|e| tracing::warn!(error = ?e, "Failed to enumerate server classes"))?
         };
 

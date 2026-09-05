@@ -33,7 +33,7 @@ pub enum OpcError {
     ///
     /// This variant wraps a [`windows::core::Error`] and provides a friendly
     /// hint for common OPC-related HRESULT codes.
-    #[error("COM error: {source} ({})", com_error_hint(.source))]
+    #[error("COM error: {source}{}", format_com_hint(.source))]
     Com {
         #[from]
         source: windows::core::Error,
@@ -100,19 +100,47 @@ impl<T> From<std::sync::PoisonError<T>> for OpcError {
     }
 }
 
-fn com_error_hint(source: &windows::core::Error) -> &'static str {
+fn format_com_hint(source: &windows::core::Error) -> String {
     #[cfg(feature = "opc-da-backend")]
     {
-        crate::raw::hresult::friendly_hresult_hint(source.code()).unwrap_or("No hint available")
+        if let Some(hint) = crate::raw::hresult::friendly_hresult_hint(source.code()) {
+            format!(" ({hint})")
+        } else {
+            String::new()
+        }
     }
     #[cfg(not(feature = "opc-da-backend"))]
     {
         let _ = source;
-        "No hint available"
+        String::new()
     }
 }
 
 impl OpcError {
+    /// Returns `true` if this error indicates a connection failure, network timeout,
+    /// or dropped COM RPC connection that warrants server reconnection or pool eviction.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use opc_da_client::OpcError;
+    ///
+    /// let err = OpcError::Connection("server unreachable".into());
+    /// assert!(err.is_connection_error());
+    ///
+    /// let err = OpcError::InvalidState("already open".into());
+    /// assert!(!err.is_connection_error());
+    /// ```
+    #[must_use]
+    pub fn is_connection_error(&self) -> bool {
+        match self {
+            Self::Connection(_) => true,
+            #[cfg(feature = "opc-da-backend")]
+            Self::Com { source } => crate::raw::hresult::is_connection_hresult(source.code()),
+            _ => false,
+        }
+    }
+
     /// Returns an actionable user-friendly hint if this error is caused by a known COM or OPC failure.
     ///
     /// # Examples
@@ -196,6 +224,7 @@ pub(crate) enum OpcOperation {
     BrowseRecursiveChangePositionDown,
     BrowseRecursiveChildBranch,
     BrowseRecursiveChangePositionUp,
+    BrowseTags,
 }
 
 impl std::fmt::Display for OpcOperation {
@@ -233,6 +262,7 @@ impl std::fmt::Display for OpcOperation {
             Self::BrowseRecursiveChangePositionDown => "browse_recursive:change_position_down",
             Self::BrowseRecursiveChildBranch => "browse_recursive:child_branch",
             Self::BrowseRecursiveChangePositionUp => "browse_recursive:change_position_up",
+            Self::BrowseTags => "browse_tags",
         };
         write!(f, "{op_str}")
     }
@@ -436,5 +466,51 @@ mod tests {
 
         let conn_err = OpcError::connection_failed("Matrikon.OPC", "invalid CLSID");
         assert!(matches!(conn_err, OpcError::Connection(msg) if msg.contains("Matrikon.OPC")));
+    }
+
+    #[test]
+    fn test_is_connection_error() {
+        let conn_err = OpcError::Connection("connection lost".into());
+        assert!(conn_err.is_connection_error());
+
+        let state_err = OpcError::InvalidState("bad state".into());
+        assert!(!state_err.is_connection_error());
+
+        #[cfg(feature = "opc-da-backend")]
+        {
+            use crate::raw::hresult::RPC_S_SERVER_UNAVAILABLE;
+            let rpc_err = OpcError::Com {
+                source: windows::core::Error::from_hresult(RPC_S_SERVER_UNAVAILABLE),
+            };
+            assert!(rpc_err.is_connection_error());
+
+            use windows::Win32::Foundation::E_POINTER;
+            let pointer_err = OpcError::Com {
+                source: windows::core::Error::from_hresult(E_POINTER),
+            };
+            assert!(!pointer_err.is_connection_error());
+        }
+    }
+
+    #[test]
+    fn test_com_error_display_formatting() {
+        #[cfg(feature = "opc-da-backend")]
+        {
+            use crate::raw::hresult::RPC_S_SERVER_UNAVAILABLE;
+            let rpc_err = OpcError::Com {
+                source: windows::core::Error::from_hresult(RPC_S_SERVER_UNAVAILABLE),
+            };
+            let formatted = rpc_err.to_string();
+            assert!(formatted.contains("The RPC server is unavailable"));
+            assert!(!formatted.contains("No hint available"));
+
+            use windows::Win32::Foundation::E_POINTER;
+            let pointer_err = OpcError::Com {
+                source: windows::core::Error::from_hresult(E_POINTER),
+            };
+            let formatted_ptr = pointer_err.to_string();
+            assert!(!formatted_ptr.contains("No hint available"));
+            assert!(!formatted_ptr.ends_with(" ()"));
+        }
     }
 }

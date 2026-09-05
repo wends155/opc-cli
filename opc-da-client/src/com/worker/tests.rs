@@ -1,14 +1,3 @@
-#![allow(
-    clippy::single_char_pattern,
-    clippy::cast_possible_wrap,
-    clippy::ptr_as_ptr,
-    clippy::borrow_as_ptr,
-    clippy::mixed_attributes_style,
-    clippy::unreadable_literal,
-    clippy::undocumented_unsafe_blocks,
-    clippy::manual_assert
-)]
-
 use super::*;
 use crate::com::connector::{
     ConnectedGroup, ConnectedServer, CreatedGroup, DataSource, GroupConfig, GroupItemDef,
@@ -90,7 +79,7 @@ impl ServerConnector for WorkerMockConnector {
             host: None,
         }])
     }
-    fn connect(&self, _server_name: &str) -> OpcResult<Self::Server> {
+    fn connect_identifier(&self, _identifier: &ServerIdentifier) -> OpcResult<Self::Server> {
         Ok(WorkerMockServer)
     }
 }
@@ -188,7 +177,7 @@ impl ConnectedServer for MismatchedServer {
     fn add_group(&self, config: &GroupConfig<'_>) -> OpcResult<CreatedGroup<Self::Group>> {
         Ok(CreatedGroup {
             group: MismatchedGroup,
-            server_handle: GroupHandle(1),
+            server_handle: GroupHandle::new(1),
             revised_update_rate_ms: config.update_rate_ms,
         })
     }
@@ -205,7 +194,7 @@ impl ServerConnector for MismatchedConnector {
     fn enumerate_server_details(&self, _host: &str) -> OpcResult<Vec<OpcServerInfo>> {
         Ok(vec![])
     }
-    fn connect(&self, _server_name: &str) -> OpcResult<Self::Server> {
+    fn connect_identifier(&self, _identifier: &ServerIdentifier) -> OpcResult<Self::Server> {
         Ok(MismatchedServer)
     }
 }
@@ -397,6 +386,54 @@ async fn test_worker_panic_propagation() {
 }
 
 #[tokio::test]
+async fn test_worker_thread_recovery_after_panic() {
+    let state = Arc::new(MockState::default());
+    state.should_panic_on_request.store(true, Ordering::Relaxed);
+    let connector = Arc::new(MockServerConnector::with_state(state.clone()));
+    let worker = tokio::task::spawn_blocking(move || ComWorker::start(connector).unwrap())
+        .await
+        .unwrap();
+
+    // First request triggers simulated panic
+    let result = worker
+        .send_request(|reply| ComRequest::WriteTagValue {
+            server: ServerIdentifier::from("Mock.Server.1"),
+            tag_id: "Tag1".to_string(),
+            value: OpcValue::Int(1),
+            reply,
+        })
+        .await;
+
+    assert!(result.is_err());
+    if let Err(OpcError::Internal(msg)) = result {
+        assert!(
+            msg.contains("panicked"),
+            "Expected worker panic message, got: {msg}"
+        );
+    } else {
+        panic!("Expected OpcError::Internal, got {:?}", result);
+    }
+
+    // Now disarm the panic trigger and verify worker thread survived and processes subsequent requests
+    state
+        .should_panic_on_request
+        .store(false, Ordering::Relaxed);
+
+    let recovery_result = worker
+        .send_request(|reply| ComRequest::WriteTagValue {
+            server: ServerIdentifier::from("Mock.Server.1"),
+            tag_id: "Tag1".to_string(),
+            value: OpcValue::Int(42),
+            reply,
+        })
+        .await
+        .expect("Worker thread must recover and process subsequent request successfully");
+
+    assert!(recovery_result.is_success());
+    assert_eq!(recovery_result.tag_id, "Tag1");
+}
+
+#[tokio::test]
 async fn test_drop_during_active_request() {
     let state = Arc::new(MockState::default());
     let connector = Arc::new(MockServerConnector::with_state(state.clone()));
@@ -419,7 +456,7 @@ async fn test_worker_init_failure() {
         fn enumerate_server_details(&self, _host: &str) -> OpcResult<Vec<OpcServerInfo>> {
             Err(OpcError::Internal("COM subsystem failed".into()))
         }
-        fn connect(&self, _name: &str) -> OpcResult<Self::Server> {
+        fn connect_identifier(&self, _identifier: &ServerIdentifier) -> OpcResult<Self::Server> {
             Err(OpcError::Internal("COM subsystem failed".into()))
         }
     }
@@ -454,7 +491,7 @@ impl ConnectedGroup for QualityTestGroup {
             .map(|(i, _)| {
                 if i == 4 {
                     GroupItemResult {
-                        server_handle: ItemHandle(0),
+                        server_handle: ItemHandle::new(0),
                         canonical_type: 0,
                         error: Some(OpcError::Com {
                             source: windows::core::Error::from_hresult(
@@ -465,7 +502,7 @@ impl ConnectedGroup for QualityTestGroup {
                 } else {
                     GroupItemResult {
                         #[allow(clippy::cast_possible_truncation)]
-                        server_handle: ItemHandle((i + 1) as u32),
+                        server_handle: ItemHandle::new((i + 1) as u32),
                         canonical_type: 8,
                         error: None,
                     }
@@ -531,7 +568,7 @@ impl ConnectedServer for QualityTestServer {
     fn add_group(&self, config: &GroupConfig<'_>) -> OpcResult<CreatedGroup<Self::Group>> {
         Ok(CreatedGroup {
             group: QualityTestGroup,
-            server_handle: GroupHandle(1),
+            server_handle: GroupHandle::new(1),
             revised_update_rate_ms: config.update_rate_ms,
         })
     }
@@ -553,7 +590,7 @@ impl ServerConnector for QualityTestConnector {
             host: None,
         }])
     }
-    fn connect(&self, _name: &str) -> OpcResult<Self::Server> {
+    fn connect_identifier(&self, _identifier: &ServerIdentifier) -> OpcResult<Self::Server> {
         Ok(QualityTestServer)
     }
 }
@@ -676,7 +713,7 @@ async fn test_worker_browse_tags_success() {
 
     assert_eq!(result.len(), 3);
     assert_eq!(result, vec!["Random.Int4", "Random.Real8", "Random.String"]);
-    assert_eq!(collector.len(), 3);
+    assert_eq!(collector.len(), 0);
 }
 
 #[tokio::test]
@@ -720,7 +757,7 @@ async fn test_worker_browse_tags_capacity_cap() {
 
     assert_eq!(result.len(), 2);
     assert_eq!(result, vec!["Random.Int4", "Random.Real8"]);
-    assert!(collector.is_full());
+    assert!(collector.is_empty());
 }
 
 #[tokio::test]
@@ -766,8 +803,8 @@ fn test_group_guard_cleanup_on_drop() {
     let server = MockConnectedServer::default();
     assert_eq!(server.state.remove_group_count.load(Ordering::Relaxed), 0);
     {
-        let guard = GroupGuard::new(&server, GroupHandle(42));
-        assert_eq!(guard.handle(), GroupHandle(42));
+        let guard = GroupGuard::new(&server, GroupHandle::new(42));
+        assert_eq!(guard.handle(), GroupHandle::new(42));
     }
     assert_eq!(server.state.remove_group_count.load(Ordering::Relaxed), 1);
 }
@@ -776,7 +813,7 @@ fn test_group_guard_cleanup_on_drop() {
 fn test_group_guard_disarm_prevents_cleanup() {
     let server = MockConnectedServer::default();
     {
-        let mut guard = GroupGuard::new(&server, GroupHandle(42));
+        let mut guard = GroupGuard::new(&server, GroupHandle::new(42));
         guard.disarm();
     }
     assert_eq!(server.state.remove_group_count.load(Ordering::Relaxed), 0);
@@ -794,9 +831,8 @@ async fn test_worker_handle_read_error_cleans_group() {
     let server = Arc::new(MockConnectedServer {
         group: Arc::new(group),
         state: connector.state.clone(),
-        should_fail_connection: std::sync::atomic::AtomicBool::new(false),
         tags: std::sync::Arc::new(std::sync::Mutex::new(vec!["Test.Tag".to_string()])),
-        organization: std::sync::atomic::AtomicU32::new(1),
+        ..Default::default()
     });
     let custom_connector = Arc::new(MockServerConnector {
         server: server.clone(),

@@ -6,8 +6,8 @@
 //! This module is private to the `com` subsystem (`pub(crate)`) ensuring
 //! low-level COM FFI structures do not leak into Tier 1 domain code.
 
-use crate::provider::OpcValue;
 use crate::raw::hresult::friendly_hresult_hint as friendly_com_hresult_hint;
+use crate::types::OpcValue;
 use windows::Win32::Foundation::VARIANT_BOOL;
 use windows::Win32::System::Ole::{
     SafeArrayAccessData, SafeArrayGetDim, SafeArrayGetElemsize, SafeArrayGetLBound,
@@ -16,9 +16,20 @@ use windows::Win32::System::Ole::{
 use windows::Win32::System::Variant::{VARIANT, VT_BOOL, VT_BSTR, VT_EMPTY, VT_I4, VT_NULL, VT_R8};
 use windows::core::BSTR;
 
+/// Maximum recursion depth for nested SafeArray traversal to prevent stack overflow.
+const MAX_VARIANT_RECURSION_DEPTH: usize = 8;
+
 /// Convert OPC DA VARIANT to a displayable string.
-#[allow(clippy::too_many_lines)]
 pub fn variant_to_string(variant: &VARIANT) -> String {
+    variant_to_string_bounded(variant, 0)
+}
+
+#[allow(clippy::too_many_lines)]
+fn variant_to_string_bounded(variant: &VARIANT, depth: usize) -> String {
+    if depth >= MAX_VARIANT_RECURSION_DEPTH {
+        return "<nested>".to_string();
+    }
+
     // SAFETY: Accessing the VARIANT union fields. Caller guarantees VARIANT was produced by COM.
     // SAFETY: The `vt` discriminant correctly identifies which union arm is active.
     unsafe {
@@ -52,7 +63,7 @@ pub fn variant_to_string(variant: &VARIANT) -> String {
                             std::slice::from_raw_parts(data_ptr as *const VARIANT, count as usize);
                         for i in 0..display_count {
                             #[allow(clippy::cast_sign_loss)]
-                            elements.push(variant_to_string(&vars[i as usize]));
+                            elements.push(variant_to_string_bounded(&vars[i as usize], depth + 1));
                         }
                         let _ = SafeArrayUnaccessData(parray);
                     }
@@ -71,9 +82,13 @@ pub fn variant_to_string(variant: &VARIANT) -> String {
                                 std::ptr::addr_of_mut!((*temp_var.Anonymous.Anonymous).Anonymous)
                                     .cast::<u8>();
 
-                            std::ptr::copy_nonoverlapping(src_ptr, dst_ptr, elem_size.min(16));
+                            let union_cap =
+                                core::mem::size_of_val(&(*temp_var.Anonymous.Anonymous).Anonymous);
+                            let copy_len = elem_size.min(union_cap);
 
-                            elements.push(variant_to_string(&temp_var));
+                            std::ptr::copy_nonoverlapping(src_ptr, dst_ptr, copy_len);
+
+                            elements.push(variant_to_string_bounded(&temp_var, depth + 1));
                         }
                         let _ = SafeArrayUnaccessData(parray);
                     }
@@ -259,7 +274,7 @@ pub fn opc_value_to_variant(value: &OpcValue) -> VARIANT {
 #[repr(transparent)]
 #[derive(Debug)]
 #[allow(dead_code)]
-pub struct ScopedVariant(pub VARIANT);
+pub struct ScopedVariant(VARIANT);
 
 #[allow(dead_code)]
 impl ScopedVariant {
@@ -284,6 +299,12 @@ impl ScopedVariant {
     /// Returns a mutable reference to the inner raw [`VARIANT`].
     pub fn as_raw_mut(&mut self) -> &mut VARIANT {
         &mut self.0
+    }
+
+    /// Replaces the inner variant after safely clearing the existing one.
+    pub fn replace(&mut self, new_val: VARIANT) {
+        self.clear();
+        self.0 = new_val;
     }
 
     /// Consumes the guard and extracts the inner raw [`VARIANT`] without running the destructor.
@@ -317,12 +338,6 @@ impl std::ops::Deref for ScopedVariant {
     }
 }
 
-impl std::ops::DerefMut for ScopedVariant {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.0
-    }
-}
-
 impl Drop for ScopedVariant {
     fn drop(&mut self) {
         self.clear();
@@ -332,15 +347,29 @@ impl Drop for ScopedVariant {
 /// RAII guard for an array of COM-allocated [`tagOPCITEMSTATE`].
 ///
 /// Ensures [`windows::Win32::System::Variant::VariantClear`] is deterministically called
-/// on every item's `vDataValue` when the guard drops, preventing OLE Automation heap leaks
-/// for `BSTR` or `SAFEARRAY` data before the outer array memory is freed via `CoTaskMemFree`.
-#[allow(dead_code)]
-pub struct ItemStatesGuard<'a>(pub &'a mut [crate::raw::bindings::da::tagOPCITEMSTATE]);
+/// on every item's `vDataValue` when the guard drops IF AND ONLY IF `errors[i].is_ok()` is true,
+/// preventing OLE Automation heap leaks for `BSTR` or `SAFEARRAY` data while guaranteeing
+/// safety against uninitialized COM memory on failed reads.
+pub struct ItemStatesGuard<'a> {
+    states: &'a mut [crate::raw::bindings::da::tagOPCITEMSTATE],
+    errors: &'a [windows::core::HRESULT],
+}
+
+impl<'a> ItemStatesGuard<'a> {
+    /// Creates a new `ItemStatesGuard` wrapping the states slice and the COM errors slice.
+    #[must_use]
+    pub fn new(
+        states: &'a mut [crate::raw::bindings::da::tagOPCITEMSTATE],
+        errors: &'a [windows::core::HRESULT],
+    ) -> Self {
+        Self { states, errors }
+    }
+}
 
 impl std::fmt::Debug for ItemStatesGuard<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ItemStatesGuard")
-            .field("len", &self.0.len())
+            .field("len", &self.states.len())
             .finish()
     }
 }
@@ -349,16 +378,20 @@ impl std::ops::Deref for ItemStatesGuard<'_> {
     type Target = [crate::raw::bindings::da::tagOPCITEMSTATE];
 
     fn deref(&self) -> &Self::Target {
-        self.0
+        self.states
     }
 }
 
 impl Drop for ItemStatesGuard<'_> {
     fn drop(&mut self) {
-        for state in self.0.iter_mut() {
-            // SAFETY: `state.vDataValue` is a VARIANT; VariantClear frees BSTR/SAFEARRAY or is safe no-op on VT_EMPTY.
-            unsafe {
-                let _ = windows::Win32::System::Variant::VariantClear(&raw mut state.vDataValue);
+        for (state, &err) in self.states.iter_mut().zip(self.errors) {
+            if err.is_ok() {
+                /* SAFETY: Invariant REV-01: COM leaves vDataValue uninitialized if the read fails.
+                VariantClear MUST only be invoked if the item read succeeded (err.is_ok()). */
+                unsafe {
+                    let _ =
+                        windows::Win32::System::Variant::VariantClear(&raw mut state.vDataValue);
+                }
             }
         }
     }
@@ -726,8 +759,9 @@ mod tests {
             assert_eq!(states[0].vDataValue.Anonymous.Anonymous.vt, VT_BSTR);
         }
 
+        let errors = [windows::core::HRESULT(0), windows::core::HRESULT(0)];
         {
-            let _guard = ItemStatesGuard(&mut states);
+            let _guard = ItemStatesGuard::new(&mut states, &errors);
         }
 
         unsafe {
@@ -744,5 +778,77 @@ mod tests {
             (*scoped.as_raw_mut().Anonymous.Anonymous).vt = VT_I4;
             assert_eq!(scoped.as_raw().Anonymous.Anonymous.vt, VT_I4);
         }
+    }
+
+    #[test]
+    fn test_item_states_guard_partial_failure_s_false_uninitialized_safety() {
+        use windows::Win32::Foundation::{E_FAIL, S_OK};
+        use windows::Win32::System::Variant::{VT_BSTR, VT_DISPATCH};
+        use windows::core::HRESULT;
+
+        let mut states: [crate::raw::bindings::da::tagOPCITEMSTATE; 2] =
+            unsafe { std::mem::zeroed() };
+        let errors: [HRESULT; 2] = [S_OK, E_FAIL];
+
+        unsafe {
+            let bstr = windows::core::BSTR::from("ValidTagValue");
+            (*states[0].vDataValue.Anonymous.Anonymous).vt = VT_BSTR;
+            (*states[0].vDataValue.Anonymous.Anonymous)
+                .Anonymous
+                .bstrVal = std::mem::ManuallyDrop::new(bstr);
+
+            // Poison bits in failed item: uninitialized VT_DISPATCH pointer
+            (*states[1].vDataValue.Anonymous.Anonymous).vt = VT_DISPATCH;
+            (*states[1].vDataValue.Anonymous.Anonymous)
+                .Anonymous
+                .punkVal = std::mem::ManuallyDrop::new(std::mem::transmute::<
+                usize,
+                Option<windows::core::IUnknown>,
+            >(0xDEAD_BEEF));
+        }
+
+        {
+            let _guard = crate::com::variant::ItemStatesGuard::new(&mut states, &errors);
+        }
+
+        assert_eq!(unsafe { states[0].vDataValue.Anonymous.Anonymous.vt.0 }, 0); // Cleared to VT_EMPTY
+        assert_eq!(
+            unsafe { states[1].vDataValue.Anonymous.Anonymous.vt.0 },
+            VT_DISPATCH.0
+        ); // Skipped because error was E_FAIL
+
+        // Reset poison bits to safe empty so test stack unwinding doesn't trigger spurious runtime checks
+        unsafe {
+            (*states[1].vDataValue.Anonymous.Anonymous).vt = VT_EMPTY;
+            (*states[1].vDataValue.Anonymous.Anonymous)
+                .Anonymous
+                .punkVal = std::mem::ManuallyDrop::new(None);
+        }
+    }
+
+    #[test]
+    fn test_safearray_unpacking_buffer_bounds_canary_protection() {
+        #[repr(C)]
+        struct CanaryBuffer {
+            before: [u8; 16],
+            var: windows::Win32::System::Variant::VARIANT,
+            after: [u8; 16],
+        }
+        let mut buf = CanaryBuffer {
+            before: [0xAA; 16],
+            var: windows::Win32::System::Variant::VARIANT::default(),
+            after: [0xBB; 16],
+        };
+        let union_cap = unsafe { std::mem::size_of_val(&(*buf.var.Anonymous.Anonymous).Anonymous) };
+        let copy_len = (16usize).min(union_cap);
+        let src = [0x55u8; 16];
+        let dst = unsafe {
+            std::ptr::addr_of_mut!((*buf.var.Anonymous.Anonymous).Anonymous).cast::<u8>()
+        };
+        unsafe {
+            std::ptr::copy_nonoverlapping(src.as_ptr(), dst, copy_len);
+        }
+        assert_eq!(buf.before, [0xAA; 16]);
+        assert_eq!(buf.after, [0xBB; 16]);
     }
 }

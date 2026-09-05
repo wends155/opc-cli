@@ -70,7 +70,7 @@ use opc_da_client::{OpcDaClient, OpcProvider, OpcResult};
 
 #[tokio::main]
 async fn main() -> OpcResult<()> {
-    let client = OpcDaClient::default();
+    let client: OpcDaClient = OpcDaClient::default();
     let servers = client.list_servers("localhost").await?;
 
     println!("Available Servers:");
@@ -90,7 +90,7 @@ use opc_da_client::{OpcDaClient, OpcProvider, OpcResult, ServerIdentifier};
 
 #[tokio::main]
 async fn main() -> OpcResult<()> {
-    let client = OpcDaClient::default();
+    let client: OpcDaClient = OpcDaClient::default();
 
     // Query structured server information (ProgID, CLSID, and human-readable title)
     let server_details = client.list_server_details("localhost").await?;
@@ -118,7 +118,7 @@ use opc_da_client::{
 
 #[tokio::main]
 async fn main() -> OpcResult<()> {
-    let client = OpcDaClient::default();
+    let client: OpcDaClient = OpcDaClient::default();
     let server = "Matrikon.OPC.Simulation.1";
     let tags = vec![
         "Random.Int4".to_string(),
@@ -170,7 +170,7 @@ use opc_da_client::{OpcDaClient, OpcProvider, OpcResult, OpcValue};
 
 #[tokio::main]
 async fn main() -> OpcResult<()> {
-    let client = OpcDaClient::default();
+    let client: OpcDaClient = OpcDaClient::default();
     let server = "Matrikon.OPC.Simulation.1";
 
     let result = client
@@ -194,7 +194,7 @@ use opc_da_client::{OpcDaClient, OpcProvider, OpcResult, TagCollector};
 
 #[tokio::main]
 async fn main() -> OpcResult<()> {
-    let client = OpcDaClient::default();
+    let client: OpcDaClient = OpcDaClient::default();
     let server = "Matrikon.OPC.Simulation.1";
 
     let collector = TagCollector::new(1000);

@@ -14,12 +14,48 @@ use std::fmt;
 ///
 /// ```
 /// use opc_da_client::GroupHandle;
-/// let handle = GroupHandle(123u32);
-/// assert_eq!(handle.0, 123u32);
+/// let handle = GroupHandle::new(123u32);
+/// assert_eq!(handle.as_raw(), 123u32);
 /// ```
 #[repr(transparent)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
-pub struct GroupHandle(pub u32);
+pub struct GroupHandle(u32);
+
+impl GroupHandle {
+    /// Creates a new `GroupHandle` from a raw 32-bit unsigned integer.
+    #[inline]
+    #[must_use]
+    pub const fn new(raw: u32) -> Self {
+        Self(raw)
+    }
+
+    /// Returns the underlying raw 32-bit handle value.
+    #[inline]
+    #[must_use]
+    pub const fn as_raw(self) -> u32 {
+        self.0
+    }
+}
+
+impl From<u32> for GroupHandle {
+    #[inline]
+    fn from(raw: u32) -> Self {
+        Self(raw)
+    }
+}
+
+impl From<GroupHandle> for u32 {
+    #[inline]
+    fn from(handle: GroupHandle) -> Self {
+        handle.0
+    }
+}
+
+impl fmt::Display for GroupHandle {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
 
 /// Opaque handle for an OPC item.
 ///
@@ -30,12 +66,214 @@ pub struct GroupHandle(pub u32);
 ///
 /// ```
 /// use opc_da_client::ItemHandle;
-/// let handle = ItemHandle(456u32);
-/// assert_eq!(handle.0, 456u32);
+/// let handle = ItemHandle::new(456u32);
+/// assert_eq!(handle.as_raw(), 456u32);
 /// ```
 #[repr(transparent)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
-pub struct ItemHandle(pub u32);
+pub struct ItemHandle(u32);
+
+impl ItemHandle {
+    /// Creates a new `ItemHandle` from a raw 32-bit unsigned integer.
+    #[inline]
+    #[must_use]
+    pub const fn new(raw: u32) -> Self {
+        Self(raw)
+    }
+
+    /// Returns the underlying raw 32-bit handle value.
+    #[inline]
+    #[must_use]
+    pub const fn as_raw(self) -> u32 {
+        self.0
+    }
+}
+
+impl From<u32> for ItemHandle {
+    #[inline]
+    fn from(raw: u32) -> Self {
+        Self(raw)
+    }
+}
+
+impl From<ItemHandle> for u32 {
+    #[inline]
+    fn from(handle: ItemHandle) -> Self {
+        handle.0
+    }
+}
+
+impl fmt::Display for ItemHandle {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+// ── Canonical OPC Value Variant ─────────────────────────────────────
+
+/// Canonical OPC DA Data Access value variant.
+///
+/// Encapsulates all standard COM automation data types supported by OPC DA 2.05a / 3.0.
+///
+/// # Examples
+///
+/// ```
+/// use opc_da_client::OpcValue;
+///
+/// let val: OpcValue = "42".parse().unwrap();
+/// assert_eq!(val, OpcValue::Int(42));
+/// assert_eq!(val.as_int(), Some(42));
+/// assert_eq!(val.to_string(), "42");
+/// ```
+#[derive(Debug, Clone, PartialEq)]
+pub enum OpcValue {
+    /// String value (`VT_BSTR`) — server may coerce to target type.
+    String(String),
+    /// 32-bit integer (`VT_I4`).
+    Int(i32),
+    /// 64-bit float (`VT_R8`).
+    Float(f64),
+    /// Boolean (`VT_BOOL`).
+    Bool(bool),
+    /// Empty value (`VT_EMPTY`) — uninitialized or absent variant.
+    Empty,
+    /// Null value (`VT_NULL`) — explicitly null variant.
+    Null,
+}
+
+impl fmt::Display for OpcValue {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::String(s) => write!(f, "{s}"),
+            Self::Int(i) => write!(f, "{i}"),
+            Self::Float(fl) => write!(f, "{fl}"),
+            Self::Bool(b) => write!(f, "{b}"),
+            Self::Empty => write!(f, "Empty"),
+            Self::Null => write!(f, "Null"),
+        }
+    }
+}
+
+impl OpcValue {
+    /// Returns the integer value if this is an [`OpcValue::Int`].
+    #[inline]
+    #[must_use]
+    pub const fn as_int(&self) -> Option<i32> {
+        match self {
+            Self::Int(i) => Some(*i),
+            _ => None,
+        }
+    }
+
+    /// Returns the float value if this is an [`OpcValue::Float`].
+    #[inline]
+    #[must_use]
+    pub const fn as_float(&self) -> Option<f64> {
+        match self {
+            Self::Float(f) => Some(*f),
+            _ => None,
+        }
+    }
+
+    /// Returns the boolean value if this is an [`OpcValue::Bool`].
+    #[inline]
+    #[must_use]
+    pub const fn as_bool(&self) -> Option<bool> {
+        match self {
+            Self::Bool(b) => Some(*b),
+            _ => None,
+        }
+    }
+
+    /// Returns a borrowed string slice if this is an [`OpcValue::String`].
+    #[inline]
+    #[must_use]
+    pub fn as_str(&self) -> Option<&str> {
+        match self {
+            Self::String(s) => Some(s.as_str()),
+            _ => None,
+        }
+    }
+
+    /// Returns `true` if this value is [`OpcValue::Empty`].
+    #[inline]
+    #[must_use]
+    pub const fn is_empty(&self) -> bool {
+        matches!(self, Self::Empty)
+    }
+
+    /// Returns `true` if this value is [`OpcValue::Null`].
+    #[inline]
+    #[must_use]
+    pub const fn is_null(&self) -> bool {
+        matches!(self, Self::Null)
+    }
+}
+
+impl From<i32> for OpcValue {
+    #[inline]
+    fn from(val: i32) -> Self {
+        Self::Int(val)
+    }
+}
+
+impl From<f64> for OpcValue {
+    #[inline]
+    fn from(val: f64) -> Self {
+        Self::Float(val)
+    }
+}
+
+impl From<bool> for OpcValue {
+    #[inline]
+    fn from(val: bool) -> Self {
+        Self::Bool(val)
+    }
+}
+
+impl From<String> for OpcValue {
+    #[inline]
+    fn from(val: String) -> Self {
+        Self::String(val)
+    }
+}
+
+impl From<&str> for OpcValue {
+    #[inline]
+    fn from(val: &str) -> Self {
+        Self::String(val.to_string())
+    }
+}
+
+impl std::str::FromStr for OpcValue {
+    type Err = std::convert::Infallible;
+
+    /// Parses a string into an [`OpcValue`], prioritizing boolean keywords,
+    /// special variants, 32-bit integers, 64-bit floats, and defaulting to string.
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let trimmed = s.trim();
+
+        if trimmed.eq_ignore_ascii_case("true") {
+            return Ok(Self::Bool(true));
+        }
+        if trimmed.eq_ignore_ascii_case("false") {
+            return Ok(Self::Bool(false));
+        }
+        if trimmed.eq_ignore_ascii_case("empty") {
+            return Ok(Self::Empty);
+        }
+        if trimmed.eq_ignore_ascii_case("null") {
+            return Ok(Self::Null);
+        }
+        if let Ok(i) = trimmed.parse::<i32>() {
+            return Ok(Self::Int(i));
+        }
+        if let Ok(f) = trimmed.parse::<f64>() {
+            return Ok(Self::Float(f));
+        }
+        Ok(Self::String(s.to_string()))
+    }
+}
 
 /// Major OPC DA quality status (bits 6-7, mask `0xC0`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
@@ -246,12 +484,27 @@ impl From<OpcQuality> for u16 {
     }
 }
 
-impl From<&str> for OpcQuality {
-    fn from(s: &str) -> Self {
-        match s.to_lowercase().as_str() {
-            "good" => Self::GOOD,
-            "uncertain" => Self::UNCERTAIN,
-            _ => Self::BAD,
+/// Error returned when parsing an invalid quality string.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ParseQualityError(pub String);
+
+impl fmt::Display for ParseQualityError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "Invalid OPC quality string: '{}'", self.0)
+    }
+}
+
+impl std::error::Error for ParseQualityError {}
+
+impl std::str::FromStr for OpcQuality {
+    type Err = ParseQualityError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.trim().to_lowercase().as_str() {
+            "good" => Ok(Self::GOOD),
+            "uncertain" => Ok(Self::UNCERTAIN),
+            "bad" => Ok(Self::BAD),
+            other => Err(ParseQualityError(other.to_string())),
         }
     }
 }
@@ -529,6 +782,24 @@ pub enum ServerIdentifier {
 }
 
 impl ServerIdentifier {
+    /// Returns a borrowed reference to the ProgID if this is a [`ServerIdentifier::ProgId`].
+    #[must_use]
+    pub fn as_prog_id(&self) -> Option<&str> {
+        match self {
+            Self::ProgId(prog_id) => Some(prog_id.as_str()),
+            Self::Clsid(_) => None,
+        }
+    }
+
+    /// Returns a borrowed reference to the CLSID GUID if this is a [`ServerIdentifier::Clsid`].
+    #[must_use]
+    pub const fn as_clsid(&self) -> Option<&windows::core::GUID> {
+        match self {
+            Self::Clsid(guid) => Some(guid),
+            Self::ProgId(_) => None,
+        }
+    }
+
     /// Returns `true` if this identifier is a direct [`ServerIdentifier::Clsid`].
     #[must_use]
     pub fn is_clsid(&self) -> bool {
@@ -775,11 +1046,14 @@ mod tests {
 
     #[test]
     fn test_opc_quality_from_str() {
-        assert_eq!(OpcQuality::from("good"), OpcQuality::GOOD);
-        assert_eq!(OpcQuality::from("Good"), OpcQuality::GOOD);
-        assert_eq!(OpcQuality::from("bad"), OpcQuality::BAD);
-        assert_eq!(OpcQuality::from("uncertain"), OpcQuality::UNCERTAIN);
-        assert_eq!(OpcQuality::from("other"), OpcQuality::BAD);
+        assert_eq!("good".parse::<OpcQuality>().unwrap(), OpcQuality::GOOD);
+        assert_eq!("Good".parse::<OpcQuality>().unwrap(), OpcQuality::GOOD);
+        assert_eq!("bad".parse::<OpcQuality>().unwrap(), OpcQuality::BAD);
+        assert_eq!(
+            "uncertain".parse::<OpcQuality>().unwrap(),
+            OpcQuality::UNCERTAIN
+        );
+        assert!("other".parse::<OpcQuality>().is_err());
     }
 
     #[test]

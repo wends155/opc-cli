@@ -80,7 +80,7 @@ impl ServerConnector for ComConnector {
         // SAFETY: Calling COM method EnumClassesOfCategories with valid version GUID slice.
         let iter = unsafe {
             servers
-                .EnumClassesOfCategories(&versions, &versions)
+                .EnumClassesOfCategories(&versions, &[])
                 .inspect_err(|e| tracing::warn!(error = ?e, "Failed to enumerate server classes"))?
         };
 
@@ -217,18 +217,18 @@ impl ConnectedServer for ComServer {
     #[tracing::instrument(level = "info", skip(self), err)]
     fn add_group(&self, config: &GroupConfig<'_>) -> OpcResult<CreatedGroup<Self::Group>> {
         let mut group = None;
-        let group_name = LocalPointer::from(config.name);
-        let group_name = group_name.as_pcwstr();
+        let group_name_buf = LocalPointer::from(config.name);
+        let group_name_ptr = group_name_buf.as_pcwstr();
 
         let mut raw_server_handle = 0u32;
         let mut revised_update_rate = 0u32;
         // SAFETY: Calling COM interface method AddGroup with valid parameters and output pointers.
         unsafe {
             self.server.AddGroup(
-                group_name,
+                group_name_ptr,
                 config.active,
                 config.update_rate_ms,
-                config.client_handle.0,
+                config.client_handle.as_raw(),
                 &raw const config.time_bias,
                 &raw const config.percent_deadband,
                 config.locale_id,
@@ -252,7 +252,7 @@ impl ConnectedServer for ComServer {
 
                 Ok(CreatedGroup {
                     group,
-                    server_handle: GroupHandle(raw_server_handle),
+                    server_handle: GroupHandle::new(raw_server_handle),
                     revised_update_rate_ms: revised_update_rate,
                 })
             }
@@ -263,7 +263,7 @@ impl ConnectedServer for ComServer {
     fn remove_group(&self, server_group: GroupHandle, force: bool) -> OpcResult<()> {
         // SAFETY: Calling COM interface method RemoveGroup with server handle.
         unsafe {
-            self.server.RemoveGroup(server_group.0, force)?;
+            self.server.RemoveGroup(server_group.as_raw(), force)?;
         }
         Ok(())
     }

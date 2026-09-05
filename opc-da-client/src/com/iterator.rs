@@ -1,18 +1,10 @@
-#![allow(
-    unused_mut,
-    clippy::borrow_as_ptr,
-    clippy::cast_possible_truncation,
-    clippy::cast_sign_loss,
-    clippy::ignored_unit_patterns,
-    clippy::ptr_as_ptr,
-    clippy::undocumented_unsafe_blocks
-)]
-
 use crate::com::memory::{RemoteArray, RemotePointer, TryToLocal as _};
 use crate::errors::OpcResult;
 
 const MAX_CACHE_SIZE: usize = 16;
+const MAX_CACHE_SIZE_U32: u32 = 16;
 const STRING_CACHE_SIZE: usize = 256;
+const STRING_CACHE_SIZE_U32: u32 = 256;
 
 /// Iterator over COM GUIDs from IEnumGUID.  
 ///
@@ -32,7 +24,7 @@ impl GuidIterator {
         Self {
             inner,
             cache: Box::from([windows::core::GUID::zeroed(); MAX_CACHE_SIZE]),
-            index: MAX_CACHE_SIZE as u32,
+            index: MAX_CACHE_SIZE_U32,
             count: 0,
             done: false,
         }
@@ -51,7 +43,7 @@ impl Iterator for GuidIterator {
             // SAFETY: Calling IEnumGUID::Next COM interface method with valid mutable cache slice and count pointer.
             let code = unsafe {
                 self.inner
-                    .Next(self.cache.as_mut_slice(), Some(&mut self.count))
+                    .Next(self.cache.as_mut_slice(), Some(&raw mut self.count))
             };
 
             if code.is_ok() {
@@ -109,7 +101,7 @@ impl StringIterator {
             source: StringIteratorSource::Com {
                 inner,
                 cache: Box::new([windows::core::PWSTR::null(); STRING_CACHE_SIZE]),
-                index: STRING_CACHE_SIZE as u32,
+                index: STRING_CACHE_SIZE_U32,
                 count: 0,
             },
             done: false,
@@ -219,6 +211,32 @@ impl Iterator for StringIterator {
     }
 }
 
+impl Drop for StringIterator {
+    fn drop(&mut self) {
+        if let StringIteratorSource::Com {
+            cache,
+            index,
+            count,
+            ..
+        } = &mut self.source
+        {
+            let start = (*index as usize).min(cache.len());
+            let end = (*count as usize).min(cache.len());
+            if start < end {
+                for pwstr in &mut cache[start..end] {
+                    if !pwstr.is_null() {
+                        // SAFETY: pwstr was allocated by COM IEnumString::Next via CoTaskMemAlloc.
+                        unsafe {
+                            windows::Win32::System::Com::CoTaskMemFree(Some(pwstr.0 as _));
+                        }
+                        *pwstr = windows::core::PWSTR::null();
+                    }
+                }
+            }
+        }
+    }
+}
+
 pub struct GroupIterator<Group: TryFrom<windows::core::IUnknown, Error = windows::core::Error>> {
     inner: windows::Win32::System::Com::IEnumUnknown,
     cache: Box<[Option<windows::core::IUnknown>; MAX_CACHE_SIZE]>,
@@ -233,7 +251,7 @@ impl<Group: TryFrom<windows::core::IUnknown, Error = windows::core::Error>> Grou
         Self {
             inner,
             cache: Box::from([const { None }; MAX_CACHE_SIZE]),
-            index: MAX_CACHE_SIZE as u32,
+            index: MAX_CACHE_SIZE_U32,
             count: 0,
             done: false,
             _mark: std::marker::PhantomData,
@@ -255,7 +273,7 @@ impl<Group: TryFrom<windows::core::IUnknown, Error = windows::core::Error>> Iter
             // SAFETY: Calling IEnumUnknown::Next COM interface method with valid mutable cache slice and count pointer.
             let code = unsafe {
                 self.inner
-                    .Next(self.cache.as_mut_slice(), Some(&mut self.count))
+                    .Next(self.cache.as_mut_slice(), Some(&raw mut self.count))
             };
 
             if code.is_ok() {
@@ -294,15 +312,17 @@ impl<Group: TryFrom<windows::core::IUnknown, Error = windows::core::Error>> Iter
 }
 
 // for crate::raw::bindings::da::IEnumOPCItemAttributes
-pub struct ItemAttributeIterator {
+#[allow(dead_code)]
+pub(crate) struct ItemAttributeIterator {
     inner: crate::raw::bindings::da::IEnumOPCItemAttributes,
     cache: RemoteArray<crate::raw::bindings::da::tagOPCITEMATTRIBUTES>,
     index: u32,
     done: bool,
 }
 
+#[allow(dead_code)]
 impl ItemAttributeIterator {
-    pub fn new(inner: crate::raw::bindings::da::IEnumOPCItemAttributes) -> Self {
+    pub(crate) fn new(inner: crate::raw::bindings::da::IEnumOPCItemAttributes) -> Self {
         Self {
             inner,
             cache: RemoteArray::empty(),
@@ -321,19 +341,19 @@ impl Iterator for ItemAttributeIterator {
         }
 
         if self.index >= self.cache.len() {
-            let mut attrs = RemoteArray::new(MAX_CACHE_SIZE as u32);
+            let mut attrs = RemoteArray::new(MAX_CACHE_SIZE_U32);
 
             // SAFETY: Calling IEnumOPCItemAttributes::Next COM interface method with valid output array pointers.
             let result = unsafe {
                 self.inner.Next(
-                    MAX_CACHE_SIZE as u32,
+                    MAX_CACHE_SIZE_U32,
                     attrs.as_mut_ptr(),
                     attrs.as_mut_len_ptr(),
                 )
             };
 
             match result {
-                Ok(_) => {
+                Ok(()) => {
                     if attrs.is_empty() {
                         self.done = true;
                         return None;
@@ -386,15 +406,20 @@ mod tests {
         ) -> windows::core::HRESULT {
             let mut fetched = 0;
             let index = self.index.load(std::sync::atomic::Ordering::Relaxed);
+            // SAFETY: Caller guarantees rgelt points to a valid buffer of length celt.
             let rgelt = unsafe { std::slice::from_raw_parts_mut(rgelt, celt as usize) };
 
             for i in 0..celt as usize {
                 if index + i < self.items.len() {
                     let s = &self.items[index + i];
-                    let mut w: Vec<u16> = s.encode_utf16().chain(std::iter::once(0)).collect();
+                    let w: Vec<u16> = s.encode_utf16().chain(std::iter::once(0)).collect();
+                    // SAFETY: CoTaskMemAlloc allocates COM memory.
                     let ptr = unsafe { windows::Win32::System::Com::CoTaskMemAlloc(w.len() * 2) };
-                    unsafe { std::ptr::copy_nonoverlapping(w.as_ptr(), ptr as *mut u16, w.len()) };
-                    rgelt[i] = PWSTR(ptr as *mut u16);
+                    // SAFETY: Copies UTF-16 code units into newly allocated COM buffer.
+                    unsafe {
+                        std::ptr::copy_nonoverlapping(w.as_ptr(), ptr.cast::<u16>(), w.len());
+                    };
+                    rgelt[i] = PWSTR(ptr.cast::<u16>());
                     fetched += 1;
                 } else {
                     break;
@@ -405,7 +430,8 @@ mod tests {
                 .store(index + fetched, std::sync::atomic::Ordering::Relaxed);
 
             if !pceltfetched.is_null() {
-                unsafe { *pceltfetched = fetched as u32 };
+                // SAFETY: Caller provided non-null pceltfetched pointer.
+                unsafe { *pceltfetched = u32::try_from(fetched).unwrap_or(0) };
             }
 
             if fetched == celt as usize {
@@ -474,15 +500,20 @@ mod tests {
         ) -> windows::core::HRESULT {
             let mut fetched = 0;
             let index = self.index.load(std::sync::atomic::Ordering::Relaxed);
+            // SAFETY: Caller guarantees rgelt points to a valid buffer of length celt.
             let rgelt = unsafe { std::slice::from_raw_parts_mut(rgelt, celt as usize) };
 
             for i in 0..celt as usize {
                 if index + i < self.items.len() {
                     let s = &self.items[index + i];
                     let w: Vec<u16> = s.encode_utf16().chain(std::iter::once(0)).collect();
+                    // SAFETY: CoTaskMemAlloc allocates COM memory.
                     let ptr = unsafe { windows::Win32::System::Com::CoTaskMemAlloc(w.len() * 2) };
-                    unsafe { std::ptr::copy_nonoverlapping(w.as_ptr(), ptr as *mut u16, w.len()) };
-                    rgelt[i] = PWSTR(ptr as *mut u16);
+                    // SAFETY: Copies UTF-16 code units into newly allocated COM buffer.
+                    unsafe {
+                        std::ptr::copy_nonoverlapping(w.as_ptr(), ptr.cast::<u16>(), w.len());
+                    };
+                    rgelt[i] = PWSTR(ptr.cast::<u16>());
                     fetched += 1;
                 } else {
                     break;
@@ -494,11 +525,12 @@ mod tests {
 
             // Lie about the count: claim extra null entries (only on non-empty batches)
             let reported = if fetched > 0 {
-                (fetched as u32) + self.extra_nulls
+                u32::try_from(fetched).unwrap_or(0) + self.extra_nulls
             } else {
                 0
             };
             if !pceltfetched.is_null() {
+                // SAFETY: Caller provided non-null pceltfetched pointer.
                 unsafe { *pceltfetched = reported.min(celt) };
             }
 
@@ -581,5 +613,36 @@ mod tests {
         let empty_iter = StringIterator::from_vec(Vec::new());
         let empty_results: Vec<String> = empty_iter.collect::<Result<Vec<_>, _>>().unwrap();
         assert!(empty_results.is_empty());
+    }
+
+    #[test]
+    fn test_string_iterator_drop_frees_unconsumed_cached_strings() {
+        let items = vec![
+            "Item1".to_string(),
+            "Item2".to_string(),
+            "Item3".to_string(),
+            "Item4".to_string(),
+        ];
+        let mock_enum: IEnumString = MockEnumString {
+            items,
+            index: std::sync::atomic::AtomicUsize::new(0),
+        }
+        .into();
+
+        {
+            let mut iter = StringIterator::new(mock_enum);
+            let first = iter.next().expect("should have first item").unwrap();
+            assert_eq!(first, "Item1");
+            // Remaining 3 items are sitting in cache and must be freed when iter is dropped here
+        }
+    }
+
+    #[test]
+    fn test_string_iterator_in_memory_drop() {
+        let items = vec!["A".to_string(), "B".to_string()];
+        let mut iter = StringIterator::from_vec(items);
+        assert_eq!(iter.next().unwrap().unwrap(), "A");
+        // Dropping in-memory iterator should not panic or call CoTaskMemFree
+        drop(iter);
     }
 }

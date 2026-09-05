@@ -56,30 +56,30 @@ opc-cli/
 │   ├── architecture.md         # Library technical architecture specification
 │   ├── spec.md                 # Library behavioral contracts
 │   └── src/
-│       ├── lib.rs              # Library root & public re-exports
-│       ├── provider.rs         # OpcProvider trait, TagValue, OpcValue, WriteResult, TagCollector, OpcServerInfo, OpcServerEndpoint
-│       ├── types.rs            # Canonical protocol types, handles, ServerIdentifier, and browse enums
-│       ├── errors.rs           # Canonical OpcError, OpcResult, OpcOperation, and log_opc_err!
+│       ├── lib.rs              # Library root & public re-exports (zero unreachables, Default MockOpcDaClient)
+│       ├── provider.rs         # OpcProvider trait (read_tag_value, write_tag_values), TagValue, WriteResult, TagCollector (re-exports OpcValue)
+│       ├── types.rs            # Canonical domain types (OpcValue, OpcQuality with FromStr), handles (GroupHandle, ItemHandle), ServerIdentifier, browse enums
+│       ├── errors.rs           # Canonical OpcError (is_connection_error), OpcResult, OpcOperation, and log_opc_err!
 │       ├── com/                # COM subsystem (feature: opc-da-backend)
 │       │   ├── mod.rs          # COM module root & re-exports
 │       │   ├── client.rs       # OpcDaClient implementation
-│       │   ├── connector.rs    # Slim coordinator facade (re-exports submodules)
+│       │   ├── connector.rs    # Slim coordinator facade (pure connector submodules, zero raw::memory leak)
 │       │   ├── connector/      # Dedicated single-responsibility connector submodules
-│       │   │   ├── traits.rs   # Core traits (ServerConnector, ConnectedServer, ConnectedGroup) & pure-Rust DTOs
+│       │   │   ├── traits.rs   # Core traits (ServerConnector, ConnectedServer, ConnectedGroup), GroupConfig::ephemeral, pure-Rust DTOs
 │       │   │   ├── server.rs   # Win32 COM server connection & namespace navigation (ComConnector, ComServer)
-│       │   │   ├── group.rs    # Win32 COM group item registration & I/O (ComGroup) with RAII VARIANT guards
-│       │   │   └── mock.rs     # Pure-Rust mock infrastructure (MockServerConnector, MockConnectedServer, MockConnectedGroup)
+│       │   │   ├── group.rs    # Win32 COM group item registration & I/O (ComGroup) with RAII ItemResultsBlobGuard & VARIANT guards
+│       │   │   └── mock.rs     # Pure-Rust mock infrastructure (MockServerConnector, MockConnectedServer, MockConnectedGroup) with fluent builders
 │       │   ├── discovery.rs    # Server discovery, OpcServerListCatalog, registry inspection, guid_to_progid
 │       │   ├── guard.rs        # RAII COM initialization/teardown (ComGuard), group cleanup (GroupGuard), and browse cursor protection (BrowsePositionGuard)
-│       │   ├── iterator.rs     # COM enumerators (StringIterator, GuidIterator)
-│       │   ├── variant.rs      # Win32 VARIANT & SafeArray conversion to/from OpcValue and string
-│       │   ├── worker.rs       # Slim worker facade & ComRequest event loop (ComWorker)
+│       │   ├── iterator.rs     # COM enumerators (StringIterator with RAII drop cleanup, GuidIterator)
+│       │   ├── variant.rs      # Win32 VARIANT & SafeArray conversion, ItemStatesGuard (VariantClear iff ok), ScopedVariant
+│       │   ├── worker.rs       # Slim worker facade & ComRequest event loop (ComWorker) with 2-tier catch_unwind & request prioritization
 │       │   └── worker/         # Dedicated single-responsibility worker engines
-│       │       ├── pool.rs     # Connection caching, eviction & retry dispatch (dispatch_with_retry)
-│       │       ├── read.rs     # Synchronous tag reading engine with in-place mutation (handle_read)
-│       │       ├── write.rs    # Synchronous tag writing engine with error mapping (handle_write)
-│       │       ├── browse.rs   # Flat/hierarchical namespace traversal with RAII cursor protection (handle_browse)
-│       │       └── tests.rs    # Dedicated worker test suite & mock fixtures (22 unit tests)
+│       │       ├── pool.rs     # Connection caching, active group reuse, eviction & retry dispatch (dispatch_with_retry)
+│       │       ├── read.rs     # Synchronous tag reading engine with in-place mutation and zip iteration (handle_read)
+│       │       ├── write.rs    # Synchronous tag writing engine with error mapping and ephemeral group config (handle_write)
+│       │       ├── browse.rs   # Flat/hierarchical namespace traversal with cooperative chunking & TagCollector::harvest (handle_browse)
+│       │       └── tests.rs    # Dedicated worker test suite & mock fixtures (panic recovery tests, 0 warnings)
 │       └── raw/                # Crate-internal low-level FFI subsystem (pub(crate))
 │           ├── mod.rs          # Raw module root
 │           ├── bindings/       # Frozen COM bindings (windgen output, read-only: da, comn)
@@ -102,19 +102,19 @@ opc-cli/
 ## 5. Module Boundaries
 
 ### `opc-cli` (TUI Application)
-- **Owns**: Terminal UI rendering, keyboard input handling, navigation state machine, background async task spawning (`tokio::spawn`), status bar notifications.
+- **Owns**: Terminal UI rendering, keyboard input handling, navigation state machine, background async task spawning (`tokio::spawn`), status bar notifications, and context-aware write parsing with boolean coercion (`App::resolve_write_value`).
 - **Does NOT Own**: Raw COM initialization, registry enumeration, OPC group creation, HRESULT interpretation logic.
 - **Trait Interfaces**: Consumes `dyn OpcProvider` asynchronously.
 - **Mock Availability**: Fully mockable via `MockOpcProvider` (compiled when `feature = "test-support"` is active in `opc-da-client`).
 
 ### `opc-da-client` (Core Client Library)
-- **Owns**: Public API (`OpcProvider`), canonical identity types (`ServerIdentifier`, `OpcServerInfo`, `OpcServerEndpoint`), data structs (`TagValue`, `OpcValue`, `WriteResult`, `TagCollector`), error definitions (`OpcError`), inherent diagnostic method (`OpcError::friendly_hint`), RAII group and cursor management (`GroupGuard`, `BrowsePositionGuard`), server discovery (`com::discovery`), and modular connector coordinator facade (`com::connector`).
+- **Owns**: Public API (`OpcProvider` with `read_tag_value` and `write_tag_values` defaults), canonical domain types in `types.rs` (`OpcValue`, `OpcQuality` with `FromStr`, `ServerIdentifier`, encapsulated `GroupHandle` and `ItemHandle`), data structs (`TagValue`, `WriteResult`, `TagCollector` with $O(1)$ `harvest`), error definitions (`OpcError::is_connection_error`), inherent diagnostic method (`OpcError::friendly_hint`), RAII group and cursor management (`GroupGuard`, `BrowsePositionGuard`), server discovery (`com::discovery`), and modular connector coordinator facade (`com::connector`).
 - **Does NOT Own**: Terminal rendering, direct COM worker loop implementation.
 - **Trait Interfaces**: Exports `OpcProvider`.
-- **Mock Availability**: Provides `MockOpcProvider` via `mockall`, and exports `MockOpcDaClient` type alias under `all(feature = "test-support", feature = "opc-da-backend")`.
+- **Mock Availability**: Provides `MockOpcProvider` via `mockall`, and exports `MockOpcDaClient` type alias and `Default` implementation under `all(feature = "test-support", feature = "opc-da-backend")`.
 
 ### `ComWorker` (MTA Worker Thread Pool)
-- **Owns**: Dedicated OS background thread, `CoInitializeEx(MTA)` lifecycle (`ComGuard`), connection pool caching keyed by `ServerIdentifier` (`HashMap<ServerIdentifier, Server>`), transparent stale connection eviction on RPC errors (`0x800706BA`), and modular worker dispatch engines (`pool::dispatch_with_retry`, `read::handle_read`, `write::handle_write`, `browse::handle_browse`).
+- **Owns**: Dedicated OS background thread, 2-tier `catch_unwind` panic resilience with priority queue dispatch favoring reads and writes over background browses, `CoInitializeEx(MTA)` lifecycle (`ComGuard`), connection pool caching keyed by `ServerIdentifier` with active group reuse, transparent stale connection eviction on RPC errors (`0x800706BA`), and modular worker dispatch engines (`pool::dispatch_with_retry`, `read::handle_read`, `write::handle_write`, `browse::handle_browse`).
 - **Does NOT Own**: TUI state, UI rendering, high-level task timeouts.
 - **Trait Interfaces**: Uses internal `ServerConnector` trait and connector submodules (`com::connector::{traits, server, group, mock}`).
 - **Mock Availability**: Fully unit-tested via modular `MockServerConnector` (exported under `feature = "test-support"`).

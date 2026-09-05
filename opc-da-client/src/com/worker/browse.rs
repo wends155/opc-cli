@@ -33,7 +33,7 @@ pub fn handle_browse<S: ConnectedServer>(
     let start = std::time::Instant::now();
 
     if collector.is_cancelled() || collector.is_full() {
-        return Ok(collector.snapshot());
+        return Ok(collector.harvest());
     }
 
     let org = opc_server.query_organization().inspect_err(|e| {
@@ -110,7 +110,7 @@ pub fn handle_browse<S: ConnectedServer>(
             browse_recursive(opc_server, collector, 0)?;
         }
     }
-    let result = collector.snapshot();
+    let result = collector.harvest();
     tracing::info!(
         count = result.len(),
         elapsed_ms = super::elapsed_ms(start),
@@ -183,6 +183,9 @@ fn browse_recursive<S: ConnectedServer>(
             return Ok(());
         }
 
+        // Cooperative yield between branches to prevent HoL starvation of high-priority reads/writes
+        std::thread::yield_now();
+
         let guard = match BrowsePositionGuard::enter(server, &branch) {
             Ok(g) => g,
             Err(e) => {
@@ -208,4 +211,35 @@ fn browse_recursive<S: ConnectedServer>(
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::com::connector::mock::MockConnectedServer;
+
+    #[test]
+    fn test_handle_browse_harvests_tags() {
+        let server = MockConnectedServer::default();
+        let server_id = ServerIdentifier::from("Test.Server");
+        let collector = TagCollector::new(100);
+
+        let tags = handle_browse(&server_id, &collector, &server)
+            .expect("browse operation should succeed");
+        assert!(!tags.is_empty());
+        // Since tags were harvested, collector should now be empty
+        assert_eq!(collector.len(), 0);
+    }
+
+    #[test]
+    fn test_handle_browse_cancelled_returns_harvest() {
+        let server = MockConnectedServer::default();
+        let server_id = ServerIdentifier::from("Test.Server");
+        let collector = TagCollector::new(100);
+        collector.cancel();
+
+        let tags = handle_browse(&server_id, &collector, &server)
+            .expect("cancelled browse should return empty ok");
+        assert!(tags.is_empty());
+    }
 }

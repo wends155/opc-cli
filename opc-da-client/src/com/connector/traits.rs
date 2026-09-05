@@ -5,9 +5,9 @@
 
 use crate::com::iterator::StringIterator;
 use crate::errors::{OpcError, OpcResult};
-use crate::provider::{OpcQuality, OpcValue};
 use crate::types::{
-    BrowseDirection, BrowseType, GroupHandle, ItemHandle, OpcServerInfo, ServerIdentifier,
+    BrowseDirection, BrowseType, GroupHandle, ItemHandle, OpcQuality, OpcServerInfo, OpcValue,
+    ServerIdentifier,
 };
 
 // ── Pure-Rust Data Transfer Objects ────────────────────────────────
@@ -76,6 +76,50 @@ pub struct GroupConfig<'a> {
     pub locale_id: u32,
 }
 
+impl<'a> GroupConfig<'a> {
+    /// Creates an ephemeral, active group configuration with standard defaults.
+    #[must_use]
+    pub const fn ephemeral(name: &'a str) -> Self {
+        Self {
+            name,
+            active: true,
+            update_rate_ms: 1000,
+            client_handle: GroupHandle::new(1),
+            time_bias: 0,
+            percent_deadband: 0.0,
+            locale_id: 0,
+        }
+    }
+
+    /// Sets the requested update rate in milliseconds.
+    #[must_use]
+    pub const fn with_update_rate(mut self, update_rate_ms: u32) -> Self {
+        self.update_rate_ms = update_rate_ms;
+        self
+    }
+
+    /// Sets the client-assigned group handle.
+    #[must_use]
+    pub const fn with_client_handle(mut self, client_handle: GroupHandle) -> Self {
+        self.client_handle = client_handle;
+        self
+    }
+
+    /// Sets whether the group is active.
+    #[must_use]
+    pub const fn with_active(mut self, active: bool) -> Self {
+        self.active = active;
+        self
+    }
+
+    /// Sets the percent deadband for analog items.
+    #[must_use]
+    pub const fn with_percent_deadband(mut self, percent_deadband: f32) -> Self {
+        self.percent_deadband = percent_deadband;
+        self
+    }
+}
+
 /// Output wrapper returned when an OPC group is added.
 pub struct CreatedGroup<G> {
     /// Connected group instance.
@@ -125,25 +169,20 @@ pub trait ServerConnector: Send + Sync {
             .collect())
     }
 
-    /// Connect to the named OPC DA server and return a server facade.
-    ///
-    /// # Errors
-    /// Returns an [`OpcError`] if connection fails.
-    fn connect(&self, server_name: &str) -> OpcResult<Self::Server>;
-
     /// Connect to an OPC DA server specified by a [`ServerIdentifier`].
     ///
-    /// The default implementation delegates to [`Self::connect`] using the string representation.
+    /// # Errors
+    /// Returns an [`OpcError`] if connection fails.
+    fn connect_identifier(&self, identifier: &ServerIdentifier) -> OpcResult<Self::Server>;
+
+    /// Connect to the named OPC DA server and return a server facade.
+    ///
+    /// The default implementation delegates to [`Self::connect_identifier`] with a [`ServerIdentifier::ProgId`].
     ///
     /// # Errors
     /// Returns an [`OpcError`] if connection fails.
-    fn connect_identifier(&self, identifier: &ServerIdentifier) -> OpcResult<Self::Server> {
-        match identifier {
-            ServerIdentifier::ProgId(prog_id) => self.connect(prog_id),
-            ServerIdentifier::Clsid(guid) => {
-                self.connect(&crate::types::format_guid_bracketed(guid))
-            }
-        }
+    fn connect(&self, server_name: &str) -> OpcResult<Self::Server> {
+        self.connect_identifier(&ServerIdentifier::ProgId(server_name.to_string()))
     }
 }
 
@@ -222,4 +261,26 @@ pub trait ConnectedGroup {
         server_handles: &[ItemHandle],
         values: &[OpcValue],
     ) -> OpcResult<Vec<Result<(), OpcError>>>;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_group_config_ephemeral_and_builders() {
+        let config = GroupConfig::ephemeral("TestGroup")
+            .with_update_rate(500)
+            .with_client_handle(GroupHandle::new(42))
+            .with_active(false)
+            .with_percent_deadband(0.5);
+
+        assert_eq!(config.name, "TestGroup");
+        assert!(!config.active);
+        assert_eq!(config.update_rate_ms, 500);
+        assert_eq!(config.client_handle, GroupHandle::new(42));
+        assert!((config.percent_deadband - 0.5).abs() < f32::EPSILON);
+        assert_eq!(config.time_bias, 0);
+        assert_eq!(config.locale_id, 0);
+    }
 }

@@ -25,7 +25,9 @@ All methods use `#[async_trait]`.
 | `list_server_details` | `async fn list_server_details(&self, host: &str) -> OpcResult<Vec<OpcServerInfo>>` | Enumerate OPC DA servers on `host` with rich metadata (`ProgID`, `CLSID`, user-readable name). Default implementation synthesizes records wrapping `list_servers`. |
 | `browse_tags` | `async fn browse_tags(&self, server: &str, collector: TagCollector) -> OpcResult<Vec<String>>` | Recursively discover tags on `server`, pushing each to `collector` as found. |
 | `read_tag_values` | `async fn read_tag_values(&self, server: &str, tag_ids: Vec<String>) -> OpcResult<Vec<TagValue>>` | Read current value, quality, and timestamp for the given tag IDs. |
+| `read_tag_value` | `async fn read_tag_value(&self, server: &str, tag_id: &str) -> OpcResult<Option<TagValue>>` | Convenience helper to read a single tag on `server`. Default implementation delegates to `read_tag_values`. |
 | `write_tag_value` | `async fn write_tag_value(&self, server: &str, tag_id: &str, value: OpcValue) -> OpcResult<WriteResult>` | Write a typed value to a single tag on `server`. |
+| `write_tag_values` | `async fn write_tag_values(&self, server: &str, writes: &[(&str, OpcValue)]) -> OpcResult<Vec<WriteResult>>` | Convenience helper to write multiple tags sequentially on `server`. Default implementation iterates over `write_tag_value`. |
 
 **Error Conditions:**
 
@@ -424,9 +426,10 @@ Before calling `browse_recursive`, `browse_tags` attempts `browse_opc_item_ids(B
 
 #### Public API
 
-- `GroupHandle(pub u32)`: Opaque, type-safe newtype wrapper for server/client group handles.
-- `ItemHandle(pub u32)`: Opaque, type-safe newtype wrapper for server/client item handles.
-- `OpcQuality`: Fully decomposed, zero-allocation 16-bit OPC DA quality word (`major: QualityMajor`, `substatus: QualitySubstatus`, `limit: QualityLimit`, `raw: u16`). Implements `From<u16>`, `From<OpcQuality> for u16`, `Display` (rich human-readable diagnostics), `From<&str>`, and predicates (`is_good`, `is_bad`, `is_uncertain`, `is_limited`).
+- `GroupHandle`: Encapsulated opaque newtype with private inner `.0`, constructor `new(u32)`, and accessors `as_u32(&self) -> u32`, `into_u32(self) -> u32`.
+- `ItemHandle`: Encapsulated opaque newtype with private inner `.0`, constructor `new(u32)`, and accessors `as_u32(&self) -> u32`, `into_u32(self) -> u32`.
+- `OpcQuality`: Fully decomposed, zero-allocation 16-bit OPC DA quality word (`major: QualityMajor`, `substatus: QualitySubstatus`, `limit: QualityLimit`, `raw: u16`). Implements `From<u16>`, `From<OpcQuality> for u16`, `Display` (rich human-readable diagnostics), `std::str::FromStr` returning `Result<Self, OpcQualityParseError>`, and predicates (`is_good`, `is_bad`, `is_uncertain`, `is_limited`).
+- `OpcValue`: Canonical domain value enum (`String(String)`, `Int(i32)`, `Float(f64)`, `Bool(bool)`, `Empty`, `Null`). Implements `std::str::FromStr`, `From` for primitive types, and typed accessors (`as_str`, `as_i32`, `as_f64`, `as_bool`, `is_empty`, `is_null`).
 - `QualityMajor`: Major OPC DA quality status (`Good`, `Bad`, `Uncertain`, `Unknown(u8)`).
 - `QualitySubstatus`: Detailed substatus reason code (all OPC DA 2.05a codes: `NonSpecific`, `ConfigurationError`, `NotConnected`, `DeviceFailure`, `SensorFailure`, `LastKnownValue`, `CommFailure`, `OutOfService`, `WaitingForInitialData`, `LastUsableValue`, `SensorCalNeeded`, `EguExceeded`, `SubNormal`, `LocalOverride`, and `Raw(u8)`).
 - `QualityLimit`: Limit conditions on the tag value (`NotLimited`, `LowLimited`, `HighLimited`, `Constant`).
@@ -524,7 +527,7 @@ Before calling `browse_recursive`, `browse_tags` attempts `browse_opc_item_ids(B
 **Purpose:** Pure-Rust facade traits, DTOs, and concrete Win32 COM / mock implementations partitioned into cohesive single-responsibility submodules:
 
 * `com::connector::traits`:
-  - `ServerConnector`: Discovers servers via `enumerate_servers()` and `enumerate_server_details(host: &str) -> OpcResult<Vec<OpcServerInfo>>`, and connects via `connect(name)` and `connect_identifier(&ServerIdentifier)`. Implemented by `ComConnector` and `MockServerConnector`.
+  - `ServerConnector`: Discovers servers via `enumerate_servers()` and `enumerate_server_details(host: &str) -> OpcResult<Vec<OpcServerInfo>>`, and connects via `connect_identifier(&ServerIdentifier)` (primary required method) and `connect(name)` (default convenience method delegating to `connect_identifier`). Implemented by `ComConnector` and `MockServerConnector`.
   - `ConnectedServer`: Introspects server namespace and adds/removes groups using `GroupConfig` and `CreatedGroup`. Implemented by `ComServer` and `MockConnectedServer`. Supports in-memory tag browsing via `StringIterator::from_vec`.
   - `ConnectedGroup`: Pure-Rust facade over OPC DA groups:
     - `add_items(&self, items: &[GroupItemDef]) -> OpcResult<Vec<GroupItemResult>>`

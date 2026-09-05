@@ -8,10 +8,33 @@ use crate::com::connector::traits::{
 };
 use crate::com::variant::{ItemStatesGuard, ScopedVariant};
 use crate::errors::{OpcError, OpcResult};
-use crate::provider::{OpcQuality, OpcValue};
 use crate::raw::memory::{LocalPointer, RemoteArray};
-use crate::types::ItemHandle;
+use crate::types::{ItemHandle, OpcQuality, OpcValue};
 use windows::core::Interface;
+
+/// RAII guard ensuring each `pBlob` in `tagOPCITEMRESULT` is freed via `CoTaskMemFree`.
+struct ItemResultsBlobGuard<'a>(&'a mut [crate::raw::bindings::da::tagOPCITEMRESULT]);
+
+impl<'a> ItemResultsBlobGuard<'a> {
+    fn new(results: &'a mut [crate::raw::bindings::da::tagOPCITEMRESULT]) -> Self {
+        Self(results)
+    }
+}
+
+impl Drop for ItemResultsBlobGuard<'_> {
+    fn drop(&mut self) {
+        for res in self.0.iter_mut() {
+            if !res.pBlob.is_null() && res.dwBlobSize > 0 {
+                // SAFETY: pBlob was allocated by the OPC COM server via CoTaskMemAlloc.
+                unsafe {
+                    windows::Win32::System::Com::CoTaskMemFree(Some(res.pBlob as _));
+                }
+                res.pBlob = std::ptr::null_mut();
+                res.dwBlobSize = 0;
+            }
+        }
+    }
+}
 
 /// COM-backed [`ConnectedGroup`].
 #[allow(dead_code)]
@@ -51,7 +74,7 @@ impl ConnectedGroup for ComGroup {
                 szAccessPath: windows::core::PWSTR::null(),
                 szItemID: wide_names[i].as_pwstr(),
                 bActive: item.active.into(),
-                hClient: item.client_handle.0,
+                hClient: item.client_handle.as_raw(),
                 vtRequestedDataType: 0,
                 dwBlobSize: 0,
                 pBlob: std::ptr::null_mut(),
@@ -72,11 +95,19 @@ impl ConnectedGroup for ComGroup {
             )?;
         }
 
-        let results_slice = results.as_slice();
+        let results_guard = ItemResultsBlobGuard::new(results.as_mut_slice());
+        let results_slice = &*results_guard.0;
         let errors_slice = errors.as_slice();
+
+        if results_slice.len() < items.len() || errors_slice.len() < items.len() {
+            return Err(OpcError::InvalidState(
+                "COM server returned fewer item results or errors than requested items".to_string(),
+            ));
+        }
+
         let mut group_results = Vec::with_capacity(items.len());
 
-        for i in 0..items.len() {
+        for (i, res) in results_slice[..items.len()].iter().enumerate() {
             let err = if errors_slice[i].is_ok() {
                 None
             } else {
@@ -85,8 +116,8 @@ impl ConnectedGroup for ComGroup {
                 })
             };
             group_results.push(GroupItemResult {
-                server_handle: ItemHandle(results_slice[i].hServer),
-                canonical_type: results_slice[i].vtCanonicalDataType,
+                server_handle: ItemHandle::new(res.hServer),
+                canonical_type: res.vtCanonicalDataType,
                 error: err,
             });
         }
@@ -126,16 +157,23 @@ impl ConnectedGroup for ComGroup {
             )?;
         }
 
-        // RAII guard ensures VariantClear is invoked on all item states before RemoteArray frees memory.
-        let guard = ItemStatesGuard(item_values.as_mut_slice());
-
+        let states_slice = item_values.as_mut_slice();
         let errors_slice = errors.as_slice();
+
+        if states_slice.len() < server_handles.len() || errors_slice.len() < server_handles.len() {
+            return Err(OpcError::InvalidState(
+                "COM server returned fewer item states or errors than requested server handles"
+                    .to_string(),
+            ));
+        }
+
+        // RAII guard ensures VariantClear is invoked on all valid item states before RemoteArray frees memory.
+        let guard = ItemStatesGuard::new(states_slice, errors_slice);
         let mut states = Vec::with_capacity(server_handles.len());
 
-        for i in 0..server_handles.len() {
+        for (i, state) in guard[..server_handles.len()].iter().enumerate() {
             let err = errors_slice[i];
             if err.is_ok() {
-                let state = &guard[i];
                 let value = crate::com::variant::variant_to_opc_value(&state.vDataValue);
                 let quality = OpcQuality::from(state.wQuality);
                 let timestamp =
@@ -143,7 +181,7 @@ impl ConnectedGroup for ComGroup {
                         .unwrap_or(std::time::SystemTime::UNIX_EPOCH);
 
                 states.push(Ok(GroupItemState {
-                    client_handle: ItemHandle(state.hClient),
+                    client_handle: ItemHandle::new(state.hClient),
                     value,
                     quality,
                     timestamp,
@@ -164,6 +202,11 @@ impl ConnectedGroup for ComGroup {
         server_handles: &[ItemHandle],
         values: &[OpcValue],
     ) -> OpcResult<Vec<Result<(), OpcError>>> {
+        if server_handles.is_empty() {
+            return Err(OpcError::InvalidState(
+                "server_handles cannot be empty".to_string(),
+            ));
+        }
         if server_handles.len() != values.len() {
             return Err(OpcError::InvalidState(
                 "server_handles and values must have the same length".to_string(),
@@ -186,7 +229,13 @@ impl ConnectedGroup for ComGroup {
         }
 
         let errors_slice = errors.as_slice();
-        let results = errors_slice
+        if errors_slice.len() < server_handles.len() {
+            return Err(OpcError::InvalidState(
+                "COM server returned fewer errors than written handles".to_string(),
+            ));
+        }
+
+        let results = errors_slice[..server_handles.len()]
             .iter()
             .map(|&hr| {
                 if hr.is_ok() {
@@ -265,10 +314,39 @@ mod tests {
             Err(OpcError::InvalidState(_))
         ));
 
-        // Test mismatched write lengths returns InvalidState
+        // Test empty write returns InvalidState
         assert!(matches!(
-            group.write(&[ItemHandle(1)], &[]),
+            group.write(&[], &[]),
             Err(OpcError::InvalidState(_))
         ));
+
+        // Test mismatched write lengths returns InvalidState
+        assert!(matches!(
+            group.write(&[ItemHandle::new(1)], &[]),
+            Err(OpcError::InvalidState(_))
+        ));
+    }
+
+    #[test]
+    fn test_item_results_blob_guard_frees_blobs() {
+        // SAFETY: tagOPCITEMRESULT is a C POD structure where all-zero bit pattern is valid.
+        let mut results: [crate::raw::bindings::da::tagOPCITEMRESULT; 2] =
+            unsafe { std::mem::zeroed() };
+        let blob_data = [1u8, 2, 3, 4];
+        // SAFETY: CoTaskMemAlloc allocates COM memory.
+        let ptr = unsafe { windows::Win32::System::Com::CoTaskMemAlloc(blob_data.len()) };
+        // SAFETY: Copies blob data into newly allocated COM memory.
+        unsafe {
+            std::ptr::copy_nonoverlapping(blob_data.as_ptr(), ptr.cast::<u8>(), blob_data.len());
+        }
+        results[0].dwBlobSize = u32::try_from(blob_data.len()).unwrap_or(0);
+        results[0].pBlob = ptr.cast::<u8>();
+
+        {
+            let _guard = ItemResultsBlobGuard::new(&mut results);
+        }
+
+        assert!(results[0].pBlob.is_null());
+        assert_eq!(results[0].dwBlobSize, 0);
     }
 }

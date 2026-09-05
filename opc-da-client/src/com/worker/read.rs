@@ -1,7 +1,8 @@
 //! Tag reading engine with in-place value population.
 
 use crate::com::connector::{
-    ConnectedGroup, ConnectedServer, DataSource, GroupItemDef, GroupItemResult, GroupItemState,
+    ConnectedGroup, ConnectedServer, DataSource, GroupConfig, GroupItemDef, GroupItemResult,
+    GroupItemState,
 };
 use crate::com::guard::GroupGuard;
 use crate::errors::{OpcError, OpcOperation, OpcResult};
@@ -23,6 +24,10 @@ pub fn handle_read<S: ConnectedServer>(
     tag_ids: &[String],
     opc_server: &S,
 ) -> OpcResult<Vec<TagValue>> {
+    if tag_ids.is_empty() {
+        return Ok(Vec::new());
+    }
+
     #[cfg(feature = "dev-diagnostics")]
     tracing::trace!(
         server = %server_id,
@@ -33,7 +38,7 @@ pub fn handle_read<S: ConnectedServer>(
     let start = std::time::Instant::now();
 
     let created = opc_server
-        .add_group(&super::ephemeral_group_config("opc-da-client-read"))
+        .add_group(&GroupConfig::ephemeral("opc-da-client-read"))
         .inspect_err(|e| {
             log_opc_err!(
                 e,
@@ -51,7 +56,7 @@ pub fn handle_read<S: ConnectedServer>(
         .map(|(idx, tag_id)| GroupItemDef {
             item_id: tag_id.clone(),
             #[allow(clippy::cast_possible_truncation)]
-            client_handle: ItemHandle(idx as u32),
+            client_handle: ItemHandle::new(idx as u32),
             active: true,
         })
         .collect();
@@ -106,7 +111,7 @@ pub fn handle_read<S: ConnectedServer>(
         })?;
 
     populate_item_states(
-        &item_states,
+        item_states,
         &valid_indices,
         tag_ids,
         server_id,
@@ -128,8 +133,8 @@ fn partition_item_results(
     server_id: &ServerIdentifier,
     tag_values: &mut [TagValue],
 ) -> (Vec<ItemHandle>, Vec<usize>) {
-    let mut server_handles = Vec::new();
-    let mut valid_indices = Vec::new();
+    let mut server_handles = Vec::with_capacity(results.len());
+    let mut valid_indices = Vec::with_capacity(results.len());
 
     for (idx, item_result) in results.iter().enumerate() {
         if item_result.error.is_none() {
@@ -156,30 +161,56 @@ fn partition_item_results(
 
 /// Writes device states into pre-allocated [`TagValue`] entries by original index.
 fn populate_item_states(
-    item_states: &[OpcResult<GroupItemState>],
+    item_states: Vec<OpcResult<GroupItemState>>,
     valid_indices: &[usize],
     tag_ids: &[String],
     server_id: &ServerIdentifier,
     tag_values: &mut [TagValue],
 ) {
-    for (i, idx) in valid_indices.iter().enumerate() {
-        match &item_states[i] {
+    for (state_res, &idx) in item_states.into_iter().zip(valid_indices) {
+        match state_res {
             Ok(state) => {
-                tag_values[*idx].value = Some(state.value.clone());
-                tag_values[*idx].quality = state.quality;
-                tag_values[*idx].timestamp = Some(state.timestamp);
+                tag_values[idx].value = Some(state.value);
+                tag_values[idx].quality = state.quality;
+                tag_values[idx].timestamp = Some(state.timestamp);
             }
             Err(e) => {
                 log_opc_err!(
-                    e,
+                    &e,
                     OpcOperation::ReadPerItem,
                     server = %server_id,
-                    tag = %tag_ids[*idx]
+                    tag = %tag_ids[idx]
                 );
-                tag_values[*idx].value = None;
-                tag_values[*idx].quality = OpcQuality::BAD_COMM_FAILURE;
-                tag_values[*idx].timestamp = None;
+                tag_values[idx].value = None;
+                tag_values[idx].quality = OpcQuality::BAD_COMM_FAILURE;
+                tag_values[idx].timestamp = None;
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::com::connector::mock::MockConnectedServer;
+
+    #[test]
+    fn test_handle_read_empty_tags_short_circuits() {
+        let server = MockConnectedServer::default();
+        let server_id = ServerIdentifier::from("Test.Server");
+        let results = handle_read(&server_id, &[], &server).expect("empty tags must succeed");
+        assert!(results.is_empty());
+    }
+
+    #[test]
+    fn test_handle_read_with_mock_server() {
+        let server = MockConnectedServer::default();
+        let server_id = ServerIdentifier::from("Test.Server");
+        let tags = vec!["Random.Int4".to_string(), "Random.Real8".to_string()];
+        let results = handle_read(&server_id, &tags, &server).expect("reading tags must succeed");
+        assert_eq!(results.len(), 2);
+        assert_eq!(results[0].tag_id, "Random.Int4");
+        assert_eq!(results[1].tag_id, "Random.Real8");
+        assert!(results[0].value.is_some());
     }
 }

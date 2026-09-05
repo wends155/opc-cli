@@ -1,6 +1,6 @@
 //! Tag writing engine with validation and result mapping.
 
-use crate::com::connector::{ConnectedGroup, ConnectedServer, GroupItemDef};
+use crate::com::connector::{ConnectedGroup, ConnectedServer, GroupConfig, GroupItemDef};
 use crate::com::guard::GroupGuard;
 use crate::errors::{OpcError, OpcOperation, OpcResult};
 use crate::log_opc_err;
@@ -32,7 +32,7 @@ pub fn handle_write<S: ConnectedServer>(
     let start = std::time::Instant::now();
 
     let created = opc_server
-        .add_group(&super::ephemeral_group_config("opc-da-client-write"))
+        .add_group(&GroupConfig::ephemeral("opc-da-client-write"))
         .inspect_err(|e| {
             log_opc_err!(
                 e,
@@ -129,4 +129,22 @@ pub fn handle_write<S: ConnectedServer>(
     };
 
     Ok(write_result)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::com::connector::mock::MockConnectedServer;
+
+    #[test]
+    fn test_handle_write_success() {
+        let server = MockConnectedServer::default();
+        let server_id = ServerIdentifier::from("Test.Server");
+        let value = OpcValue::Int(123);
+        let result = handle_write(&server_id, "Random.Int4", &value, &server)
+            .expect("write operation should succeed");
+        assert!(result.is_success());
+        assert_eq!(result.tag_id, "Random.Int4");
+        assert!(result.error().is_none());
+    }
 }

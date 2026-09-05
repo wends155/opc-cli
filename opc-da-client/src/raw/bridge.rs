@@ -54,7 +54,7 @@ impl IntoBridge<ItemDefBridge> for ItemDef {
             access_path: LocalPointer::from(&self.access_path),
             item_id: LocalPointer::from(&self.item_id),
             active: self.active,
-            item_client_handle: self.client_handle.0,
+            item_client_handle: self.client_handle.as_raw(),
             requested_data_type: self.data_type,
             blob: LocalPointer::new(Some(self.blob)),
         }
@@ -96,13 +96,22 @@ pub struct ItemResult {
 
 impl TryFromNative<tagOPCITEMRESULT> for ItemResult {
     fn try_from_native(native: &tagOPCITEMRESULT) -> windows::core::Result<Self> {
+        let blob = if !native.pBlob.is_null() && native.dwBlobSize > 0 {
+            /* SAFETY: COM server provides a valid buffer of dwBlobSize bytes at pBlob.
+            We borrow a non-owning slice and copy into an owned Vec<u8>. */
+            let bytes = unsafe {
+                core::slice::from_raw_parts(native.pBlob, native.dwBlobSize as usize).to_vec()
+            };
+            bytes
+        } else {
+            Vec::new()
+        };
+
         Ok(Self {
-            server_handle: ItemHandle(native.hServer),
+            server_handle: ItemHandle::new(native.hServer),
             data_type: native.vtCanonicalDataType,
             access_rights: native.dwAccessRights,
-            blob: RemoteArray::from_mut_ptr(native.pBlob, native.dwBlobSize)
-                .as_slice()
-                .to_vec(),
+            blob,
         })
     }
 }
@@ -165,16 +174,25 @@ pub struct ItemAttributes {
 
 impl TryFromNative<tagOPCITEMATTRIBUTES> for ItemAttributes {
     fn try_from_native(native: &tagOPCITEMATTRIBUTES) -> windows::core::Result<Self> {
+        let blob = if !native.pBlob.is_null() && native.dwBlobSize > 0 {
+            /* SAFETY: COM server provides a valid buffer of dwBlobSize bytes at pBlob.
+            We borrow a non-owning slice and copy into an owned Vec<u8>. */
+            let bytes = unsafe {
+                core::slice::from_raw_parts(native.pBlob, native.dwBlobSize as usize).to_vec()
+            };
+            bytes
+        } else {
+            Vec::new()
+        };
+
         Ok(Self {
             access_path: try_from_native!(&native.szAccessPath),
             item_id: try_from_native!(&native.szItemID),
             active: native.bActive.into(),
-            client_handle: ItemHandle(native.hClient),
-            server_handle: ItemHandle(native.hServer),
+            client_handle: ItemHandle::new(native.hClient),
+            server_handle: ItemHandle::new(native.hServer),
             access_rights: native.dwAccessRights,
-            blob: RemoteArray::from_mut_ptr(native.pBlob, native.dwBlobSize)
-                .as_slice()
-                .to_vec(),
+            blob,
             requested_data_type: native.vtRequestedDataType,
             canonical_data_type: native.vtCanonicalDataType,
             eu_type: try_from_native!(&native.dwEUType),
@@ -215,7 +233,7 @@ pub struct ItemState {
 impl TryFromNative<tagOPCITEMSTATE> for ItemState {
     fn try_from_native(native: &tagOPCITEMSTATE) -> windows::core::Result<Self> {
         Ok(Self {
-            client_handle: ItemHandle(native.hClient),
+            client_handle: ItemHandle::new(native.hClient),
             timestamp: try_from_native!(&native.ftTimeStamp),
             quality: native.wQuality,
             data_value: native.vDataValue.clone(),
@@ -677,5 +695,45 @@ impl ToNative<tagOPCNAMESPACETYPE> for NamespaceType {
             NamespaceType::Hierarchy => OPC_NS_HIERARCHIAL,
             NamespaceType::Flat => OPC_NS_FLAT,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::raw::bindings::da::tagOPCITEMRESULT;
+    use crate::types::ItemHandle;
+
+    #[test]
+    fn test_bridge_borrowed_blob_no_double_free() {
+        let mut stack_blob = [1u8, 2, 3, 4];
+        let native = tagOPCITEMRESULT {
+            hServer: 42,
+            vtCanonicalDataType: 8,
+            wReserved: 0,
+            dwAccessRights: 1,
+            dwBlobSize: stack_blob.len() as u32,
+            pBlob: stack_blob.as_mut_ptr(),
+        };
+
+        // If ItemResult::try_from_native incorrectly wraps pBlob in an owning RemoteArray,
+        // it will attempt to call CoTaskMemFree on stack memory upon dropping, crashing or corrupting the heap.
+        let result = ItemResult::try_from_native(&native).unwrap();
+        assert_eq!(result.server_handle, ItemHandle::new(42));
+        assert_eq!(result.data_type, 8);
+        assert_eq!(result.access_rights, 1);
+        assert_eq!(result.blob, vec![1, 2, 3, 4]);
+
+        // Also test null pointer / 0 size
+        let null_native = tagOPCITEMRESULT {
+            hServer: 43,
+            vtCanonicalDataType: 3,
+            wReserved: 0,
+            dwAccessRights: 1,
+            dwBlobSize: 0,
+            pBlob: std::ptr::null_mut(),
+        };
+        let null_result = ItemResult::try_from_native(&null_native).unwrap();
+        assert_eq!(null_result.blob, Vec::<u8>::new());
     }
 }

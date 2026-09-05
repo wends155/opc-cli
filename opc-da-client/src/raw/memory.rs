@@ -179,14 +179,22 @@ impl<T: Sized> RemotePointer<T> {
     }
 
     pub(crate) fn copy_slice(value: &[T]) -> Self {
+        if value.is_empty() {
+            return Self::null();
+        }
+        let byte_len = core::mem::size_of_val(value);
         // SAFETY: Allocates memory for slice using COM CoTaskMemAlloc.
-        let pointer = unsafe { CoTaskMemAlloc(core::mem::size_of_val(value)) };
+        let pointer = unsafe { CoTaskMemAlloc(byte_len) };
+        if pointer.is_null() {
+            tracing::error!(bytes = byte_len, "CoTaskMemAlloc failed in copy_slice");
+            return Self::null();
+        }
         // SAFETY: Destination buffer was allocated with sufficient capacity and pointers are non-overlapping.
         unsafe {
-            core::ptr::copy_nonoverlapping(value.as_ptr(), pointer as _, value.len());
+            core::ptr::copy_nonoverlapping(value.as_ptr(), pointer.cast(), value.len());
         }
         Self {
-            inner: pointer as _,
+            inner: pointer.cast(),
         }
     }
 
@@ -321,22 +329,22 @@ impl<T: Sized> Drop for RemotePointer<T> {
 ///
 /// This struct is useful for preparing data to be read by COM functions.
 pub struct LocalPointer<T: Sized> {
-    inner: Option<Box<T>>,
+    inner: Option<T>,
 }
 
 impl<T: Sized> LocalPointer<T> {
     /// Creates a new `LocalPointer` from an optional value.
     #[inline(always)]
     pub fn new(value: Option<T>) -> Self {
-        Self {
-            inner: value.map(Box::new),
-        }
+        Self { inner: value }
     }
 
     /// Creates a `LocalPointer` from a boxed value.
     #[inline(always)]
     pub fn from_box(value: Box<T>) -> Self {
-        Self { inner: Some(value) }
+        Self {
+            inner: Some(*value),
+        }
     }
 
     #[inline(always)]
@@ -351,8 +359,8 @@ impl<T: Sized> LocalPointer<T> {
     #[inline(always)]
     pub fn as_ptr(&self) -> *const T {
         match &self.inner {
-            Some(value) => value.as_ref() as *const T,
-            None => std::ptr::null_mut(),
+            Some(value) => value as *const T,
+            None => std::ptr::null(),
         }
     }
 
@@ -360,7 +368,7 @@ impl<T: Sized> LocalPointer<T> {
     #[inline(always)]
     pub fn as_mut_ptr(&mut self) -> *mut T {
         match &mut self.inner {
-            Some(value) => value.as_mut() as *mut T,
+            Some(value) => value as *mut T,
             None => std::ptr::null_mut(),
         }
     }
@@ -368,13 +376,13 @@ impl<T: Sized> LocalPointer<T> {
     /// Consumes the `LocalPointer`, returning the inner value if it exists.
     #[inline(always)]
     pub fn into_inner(self) -> Option<T> {
-        self.inner.map(|v| *v)
+        self.inner
     }
 
     /// Returns a reference to the inner value if it exists.
     #[inline(always)]
     pub fn inner(&self) -> Option<&T> {
-        self.inner.as_ref().map(|v| v.as_ref())
+        self.inner.as_ref()
     }
 }
 
@@ -682,5 +690,33 @@ mod tests {
         let null_ptr: RemotePointer<u16> = RemotePointer::null();
         let err = null_ptr.into_string().unwrap_err();
         assert!(matches!(err, OpcError::Com { .. }));
+    }
+
+    #[test]
+    fn test_remote_pointer_copy_slice_empty_and_valid() {
+        // Empty slice returns null RemotePointer immediately without allocating
+        let empty_slice: &[u32] = &[];
+        let empty_ptr = RemotePointer::copy_slice(empty_slice);
+        assert!(empty_ptr.as_ref().is_none());
+
+        // Valid non-empty slice copies data safely
+        let valid_data = [10u32, 20, 30];
+        let ptr = RemotePointer::copy_slice(&valid_data);
+        assert_eq!(ptr.as_ref(), Some(&10));
+    }
+
+    #[test]
+    fn test_local_pointer_no_box_indirection() {
+        let lp = LocalPointer::new(Some(42i32));
+        assert_eq!(lp.inner(), Some(&42));
+        assert_eq!(lp.into_inner(), Some(42));
+
+        let lp_none: LocalPointer<i32> = LocalPointer::new(None);
+        assert!(lp_none.inner().is_none());
+        assert!(lp_none.as_ptr().is_null());
+
+        let boxed = Box::new(100u64);
+        let lp_boxed = LocalPointer::from_box(boxed);
+        assert_eq!(lp_boxed.inner(), Some(&100));
     }
 }

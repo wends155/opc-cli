@@ -23,11 +23,9 @@ const _: () = assert!(
 
 pub use crate::com::iterator::{GuidIterator, StringIterator};
 pub use crate::errors::{OpcError, OpcResult};
-pub use crate::provider::{OpcQuality, OpcValue};
-pub use crate::raw::memory::{LocalPointer, RemoteArray, RemotePointer};
 pub use crate::types::{
-    BrowseDirection, BrowseType, GroupHandle, ItemHandle, OpcServerEndpoint, OpcServerInfo,
-    ServerIdentifier,
+    BrowseDirection, BrowseType, GroupHandle, ItemHandle, OpcQuality, OpcServerEndpoint,
+    OpcServerInfo, OpcValue, ServerIdentifier,
 };
 
 pub use group::ComGroup;
