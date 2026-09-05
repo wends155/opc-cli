@@ -3,7 +3,7 @@
 > **Behavioral Source of Truth** for the `opc-da-client` library crate.
 > Defines *what* each module should do — independent of current implementation.
 >
-> Last verified against: c1feee3
+> Last verified against: f307252
 
 ---
 
@@ -218,6 +218,13 @@ All methods use `#[async_trait]`.
 | `format_hresult` | `fn(hr: HRESULT) -> String` | Formats `HRESULT` as `0xHHHHHHHH: <hint>` or `0xHHHHHHHH`. |
 | `is_connection_hresult` | `fn(hr: HRESULT) -> bool` | Detects connection/transport drops (`RPC_S_*`, `CO_E_SERVER_EXEC_FAILURE`). |
 
+##### `errors` Telemetry Module
+
+| Item | Signature / Type | Purpose |
+| :--- | :--- | :--- |
+| `enum OpcOperation` | `pub(crate) enum OpcOperation` | Canonical strongly-typed operation identifiers for all OPC DA client operations. Implements `Display` formatting to snake_case/kebab keys. |
+| `log_opc_err!` | `macro_rules! log_opc_err` | Emits a consolidated, structured `tracing::error!` event containing `operation`, `hresult`, `hint`, `chain`, and arbitrary contextual fields (`server`, `tag`, `value`, `depth`, `branch`). Eliminates duplicate double logging. |
+| `log_opc_error` | `fn(error: &OpcError, operation: &str)` | Legacy compatibility wrapper delegating directly to `log_opc_err!`. |
 
 ---
 
@@ -244,8 +251,7 @@ Implements `OpcProvider` for all four trait methods by dispatching to the `ComWo
 *   Connections are pooled and cached automatically inside the worker, mapped by ProgID.
 *   Stale connections are transparently evicted and retried during request dispatch.
 *   GUID filtering: zeroed GUIDs are skipped during server enumeration.
-*   Server list is sorted and deduplicated before returning.
-*   OPC groups created by `read_tag_values` and `write_tag_value` are **always** removed via `remove_group` — even on error paths — to prevent resource leaks.
+*   OPC groups created by `read_tag_values` and `write_tag_value` are **always** managed by `GroupGuard`, guaranteeing deterministic invocation of `remove_group(handle, true)` on `Drop` across all return paths, early returns with `?`, and thread panics.
 
 #### Internal: `browse_recursive`
 
@@ -300,6 +306,22 @@ Before calling `browse_recursive`, `browse_tags` attempts `browse_opc_item_ids(B
 *   `S_FALSE` (already initialized) is treated as success — the guard will still call `CoUninitialize` on drop.
 *   The guard is **not** `Send` or `Sync` — it must remain on the thread that created it.
 
+##### `struct GroupGuard<'a, S: ConnectedServer>` (Internal RAII Cleanup)
+
+**Purpose:** Provide an automatic RAII drop guard for temporary COM groups created during `read_tag_values` and `write_tag_value` executions on the `ComWorker` thread.
+
+| Method | Signature | Description |
+| :--- | :--- | :--- |
+| `new(server: &'a S, handle: GroupHandle)` | `pub(crate) fn new(server: &'a S, handle: GroupHandle) -> Self` | Wraps server reference and group handle with `disarmed = false`. |
+| `handle(&self)` | `pub(crate) fn handle(&self) -> GroupHandle` | Returns the inner group handle. |
+| `disarm(&mut self)` | `pub(crate) fn disarm(&mut self)` | Disarms automatic cleanup on drop. |
+
+**Drop behavior:** When dropped, if not disarmed, calls `self.server.remove_group(self.handle, true)`. Any server cleanup errors are logged as warnings without panicking.
+
+**Invariants:**
+*   Constructed immediately upon successful `add_group` return.
+*   Guarantees group destruction on all function exits (early `?` propagation, empty item slices, error returns, and panics).
+
 ---
 
 ### 1.5 `types` — Canonical Protocol Types & Handles
@@ -347,7 +369,7 @@ Before calling `browse_recursive`, `browse_tags` attempts `browse_opc_item_ids(B
 - Server connection helpers:
   - `connect_server(server_name: &str) -> OpcResult<IOPCServer>`: Resolves ProgID to CLSID via registry and creates connected COM server handle.
   - `guid_to_progid(guid: &GUID) -> OpcResult<String>`: Converts a COM GUID to its registered ProgID string with guaranteed COM allocator cleanup.
-- `MockConnectedGroup`, `MockConnectedServer`, and `MockServerConnector`: Reusable pure-Rust mocks (under `#[cfg(any(test, feature = "test-support"))]` and exported at crate root under `test-support`) supporting pluggable closures, failure injection (`MockState`), and simulated tag browsing without native COM allocators or unsafe blocks.
+- `MockConnectedGroup`, `MockConnectedServer`, and `MockServerConnector`: Reusable pure-Rust mocks (under `#[cfg(any(test, feature = "test-support"))]` and exported at crate root under `test-support`) supporting pluggable closures, failure injection (`MockState`), tracking of cleanup invocations (`MockState::remove_group_count`), and simulated tag browsing without native COM allocators or unsafe blocks.
 
 ---
 
@@ -355,7 +377,7 @@ Before calling `browse_recursive`, `browse_tags` attempts `browse_opc_item_ids(B
 
 **Purpose:** Strict crate-internal isolation (`pub(crate) mod raw;`) for all raw Win32 bindings and FFI memory management:
 - `raw::bindings`: Autogenerated Win32 COM bindings (`da`, `comn`).
-- `raw::memory`: Unsafe memory wrappers (`RemoteArray`, `RemotePointer`, `LocalPointer`) managing `CoTaskMemAlloc` / `CoTaskMemFree`.
+- `raw::memory`: Unsafe memory wrappers (`RemoteArray`, `RemotePointer`, `LocalPointer`) managing `CoTaskMemAlloc` / `CoTaskMemFree`. `RemotePointer` and `RemoteArray` are strictly move-only types (`Clone` prohibited) to prevent double-free heap corruptions on unmanaged memory.
 - `raw::bridge`: Dormant COM bridge structures (`ItemDef`, `ItemState`, etc.) preserved for binary compatibility and low-level Win32 conversions.
 - **Invariant:** `raw` types must NEVER leak into the public API or domain types (`types.rs`).
 
@@ -451,6 +473,10 @@ Defined in § 1.1. See table above.
 - [x] `test_worker_init_failure` — initialization error handling.
 - [x] `test_worker_read_tag_values_mismatched_lengths` — error resilience on uneven responses.
 - [x] `test_worker_read_tag_values_quality_decoding` — mock-driven integration test verifying end-to-end multi-quality decoding and item rejection error mapping.
+- [x] `test_group_guard_cleanup_on_drop` — verifies `GroupGuard` automatically invokes `remove_group` upon drop.
+- [x] `test_group_guard_disarm_prevents_cleanup` — verifies disarming `GroupGuard` suppresses drop cleanup.
+- [x] `test_worker_handle_read_error_cleans_group` — negative unit test asserting group handle cleanup when item addition fails.
+- [x] `test_worker_tracing_instrumentation_execution` — verifies worker operations execute successfully under active tracing instrumentation.
 
 ### Type-Safe Enum Unit Tests (in `types.rs`)
 
@@ -509,6 +535,12 @@ Defined in § 1.1. See table above.
 - [x] `test_opc_error_friendly_hint` — verifies `friendly_hint` returns `None` for non-COM errors and expected text for known COM errors.
 - [x] `test_friendly_hint_known_codes` — verifies HRESULT hints for known codes (`RPC_S_CALL_FAILED_DNE`, `REGDB_E_CLASSNOTREG`, `OPC_E_BADRIGHTS`, `OPC_E_BADTYPE`, `OPC_E_UNKNOWNITEMID`, `OPC_E_INVALIDITEMID`).
 - [x] `test_friendly_hint_unknown_code` — verifies `None` on unknown or internal error codes.
+- [x] `test_opc_operation_display` — validates canonical string formatting across all `OpcOperation` enum variants.
+- [x] `test_log_opc_err_macro` — validates structured key-value emission and diagnostic capture via `log_opc_err!`.
+
+### Raw Memory Safety Unit Tests (in `raw/memory.rs`)
+
+- [x] `test_remote_array_safety_and_invariants` — verifies zero-allocation remote array creation, safe move-only drop semantics, and heap integrity without `Clone`.
 
 ### Mock-Based Tests (in `opc-cli`)
 

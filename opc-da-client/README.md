@@ -18,7 +18,7 @@ OPC DA is deeply coupled to Windows COM/DCOM, which poses significant architectu
 
 - **Async/Await Trait Abstraction**: Built on `tokio` and `async-trait`, using the canonical `OpcProvider` trait for zero-cost abstraction, backend flexibility, and straightforward test mocking.
 - **Pure-Rust Connector Facade**: Strict isolation of low-level Win32 COM and FFI types behind the `ConnectedServer` and `ConnectedGroup` traits, keeping raw COM types and unsafe memory handling strictly internal.
-- **Transparent COM & Thread Management**: Automatically spawns and manages a dedicated MTA worker thread, maintaining strict thread affinity and connection pooling with auto-recovery for stale proxies.
+- **Transparent COM & Thread Management**: Automatically spawns and manages a dedicated MTA worker thread, maintaining strict thread affinity, connection pooling with auto-recovery for stale proxies, and RAII group teardown (`GroupGuard`) ensuring deterministic server cleanup across all return paths and panics.
 - **Strongly-Typed Domain Models**: `TagValue` uses `Option<OpcValue>` and `Option<std::time::SystemTime>` ensuring lossless, zero-allocation typed access on read results and writes.
 - **Zero-Allocation Display Adapters**: `DisplayOptionOpcValue` and `DisplayOptionTimestamp` adapters with extension traits `OpcValueOptionExt` and `SystemTimeOptionExt` enable zero-allocation formatted streaming with width-padded table alignment.
 - **Canonical Display Formatting**: `TagValue` implements `std::fmt::Display` rendering `"{tag_id} = {value} [{quality}] @ {timestamp}"` for clean, single-line logging and diagnostics.
