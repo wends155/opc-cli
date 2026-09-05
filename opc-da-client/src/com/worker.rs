@@ -229,6 +229,7 @@ impl<C: ServerConnector + 'static> ComWorker<C> {
             .map_err(|_| OpcError::Internal("COM worker shut down during request".into()))?
     }
 
+    #[tracing::instrument(level = "debug", skip(cache, connector, operation))]
     fn dispatch_with_retry<F, R>(
         cache: &mut HashMap<String, C::Server>,
         connector: &Arc<C>,
@@ -253,35 +254,45 @@ impl<C: ServerConnector + 'static> ComWorker<C> {
 
         match operation(server_ref) {
             Err(e) if is_connection_error(&e) => {
+                crate::errors::log_opc_error(&e, "dispatch_with_retry:connection_error");
                 tracing::warn!(server = %server_name, error = ?e, "Evicting stale connection");
                 cache.remove(server_name);
                 tracing::debug!(server = %server_name, "Reconnecting");
                 let fresh_srv = connector.connect(server_name).map_err(|connect_e| {
+                    crate::errors::log_opc_error(&connect_e, "dispatch_with_retry:reconnect");
                     tracing::error!(error = ?connect_e, "Reconnect failed");
                     connect_e
                 })?;
                 let fresh_ref = &fresh_srv;
                 let result = operation(fresh_ref);
+                if let Err(ref op_e) = result {
+                    crate::errors::log_opc_error(op_e, "dispatch_with_retry:retried_operation");
+                }
                 tracing::info!(server = %server_name, "Reconnection successful, pool updated");
                 cache.insert(server_name.to_string(), fresh_srv);
                 result
             }
-            other => other,
+            Err(e) => {
+                crate::errors::log_opc_error(&e, "dispatch_with_retry:operation");
+                Err(e)
+            }
+            Ok(v) => Ok(v),
         }
     }
 
     #[allow(clippy::too_many_lines)]
+    #[tracing::instrument(
+        name = "opc.read_tag_values",
+        level = "info",
+        skip(tag_ids, opc_server),
+        fields(tag_count = tag_ids.len()),
+        err
+    )]
     fn handle_read(
         server_name: &str,
         tag_ids: &[String],
         opc_server: &C::Server,
     ) -> OpcResult<Vec<TagValue>> {
-        let span = tracing::info_span!(
-            "opc.read_tag_values",
-            server = %server_name,
-            tag_count = tag_ids.len()
-        );
-        let _enter = span.enter();
         #[cfg(feature = "dev-diagnostics")]
         tracing::trace!(
             server = %server_name,
@@ -291,15 +302,19 @@ impl<C: ServerConnector + 'static> ComWorker<C> {
         );
         let start = std::time::Instant::now();
 
-        let created = opc_server.add_group(&GroupConfig {
-            name: "opc-da-client-read",
-            active: true,
-            update_rate_ms: 1000,
-            client_handle: GroupHandle::default(),
-            time_bias: 0,
-            percent_deadband: 0.0,
-            locale_id: 0,
-        })?;
+        let created = opc_server
+            .add_group(&GroupConfig {
+                name: "opc-da-client-read",
+                active: true,
+                update_rate_ms: 1000,
+                client_handle: GroupHandle::default(),
+                time_bias: 0,
+                percent_deadband: 0.0,
+                locale_id: 0,
+            })
+            .inspect_err(|e| {
+                crate::errors::log_opc_error(e, "read_tag_values:add_group");
+            })?;
         let group = created.group;
         let server_handle = created.server_handle;
 
@@ -314,15 +329,18 @@ impl<C: ServerConnector + 'static> ComWorker<C> {
             })
             .collect();
 
-        let results = group.add_items(&item_defs)?;
+        let results = group.add_items(&item_defs).inspect_err(|e| {
+            crate::errors::log_opc_error(e, "read_tag_values:add_items");
+        })?;
 
         if results.len() != tag_ids.len() {
             if let Err(e) = opc_server.remove_group(server_handle, true) {
                 tracing::warn!(error = ?e, operation = "read_tag_values", "Failed to remove OPC group during cleanup");
             }
-            return Err(OpcError::Internal(
-                "OPC server returned mismatched result array sizes".into(),
-            ));
+            let err =
+                OpcError::Internal("OPC server returned mismatched result array sizes".into());
+            crate::errors::log_opc_error(&err, "read_tag_values:mismatched_results");
+            return Err(err);
         }
 
         let mut tag_values: Vec<TagValue> = tag_ids
@@ -364,7 +382,12 @@ impl<C: ServerConnector + 'static> ComWorker<C> {
             return Ok(tag_values);
         }
 
-        let item_states = group.read(DataSource::Device, &server_handles)?;
+        let item_states = group.read(DataSource::Device, &server_handles).inspect_err(|e| {
+            crate::errors::log_opc_error(e, "read_tag_values:group_read");
+            if let Err(cleanup_e) = opc_server.remove_group(server_handle, true) {
+                tracing::warn!(error = ?cleanup_e, operation = "read_tag_values", "Failed to remove OPC group during cleanup");
+            }
+        })?;
 
         for (i, idx) in valid_indices.iter().enumerate() {
             match &item_states[i] {
@@ -377,6 +400,7 @@ impl<C: ServerConnector + 'static> ComWorker<C> {
                     };
                 }
                 Err(e) => {
+                    crate::errors::log_opc_error(e, "read_tag_values:per_item_read");
                     tracing::warn!(
                         tag = %tag_ids[*idx],
                         error = ?e,
@@ -404,18 +428,19 @@ impl<C: ServerConnector + 'static> ComWorker<C> {
     }
 
     #[allow(clippy::too_many_lines)]
+    #[tracing::instrument(
+        name = "opc.write_tag_value",
+        level = "info",
+        skip(value, opc_server),
+        fields(tag = %tag_id),
+        err
+    )]
     fn handle_write(
         server_name: &str,
         tag_id: &str,
         value: &OpcValue,
         opc_server: &C::Server,
     ) -> OpcResult<WriteResult> {
-        let span = tracing::info_span!(
-            "opc.write_tag_value",
-            server = %server_name,
-            tag = %tag_id
-        );
-        let _enter = span.enter();
         #[cfg(feature = "dev-diagnostics")]
         tracing::trace!(
             server = %server_name,
@@ -425,15 +450,19 @@ impl<C: ServerConnector + 'static> ComWorker<C> {
         );
         let start = std::time::Instant::now();
 
-        let created = opc_server.add_group(&GroupConfig {
-            name: "opc-da-client-write",
-            active: true,
-            update_rate_ms: 1000,
-            client_handle: GroupHandle(0),
-            time_bias: 0,
-            percent_deadband: 0.0,
-            locale_id: 0,
-        })?;
+        let created = opc_server
+            .add_group(&GroupConfig {
+                name: "opc-da-client-write",
+                active: true,
+                update_rate_ms: 1000,
+                client_handle: GroupHandle(0),
+                time_bias: 0,
+                percent_deadband: 0.0,
+                locale_id: 0,
+            })
+            .inspect_err(|e| {
+                crate::errors::log_opc_error(e, "write_tag_value:add_group");
+            })?;
         let group = created.group;
         let server_handle = created.server_handle;
 
@@ -443,12 +472,17 @@ impl<C: ServerConnector + 'static> ComWorker<C> {
             active: true,
         };
 
-        let results = group.add_items(&[item_def])?;
-        let item_res = results
-            .first()
-            .ok_or_else(|| OpcError::Internal("Server returned empty item results".to_string()))?;
+        let results = group.add_items(&[item_def]).inspect_err(|e| {
+            crate::errors::log_opc_error(e, "write_tag_value:add_items");
+        })?;
+        let item_res = results.first().ok_or_else(|| {
+            let e = OpcError::Internal("Server returned empty item results".to_string());
+            crate::errors::log_opc_error(&e, "write_tag_value:empty_item_results");
+            e
+        })?;
 
         if let Some(e) = &item_res.error {
+            crate::errors::log_opc_error(e, "write_tag_value:add_items_rejected");
             tracing::warn!(error = ?e, "write_tag_value: failed to add tag to group");
             if let Err(err) = opc_server.remove_group(server_handle, true) {
                 tracing::warn!(error = ?err, operation = "write_tag_value", "Failed to remove OPC group during cleanup");
@@ -457,10 +491,16 @@ impl<C: ServerConnector + 'static> ComWorker<C> {
         }
 
         let item_handle = item_res.server_handle;
-        let write_results = group.write(&[item_handle], std::slice::from_ref(value))?;
-        let write_res = write_results
-            .first()
-            .ok_or_else(|| OpcError::Internal("Server returned empty write errors".to_string()))?;
+        let write_results = group
+            .write(&[item_handle], std::slice::from_ref(value))
+            .inspect_err(|e| {
+                crate::errors::log_opc_error(e, "write_tag_value:group_write");
+            })?;
+        let write_res = write_results.first().ok_or_else(|| {
+            let e = OpcError::Internal("Server returned empty write errors".to_string());
+            crate::errors::log_opc_error(&e, "write_tag_value:empty_write_errors");
+            e
+        })?;
 
         let write_result = match write_res {
             Ok(()) => {
@@ -471,6 +511,7 @@ impl<C: ServerConnector + 'static> ComWorker<C> {
                 WriteResult::success(tag_id)
             }
             Err(e) => {
+                crate::errors::log_opc_error(e, "write_tag_value:server_rejected");
                 tracing::warn!(
                     error = %e,
                     elapsed_ms = u64::try_from(start.elapsed().as_millis()).unwrap_or(u64::MAX),
@@ -486,13 +527,18 @@ impl<C: ServerConnector + 'static> ComWorker<C> {
         Ok(write_result)
     }
 
+    #[tracing::instrument(
+        name = "opc.browse_tags",
+        level = "info",
+        skip(collector, opc_server),
+        fields(max_tags = collector.max_tags()),
+        err
+    )]
     fn handle_browse(
         server_name: &str,
         collector: &TagCollector,
         opc_server: &C::Server,
     ) -> OpcResult<Vec<String>> {
-        let span = tracing::info_span!("opc.browse_tags", server = %server_name, max_tags = collector.max_tags());
-        let _enter = span.enter();
         #[cfg(feature = "dev-diagnostics")]
         tracing::trace!(
             server = %server_name,
@@ -505,12 +551,21 @@ impl<C: ServerConnector + 'static> ComWorker<C> {
             return Ok(collector.snapshot());
         }
 
-        let org = opc_server.query_organization()?;
+        let org = opc_server.query_organization().inspect_err(|e| {
+            crate::errors::log_opc_error(e, "browse_tags:query_organization");
+        })?;
 
         if org == NamespaceType::Flat as u32 {
-            let string_iter = opc_server.browse_opc_item_ids(BrowseType::Leaf, Some(""), 0, 0)?;
+            let string_iter = opc_server
+                .browse_opc_item_ids(BrowseType::Leaf, Some(""), 0, 0)
+                .inspect_err(|e| {
+                    crate::errors::log_opc_error(e, "browse_tags:flat_leaves");
+                })?;
             for tag_res in string_iter {
-                if !collector.push(tag_res?) {
+                let tag = tag_res.inspect_err(|e| {
+                    crate::errors::log_opc_error(e, "browse_tags:flat_leaf_item");
+                })?;
+                if !collector.push(tag) {
                     break;
                 }
             }
@@ -528,6 +583,10 @@ impl<C: ServerConnector + 'static> ComWorker<C> {
                                         }
                                     }
                                     Err(e) => {
+                                        crate::errors::log_opc_error(
+                                            &e,
+                                            "browse_tags:flat_enum_item",
+                                        );
                                         tracing::warn!(error = ?e, "OPC_FLAT tag iteration error, skipping");
                                     }
                                 }
@@ -563,6 +622,7 @@ impl<C: ServerConnector + 'static> ComWorker<C> {
         Ok(result)
     }
 
+    #[tracing::instrument(level = "debug", skip(server, collector), err)]
     fn browse_recursive(
         server: &C::Server,
         collector: &TagCollector,
@@ -576,27 +636,39 @@ impl<C: ServerConnector + 'static> ComWorker<C> {
             return Ok(());
         }
 
-        let branch_enum = server.browse_opc_item_ids(BrowseType::Branch, Some(""), 0, 0)?;
+        let branch_enum = server
+            .browse_opc_item_ids(BrowseType::Branch, Some(""), 0, 0)
+            .inspect_err(|e| {
+                crate::errors::log_opc_error(e, "browse_recursive:branches");
+            })?;
 
         let branches: Vec<String> = branch_enum
             .filter_map(|r| match r {
                 Ok(name) => Some(name),
                 Err(e) => {
+                    crate::errors::log_opc_error(&e, "browse_recursive:branch_item");
                     tracing::warn!(error = ?e, "Branch iteration error, skipping");
                     None
                 }
             })
             .collect();
 
-        let leaf_enum = server.browse_opc_item_ids(BrowseType::Leaf, Some(""), 0, 0)?;
+        let leaf_enum = server
+            .browse_opc_item_ids(BrowseType::Leaf, Some(""), 0, 0)
+            .inspect_err(|e| {
+                crate::errors::log_opc_error(e, "browse_recursive:leaves");
+            })?;
         for tag_res in leaf_enum {
             if collector.is_cancelled() || collector.is_full() {
                 return Ok(());
             }
-            let browse_name = tag_res?;
+            let browse_name = tag_res.inspect_err(|e| {
+                crate::errors::log_opc_error(e, "browse_recursive:leaf_item");
+            })?;
             let tag = match server.get_item_id(&browse_name) {
                 Ok(id) => id,
                 Err(e) => {
+                    crate::errors::log_opc_error(&e, "browse_recursive:get_item_id");
                     tracing::warn!(
                         browse_name = %browse_name,
                         error = ?e,
@@ -615,6 +687,7 @@ impl<C: ServerConnector + 'static> ComWorker<C> {
                 return Ok(());
             }
             if let Err(e) = server.change_browse_position(BrowseDirection::Down, &branch) {
+                crate::errors::log_opc_error(&e, "browse_recursive:change_position_down");
                 tracing::warn!(
                     branch = %branch,
                     error = ?e,
@@ -624,10 +697,12 @@ impl<C: ServerConnector + 'static> ComWorker<C> {
             }
 
             if let Err(e) = Self::browse_recursive(server, collector, depth + 1) {
+                crate::errors::log_opc_error(&e, "browse_recursive:child_branch");
                 tracing::warn!(error = ?e, "browse_recursive error");
             }
 
             if let Err(e) = server.change_browse_position(BrowseDirection::Up, "") {
+                crate::errors::log_opc_error(&e, "browse_recursive:change_position_up");
                 tracing::warn!(error = ?e, "Failed to browse up, stopping recursion");
                 break;
             }
@@ -1355,5 +1430,21 @@ mod tests {
 
         assert_eq!(result.len(), 3);
         assert_eq!(result, vec!["Random.Int4", "Random.Real8", "Random.String"]);
+    }
+
+    #[tokio::test]
+    async fn test_worker_tracing_instrumentation_execution() {
+        let connector = std::sync::Arc::new(MockServerConnector::default());
+        let worker = tokio::task::spawn_blocking(move || ComWorker::start(connector).unwrap())
+            .await
+            .unwrap();
+        let servers = worker
+            .send_request(|reply| ComRequest::ListServers {
+                host: "localhost".into(),
+                reply,
+            })
+            .await
+            .expect("list servers");
+        assert_eq!(servers, vec!["Matrikon.OPC.Simulation.1".to_string()]);
     }
 }

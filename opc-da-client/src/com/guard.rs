@@ -46,6 +46,7 @@ impl ComGuard {
     /// # Errors
     ///
     /// Returns `Err(OpcError::Com)` if `CoInitializeEx` fails with a fatal HRESULT.
+    #[tracing::instrument(level = "info", err)]
     pub fn new() -> OpcResult<Self> {
         // SAFETY: CoInitializeEx is a standard Win32 FFI call passing COINIT_MULTITHREADED to join MTA.
         // SAFETY: Result is checked below, and CoUninitialize is guaranteed via Drop.

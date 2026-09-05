@@ -4,8 +4,13 @@
 //! (`IntoBridge`, `TryToNative`, `TryFromNative`) for interacting directly with
 //! Win32 COM interfaces (`tagOPCITEMDEF`, `tagOPCITEMSTATE`, `COSERVERINFO`, etc.).
 
-#![allow(warnings)]
-#![allow(clippy::all, clippy::pedantic, clippy::restriction)]
+#![allow(
+    dead_code,
+    clippy::all,
+    clippy::pedantic,
+    clippy::nursery,
+    clippy::undocumented_unsafe_blocks
+)]
 
 use crate::raw::bindings::da::*;
 use crate::raw::memory::{

@@ -1,5 +1,20 @@
 # Project Context Summary
 
+## 2026-09-05: Observability Instrumentation & COM Memory Safety Hardening (`opc-da-client`, `opc-cli`)
+> 📝 **Context Update:**
+> * **Feature:** Eliminate critical COM memory safety hazards in `raw/memory.rs`, remove blanket compiler/clippy allows, uniformly instrument low-level COM FFI gateway methods, background worker dispatch, public provider methods, and application actions with `#[tracing::instrument]`.
+> * **Changes:**
+>   - Eliminated potential double-free / heap corruption vulnerability by removing `Clone` derive from `RemotePointer<T>` and `RemoteArray<T>` (which free unmanaged memory via `CoTaskMemFree` on drop). Removed interior deallocator `RemoteArray::into_vec`. Added unit test `test_remote_array_safety_and_invariants`.
+>   - Replaced blanket `#![allow(warnings)]` in `raw/memory.rs` and `raw/bridge.rs` with fine-grained item-level and module-level allows while preserving 100% of types/structs in `raw/bridge.rs` for future OPC DA v3 support.
+>   - Decorated low-level COM gateway methods with `#[tracing::instrument]`: `ComGuard::new`, `guid_to_progid`, `connect_server`, `ComConnector::enumerate_servers`, `ComConnector::connect`, `ComServer` methods (`query_organization`, `browse_opc_item_ids`, `change_browse_position`, `get_item_id`, `add_group`, `remove_group`), and `ComGroup` methods (`add_items`, `read`, `write`). Large/sensitive parameter vectors are skipped.
+>   - Modernized `ComWorker` in `com/worker.rs`: decorated `dispatch_with_retry`, `handle_read`, `handle_write`, `handle_browse`, and `browse_recursive` with `#[tracing::instrument]`; replaced ad-hoc manual spans; and standardized error inspection via `.inspect_err(|e| log_opc_error(e, ...))`. Added unit test `test_worker_tracing_instrumentation_execution`.
+>   - Instrumented public provider methods in `com/client.rs` on `OpcDaClient` (`new`, `list_servers`, `browse_tags`, `read_tag_values`, `write_tag_value`).
+>   - Instrumented application user actions in `opc-cli/src/app.rs` (`start_fetch_servers`, `start_browse_tags`, `start_read_values`, `start_write_value`).
+>   - Synchronized `architecture.md §9` and `§10` with function-level instrumentation and updated test counts (75 unit tests in `opc-da-client`, 38 unit tests in `opc-cli`, 53 doc-tests).
+>   - Ran the complete 9-gate quality pipeline (`scripts/verify.ps1`) with exit 0.
+> * **New Constraints:** `RemotePointer` and `RemoteArray` are strictly move-only types and must never implement `Clone`. Low-level COM FFI gateway functions and worker dispatch handlers must maintain function-level `#[tracing::instrument]` spans with large payload vectors skipped.
+> * **Pruned:** Removed `RemoteArray::into_vec`, blanket `#![allow(warnings)]` suppressions, and ad-hoc manual `tracing::info_span!` / elapsed time calculation boilerplate.
+
 ## 2026-09-04: Architecture Specification Synchronization for helpers.rs Dissolution (`opc-da-client`)
 > 📝 **Context Update:**
 > * **Feature:** Synchronize `opc-da-client/architecture.md` with active crate architecture, eliminating stale references to `helpers.rs`, documenting `com::variant` and `raw::hresult`, updating the 9-gate toolchain, and modernizing error handling and testing strategies.

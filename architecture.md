@@ -157,7 +157,12 @@ The project uses a unified dual-interface build system:
 
 - **Framework**: `tracing` + `tracing-subscriber` + `tracing-appender-localtime`.
 - **Target**: Rolling log file `logs/opc-cli.log` (stdout is reserved for Ratatui TUI rendering).
-- **Instrumentation**: Key operations (`list_servers`, `browse_tags`, `read_tag_values`, `write_tag_value`) are decorated with `#[tracing::instrument]` and log entry, exit, and `elapsed_ms` execution timing.
+- **Instrumentation**: Function-level tracing spans (`#[tracing::instrument]`) are uniformly applied across all architectural tiers:
+  - **COM Gateway & FFI (`connector.rs`, `guard.rs`)**: MTA apartment initialization (`ComGuard::new`), server enumeration, server connection, group creation, and item read/write with automatic error recording (`err`).
+  - **Worker Dispatch & Traversal (`worker.rs`)**: Request dispatch with connection retry (`dispatch_with_retry`), group management, reading, writing, and hierarchical/flat namespace browsing (`browse_recursive`).
+  - **Public Provider (`client.rs`)**: Public `OpcProvider` trait methods (`list_servers`, `browse_tags`, `read_tag_values`, `write_tag_value`).
+  - **Application Layer (`app.rs`)**: User actions (`start_fetch_servers`, `start_browse_tags`, `start_read_values`, `start_write_value`).
+  - High-volume payload vectors (`tag_ids`, `items`, `server_handles`, `values`) are explicitly skipped in instrumentation attributes to eliminate serialization overhead during high-frequency polling.
 - **Two-Tier Diagnostics**:
   - **Dynamic Field Tier**: Runtime verbosity count flags `-v` (debug) / `-vv` (trace) mapped to `EnvFilter` levels to dynamically control logging without recompilation.
   - **Compile-Time Dev Tier**: Opt-in `dev-diagnostics` Cargo feature that compiles verbose trace-level MTA request/response argument dumps into `ComWorker` method executions.
@@ -169,9 +174,9 @@ The project uses a unified dual-interface build system:
 
 ## 10. Testing Strategy
 
-- **Unit Testing**: Mock-based testing using `MockOpcProvider` (`mockall`). TUI navigation flow, state transitions, search cycling, and ring-buffer logic are verified without Windows COM dependencies (38+ unit tests in `opc-cli`).
-- **COM Worker Testing**: `ComWorker` unit tests (`opc-da-client/src/com/worker.rs`) use the consolidated `MockServerConnector` to test write paths, tag browsing (flat, hierarchical, cancellation, capacity limits), server connection pooling (`connect_count == 1`), stale connection eviction (`connect_count == 2`), thread panic safety, and worker drop behaviors (76+ unit tests in `opc-da-client`).
-- **Doc Testing**: Public API items include runnable doc tests verified via `cargo test --doc --workspace --all-features` (55+ doc-tests, including pure-Rust mocking examples in `README.md` and `provider.rs`).
+- **Unit Testing**: Mock-based testing using `MockOpcProvider` (`mockall`). TUI navigation flow, state transitions, search cycling, and ring-buffer logic are verified without Windows COM dependencies (38 unit tests in `opc-cli`).
+- **COM Worker & Memory Safety Testing**: `ComWorker` and `raw/memory.rs` unit tests use `MockServerConnector` and synthetic allocations to test write paths, tag browsing (flat, hierarchical, cancellation, capacity limits), server connection pooling, stale connection eviction, thread panic safety, worker drop behaviors, tracing instrumentation execution, and non-cloneable remote pointer safe drop (75 unit tests in `opc-da-client`).
+- **Doc Testing**: Public API items include runnable doc tests verified via `cargo test --doc --workspace --all-features` (53 doc-tests, including pure-Rust mocking examples in `README.md` and `provider.rs`).
 - **Polyfill Build Gates**: Independent compilation of `compat/*` polyfill crates inside `scripts/verify.ps1`.
 - **AST-Grep Structural Safety Gates**: `sg scan` enforcement of zero unwrap/expect in production library code and mandatory `// SAFETY:` rationale on all unsafe blocks. Rules are validated via ast-grep unit tests before static scans.
 - **Forbidden Macro Scanner**: Automated `rg` scan ensuring zero `println!`, `dbg!`, or `todo!` macros in `opc-da-client/src/`.

@@ -143,6 +143,7 @@ impl App {
     }
 
     // Actions
+    #[tracing::instrument(level = "info", skip(self))]
     pub fn start_fetch_servers(&mut self) {
         let host = self.host_input.clone();
         self.log_transition(CurrentScreen::Loading, "start_fetch_servers");
@@ -299,6 +300,7 @@ impl App {
         }
     }
 
+    #[tracing::instrument(level = "info", skip(self))]
     pub fn start_browse_tags(&mut self) {
         if self.current_screen != CurrentScreen::ServerList {
             return;
@@ -429,6 +431,7 @@ impl App {
     }
 
     /// Start reading values for selected tags.
+    #[tracing::instrument(level = "debug", skip(self))]
     pub fn start_read_values(&mut self) {
         if self.current_screen != CurrentScreen::TagList {
             return;
@@ -592,6 +595,7 @@ impl App {
     }
 
     /// Start writing a value to the selected tag.
+    #[tracing::instrument(level = "info", skip(self))]
     pub fn start_write_value(&mut self) {
         let tag_id = match &self.write_tag_id {
             Some(t) => t.clone(),

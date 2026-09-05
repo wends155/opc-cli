@@ -178,6 +178,7 @@ pub trait ConnectedGroup {
 // ── COM-backed implementations ──────────────────────────────────────
 
 /// Helper to convert GUID to `ProgID` using Windows API
+#[tracing::instrument(level = "debug", err)]
 pub(crate) fn guid_to_progid(guid: &windows::core::GUID) -> OpcResult<String> {
     // SAFETY: `ProgIDFromCLSID` is a Win32 FFI call that allocates a PWSTR via COM allocator.
     // SAFETY: We read it and ensure `CoTaskMemFree` is always called before returning.
@@ -208,6 +209,7 @@ pub(crate) fn guid_to_progid(guid: &windows::core::GUID) -> OpcResult<String> {
 ///
 /// Returns `Err` if the `ProgID` cannot be resolved or the server
 /// cannot be instantiated.
+#[tracing::instrument(level = "info", err)]
 pub(crate) fn connect_server(server_name: &str) -> OpcResult<crate::raw::bindings::da::IOPCServer> {
     // SAFETY: `server_wide` is null-terminated and lives until end of scope.
     let clsid_raw = unsafe {
@@ -245,6 +247,7 @@ pub struct ComConnector;
 impl ServerConnector for ComConnector {
     type Server = ComServer;
 
+    #[tracing::instrument(level = "info", skip(self), err)]
     fn enumerate_servers(&self) -> OpcResult<Vec<String>> {
         tracing::debug!("Enumerating OPC DA Server classes via COM Component Categories Manager");
         // SAFETY: Calling COM function CLSIDFromProgID with static wide string literal.
@@ -291,6 +294,7 @@ impl ServerConnector for ComConnector {
         Ok(servers)
     }
 
+    #[tracing::instrument(level = "info", skip(self), err)]
     fn connect(&self, server_name: &str) -> OpcResult<Self::Server> {
         let server = connect_server(server_name)?;
 
@@ -326,6 +330,7 @@ pub struct ComServer {
 impl ConnectedServer for ComServer {
     type Group = ComGroup;
 
+    #[tracing::instrument(level = "debug", skip(self), err)]
     fn query_organization(&self) -> OpcResult<u32> {
         let iface = self.browse_server_address_space.as_ref().ok_or_else(|| {
             OpcError::NotImplemented("IOPCBrowseServerAddressSpace not supported".to_string())
@@ -335,6 +340,7 @@ impl ConnectedServer for ComServer {
         Ok(org.0 as u32)
     }
 
+    #[tracing::instrument(level = "debug", skip(self), err)]
     fn browse_opc_item_ids(
         &self,
         browse_type: BrowseType,
@@ -355,6 +361,7 @@ impl ConnectedServer for ComServer {
         Ok(StringIterator::new(output))
     }
 
+    #[tracing::instrument(level = "debug", skip(self), err)]
     fn change_browse_position(&self, direction: BrowseDirection, name: &str) -> OpcResult<()> {
         let iface = self.browse_server_address_space.as_ref().ok_or_else(|| {
             OpcError::NotImplemented("IOPCBrowseServerAddressSpace not supported".to_string())
@@ -369,6 +376,7 @@ impl ConnectedServer for ComServer {
         Ok(())
     }
 
+    #[tracing::instrument(level = "debug", skip(self), err)]
     fn get_item_id(&self, item_name: &str) -> OpcResult<String> {
         let iface = self.browse_server_address_space.as_ref().ok_or_else(|| {
             OpcError::NotImplemented("IOPCBrowseServerAddressSpace not supported".to_string())
@@ -380,6 +388,7 @@ impl ConnectedServer for ComServer {
         ptr.try_into().map_err(OpcError::from)
     }
 
+    #[tracing::instrument(level = "info", skip(self), err)]
     fn add_group(&self, config: &GroupConfig<'_>) -> OpcResult<CreatedGroup<Self::Group>> {
         let mut group = None;
         let group_name = LocalPointer::from(config.name);
@@ -426,6 +435,7 @@ impl ConnectedServer for ComServer {
         }
     }
 
+    #[tracing::instrument(level = "debug", skip(self), err)]
     fn remove_group(&self, server_group: GroupHandle, force: bool) -> OpcResult<()> {
         // SAFETY: Calling COM interface method RemoveGroup with server handle.
         unsafe {
@@ -449,6 +459,7 @@ pub struct ComGroup {
 }
 
 impl ConnectedGroup for ComGroup {
+    #[tracing::instrument(level = "debug", skip(self, items), err)]
     fn add_items(&self, items: &[GroupItemDef]) -> OpcResult<Vec<GroupItemResult>> {
         if items.is_empty() {
             return Err(OpcError::InvalidState("items cannot be empty".to_string()));
@@ -521,6 +532,7 @@ impl ConnectedGroup for ComGroup {
         Ok(group_results)
     }
 
+    #[tracing::instrument(level = "debug", skip(self, server_handles), err)]
     fn read(
         &self,
         source: DataSource,
@@ -582,6 +594,7 @@ impl ConnectedGroup for ComGroup {
         Ok(states)
     }
 
+    #[tracing::instrument(level = "debug", skip(self, server_handles, values), err)]
     fn write(
         &self,
         server_handles: &[ItemHandle],

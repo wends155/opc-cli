@@ -53,6 +53,7 @@ impl<C: ServerConnector + 'static> OpcDaClient<C> {
     ///     OpcDaClient::new(ComConnector)
     /// }
     /// ```
+    #[tracing::instrument(level = "info", skip(connector), err)]
     pub fn new(connector: C) -> OpcResult<Self> {
         tracing::info!("Initializing OpcDaClient...");
         let worker = ComWorker::start(Arc::new(connector))?;
@@ -64,6 +65,7 @@ impl<C: ServerConnector + 'static> OpcDaClient<C> {
 #[allow(clippy::too_many_lines)]
 #[async_trait]
 impl<C: ServerConnector + 'static> OpcProvider for OpcDaClient<C> {
+    #[tracing::instrument(level = "info", skip(self), err)]
     async fn list_servers(&self, host: &str) -> OpcResult<Vec<String>> {
         let host_owned = host.to_string();
         self.worker
@@ -74,6 +76,7 @@ impl<C: ServerConnector + 'static> OpcProvider for OpcDaClient<C> {
             .await
     }
 
+    #[tracing::instrument(level = "info", skip(self, collector), err)]
     async fn browse_tags(&self, server: &str, collector: TagCollector) -> OpcResult<Vec<String>> {
         let server_owned = server.to_string();
         self.worker
@@ -85,6 +88,7 @@ impl<C: ServerConnector + 'static> OpcProvider for OpcDaClient<C> {
             .await
     }
 
+    #[tracing::instrument(level = "info", skip(self, tag_ids), fields(tag_count = tag_ids.len()), err)]
     async fn read_tag_values(
         &self,
         server: &str,
@@ -100,6 +104,7 @@ impl<C: ServerConnector + 'static> OpcProvider for OpcDaClient<C> {
             .await
     }
 
+    #[tracing::instrument(level = "info", skip(self, value), err)]
     async fn write_tag_value(
         &self,
         server: &str,

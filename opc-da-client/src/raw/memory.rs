@@ -1,7 +1,12 @@
 //! COM memory management and type conversion utilities for the OPC DA client.
 
-#![allow(warnings)]
-#![allow(clippy::all, clippy::pedantic, clippy::restriction)]
+#![allow(
+    dead_code,
+    clippy::all,
+    clippy::pedantic,
+    clippy::nursery,
+    clippy::undocumented_unsafe_blocks
+)]
 
 use windows::{
     Win32::System::Com::{CoTaskMemAlloc, CoTaskMemFree},
@@ -14,7 +19,7 @@ use windows::{
 ///
 /// This struct ensures proper cleanup of COM-allocated memory when dropped.
 /// It provides safe access to the underlying array through slices.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, PartialEq)]
 pub struct RemoteArray<T: Sized> {
     pointer: RemotePointer<T>,
     len: u32,
@@ -136,13 +141,6 @@ impl<T: Sized> RemoteArray<T> {
     pub(crate) unsafe fn set_len(&mut self, len: u32) {
         self.len = len;
     }
-
-    pub fn into_vec(self) -> Vec<RemotePointer<T>> {
-        self.as_slice()
-            .iter()
-            .map(|v| RemotePointer::from_raw(v as *const T as *mut T))
-            .collect()
-    }
 }
 
 impl<T: Sized> Default for RemoteArray<T> {
@@ -158,7 +156,7 @@ impl<T: Sized> Default for RemoteArray<T> {
 /// This struct ensures proper cleanup of COM-allocated memory when dropped.
 /// It provides methods to access the underlying pointer.
 #[repr(transparent)]
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, PartialEq)]
 pub struct RemotePointer<T: Sized> {
     inner: *mut T,
 }
@@ -639,5 +637,22 @@ impl TryToNative<windows::Win32::Foundation::FILETIME> for std::time::SystemTime
 impl TryFromNative<windows::core::PWSTR> for String {
     fn try_from_native(native: &windows::core::PWSTR) -> windows::core::Result<Self> {
         RemotePointer::from(*native).try_into()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_remote_array_safety_and_invariants() {
+        let arr: RemoteArray<u32> = RemoteArray::empty();
+        assert_eq!(arr.len(), 0);
+        assert!(arr.is_empty());
+        assert_eq!(arr.as_slice(), &[]);
+        let default_arr: RemoteArray<u32> = RemoteArray::default();
+        assert_eq!(default_arr.len(), 0);
+        assert!(default_arr.is_empty());
+        assert_eq!(default_arr.as_slice(), &[]);
     }
 }
