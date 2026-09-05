@@ -296,8 +296,7 @@ impl ScopedVariant {
 
     /// Clears any allocated resources in the variant and resets its type to `VT_EMPTY`.
     pub fn clear(&mut self) {
-        // SAFETY: `self.0` is a valid VARIANT owned by this RAII guard.
-        // VariantClear releases any allocated BSTR or SAFEARRAY and resets vt to VT_EMPTY.
+        // SAFETY: `self.0` is a valid VARIANT; VariantClear releases BSTR/SAFEARRAY and resets vt to VT_EMPTY.
         unsafe {
             let _ = windows::Win32::System::Variant::VariantClear(&raw mut self.0);
         }
@@ -346,12 +345,18 @@ impl std::fmt::Debug for ItemStatesGuard<'_> {
     }
 }
 
+impl std::ops::Deref for ItemStatesGuard<'_> {
+    type Target = [crate::raw::bindings::da::tagOPCITEMSTATE];
+
+    fn deref(&self) -> &Self::Target {
+        self.0
+    }
+}
+
 impl Drop for ItemStatesGuard<'_> {
     fn drop(&mut self) {
         for state in self.0.iter_mut() {
-            // SAFETY: `state.vDataValue` is a COM VARIANT populated by IOPCSyncIO::Read.
-            // VariantClear safely frees contained resources (BSTR, SAFEARRAY) and sets vt to VT_EMPTY.
-            // If vt is already VT_EMPTY (e.g. on item error), VariantClear is a safe no-op.
+            // SAFETY: `state.vDataValue` is a VARIANT; VariantClear frees BSTR/SAFEARRAY or is safe no-op on VT_EMPTY.
             unsafe {
                 let _ = windows::Win32::System::Variant::VariantClear(&raw mut state.vDataValue);
             }

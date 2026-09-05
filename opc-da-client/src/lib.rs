@@ -65,3 +65,7 @@ pub use provider::MockOpcProvider;
 
 #[cfg(all(feature = "test-support", feature = "opc-da-backend"))]
 pub use com::connector::{MockConnectedGroup, MockConnectedServer, MockServerConnector};
+
+/// Type alias for an [`OpcDaClient`] instantiated with [`MockServerConnector`].
+#[cfg(all(feature = "test-support", feature = "opc-da-backend"))]
+pub type MockOpcDaClient = com::client::OpcDaClient<com::connector::MockServerConnector>;
