@@ -15,7 +15,7 @@
 >   - Synchronized `opc-da-client/architecture.md`: Updated §4 file tree, §5 module boundaries (`com::guard` and `com::worker`), and §10 test metrics (101 unit tests, 55 doc-tests).
 >   - Synchronized `opc-da-client/spec.md`: Added `BrowsePositionGuard` specification in Section 1.4, detailed worker submodules in Section 1.3, and updated test inventory in Section 3.
 >   - Verified full 9-gate quality pipeline (`pwsh -File scripts/verify.ps1`) with exit code 0 across all gates (101 unit tests in `opc-da-client`, 139 total workspace unit tests, 55 doc-tests, zero clippy warnings with `-D warnings`, zero ast-grep/forbidden pattern violations).
->   - Committed code as checkpoint `87d2ec2`.
+>   - Committed code as checkpoint `87d2ec2` and documentation as checkpoint `9b6dcd3`.
 > * **New Constraints:** `worker.rs` must remain a slim coordinator under 300 lines; domain operations must reside in dedicated single-responsibility submodules under `src/com/worker/`. All RAII resource and cursor guards must reside in `src/com/guard.rs`. Never re-introduce `#![allow(clippy::too_many_lines)]`.
 > * **Pruned:** Monolithic 1,734-line `worker.rs` blob, `#![allow(clippy::too_many_lines)]` suppression, triple string allocation in tag reading, and untyped server strings in `ComRequest`.
 
