@@ -231,12 +231,12 @@ pub(crate) fn connect_server(server_name: &str) -> OpcResult<crate::raw::binding
             windows::Win32::System::Com::CLSCTX_ALL,
         )
     }
-    .map_err(|e| {
+    .inspect_err(|e| {
         let hint = crate::raw::hresult::friendly_hresult_hint(e.code())
             .unwrap_or("Check DCOM configuration and server status");
         tracing::error!(error = ?e, server = %server_name, hint, "create_server failed");
-        OpcError::Com { source: e }
-    })?;
+    })
+    .map_err(|e| OpcError::Com { source: e })?;
     tracing::debug!(server = %server_name, "Connected to OPC DA server");
     Ok(server)
 }
@@ -676,6 +676,8 @@ pub struct MockState {
     pub should_fail_with_connection_error: std::sync::atomic::AtomicBool,
     /// Simulates worker thread panic on request handling.
     pub should_panic_on_request: std::sync::atomic::AtomicBool,
+    /// Number of times remove_group has been invoked.
+    pub remove_group_count: std::sync::atomic::AtomicUsize,
 }
 
 /// Pure-Rust mock implementation of [`ConnectedGroup`] for testing.
@@ -931,6 +933,9 @@ impl ConnectedServer for MockConnectedServer {
     }
 
     fn remove_group(&self, _server_group: GroupHandle, _force: bool) -> OpcResult<()> {
+        self.state
+            .remove_group_count
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         Ok(())
     }
 }

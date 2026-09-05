@@ -118,6 +118,108 @@ impl OpcError {
     }
 }
 
+/// Canonical operation identifiers for OPC DA interactions.
+#[allow(dead_code)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub(crate) enum OpcOperation {
+    ListServers,
+    Connect,
+    DispatchConnectionError,
+    DispatchReconnect,
+    DispatchRetriedOperation,
+    DispatchOperation,
+    ReadAddGroup,
+    ReadAddItems,
+    ReadMismatchedResults,
+    ReadSync,
+    ReadPerItem,
+    WriteAddGroup,
+    WriteAddItems,
+    WriteEmptyItemResults,
+    WriteAddItemsRejected,
+    WriteSync,
+    WriteEmptyWriteErrors,
+    WriteServerRejected,
+    BrowseQueryOrganization,
+    BrowseFlatLeaves,
+    BrowseFlatLeafItem,
+    BrowseFlatEnumItem,
+    BrowseRecursiveBranches,
+    BrowseRecursiveBranchItem,
+    BrowseRecursiveLeaves,
+    BrowseRecursiveLeafItem,
+    BrowseRecursiveGetItemId,
+    BrowseRecursiveChangePositionDown,
+    BrowseRecursiveChildBranch,
+    BrowseRecursiveChangePositionUp,
+}
+
+impl std::fmt::Display for OpcOperation {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let op_str = match self {
+            Self::ListServers => "list_servers",
+            Self::Connect => "connect",
+            Self::DispatchConnectionError => "dispatch_with_retry:connection_error",
+            Self::DispatchReconnect => "dispatch_with_retry:reconnect",
+            Self::DispatchRetriedOperation => "dispatch_with_retry:retried_operation",
+            Self::DispatchOperation => "dispatch_with_retry:operation",
+            Self::ReadAddGroup => "read_tag_values:add_group",
+            Self::ReadAddItems => "read_tag_values:add_items",
+            Self::ReadMismatchedResults => "read_tag_values:mismatched_results",
+            Self::ReadSync => "read_tag_values:group_read",
+            Self::ReadPerItem => "read_tag_values:per_item_read",
+            Self::WriteAddGroup => "write_tag_value:add_group",
+            Self::WriteAddItems => "write_tag_value:add_items",
+            Self::WriteEmptyItemResults => "write_tag_value:empty_item_results",
+            Self::WriteAddItemsRejected => "write_tag_value:add_items_rejected",
+            Self::WriteSync => "write_tag_value:group_write",
+            Self::WriteEmptyWriteErrors => "write_tag_value:empty_write_errors",
+            Self::WriteServerRejected => "write_tag_value:server_rejected",
+            Self::BrowseQueryOrganization => "browse_tags:query_organization",
+            Self::BrowseFlatLeaves => "browse_tags:flat_leaves",
+            Self::BrowseFlatLeafItem => "browse_tags:flat_leaf_item",
+            Self::BrowseFlatEnumItem => "browse_tags:flat_enum_item",
+            Self::BrowseRecursiveBranches => "browse_recursive:branches",
+            Self::BrowseRecursiveBranchItem => "browse_recursive:branch_item",
+            Self::BrowseRecursiveLeaves => "browse_recursive:leaves",
+            Self::BrowseRecursiveLeafItem => "browse_recursive:leaf_item",
+            Self::BrowseRecursiveGetItemId => "browse_recursive:get_item_id",
+            Self::BrowseRecursiveChangePositionDown => "browse_recursive:change_position_down",
+            Self::BrowseRecursiveChildBranch => "browse_recursive:child_branch",
+            Self::BrowseRecursiveChangePositionUp => "browse_recursive:change_position_up",
+        };
+        write!(f, "{op_str}")
+    }
+}
+
+/// Emits a structured `tracing::error!` event capturing HRESULT, hint, chain, and optional key-value fields.
+#[macro_export]
+macro_rules! log_opc_err {
+    ($err:expr, $op:expr) => {{
+        $crate::log_opc_err!($err, $op,)
+    }};
+    ($err:expr, $op:expr, $($field:tt)*) => {{
+        let error = $err;
+        let operation = $op;
+        let hresult = match error {
+            $crate::errors::OpcError::Com { source: e } => {
+                Some(format!("0x{:08X}", e.code().0.cast_unsigned()))
+            }
+            _ => None,
+        };
+        let hint = error.friendly_hint();
+        let chain = format!("{error:#}");
+
+        tracing::error!(
+            operation = %operation,
+            hresult = hresult.as_deref().unwrap_or("N/A"),
+            hint = hint.unwrap_or("none"),
+            chain = %chain,
+            $($field)*
+        );
+    }};
+}
+
 /// Emits a structured `tracing::error!` event with machine-parseable fields.
 ///
 /// Extracts the HRESULT code and friendly hint from an [`OpcError`],
@@ -128,20 +230,7 @@ impl OpcError {
 /// * `operation` - Name of the operation that failed (e.g., "read_tag_values")
 #[allow(dead_code)]
 pub(crate) fn log_opc_error(error: &OpcError, operation: &str) {
-    let hresult = match error {
-        OpcError::Com { source: e } => Some(format!("0x{:08X}", e.code().0.cast_unsigned())),
-        _ => None,
-    };
-    let hint = error.friendly_hint();
-    let chain = format!("{error:#}");
-
-    tracing::error!(
-        operation = %operation,
-        hresult = hresult.as_deref().unwrap_or("N/A"),
-        hint = hint.unwrap_or("none"),
-        chain = %chain,
-        "OPC operation failed"
-    );
+    log_opc_err!(error, operation);
 }
 
 #[cfg(test)]
@@ -235,5 +324,41 @@ mod tests {
     fn test_friendly_hint_unknown_code() {
         let err = OpcError::Internal("Some other error".to_string());
         assert_eq!(err.friendly_hint(), None);
+    }
+
+    #[test]
+    fn test_opc_operation_display() {
+        assert_eq!(
+            OpcOperation::ReadAddGroup.to_string(),
+            "read_tag_values:add_group"
+        );
+        assert_eq!(
+            OpcOperation::WriteSync.to_string(),
+            "write_tag_value:group_write"
+        );
+        assert_eq!(
+            OpcOperation::BrowseRecursiveChangePositionDown.to_string(),
+            "browse_recursive:change_position_down"
+        );
+        assert_eq!(
+            OpcOperation::DispatchReconnect.to_string(),
+            "dispatch_with_retry:reconnect"
+        );
+    }
+
+    #[test]
+    fn test_log_opc_err_macro() {
+        let err = OpcError::Connection("server unreachable".into());
+        log_opc_err!(
+            &err,
+            OpcOperation::Connect,
+            server = "Matrikon.OPC.Simulation.1"
+        );
+        log_opc_err!(
+            &err,
+            OpcOperation::ReadAddItems,
+            server = "Matrikon.OPC.Simulation.1",
+            tag_count = 5
+        );
     }
 }

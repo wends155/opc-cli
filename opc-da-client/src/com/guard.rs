@@ -52,10 +52,9 @@ impl ComGuard {
         // SAFETY: Result is checked below, and CoUninitialize is guaranteed via Drop.
         let hr = unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) };
 
-        hr.ok().map_err(|e| {
-            tracing::error!(error = ?e, "COM MTA initialization failed");
-            OpcError::Com { source: e }
-        })?;
+        hr.ok()
+            .inspect_err(|e| tracing::error!(error = ?e, "COM MTA initialization failed"))
+            .map_err(|e| OpcError::Com { source: e })?;
 
         tracing::debug!("COM MTA initialized");
 
