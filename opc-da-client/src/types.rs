@@ -542,25 +542,31 @@ impl ServerIdentifier {
     }
 }
 
+/// Formats a 128-bit COM GUID into a bracketed registry/DCOM string:
+/// `"{XXXXXXXX-XXXX-XXXX-XXXX-XXXXXXXXXXXX}"`.
+#[must_use]
+pub(crate) fn format_guid_bracketed(guid: &windows::core::GUID) -> String {
+    format!(
+        "{{{:08X}-{:04X}-{:04X}-{:02X}{:02X}-{:02X}{:02X}{:02X}{:02X}{:02X}{:02X}}}",
+        guid.data1,
+        guid.data2,
+        guid.data3,
+        guid.data4[0],
+        guid.data4[1],
+        guid.data4[2],
+        guid.data4[3],
+        guid.data4[4],
+        guid.data4[5],
+        guid.data4[6],
+        guid.data4[7]
+    )
+}
+
 impl fmt::Display for ServerIdentifier {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::ProgId(prog_id) => write!(f, "{prog_id}"),
-            Self::Clsid(guid) => write!(
-                f,
-                "{{{:08X}-{:04X}-{:04X}-{:02X}{:02X}-{:02X}{:02X}{:02X}{:02X}{:02X}{:02X}}}",
-                guid.data1,
-                guid.data2,
-                guid.data3,
-                guid.data4[0],
-                guid.data4[1],
-                guid.data4[2],
-                guid.data4[3],
-                guid.data4[4],
-                guid.data4[5],
-                guid.data4[6],
-                guid.data4[7]
-            ),
+            Self::Clsid(guid) => write!(f, "{}", format_guid_bracketed(guid)),
         }
     }
 }
@@ -827,6 +833,25 @@ mod tests {
         assert_eq!(
             info_without_user_type.endpoint().host.as_deref(),
             Some("192.168.1.10")
+        );
+    }
+
+    #[test]
+    fn test_format_guid_bracketed() {
+        let guid = windows::core::GUID::zeroed();
+        assert_eq!(
+            format_guid_bracketed(&guid),
+            "{00000000-0000-0000-0000-000000000000}"
+        );
+        assert_eq!(
+            format_guid_bracketed(&guid),
+            ServerIdentifier::Clsid(guid).to_string()
+        );
+
+        let custom_guid = windows::core::GUID::from_u128(0x01234567_89AB_CDEF_0123_456789ABCDEF);
+        assert_eq!(
+            format_guid_bracketed(&custom_guid),
+            ServerIdentifier::Clsid(custom_guid).to_string()
         );
     }
 }

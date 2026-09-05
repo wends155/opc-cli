@@ -73,22 +73,23 @@ impl Drop for RegKeyGuard {
     }
 }
 
-fn open_clsid_key(
-    clsid_str: &str,
+/// Opens a Windows registry subkey safely with specified access/view flags.
+fn open_reg_key(
+    parent: windows::Win32::System::Registry::HKEY,
+    subkey: &str,
     view_flag: windows::Win32::System::Registry::REG_SAM_FLAGS,
 ) -> Option<RegKeyGuard> {
     use windows::Win32::Foundation::ERROR_SUCCESS;
-    use windows::Win32::System::Registry::{HKEY_CLASSES_ROOT, KEY_READ, RegOpenKeyExW};
+    use windows::Win32::System::Registry::{KEY_READ, RegOpenKeyExW};
     use windows::core::PCWSTR;
 
-    let subkey = format!(r"CLSID\{clsid_str}");
     let wide: Vec<u16> = subkey.encode_utf16().chain(std::iter::once(0)).collect();
     let mut key = windows::Win32::System::Registry::HKEY::default();
 
-    // SAFETY: Calling Win32 RegOpenKeyExW with null-terminated PCWSTR.
+    // SAFETY: Calling Win32 RegOpenKeyExW with null-terminated PCWSTR and valid parent HKEY.
     let status = unsafe {
         RegOpenKeyExW(
-            HKEY_CLASSES_ROOT,
+            parent,
             PCWSTR(wide.as_ptr()),
             None,
             KEY_READ | view_flag,
@@ -103,44 +104,81 @@ fn open_clsid_key(
     }
 }
 
-fn read_default_string(
-    parent: windows::Win32::System::Registry::HKEY,
-    subkey_name: Option<&str>,
-    view_flag: windows::Win32::System::Registry::REG_SAM_FLAGS,
-) -> Option<String> {
-    use windows::Win32::Foundation::ERROR_SUCCESS;
-    use windows::Win32::System::Registry::{KEY_READ, RegOpenKeyExW, RegQueryValueExW};
-    use windows::core::PCWSTR;
+/// Expands Win32 environment variable strings (e.g. `%SystemRoot%\System32`).
+fn expand_environment_string(raw: &str) -> String {
+    use windows::core::{PCWSTR, PWSTR};
 
-    let target_guard = if let Some(sub) = subkey_name {
-        let wide: Vec<u16> = sub.encode_utf16().chain(std::iter::once(0)).collect();
-        let mut key = windows::Win32::System::Registry::HKEY::default();
-        // SAFETY: Calling Win32 RegOpenKeyExW with valid wide string.
-        let status = unsafe {
-            RegOpenKeyExW(
-                parent,
-                PCWSTR(wide.as_ptr()),
-                None,
-                KEY_READ | view_flag,
-                &raw mut key,
-            )
-        };
-        if status == ERROR_SUCCESS {
-            Some(RegKeyGuard(key))
-        } else {
-            return None;
-        }
-    } else {
-        None
+    if !raw.contains('%') {
+        return raw.to_string();
+    }
+
+    let wide: Vec<u16> = raw.encode_utf16().chain(std::iter::once(0)).collect();
+
+    // SAFETY: Declaring Windows kernel32 function.
+    unsafe extern "system" {
+        fn ExpandEnvironmentStringsW(lpsrc: PCWSTR, lpdst: PWSTR, nsize: u32) -> u32;
+    }
+
+    let mut buf = [0u16; 512];
+
+    // SAFETY: Calling Win32 ExpandEnvironmentStringsW with null-terminated wide string.
+    let req_size = unsafe {
+        ExpandEnvironmentStringsW(
+            PCWSTR(wide.as_ptr()),
+            PWSTR(buf.as_mut_ptr()),
+            u32::try_from(buf.len()).unwrap_or(512),
+        )
     };
 
-    let target = target_guard.as_ref().map_or(parent, |g| g.0);
+    if req_size == 0 {
+        return raw.to_string();
+    }
+
+    if (req_size as usize) <= buf.len() {
+        let valid_len = (req_size as usize).saturating_sub(1);
+        String::from_utf16_lossy(&buf[..valid_len])
+    } else {
+        let mut dynamic_buf = vec![0u16; req_size as usize];
+        let dynamic_len = u32::try_from(dynamic_buf.len()).unwrap_or(req_size);
+        // SAFETY: Calling Win32 ExpandEnvironmentStringsW with dynamic buffer sized to req_size.
+        let dynamic_req = unsafe {
+            ExpandEnvironmentStringsW(
+                PCWSTR(wide.as_ptr()),
+                PWSTR(dynamic_buf.as_mut_ptr()),
+                dynamic_len,
+            )
+        };
+        if dynamic_req == 0 {
+            raw.to_string()
+        } else {
+            let valid_len = (dynamic_req as usize).saturating_sub(1);
+            String::from_utf16_lossy(&dynamic_buf[..valid_len])
+        }
+    }
+}
+
+fn open_clsid_key(
+    clsid_str: &str,
+    view_flag: windows::Win32::System::Registry::REG_SAM_FLAGS,
+) -> Option<RegKeyGuard> {
+    open_reg_key(
+        windows::Win32::System::Registry::HKEY_CLASSES_ROOT,
+        &format!(r"CLSID\{clsid_str}"),
+        view_flag,
+    )
+}
+
+fn read_string_from_key(target: windows::Win32::System::Registry::HKEY) -> Option<String> {
+    use windows::Win32::Foundation::{ERROR_MORE_DATA, ERROR_SUCCESS};
+    use windows::Win32::System::Registry::{REG_EXPAND_SZ, REG_VALUE_TYPE, RegQueryValueExW};
+    use windows::core::PCWSTR;
+
     let mut buf = [0u16; 512];
     let mut len = u32::try_from(std::mem::size_of_val(&buf)).unwrap_or(1024);
-    let mut val_type = windows::Win32::System::Registry::REG_VALUE_TYPE::default();
+    let mut val_type = REG_VALUE_TYPE::default();
 
     // SAFETY: Calling Win32 RegQueryValueExW with raw pointers to stack buffers.
-    let status = unsafe {
+    let mut status = unsafe {
         RegQueryValueExW(
             target,
             PCWSTR::null(),
@@ -151,17 +189,67 @@ fn read_default_string(
         )
     };
 
-    if status == ERROR_SUCCESS && len > 1 {
+    let raw_string = if status == ERROR_SUCCESS && len > 1 {
         let valid_u16_count = (len as usize) / std::mem::size_of::<u16>();
         let val = String::from_utf16_lossy(&buf[..valid_u16_count.min(buf.len())]);
-        let trimmed = val.trim_matches('\0').trim().to_string();
+        val.trim_matches('\0').trim().to_string()
+    } else if status == ERROR_MORE_DATA && len > 1 {
+        // Two-phase query: dynamically reallocate buffer sized according to required len
+        let u16_needed = (len as usize) / std::mem::size_of::<u16>() + 1;
+        let mut dynamic_buf = vec![0u16; u16_needed];
+        let mut dynamic_len = len;
+
+        // SAFETY: Calling Win32 RegQueryValueExW with dynamically sized vector buffer.
+        status = unsafe {
+            RegQueryValueExW(
+                target,
+                PCWSTR::null(),
+                None,
+                Some(&raw mut val_type),
+                Some(dynamic_buf.as_mut_ptr().cast::<u8>()),
+                Some(&raw mut dynamic_len),
+            )
+        };
+
+        if status == ERROR_SUCCESS && dynamic_len > 1 {
+            let valid_u16_count = (dynamic_len as usize) / std::mem::size_of::<u16>();
+            let val =
+                String::from_utf16_lossy(&dynamic_buf[..valid_u16_count.min(dynamic_buf.len())]);
+            val.trim_matches('\0').trim().to_string()
+        } else {
+            return None;
+        }
+    } else {
+        return None;
+    };
+
+    if raw_string.is_empty() {
+        return None;
+    }
+
+    if val_type == REG_EXPAND_SZ {
+        let expanded = expand_environment_string(&raw_string);
+        let trimmed = expanded.trim().to_string();
         if trimmed.is_empty() {
             None
         } else {
             Some(trimmed)
         }
     } else {
-        None
+        Some(raw_string)
+    }
+}
+
+fn read_default_string(
+    parent: windows::Win32::System::Registry::HKEY,
+    subkey_name: Option<&str>,
+    view_flag: windows::Win32::System::Registry::REG_SAM_FLAGS,
+) -> Option<String> {
+    if let Some(sub) = subkey_name {
+        let guard = open_reg_key(parent, sub, view_flag)?;
+        read_string_from_key(guard.0)
+    } else {
+        read_string_from_key(parent)
     }
 }
 
@@ -196,20 +284,7 @@ pub fn inspect_local_registration(
         }
     }
 
-    let clsid_str = format!(
-        "{{{:08X}-{:04X}-{:04X}-{:02X}{:02X}-{:02X}{:02X}{:02X}{:02X}{:02X}{:02X}}}",
-        clsid.data1,
-        clsid.data2,
-        clsid.data3,
-        clsid.data4[0],
-        clsid.data4[1],
-        clsid.data4[2],
-        clsid.data4[3],
-        clsid.data4[4],
-        clsid.data4[5],
-        clsid.data4[6],
-        clsid.data4[7]
-    );
+    let clsid_str = crate::types::format_guid_bracketed(clsid);
 
     use windows::Win32::System::Registry::{KEY_WOW64_32KEY, REG_SAM_FLAGS};
     let views = [REG_SAM_FLAGS(0), KEY_WOW64_32KEY];
@@ -247,7 +322,7 @@ pub fn inspect_local_registration(
 
     let err = OpcError::Server(
         format!("No LocalServer32 or InprocServer32 registry key found for CLSID {clsid_str}"),
-        0x8004_0154,
+        crate::raw::hresult::REGDB_E_CLASSNOTREG.0.cast_unsigned(),
     );
     log_opc_err!(&err, OpcOperation::InspectRegistration, clsid = %clsid_str);
     Err(err)
@@ -438,5 +513,42 @@ mod tests {
             OpcServerType::InprocServer32.to_string(),
             "InprocServer32 (DLL)"
         );
+    }
+
+    #[test]
+    fn test_open_reg_key_invalid() {
+        use windows::Win32::System::Registry::{HKEY_CLASSES_ROOT, REG_SAM_FLAGS};
+        let key = open_reg_key(
+            HKEY_CLASSES_ROOT,
+            r"CLSID\{NONEXISTENT-0000-0000-0000-000000000000}\Invalid",
+            REG_SAM_FLAGS(0),
+        );
+        assert!(key.is_none());
+    }
+
+    #[test]
+    fn test_expand_environment_string() {
+        let expanded = expand_environment_string(r"%SystemRoot%\System32");
+        assert!(!expanded.contains("%SystemRoot%"));
+        assert!(expanded.to_ascii_lowercase().contains(r"\system32"));
+        let plain = expand_environment_string(r"C:\Program Files\OPC\server.exe");
+        assert_eq!(plain, r"C:\Program Files\OPC\server.exe");
+    }
+
+    #[test]
+    fn test_inspect_local_registration_nonexistent_returns_classnotreg() {
+        let nonexistent_clsid =
+            windows::core::GUID::from_u128(0xFEEDFACE_CAFE_BEEF_0123_456789ABCDEF);
+        let err = inspect_local_registration(&nonexistent_clsid, None).unwrap_err();
+        match err {
+            OpcError::Server(msg, code) => {
+                assert_eq!(
+                    code,
+                    crate::raw::hresult::REGDB_E_CLASSNOTREG.0.cast_unsigned()
+                );
+                assert!(msg.contains("No LocalServer32 or InprocServer32 registry key found"));
+            }
+            other => panic!("Expected OpcError::Server with REGDB_E_CLASSNOTREG, got {other:?}"),
+        }
     }
 }
