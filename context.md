@@ -1,5 +1,31 @@
 # Project Context Summary
 
+## 2026-09-06: Architectural Hardening, Rustdoc Coverage, and Specification Alignment (`opc-da-client` & `opc-cli`)
+> 📝 **Context Update:**
+> * **Feature:** Execute approved 14-step Master Implementation Plan resolving all 9 architectural recommendations and 11 documentation drift items from parallel Auditor subagent reports.
+> * **Changes:**
+>   - **Architectural Boundary Hardening & Layer Inversion Elimination:**
+>     - Fixed layer inversion in `try_from_native!` macro in `raw/memory.rs`: changed target path from `$crate::com::memory::TryFromNative` to `$crate::raw::memory::TryFromNative`.
+>     - Removed `pub(crate) use crate::raw::memory;` in `com/mod.rs` and updated `com/iterator.rs` to import directly from `raw::memory`, sealing unmanaged COM memory boundary leaks.
+>     - Converted `com/worker/` submodules (`read.rs`, `write.rs`, `tests.rs`, `worker.rs`) to import canonical `OpcValue` and `OpcQuality` directly from foundation `crate::types` rather than `crate::provider`.
+>     - Removed unused `windows = { workspace = true }` dependency from `opc-cli/Cargo.toml`.
+>   - **Public API Surface & Rustdoc Completeness:**
+>     - Re-exported `ParseQualityError`, `OpcValue`, `OpcQuality`, and quality sub-enums (`QualityLimit`, `QualityMajor`, `QualitySubstatus`) at crate root in `opc-da-client/src/lib.rs`.
+>     - Added TDD unit test `test_parse_quality_error_reexport` verifying `ParseQualityError` implements `std::error::Error`.
+>     - Deduplicated crate overview documentation in `lib.rs`, removing inline `//!` block in favor of `#![doc = include_str!("../README.md")]`.
+>     - Added doc comments with `# Returns` to all `OpcValue` accessors and documented all enum variants in `types.rs`.
+>     - Added module `//!` header, `# Returns`, and runnable doctests with `MockOpcProvider` to `read_tag_value` and `write_tag_values` in `provider.rs`.
+>     - Fixed intra-doc link at `opc-cli/src/app.rs:879` and documented all public methods on `App` and `ui::render`.
+>     - Zero rustdoc warnings under `cargo doc --no-deps --workspace --all-features`.
+>   - **Documentation Ecosystem Synchronization:**
+>     - Synchronized `opc-da-client/README.md` API surface table and `logfile_format.md` logging target.
+>     - Synchronized `opc-da-client/spec.md`: updated commit hash to `fd2190e`, reconciled signatures, documented RAII guards (`ItemStatesGuard`, `StringIterator::drop`, `ItemResultsBlobGuard`, 2-tier `catch_unwind`), added Section 3: "State Machines" (`CurrentScreen`, `ComWorker`, `resolve_write_value`), and updated Section 5 test inventory to 172 tests (+10 new tests).
+>     - Synchronized root `architecture.md` and `opc-da-client/architecture.md`: updated §5 Module Boundaries (`com::client`, `com::iterator`, `raw::memory`, `raw::bridge`), §6 Dependency Direction tables (added `com::guard`, `com::iterator`, updated `com::variant`, removed phantom `serde`), §8 Error Handling (8 variants), §10 Test Strategy (39 CLI + 133 client = 172 unit tests, 59 doc-tests), and §13 Mermaid Diagrams (added `ServerConnector`, removed phantom `Worker --> Discovery`, added `CurrentScreen::Loading`).
+>   - **Quality Verification:**
+>     - Full 9-gate quality pipeline (`pwsh -File scripts/verify.ps1`) passes with exit code 0: 172 unit tests, 59 doc-tests, 0 clippy warnings (`-D warnings`), 0 AST-grep violations, 0 forbidden pattern matches, 0 anyhow/Box<dyn Error> library violations, clean release polyfill builds, clean PowerShell AST syntax.
+> * **New Constraints:** The `raw` subsystem must remain strictly self-contained and never reference `com`. `com::worker` submodules must import types directly from `types.rs`. All public items must retain 100% rustdoc coverage with zero warnings under `cargo doc --no-deps`.
+> * **Pruned:** Redundant inline crate docs in `lib.rs`, unused `windows` dependency in `opc-cli`, leaky `raw::memory` alias in `com/mod.rs`, and outdated section numbers/test metrics across architecture and specification documents.
+
 ## 2026-09-06: Comprehensive 34-Finding Architectural, Memory Safety, Concurrency, and API Remediation (`opc-da-client` & `opc-cli`)
 > 📝 **Context Update:**
 > * **Feature:** Execute end-to-end remediation of all 34 architectural, memory safety, concurrency, and API defects documented in `review_report.md` across `opc-da-client` and `opc-cli` per `implementation_plan.md` and `task.md`.

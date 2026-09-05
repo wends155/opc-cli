@@ -1,33 +1,5 @@
 #![allow(unsafe_code)]
 #![doc = include_str!("../README.md")]
-//! # opc-da-client
-//!
-//! Backend-agnostic OPC DA client library for Rust — async, trait-based,
-//! with transparent COM management.
-//!
-//! ## Quick Start
-//!
-//! ```no_run
-//! use opc_da_client::{OpcDaClient, OpcProvider, OpcResult};
-//!
-//! # #[tokio::main]
-//! # async fn main() -> OpcResult<()> {
-//! let client: OpcDaClient = OpcDaClient::default();
-//! let servers = client.list_servers("localhost").await?;
-//! # Ok(())
-//! # }
-//! ```
-//!
-//! ## Feature Flags
-//!
-//! | Flag | Default | Effect |
-//! |------|---------|--------|
-//! | `opc-da-backend` | ✅ | Native OPC DA backend via `windows-rs` |
-//! | `test-support` | ❌ | Enables `MockOpcProvider` and `MockServerConnector` mock suites |
-//!
-//! ## Platform
-//!
-//! **Windows only** — OPC DA is built on COM/DCOM.
 
 pub mod errors;
 mod provider;
@@ -48,7 +20,7 @@ pub use provider::{
 };
 pub use types::{
     BrowseDirection, BrowseType, GroupHandle, ItemHandle, OpcServerEndpoint, OpcServerInfo,
-    ServerIdentifier,
+    ParseQualityError, ServerIdentifier,
 };
 
 // Backend re-exports (conditional)
@@ -87,5 +59,13 @@ mod tests {
     fn test_mock_opc_da_client_default() {
         use super::MockOpcDaClient;
         let _client = MockOpcDaClient::default();
+    }
+
+    #[test]
+    fn test_parse_quality_error_reexport() {
+        use super::ParseQualityError;
+        let err: ParseQualityError = "INVALID".parse::<super::OpcQuality>().unwrap_err();
+        let _: &dyn std::error::Error = &err;
+        assert!(err.to_string().contains("Invalid OPC quality string"));
     }
 }

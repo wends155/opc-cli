@@ -1,3 +1,9 @@
+//! Canonical asynchronous OPC DA service provider abstractions and domain adapters.
+//!
+//! Defines the foundational [`OpcProvider`] trait for asynchronous server interaction,
+//! tag reading/writing, and address space browsing, along with domain types such as
+//! [`TagValue`], [`WriteResult`], and bounded [`TagCollector`].
+
 use crate::errors::{OpcError, OpcResult};
 pub use crate::types::{OpcQuality, OpcServerInfo, QualityLimit, QualityMajor, QualitySubstatus};
 use async_trait::async_trait;
@@ -663,6 +669,10 @@ impl TagCollector {
 
     /// Drains and returns all collected tags, resetting the buffer and atomic count.
     ///
+    /// # Returns
+    ///
+    /// Returns a vector of tag ID strings drained from the collector buffer.
+    ///
     /// # Examples
     ///
     /// ```
@@ -915,11 +925,37 @@ pub trait OpcProvider: Send + Sync {
     /// Default implementation delegates to [`OpcProvider::read_tag_values`].
     ///
     /// # Arguments
-    /// * `server` - ProgID of the OPC server.
+    /// * `server` - ProgID or identifier of the OPC server.
     /// * `tag_id` - Tag identifier to read.
+    ///
+    /// # Returns
+    /// A [`TagValue`] containing the read value, quality, and timestamp on success.
     ///
     /// # Errors
     /// Returns [`crate::errors::OpcError`] if the underlying read fails or returns empty results.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// # #[tokio::main]
+    /// # async fn main() -> opc_da_client::OpcResult<()> {
+    /// # let mut mock = opc_da_client::MockOpcProvider::new();
+    /// # mock.expect_read_tag_value().returning(|_, id| {
+    /// #     Ok(opc_da_client::TagValue {
+    /// #         tag_id: id.to_string(),
+    /// #         value: Some(opc_da_client::OpcValue::Int(42)),
+    /// #         quality: opc_da_client::OpcQuality::GOOD,
+    /// #         timestamp: None,
+    /// #     })
+    /// # });
+    /// # let client: &dyn opc_da_client::OpcProvider = &mock;
+    /// use opc_da_client::{OpcProvider, OpcResult, TagValue};
+    ///
+    /// let tag = client.read_tag_value("Matrikon.OPC.Simulation.1", "Random.Int4").await?;
+    /// assert_eq!(tag.tag_id, "Random.Int4");
+    /// # Ok(())
+    /// # }
+    /// ```
     async fn read_tag_value(&self, server: &str, tag_id: &str) -> OpcResult<TagValue> {
         let mut results = self
             .read_tag_values(server, vec![tag_id.to_string()])
@@ -934,11 +970,36 @@ pub trait OpcProvider: Send + Sync {
     /// Default implementation iteratively invokes [`OpcProvider::write_tag_value`].
     ///
     /// # Arguments
-    /// * `server` - ProgID of the OPC server.
+    /// * `server` - ProgID or identifier of the OPC server.
     /// * `writes` - Slice of `(tag_id, value)` pairs to write.
+    ///
+    /// # Returns
+    /// A vector of [`WriteResult`] structs corresponding to each tag write attempt.
     ///
     /// # Errors
     /// Returns [`crate::errors::OpcError`] if any individual write fails.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// # #[tokio::main]
+    /// # async fn main() -> opc_da_client::OpcResult<()> {
+    /// # let mut mock = opc_da_client::MockOpcProvider::new();
+    /// # mock.expect_write_tag_values().returning(|_, writes| {
+    /// #     Ok(writes.iter().map(|(id, _)| opc_da_client::WriteResult::success(id.clone())).collect())
+    /// # });
+    /// # let client: &dyn opc_da_client::OpcProvider = &mock;
+    /// use opc_da_client::{OpcProvider, OpcResult, OpcValue, WriteResult};
+    ///
+    /// let writes = vec![
+    ///     ("Bucket Brigade.Int4".to_string(), OpcValue::Int(42)),
+    ///     ("Bucket Brigade.Real4".to_string(), OpcValue::Float(3.14)),
+    /// ];
+    /// let results = client.write_tag_values("Matrikon.OPC.Simulation.1", &writes).await?;
+    /// assert_eq!(results.len(), 2);
+    /// # Ok(())
+    /// # }
+    /// ```
     async fn write_tag_values(
         &self,
         server: &str,

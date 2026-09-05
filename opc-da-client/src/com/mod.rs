@@ -9,7 +9,6 @@ pub mod connector;
 pub mod discovery;
 pub mod guard;
 pub mod iterator;
-pub(crate) use crate::raw::memory;
 pub(crate) mod variant;
 pub mod worker;
 

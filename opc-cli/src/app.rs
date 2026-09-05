@@ -135,6 +135,11 @@ impl App {
         }
     }
 
+    /// Appends a message to the status message ring buffer (bounded to 10 entries).
+    ///
+    /// # Arguments
+    ///
+    /// * `message` - Informational or diagnostic message string to display.
     pub fn add_message(&mut self, message: String) {
         self.messages.push(message);
         if self.messages.len() > 10 {
@@ -172,6 +177,7 @@ impl App {
         self.fetch_result_rx = Some(rx);
     }
 
+    /// Polls the background server enumeration task and updates application state.
     pub fn poll_fetch_result(&mut self) {
         if let Some(rx) = &mut self.fetch_result_rx {
             match rx.try_recv() {
@@ -211,6 +217,7 @@ impl App {
         }
     }
 
+    /// Moves the active cursor selection forward by one row on list/table screens.
     pub fn select_next(&mut self) {
         let count = match self.current_screen {
             CurrentScreen::ServerList => self.servers.len(),
@@ -238,6 +245,7 @@ impl App {
         }
     }
 
+    /// Moves the active cursor selection backward by one row on list/table screens.
     pub fn select_prev(&mut self) {
         if let Some(idx) = self.selected_index
             && idx > 0
@@ -300,6 +308,7 @@ impl App {
         }
     }
 
+    /// Initiates asynchronous address space tag browsing on the currently selected server.
     #[tracing::instrument(level = "info", skip(self))]
     pub fn start_browse_tags(&mut self) {
         if self.current_screen != CurrentScreen::ServerList {
@@ -370,6 +379,7 @@ impl App {
         self.browse_result_rx = Some(rx);
     }
 
+    /// Polls the background address space browsing task and populates available tags.
     pub fn poll_browse_result(&mut self) {
         if let Some(rx) = &mut self.browse_result_rx {
             match rx.try_recv() {
@@ -504,6 +514,7 @@ impl App {
         self.read_result_rx = Some(rx);
     }
 
+    /// Polls the background tag reading task and updates the tag values display table.
     pub fn poll_read_result(&mut self) {
         if let Some(rx) = &mut self.read_result_rx {
             match rx.try_recv() {
@@ -688,6 +699,7 @@ impl App {
         }
     }
 
+    /// Periodically triggers asynchronous tag reading if on the `TagValues` screen and elapsed time exceeds threshold.
     pub fn maybe_auto_refresh(&mut self) {
         if self.current_screen != CurrentScreen::TagValues {
             return;
@@ -819,6 +831,7 @@ impl App {
         }
     }
 
+    /// Navigates backward one screen in the TUI navigation hierarchy, resetting child state.
     pub fn go_back(&mut self) {
         match self.current_screen {
             CurrentScreen::ServerList => {
@@ -863,8 +876,17 @@ impl App {
     /// Resolves and parses user write input into an [`OpcValue`] with context-aware type coercion.
     ///
     /// If the existing tag is known to be a boolean, `"1"` and `"0"` are coerced to `OpcValue::Bool(true)`
-    /// and `OpcValue::Bool(false)` respectively (REV-14). Otherwise, canonical [`OpcValue::from_str`]
-    /// parsing rules apply.
+    /// and `OpcValue::Bool(false)` respectively (REV-14). Otherwise, canonical [`OpcValue`]
+    /// parsing via [`std::str::FromStr`] rules apply.
+    ///
+    /// # Arguments
+    ///
+    /// * `tag_id` - Identifier of the tag being written.
+    /// * `value_str` - Raw string entered by the user.
+    ///
+    /// # Returns
+    ///
+    /// Returns the coerced [`OpcValue`].
     pub fn resolve_write_value(&self, tag_id: &str, value_str: &str) -> OpcValue {
         let mut opc_value = value_str
             .parse::<OpcValue>()

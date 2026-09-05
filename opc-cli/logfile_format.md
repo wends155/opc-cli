@@ -42,5 +42,5 @@ Any line failing this regex indicates either a multiline message payload (which 
 
 **Example 2: Deeply nested event with fields**
 ```
-2026-02-22T03:13:25.279812Z DEBUG opc.list_servers{host=localhost}: opc_da_client::com_guard: COM MTA initialized
+2026-02-22T03:13:25.279812Z DEBUG opc.list_servers{host=localhost}: opc_da_client::com::worker: COM MTA initialized
 ```

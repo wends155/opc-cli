@@ -35,6 +35,7 @@ pub enum OpcError {
     /// hint for common OPC-related HRESULT codes.
     #[error("COM error: {source}{}", format_com_hint(.source))]
     Com {
+        /// The underlying Windows COM/DCOM error.
         #[from]
         source: windows::core::Error,
     },

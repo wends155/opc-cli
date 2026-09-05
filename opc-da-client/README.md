@@ -249,7 +249,7 @@ async fn main() -> OpcResult<()> {
 
 | Type / Trait | Kind | Purpose |
 |:---|:---|:---|
-| `OpcProvider` | `pub trait` | Async trait for OPC DA operations (`list_servers`, `list_server_details`, `browse_tags`, `read_tag_values`, `write_tag_value`). |
+| `OpcProvider` | `pub trait` | Async trait for OPC DA operations (`list_servers`, `list_server_details`, `browse_tags`, `read_tag_values`, `read_tag_value`, `write_tag_value`, `write_tag_values`). |
 | `OpcDaClient` | `pub struct` | Primary client implementation using Windows COM through a dedicated worker thread. |
 | `ServerIdentifier` | `pub enum` | Strongly-typed server identifier (`ProgId` vs `Clsid`) with automatic GUID syntax parsing. |
 | `OpcServerInfo` | `pub struct` | Rich catalog metadata record (`prog_id`, `clsid`, `user_type`, `host`) with `display_name()` and `endpoint()`. |
@@ -264,6 +264,7 @@ async fn main() -> OpcResult<()> {
 | `SystemTimeOptionExt` | `pub trait` | Extension trait providing `.display()` and `.display_or("fallback")` for `Option<SystemTime>`. |
 | `OpcValue` | `pub enum` | Strongly-typed OPC value representation (`Int`, `Float`, `Bool`, `String`, `Empty`, `Null`). |
 | `OpcQuality` | `pub struct` | Zero-allocation decomposed 16-bit OPC DA quality word (`major`, `substatus`, `limit`, `raw`). |
+| `ParseQualityError` | `pub struct` | Error returned when parsing an invalid quality string via `FromStr`. |
 | `WriteResult` | `pub struct` | Tag write operation result (`tag_id`, `status: Result<(), OpcError>`, `is_success`, `is_error`, `error`). |
 | `TagCollector` | `pub struct` | Thread-safe, bounded container encapsulating thread-safe tag accumulation, atomic progress reporting, and cooperative cancellation token. |
 | `GroupHandle` | `pub struct` | Type-safe opaque handle wrapper for an OPC group. |
@@ -273,6 +274,7 @@ async fn main() -> OpcResult<()> {
 | `OpcError` | `pub enum` | Domain error enum covering connection, group, item, type, and COM HRESULT failures. |
 | `OpcError::friendly_hint` | `pub fn` | Inherent method translating Win32 COM and OPC HRESULT codes into actionable human-readable explanations. |
 | `OpcError::connection_failed` | `pub fn` | Inherent constructor producing an `OpcError::Connection` indicating CLSID resolution failure for a ProgID. |
+| `OpcError::is_connection_error` | `pub fn` | Predicate determining whether an error was caused by transport/connection failure for reconnection logic. |
 | `MockOpcProvider` | `pub struct` | Pure-Rust mock implementation of `OpcProvider` generated via `mockall` (under `feature = "test-support"`). |
 | `MockServerConnector` | `pub struct` | Pure-Rust mock implementation of `ServerConnector` providing simulated server enumeration and tag browsing (under `feature = "test-support"`). |
 | `MockConnectedServer` | `pub struct` | Pure-Rust mock implementation of `ConnectedServer` with in-memory namespace and group registration (under `feature = "test-support"`). |

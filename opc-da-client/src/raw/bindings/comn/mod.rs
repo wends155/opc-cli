@@ -1,3 +1,5 @@
+//! Frozen OPC Common COM interface bindings.
+
 // --------------------------------------------------------------------------
 // PROVENANCE: Frozen OPC Common COM interface bindings
 //

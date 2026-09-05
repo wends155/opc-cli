@@ -8,8 +8,9 @@ use std::sync::Arc;
 
 /// Concrete [`OpcProvider`] implementation for Windows OPC DA.
 ///
-/// Uses native `windows-rs` COM interop via the internal `opc_da` module.
+/// Uses native `windows-rs` COM interop via the internal `com` subsystem.
 pub struct OpcDaClient<C: ServerConnector + 'static = ComConnector> {
+    /// Background MTA worker handle managing asynchronous request channels.
     pub worker: ComWorker<C>,
 }
 

@@ -1,3 +1,5 @@
+//! Frozen OPC Data Access 2.05a COM interface bindings.
+
 // --------------------------------------------------------------------------
 // PROVENANCE: Frozen OPC DA COM interface bindings
 //

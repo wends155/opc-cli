@@ -601,7 +601,6 @@ dependencies = [
  "tracing",
  "tracing-appender-localtime",
  "tracing-subscriber",
- "windows",
 ]
 
 [[package]]

@@ -4,8 +4,8 @@ use crate::com::connector::{ConnectedGroup, ConnectedServer, GroupConfig, GroupI
 use crate::com::guard::GroupGuard;
 use crate::errors::{OpcError, OpcOperation, OpcResult};
 use crate::log_opc_err;
-use crate::provider::{OpcValue, WriteResult};
-use crate::types::{ItemHandle, ServerIdentifier};
+use crate::provider::WriteResult;
+use crate::types::{ItemHandle, OpcValue, ServerIdentifier};
 
 /// Executes synchronous single-tag writing through a temporary OPC group, returning
 /// a structured [`WriteResult`] capturing success or server-rejected error details.

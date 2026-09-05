@@ -4,7 +4,7 @@
 //! - [`traits`]: Pure-Rust DTOs and abstract connector traits.
 //! - [`server`]: Concrete COM server connector and server facade.
 //! - [`group`]: Concrete COM group and synchronous I/O operations.
-//! - [`mock`]: Pure-Rust mock infrastructure for testing.
+//! - `mock`: Pure-Rust mock infrastructure for testing (enabled via `test-support`).
 
 pub mod group;
 #[cfg(any(test, feature = "test-support"))]

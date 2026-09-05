@@ -156,6 +156,10 @@ impl fmt::Display for OpcValue {
 
 impl OpcValue {
     /// Returns the integer value if this is an [`OpcValue::Int`].
+    ///
+    /// # Returns
+    ///
+    /// Returns `Some(i32)` if this value is [`OpcValue::Int`], or `None` otherwise.
     #[inline]
     #[must_use]
     pub const fn as_int(&self) -> Option<i32> {
@@ -166,6 +170,10 @@ impl OpcValue {
     }
 
     /// Returns the float value if this is an [`OpcValue::Float`].
+    ///
+    /// # Returns
+    ///
+    /// Returns `Some(f64)` if this value is [`OpcValue::Float`], or `None` otherwise.
     #[inline]
     #[must_use]
     pub const fn as_float(&self) -> Option<f64> {
@@ -176,6 +184,10 @@ impl OpcValue {
     }
 
     /// Returns the boolean value if this is an [`OpcValue::Bool`].
+    ///
+    /// # Returns
+    ///
+    /// Returns `Some(bool)` if this value is [`OpcValue::Bool`], or `None` otherwise.
     #[inline]
     #[must_use]
     pub const fn as_bool(&self) -> Option<bool> {
@@ -186,6 +198,10 @@ impl OpcValue {
     }
 
     /// Returns a borrowed string slice if this is an [`OpcValue::String`].
+    ///
+    /// # Returns
+    ///
+    /// Returns `Some(&str)` if this value is [`OpcValue::String`], or `None` otherwise.
     #[inline]
     #[must_use]
     pub fn as_str(&self) -> Option<&str> {
@@ -196,6 +212,10 @@ impl OpcValue {
     }
 
     /// Returns `true` if this value is [`OpcValue::Empty`].
+    ///
+    /// # Returns
+    ///
+    /// Returns `true` if this value represents an uninitialized or empty variant, `false` otherwise.
     #[inline]
     #[must_use]
     pub const fn is_empty(&self) -> bool {
@@ -203,6 +223,10 @@ impl OpcValue {
     }
 
     /// Returns `true` if this value is [`OpcValue::Null`].
+    ///
+    /// # Returns
+    ///
+    /// Returns `true` if this value represents a SQL/COM NULL variant, `false` otherwise.
     #[inline]
     #[must_use]
     pub const fn is_null(&self) -> bool {
@@ -561,8 +585,11 @@ impl fmt::Display for OpcQuality {
 /// Supported OPC DA Specification versions.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Version {
+    /// OPC Data Access 1.0a specification.
     V1,
+    /// OPC Data Access 2.05a specification.
     V2,
+    /// OPC Data Access 3.0 specification.
     V3,
 }
 
@@ -590,11 +617,17 @@ pub struct GroupState {
 /// Current running state of the OPC server.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ServerState {
+    /// The server is running normally and actively processing data.
     Running,
+    /// The server has encountered an unrecoverable failure and is not functioning.
     Failed,
+    /// The server is running but has no configuration loaded.
     NoConfig,
+    /// The server is temporarily suspended and not collecting data.
     Suspended,
+    /// The server is operating in test or diagnostic mode.
     Test,
+    /// The server cannot communicate with the underlying physical devices or network.
     CommunicationFault,
 }
 
@@ -637,8 +670,11 @@ pub struct ServerStatus {
 #[repr(u32)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum BrowseType {
+    /// Browse branch nodes (directories / containers) within the namespace.
     Branch = 1,
+    /// Browse leaf nodes (individual process tags) within the namespace.
     Leaf = 2,
+    /// Browse flat unorganized namespace items.
     Flat = 3,
 }
 
@@ -718,15 +754,20 @@ const _: () = assert!(BrowseDirection::To as u32 == 3);
 /// Granular filter for enumeration results.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum BrowseFilter {
+    /// Enumerate all available nodes regardless of type.
     All,
+    /// Enumerate only branch (container) nodes.
     Branches,
+    /// Enumerate only leaf (tag item) nodes.
     Items,
 }
 
 /// Typology of the server's address space.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum NamespaceType {
+    /// Flat namespace without hierarchical folders or branches.
     Flat,
+    /// Hierarchical tree-structured namespace with nested branches and leaves.
     Hierarchy,
 }
 

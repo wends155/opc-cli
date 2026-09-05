@@ -3,7 +3,7 @@
 > **Behavioral Source of Truth** for the `opc-da-client` library crate.
 > Defines *what* each module should do — independent of current implementation.
 >
-> Last verified against: d4a145e
+> Last verified against: fd2190e
 
 ---
 
@@ -25,9 +25,9 @@ All methods use `#[async_trait]`.
 | `list_server_details` | `async fn list_server_details(&self, host: &str) -> OpcResult<Vec<OpcServerInfo>>` | Enumerate OPC DA servers on `host` with rich metadata (`ProgID`, `CLSID`, user-readable name). Default implementation synthesizes records wrapping `list_servers`. |
 | `browse_tags` | `async fn browse_tags(&self, server: &str, collector: TagCollector) -> OpcResult<Vec<String>>` | Recursively discover tags on `server`, pushing each to `collector` as found. |
 | `read_tag_values` | `async fn read_tag_values(&self, server: &str, tag_ids: Vec<String>) -> OpcResult<Vec<TagValue>>` | Read current value, quality, and timestamp for the given tag IDs. |
-| `read_tag_value` | `async fn read_tag_value(&self, server: &str, tag_id: &str) -> OpcResult<Option<TagValue>>` | Convenience helper to read a single tag on `server`. Default implementation delegates to `read_tag_values`. |
+| `read_tag_value` | `async fn read_tag_value(&self, server: &str, tag_id: &str) -> OpcResult<TagValue>` | Convenience helper to read a single tag on `server`. Default implementation delegates to `read_tag_values`. |
 | `write_tag_value` | `async fn write_tag_value(&self, server: &str, tag_id: &str, value: OpcValue) -> OpcResult<WriteResult>` | Write a typed value to a single tag on `server`. |
-| `write_tag_values` | `async fn write_tag_values(&self, server: &str, writes: &[(&str, OpcValue)]) -> OpcResult<Vec<WriteResult>>` | Convenience helper to write multiple tags sequentially on `server`. Default implementation iterates over `write_tag_value`. |
+| `write_tag_values` | `async fn write_tag_values(&self, server: &str, writes: &[(String, OpcValue)]) -> OpcResult<Vec<WriteResult>>` | Convenience helper to write multiple tags sequentially on `server`. Default implementation iterates over `write_tag_value`. |
 
 **Error Conditions:**
 
@@ -107,6 +107,17 @@ All methods use `#[async_trait]`.
 | `Bool(bool)` | `bool` | Boolean value. | `VT_BOOL` |
 | `Empty` | N/A | Empty variant (uninitialized). | `VT_EMPTY` |
 | `Null` | N/A | Explicitly null variant. | `VT_NULL` |
+
+**Methods & Conversions:**
+* `as_int(&self) -> Option<i32>`: Returns `Some(i32)` if this value is [`OpcValue::Int`], or `None` otherwise.
+* `as_float(&self) -> Option<f64>`: Returns `Some(f64)` if this value is [`OpcValue::Float`], or `None` otherwise.
+* `as_bool(&self) -> Option<bool>`: Returns `Some(bool)` if this value is [`OpcValue::Bool`], or `None` otherwise.
+* `as_str(&self) -> Option<&str>`: Returns borrowed string slice if this value is [`OpcValue::String`], or `None` otherwise.
+* `is_empty(&self) -> bool`: Returns `true` if `self` is [`OpcValue::Empty`].
+* `is_null(&self) -> bool`: Returns `true` if `self` is [`OpcValue::Null`].
+* `From<i32>`, `From<i16>`, `From<u16>`, `From<f64>`, `From<f32>`, `From<bool>`, `From<String>`, `From<&str>`: Primitive lossless conversions into `OpcValue`.
+* `std::str::FromStr`: Parses integer, float, boolean, or falls back to String.
+* `Display`: Formats variant value as display string.
 
 **Derives:** `Debug`, `Clone`, `PartialEq`.
 
@@ -290,7 +301,8 @@ All methods use `#[async_trait]`.
 | `variant_to_opc_value` | `fn(variant: &VARIANT) -> OpcValue` | Converts a COM `VARIANT` into a strongly-typed domain `OpcValue`. |
 | `opc_value_to_variant` | `fn(value: &OpcValue) -> VARIANT` | Converts a domain `OpcValue` to a COM `VARIANT`. |
 | `struct ScopedVariant` | `pub struct ScopedVariant(pub VARIANT)` | RAII wrapper with `#[repr(transparent)]` layout and deterministic `Drop` invoking `VariantClear(&raw mut self.0)`. Provides `empty()`, `from_opc_value(&OpcValue)`, `into_inner(self)`, `as_raw_mut(&mut self)`, and `clear(&mut self)`. |
-| `struct ItemStatesGuard<'a>` | `pub struct ItemStatesGuard<'a>(pub &'a mut [tagOPCITEMSTATE])` | RAII guard invoking `VariantClear` on each element's `vDataValue: VARIANT` upon `Drop`. Implements `std::ops::Deref<Target = [tagOPCITEMSTATE]>`. |
+| `struct ItemStatesGuard<'a>` | `pub struct ItemStatesGuard<'a>(pub &'a mut [tagOPCITEMSTATE])` | RAII guard invoking `VariantClear` on element `i`'s `vDataValue` upon `Drop` if and only if `errors[i].is_ok()` (HRESULT `S_OK`) (REV-01), preventing double-free or clearing uninitialized variants. Implements `std::ops::Deref<Target = [tagOPCITEMSTATE]>`. |
+| `struct ItemResultsBlobGuard` | `pub struct ItemResultsBlobGuard(*mut OPCITEMRESULT, usize)` | RAII guard wrapping `*mut OPCITEMRESULT` array allocated by `add_items`, deterministically freeing all `pBlob.pBlobData` memory via `CoTaskMemFree` (REV-23) before freeing the results array itself. |
 
 ##### `raw::hresult` Module
 
@@ -330,10 +342,13 @@ Implements `OpcProvider` for all five trait methods (`list_servers`, `list_serve
 
 **Invariants:**
 *   All COM work runs on a dedicated, long-lived `ComWorker` thread, avoiding repeated initialization overhead and solving COM thread-affinity constraints.
+*   **Two-tier `catch_unwind` panic resilience:** Individual request handling is wrapped in `std::panic::catch_unwind` (tier 1) so driver panics return structured `OpcError::Internal` without terminating the worker thread. The outer thread loop is also protected (tier 2) to maintain client liveness.
 *   Connections are pooled and cached automatically inside the worker, keyed by `ServerIdentifier` (supporting both ProgID and direct CLSID caching).
+*   Active groups are persistently cached across reads for identical tag sets, reducing round-trip RPC overhead.
 *   Stale connections are transparently evicted and retried during request dispatch.
 *   GUID filtering: zeroed GUIDs are skipped during server enumeration.
 *   OPC groups created by `read_tag_values` and `write_tag_value` are **always** managed by `GroupGuard`, guaranteeing deterministic invocation of `remove_group(handle, true)` on `Drop` across all return paths, early returns with `?`, and thread panics.
+*   `StringIterator` implements `Drop` (REV-07), freeing any remaining cached COM BSTRs via `CoTaskMemFree` to eliminate unmanaged memory leaks.
 
 #### Internal: `browse_recursive`
 
@@ -426,10 +441,11 @@ Before calling `browse_recursive`, `browse_tags` attempts `browse_opc_item_ids(B
 
 #### Public API
 
-- `GroupHandle`: Encapsulated opaque newtype with private inner `.0`, constructor `new(u32)`, and accessors `as_u32(&self) -> u32`, `into_u32(self) -> u32`.
-- `ItemHandle`: Encapsulated opaque newtype with private inner `.0`, constructor `new(u32)`, and accessors `as_u32(&self) -> u32`, `into_u32(self) -> u32`.
-- `OpcQuality`: Fully decomposed, zero-allocation 16-bit OPC DA quality word (`major: QualityMajor`, `substatus: QualitySubstatus`, `limit: QualityLimit`, `raw: u16`). Implements `From<u16>`, `From<OpcQuality> for u16`, `Display` (rich human-readable diagnostics), `std::str::FromStr` returning `Result<Self, OpcQualityParseError>`, and predicates (`is_good`, `is_bad`, `is_uncertain`, `is_limited`).
-- `OpcValue`: Canonical domain value enum (`String(String)`, `Int(i32)`, `Float(f64)`, `Bool(bool)`, `Empty`, `Null`). Implements `std::str::FromStr`, `From` for primitive types, and typed accessors (`as_str`, `as_i32`, `as_f64`, `as_bool`, `is_empty`, `is_null`).
+- `GroupHandle`: Encapsulated opaque newtype with private inner `.0`, constructor `new(u32)`, and accessors `as_raw(&self) -> u32`, `into_raw(self) -> u32`.
+- `ItemHandle`: Encapsulated opaque newtype with private inner `.0`, constructor `new(u32)`, and accessors `as_raw(&self) -> u32`, `into_raw(self) -> u32`.
+- `OpcQuality`: Fully decomposed, zero-allocation 16-bit OPC DA quality word (`major: QualityMajor`, `substatus: QualitySubstatus`, `limit: QualityLimit`, `raw: u16`). Implements `From<u16>`, `From<OpcQuality> for u16`, `Display` (rich human-readable diagnostics), `std::str::FromStr` returning `Result<Self, ParseQualityError>`, and predicates (`is_good`, `is_bad`, `is_uncertain`, `is_limited`).
+- `ParseQualityError`: Error struct returned when parsing an invalid quality string via `FromStr`. Implements `Display` and `std::error::Error`.
+- `OpcValue`: Canonical domain value enum (`String(String)`, `Int(i32)`, `Float(f64)`, `Bool(bool)`, `Empty`, `Null`). Implements `std::str::FromStr`, `From` for primitive types, and typed accessors (`as_str`, `as_int`, `as_float`, `as_bool`, `is_empty`, `is_null`).
 - `QualityMajor`: Major OPC DA quality status (`Good`, `Bad`, `Uncertain`, `Unknown(u8)`).
 - `QualitySubstatus`: Detailed substatus reason code (all OPC DA 2.05a codes: `NonSpecific`, `ConfigurationError`, `NotConnected`, `DeviceFailure`, `SensorFailure`, `LastKnownValue`, `CommFailure`, `OutOfService`, `WaitingForInitialData`, `LastUsableValue`, `SensorCalNeeded`, `EguExceeded`, `SubNormal`, `LocalOverride`, and `Raw(u8)`).
 - `QualityLimit`: Limit conditions on the tag value (`NotLimited`, `LowLimited`, `HighLimited`, `Constant`).
@@ -577,9 +593,74 @@ Defined in § 1.1. See table above.
 
 ---
 
-## 3. Integration Points
+## 3. State Machines
 
-### 3.1 Internal: `com` Subsystem
+### 3.1 TUI Screen Navigation (`CurrentScreen`)
+
+The terminal user interface executes a hierarchical navigation state machine:
+
+| Current State | Trigger / Event | Next State | Action / Transition Effect |
+|:---|:---|:---|:---|
+| `Home` | User enters host + `Enter` | `Loading` | Spawns `list_servers` background task via `start_fetch_servers`. |
+| `Loading` | Server fetch resolves `Ok(servers)` | `ServerList` | Populates servers, selects first row, logs transition. |
+| `Loading` | Server fetch resolves `Err` | `Home` | Displays friendly error message in status log. |
+| `ServerList` | User highlights server + `Enter` | `Loading` | Spawns `browse_tags` task via `start_browse_tags`. |
+| `ServerList` | `Esc` / `go_back` | `Home` | Clears server list and resets cursor selection. |
+| `Loading` | Tag browse resolves `Ok(tags)` | `TagList` | Populates tags, pre-allocates selection flags, selects first tag. |
+| `Loading` | Tag browse resolves `Err` | `ServerList` | Displays friendly error hint in status log. |
+| `TagList` | User marks tags + `Enter` | `Loading` | Spawns `read_tag_values` task via `start_read_values`. |
+| `TagList` | `Esc` / `go_back` | `ServerList` | Clears tags, preserves server list selection. |
+| `Loading` | Tag read resolves `Ok(values)` | `TagValues` | Populates table, initializes table cursor, starts auto-refresh timer. |
+| `Loading` | Tag read resolves `Err` | `TagList` | Restores prior tag list with error in status bar. |
+| `TagValues` | User selects row + `w` | `WriteInput` | Enters write input prompt for highlighted tag via `enter_write_mode`. |
+| `TagValues` | `Esc` / `go_back` | `TagList` | Clears live values and stops auto-refresh timer. |
+| `WriteInput` | User inputs value + `Enter` | `Loading` | Spawns `write_tag_value` task with coerced `OpcValue` via `start_write_value`. |
+| `WriteInput` | `Esc` / `go_back` | `TagValues` | Aborts write input, clears input buffer. |
+| `Loading` | Write resolves `Ok` or `Err` | `TagValues` | Displays write result status and triggers immediate `start_read_values` refresh. |
+
+### 3.2 COM Worker Thread Lifecycle (`ComWorker`)
+
+The background COM worker manages thread affinity and Multi-Threaded Apartment initialization:
+
+```mermaid
+stateDiagram-v2
+    [*] --> Uninitialized
+    Uninitialized --> Spawning : ComWorker::start(connector)
+    Spawning --> Running : CoInitializeEx(COINIT_MULTITHREADED) Ok / S_FALSE
+    Spawning --> Closed : COM Initialization Error / Channel Drop
+    state Running {
+        [*] --> Idle
+        Idle --> ProcessingRequest : recv(ComRequest)
+        ProcessingRequest --> Idle : reply(Result) via oneshot
+        ProcessingRequest --> Idle : catch_unwind (Driver Panic -> OpcError::Internal)
+    }
+    Running --> Closed : Client Sender Dropped (Disconnect)
+    Running --> Closed : Outer Thread Loop Panic
+    Closed --> [*] : CoUninitialize & Thread Exit
+```
+
+- **Panic Isolation Guarantee:** If a vendor COM server crashes or panics within a request handler, Tier 1 `std::panic::catch_unwind` catches the panic, constructs an `OpcError::Internal`, sends the failure to the client's `oneshot` channel, and keeps the worker loop running for subsequent operations.
+- **Connection Cache:** Connected server instances are pooled and cached by `ServerIdentifier`. Stale connection errors (`RPC_S_*`) trigger transparent eviction and single-retry reconnection.
+- **Persistent Group Cache:** Read operations on identical tag lists reuse active OPC groups, eliminating repeated `add_group`/`add_items` round-trips.
+
+### 3.3 Context-Aware Input Coercion State Machine (`App::resolve_write_value`)
+
+Downstream input parsing follows a 2-phase deterministic coercion machine:
+
+1. **Boolean Inspection Phase:** The tag ID is looked up in the current `tag_values` buffer. If the tag's current value is known to be `Some(OpcValue::Bool(_))`:
+   - Input `"1"` or `"true"` $\rightarrow$ `OpcValue::Bool(true)`.
+   - Input `"0"` or `"false"` $\rightarrow$ `OpcValue::Bool(false)`.
+2. **Canonical FromStr Fallback Phase:** If the tag is not boolean or string is not a boolean token, input is parsed via `OpcValue::from_str`:
+   - Numeric integers $\rightarrow$ `OpcValue::Int(i32)`.
+   - Floating-point decimals $\rightarrow$ `OpcValue::Float(f64)`.
+   - Explicit `"true"` / `"false"` $\rightarrow$ `OpcValue::Bool(bool)`.
+   - All other string tokens $\rightarrow$ `OpcValue::String(value_str.to_string())`.
+
+---
+
+## 4. Integration Points
+
+### 4.1 Internal: `com` Subsystem
 
 **Boundary:** `OpcDaClient` → `com::worker::ComWorker` → `com::connector::ComServer` / `ComGroup`.
 
@@ -604,7 +685,7 @@ Defined in § 1.1. See table above.
 | :--- | :--- | :--- |
 | OPC-BUG-001 | `StringIterator` produces 16 phantom `E_POINTER` errors per iterator | **FIXED**: cache zeroing + null-PWSTR skip in `StringIterator::next()` |
 
-### 3.2 Downstream: `opc-cli` (Consumer)
+### 4.2 Downstream: `opc-cli` (Consumer)
 
 **Boundary:** `opc-cli` → `dyn OpcProvider`.
 
@@ -614,7 +695,7 @@ Defined in § 1.1. See table above.
 
 ---
 
-## 4. Required Test Coverage
+## 5. Required Test Coverage
 
 ### Unit Tests (in `errors.rs` & `raw/hresult.rs`)
 
@@ -693,13 +774,20 @@ Defined in § 1.1. See table above.
 ### Connector & Client Unit Tests (in `com/connector/` and `com/client.rs`)
 
 - [x] `test_string_iterator_from_vec` — verifies in-memory `StringIterator` collection and equality without COM interfaces.
+- [x] `test_string_iterator_drop_frees_unconsumed_cached_strings` — verifies COM `StringIterator` frees cached strings on drop.
+- [x] `test_string_iterator_in_memory_drop` — verifies in-memory `StringIterator` cleans up cleanly without errors.
 - [x] `test_mock_connector_browse` — verifies `MockConnectedServer::browse_opc_item_ids` returns in-memory simulated tags.
+- [x] `test_mock_browse_branch_vs_leaf` — verifies mock server correctly distinguishes branch vs leaf tag paths.
+- [x] `test_mock_connector_with_tag_values` — verifies pre-populating mock connector with known tag values.
 - [x] `test_mock_group_defaults` and `test_mock_group_custom_handlers` — verifies mock group default results and custom read handlers.
 - [x] `test_mock_server_add_group_and_eviction` — verifies group handle generation and connection drop error injection.
 - [x] `test_group_item_def_and_state_cloning` — verifies DTO clone and display behavior.
+- [x] `test_group_config_ephemeral_and_builders` — verifies ephemeral group configuration builder invariants.
 - [x] `test_mock_server_connector_server_details` — verifies `MockServerConnector::with_server_details` and `enumerate_server_details`.
 - [x] `test_mock_server_connector_type_aliases_and_dispatch` — verifies `MockAddItemsFn`, `MockReadFn`, and `MockWriteFn` custom handlers and default fallback.
 - [x] `test_com_group_preconditions` — verifies `ComGroup::add_items`, `read`, and `write` precondition assertions (empty slices, length mismatch) returning `OpcError::InvalidState`.
+- [x] `test_mock_opc_da_client_default` — verifies default initialization of mock client facade.
+- [x] `test_provider_default_read_tag_value` — verifies default `read_tag_value` delegation in `OpcProvider`.
 - [x] `test_client_list_server_details` — verifies `OpcDaClient::list_server_details` dispatch through worker against mock connector.
 
 ### COM RAII Guard Unit Tests (in `com/guard.rs`)
@@ -721,6 +809,7 @@ Defined in § 1.1. See table above.
 - [x] `test_connection_cache_reuse` — verifies connection caching by `ServerIdentifier` across repeated operations.
 - [x] `test_stale_connection_eviction` — verifies RPC failure triggers cache eviction, reconnect, and successful retry.
 - [x] `test_worker_panic_propagation` — verifies worker thread panic detection on subsequent client requests.
+- [x] `test_worker_thread_recovery_after_panic` — validates worker thread restarts cleanly and processes subsequent requests after a caught panic.
 - [x] `test_drop_during_active_request` — verifies channel disconnection behavior when client worker is dropped.
 - [x] `test_worker_init_failure` — verifies error propagation when thread COM initialization fails.
 - [x] `test_worker_read_tag_values_quality_decoding` — validates in-place read decoding of Good, LocalOverride, CommFailure, and EGU limits.
@@ -754,25 +843,37 @@ Defined in § 1.1. See table above.
 - [x] `test_variant_to_string_i2_and_r4` — validates 16-bit integer and single-precision float formatting.
 - [x] `test_variant_to_string_unknown_vt` — verifies fallback formatting for unrecognized VARENUM types.
 - [x] `test_variant_to_string_safearray_i4` — validates 1-D SafeArray traversal and formatting.
+- [x] `test_safearray_unpacking_buffer_bounds_canary_protection` — validates bounds canary protection and defensive clamping during SafeArray buffer unpacking.
 - [x] `test_variant_to_string_vt_error_known` and `test_variant_to_string_vt_error_unknown` — validates `VT_ERROR` HRESULT diagnostic mapping.
 - [x] `test_scoped_variant_empty_and_as_raw_mut` — verifies `ScopedVariant::empty()` initializes with `VT_EMPTY` and `as_raw_mut` provides valid pointer.
 - [x] `test_scoped_variant_drop_clears_bstr_and_resets_vt` — verifies `ScopedVariant` drop safely invokes `VariantClear`, freeing `BSTR` without memory leaks.
 - [x] `test_scoped_variant_into_inner_disarm` — verifies `ScopedVariant::into_inner` disarms the RAII guard and preserves internal `VARIANT`.
 - [x] `test_item_states_guard_drop_clears_variants` — verifies `ItemStatesGuard` drop iterates all `tagOPCITEMSTATE` elements and safely clears `vDataValue`.
+- [x] `test_item_states_guard_partial_failure_s_false_uninitialized_safety` — verifies `ItemStatesGuard` safety when server returns `S_FALSE` or uninitialized VARIANTs.
+- [x] `test_item_results_blob_guard_frees_blobs` — verifies `ItemResultsBlobGuard` safely cleans up unmanaged blob allocations on drop.
 
 ### Error & Diagnostic Unit Tests (in `errors.rs`)
 
 - [x] `test_opc_error_friendly_hint` — verifies `friendly_hint` returns `None` for non-COM errors and expected text for known COM errors.
 - [x] `test_friendly_hint_known_codes` — verifies HRESULT hints for known codes (`RPC_S_CALL_FAILED_DNE`, `REGDB_E_CLASSNOTREG`, `OPC_E_BADRIGHTS`, `OPC_E_BADTYPE`, `OPC_E_UNKNOWNITEMID`, `OPC_E_INVALIDITEMID`).
 - [x] `test_friendly_hint_unknown_code` — verifies `None` on unknown or internal error codes.
+- [x] `test_is_connection_error` — verifies `is_connection_error` classification for transport failure HRESULTs.
+- [x] `test_com_error_display_formatting` — verifies `Display` formatting for `OpcError::Com` with HRESULT and friendly hint.
 - [x] `test_opc_operation_display` — validates canonical string formatting across all `OpcOperation` enum variants.
 - [x] `test_log_opc_err_macro` — validates structured key-value emission and diagnostic capture via `log_opc_err!`.
 - [x] `test_channel_error_conversions_and_lock_poison` — verifies `From` conversions for `mpsc::RecvError`, `oneshot::RecvError`, `SendError`, and `PoisonError` to `OpcError::Internal`, and `OpcError::connection_failed`.
 
-### Raw Memory Safety Unit Tests (in `raw/memory.rs`)
+### Raw Memory Safety Unit Tests (in `raw/memory.rs` and `raw/bridge.rs`)
 
 - [x] `test_remote_array_safety_and_invariants` — verifies zero-allocation remote array creation, safe move-only drop semantics, and heap integrity without `Clone`.
 - [x] `test_remote_pointer_into_string_raii_safety` — verifies `RemotePointer<u16>::into_string` converts valid UTF-16, rejects null pointers with `OpcError::Com`, and automatically cleans up unmanaged COM memory via `CoTaskMemFree`.
+- [x] `test_remote_pointer_copy_slice_empty_and_valid` — verifies safe slice copying from remote COM pointers.
+- [x] `test_local_pointer_no_box_indirection` — verifies local COM pointer unmanaged allocation without Box indirection.
+- [x] `test_bridge_borrowed_blob_no_double_free` — verifies `BlobGuard` safely borrows memory without double-freeing on drop.
+
+### Library & Re-Export Unit Tests (in `lib.rs`)
+
+- [x] `test_parse_quality_error_reexport` — verifies `ParseQualityError` is exposed at crate root and implements `std::error::Error`.
 
 ### Mock-Based Tests (in `opc-cli`)
 
@@ -782,6 +883,7 @@ Defined in § 1.1. See table above.
 - [x] `MockOpcProvider` simulates error conditions for UI error handling.
 - [x] `test_destructure_tag_value_ergonomics` — verifies destructuring of `TagValue` with `v.value.display()` and `v.timestamp.display()`.
 - [x] `test_browse_tags_collector_timeout_and_cancellation` — verifies cooperative cancellation and partial harvesting on timeout in TUI task.
+- [x] `test_write_value_parsing_and_boolean_coercion` — validates context-aware boolean coercion and fallback string parsing in `App::resolve_write_value`.
 
 ### Doc Tests
 
@@ -790,7 +892,7 @@ Defined in § 1.1. See table above.
 - [x] `OpcResult`, `OpcError` — runnable doctests in `errors.rs`.
 - [x] `TagValue`, `OpcValue`, `WriteResult`, `DisplayOption*`, `OpcValueOptionExt`, `SystemTimeOptionExt` — runnable doctests in `provider.rs`.
 - [x] `TagCollector` methods (`new`, `unbounded`, `max_tags`, `len`, `is_empty`, `is_full`, `cancel`, `is_cancelled`, `snapshot`, `harvest`, `push`) — runnable doctests in `provider.rs`.
-- [x] `OpcProvider` trait methods (`list_servers`, `browse_tags`, `read_tag_values`, `write_tag_value`) — runnable doctests in `provider.rs` backed by `MockOpcProvider` assertions.
+- [x] `OpcProvider` trait methods (`list_servers`, `browse_tags`, `read_tag_value`, `read_tag_values`, `write_tag_value`, `write_tag_values`) — runnable doctests in `provider.rs` backed by `MockOpcProvider` assertions.
 - [x] `GroupHandle`, `ItemHandle`, `OpcQuality`, `BrowseType`, `BrowseDirection` — runnable doctests in `types.rs`.
 - [x] `OpcDaClient::new` — doctest in `com/client.rs`.
 - [x] `ComGuard` — internal-only ignored doctest in `com/guard.rs`.

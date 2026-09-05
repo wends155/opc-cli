@@ -102,7 +102,7 @@ opc-cli/
 ## 5. Module Boundaries
 
 ### `opc-cli` (TUI Application)
-- **Owns**: Terminal UI rendering, keyboard input handling, navigation state machine, background async task spawning (`tokio::spawn`), status bar notifications, and context-aware write parsing with boolean coercion (`App::resolve_write_value`).
+- **Owns**: Terminal UI rendering, keyboard input handling, navigation state machine (`CurrentScreen`), background async task spawning (`tokio::spawn`), status bar notifications, and context-aware write parsing with boolean coercion (`App::resolve_write_value`).
 - **Does NOT Own**: Raw COM initialization, registry enumeration, OPC group creation, HRESULT interpretation logic.
 - **Trait Interfaces**: Consumes `dyn OpcProvider` asynchronously.
 - **Mock Availability**: Fully mockable via `MockOpcProvider` (compiled when `feature = "test-support"` is active in `opc-da-client`).
@@ -112,6 +112,30 @@ opc-cli/
 - **Does NOT Own**: Terminal rendering, direct COM worker loop implementation.
 - **Trait Interfaces**: Exports `OpcProvider`.
 - **Mock Availability**: Provides `MockOpcProvider` via `mockall`, and exports `MockOpcDaClient` type alias and `Default` implementation under `all(feature = "test-support", feature = "opc-da-backend")`.
+
+### `opc-da-client::com::client` (Public Client Implementation)
+- **Owns**: Public concrete `OpcDaClient` struct implementing `OpcProvider`, request dispatch channel management (`mpsc::Sender<ComRequest>`), and public constructors (`OpcDaClient::new`).
+- **Does NOT Own**: In-apartment Win32 COM operations, unmanaged memory pointers, or direct FFI calls (all delegated across channels to `ComWorker`).
+- **Trait Interfaces**: Implements `OpcProvider`.
+- **Mock Availability**: `MockOpcDaClient` alias available under `all(feature = "test-support", feature = "opc-da-backend")`.
+
+### `opc-da-client::com::iterator` (Safe COM Enumerators)
+- **Owns**: Safe RAII wrapper for native Windows COM `IEnumString` enumerator with internal batch zeroing, null-PWSTR skipping, and clean drop memory deallocation, plus in-memory simulated vectors (`from_vec`) for mock testing.
+- **Does NOT Own**: COM apartment management or worker thread scheduling.
+- **Trait Interfaces**: `Iterator<Item = OpcResult<String>>`.
+- **Mock Availability**: Fully tested via pure in-memory `from_vec` test fixtures.
+
+### `opc-da-client::raw::memory` (Unmanaged COM Memory Allocator)
+- **Owns**: RAII wrappers for unmanaged Win32 COM memory allocations (`RemoteArray<T>`, `RemotePointer<T>`, `LocalPointer<T>`), guaranteeing safe deallocation via `CoTaskMemFree` on `Drop`, move-only ownership, and zero-allocation slice projections.
+- **Does NOT Own**: Higher-level COM abstractions, domain models, or thread synchronization.
+- **Trait Interfaces**: `TryFromNative`, `TryToNative`.
+- **Mock Availability**: N/A (sealed internal FFI memory abstraction, verified by co-located unit tests).
+
+### `opc-da-client::raw::bridge` (C-ABI Translation Records)
+- **Owns**: Low-level C-compatible struct representations of Win32 OPC DA items (`tagOPCITEMDEF`, `tagOPCITEMRESULT`, `tagOPCITEMSTATE`), conversion traits, and safe RAII blob deallocators (`ItemResultsBlobGuard`).
+- **Does NOT Own**: Domain types, COM interface dispatch, or public API exports.
+- **Trait Interfaces**: `IntoBridge`, `TryFromNative`.
+- **Mock Availability**: N/A (sealed internal FFI structures).
 
 ### `ComWorker` (MTA Worker Thread Pool)
 - **Owns**: Dedicated OS background thread, 2-tier `catch_unwind` panic resilience with priority queue dispatch favoring reads and writes over background browses, `CoInitializeEx(MTA)` lifecycle (`ComGuard`), connection pool caching keyed by `ServerIdentifier` with active group reuse, transparent stale connection eviction on RPC errors (`0x800706BA`), and modular worker dispatch engines (`pool::dispatch_with_retry`, `read::handle_read`, `write::handle_write`, `browse::handle_browse`).
@@ -129,9 +153,18 @@ opc-cli/
 
 | Module | May Import | Must NOT Import |
 |:---|:---|:---|
-| `opc-cli` (TUI App) | `opc-da-client` (`OpcProvider` trait, `OpcValue`, `TagValue`, `WriteResult`, `TagCollector`, `OpcError`), `ratatui`, `crossterm`, `tokio`, `tracing` | Direct Windows COM APIs (`windows::Win32::System::Com`), `com::client` / `com::worker` concrete types |
-| `opc-da-client::provider` | `thiserror`, `chrono`, `serde`, `types`, `errors` | `windows`, `ratatui`, `crossterm`, `tokio`, `com`, `raw` |
-| `opc-da-client::com` | `windows`, `windows-core`, `provider` types, `types`, `errors`, `raw`, `com::discovery`, `com::variant`, `tokio::sync` | `opc-cli`, `ratatui`, `crossterm` |
+| `opc-cli` (Core App: `app.rs`, `ui.rs`) | `opc-da-client` (`OpcProvider` trait, `OpcValue`, `TagValue`, `WriteResult`, `TagCollector`, `OpcError`), `ratatui`, `crossterm`, `tokio`, `tracing` | Direct Windows COM APIs (`windows::Win32::System::Com`), `com::client` / `com::worker` concrete types |
+| `opc-da-client::provider` | `types`, `errors`, `chrono`, `thiserror`, `async-trait` | `windows`, `ratatui`, `crossterm`, `tokio`, `com`, `raw`, `serde` |
+| `opc-da-client::types` | `errors` | `provider`, `com`, `raw`, `windows` |
+| `opc-da-client::errors` | `windows-core` (HRESULT), `raw::hresult` | `provider`, `types`, `com` |
+| `opc-da-client::com::client` | `provider`, `types`, `errors`, `com::worker` | `raw` |
+| `opc-da-client::com::worker` | `types`, `errors`, `com::connector`, `com::variant`, `tokio::sync` | `raw` |
+| `opc-da-client::com::connector` | `types`, `errors`, `com::variant`, `com::discovery`, `raw` | `provider` |
+| `opc-da-client::com::discovery` | `types`, `errors`, `raw`, `windows` | `com::client`, `com::worker`, `com::connector` |
+| `opc-da-client::com::guard` | `com::connector`, `types`, `errors`, `windows` | `provider`, `raw` |
+| `opc-da-client::com::iterator` | `raw::memory`, `raw::hresult`, `types`, `errors`, `windows` | `provider`, `com::worker` |
+| `opc-da-client::com::variant` | `types` (`OpcValue`), `raw::hresult`, `windows` | `com::client`, `com::worker`, `com::connector` |
+| `opc-da-client::raw` | `windows-core`, `types` | `com`, `provider` |
 | `compat/*` (Polyfills) | `core`, `windows-sys` / raw Win32 FFI | `std`, `tokio`, `opc-cli`, `opc-da-client` |
 
 ## 7. Toolchain
@@ -162,10 +195,11 @@ The project uses a unified dual-interface build system:
 
 ## 8. Error Handling Strategy
 
-- **Library Domain Errors**: `OpcError` (defined in `opc-da-client`) handles domain failures via `thiserror`.
+- **Library Domain Errors**: `OpcError` (defined in `opc-da-client`) handles domain failures via `thiserror` across 8 structured variants: `Com`, `ConnectionFailed`, `ServerNotFound`, `TagNotFound`, `InvalidState`, `Conversion`, `Internal`, and `NotImplemented`.
+- **Connection Failure Factory & Predicates**: `OpcError::connection_failed(source)` constructs actionable connection failures, while `OpcError::is_connection_error(&self)` identifies recoverable transport/RPC dropouts.
 - **Friendly Hint Engine**: `OpcError::friendly_hint(&self)` and `raw::hresult::friendly_hresult_hint` map technical HRESULT codes (e.g. `0x800706BA` RPC Unavailable, `0x80070005` DCOM Access Denied) to actionable plain-English text.
 - **RAII Resource & Cursor Management (`GroupGuard`, `BrowsePositionGuard`)**: Temporary COM groups created during `read_tag_values` and `write_tag_value` are guarded by `GroupGuard<'_, S: ConnectedServer>`, guaranteeing deterministic `remove_group(handle, true)` invocation on `Drop` across all return paths, `?` operator exits, and thread panics. Namespace browsing uses `BrowsePositionGuard` to deterministically restore parent cursor position (`BrowseDirection::Up`) across error returns and thread panics.
-- **RAII Memory Safety Guards (`ScopedVariant`, `ItemStatesGuard`)**: Win32 COM `VARIANT` allocations are strictly encapsulated in RAII drop guards: `ScopedVariant` guarantees deterministic `VariantClear` on `Drop` across tag write paths; `ItemStatesGuard` wraps `tagOPCITEMSTATE` slices across read paths, ensuring `VariantClear` is executed across all element variants before unmanaged memory is freed.
+- **RAII Memory Safety Guards (`ScopedVariant`, `ItemStatesGuard`, `ItemResultsBlobGuard`)**: Win32 COM `VARIANT` allocations are strictly encapsulated in RAII drop guards: `ScopedVariant` guarantees deterministic `VariantClear` on `Drop` across tag write paths; `ItemStatesGuard` wraps `tagOPCITEMSTATE` slices across read paths, ensuring `VariantClear` is executed across all element variants before unmanaged memory is freed; `ItemResultsBlobGuard` wraps `tagOPCITEMRESULT` arrays and cleans up allocated blob pointers on `Drop`.
 - **Breadcrumb Chains**: TUI uses `anyhow` displaying `{:#}` full error chains in status popups.
 - **No Swallowed Errors**: All fallible COM and background task operations propagate `Result<T, OpcError>`.
 
@@ -190,9 +224,9 @@ The project uses a unified dual-interface build system:
 
 ## 10. Testing Strategy
 
-- **Unit Testing**: Mock-based testing using `MockOpcProvider` (`mockall`). TUI navigation flow, state transitions, search cycling, and ring-buffer logic are verified without Windows COM dependencies (38 unit tests in `opc-cli`).
-- **COM Worker & Memory Safety Testing**: `ComWorker`, `com/discovery.rs`, `com/variant.rs` (`ScopedVariant`, `ItemStatesGuard`), `com/connector/` submodules (`traits.rs`, `server.rs`, `group.rs`, `mock.rs`), and `raw/memory.rs` unit tests use `MockServerConnector` and synthetic allocations to test write paths, tag browsing (flat, hierarchical, cancellation, capacity limits), server connection pooling, stale connection eviction, thread panic safety, worker drop behaviors, tracing instrumentation execution, `GroupGuard` automatic drop cleanup on `add_items` failure, registry inspection validation, non-cloneable remote pointer safe drop, and zero-leak COM memory guards (107 unit tests in `opc-da-client`, 145 total workspace tests).
-- **Doc Testing**: Public API items include runnable doc tests verified via `cargo test --doc --workspace --all-features` (55 doc-tests, including pure-Rust mocking examples in `README.md` and `provider.rs`).
+- **Unit Testing**: Mock-based testing using `MockOpcProvider` (`mockall`). TUI navigation flow, state transitions (`CurrentScreen`), search cycling, context-aware write parsing with boolean coercion (`App::resolve_write_value`), and ring-buffer logic are verified without Windows COM dependencies (39 unit tests in `opc-cli`).
+- **COM Worker & Memory Safety Testing**: `ComWorker`, `com/discovery.rs`, `com/variant.rs` (`ScopedVariant`, `ItemStatesGuard`), `com/connector/` submodules (`traits.rs`, `server.rs`, `group.rs`, `mock.rs`), `raw/memory.rs`, and `raw/bridge.rs` unit tests use `MockServerConnector` and synthetic allocations to test write paths, tag browsing (flat, hierarchical, cancellation, capacity limits), server connection pooling, stale connection eviction, 2-tier panic isolation and recovery (`test_worker_thread_recovery_after_panic`), worker drop behaviors, tracing instrumentation execution, `GroupGuard` automatic drop cleanup on `add_items` failure, registry inspection validation, non-cloneable remote pointer safe drop, safe slice copying, blob guard double-free prevention, and zero-leak COM memory guards (132 unit tests in `opc-da-client`, 171 total workspace tests).
+- **Doc Testing**: Public API items include runnable doc tests verified via `cargo test --doc --workspace --all-features` (59 doc-tests, including pure-Rust mocking examples in `README.md` and `provider.rs`).
 - **Polyfill Build Gates**: Independent compilation of `compat/*` polyfill crates inside `scripts/verify.ps1`.
 - **AST-Grep Structural Safety Gates**: `sg scan` enforcement of zero unwrap/expect in production library code and mandatory `// SAFETY:` rationale on all unsafe blocks. Rules are validated via ast-grep unit tests before static scans.
 - **Forbidden Macro Scanner**: Automated `rg` scan ensuring zero `println!`, `dbg!`, or `todo!` macros in `opc-da-client/src/`.
@@ -220,45 +254,47 @@ stateDiagram-v2
     
     state "Home (Enter Hostname)" as Home {
         [*] --> InputWait
-        InputWait --> Connecting : Enter Key
-        Connecting --> InputWait : Error (Update Status)
+        InputWait --> Loading : Enter Key (Fetch Servers)
+        InputWait --> Exiting : Esc Key / Ctrl+C
     }
 
-    Home --> ServerList : Success (Servers Found)
+    state "Loading (Background Async Task)" as Loading {
+        [*] --> InFlight
+        InFlight --> ServerList : Fetch Servers Complete
+        InFlight --> TagValues : Read Values Complete
+        InFlight --> TagValues : Write Value Complete
+        InFlight --> Home : Error / Cancel (Esc)
+    }
 
     state "Server List" as ServerList {
         [*] --> NavigatingServers
-        NavigatingServers --> BrowsingTags : Enter Key (Select Server)
+        NavigatingServers --> TagList : Enter Key (Select Server & Browse)
         NavigatingServers --> Home : Esc Key
     }
-
-    ServerList --> TagList : Success (Tags Found)
 
     state "Tag List" as TagList {
         [*] --> NavigatingTags
         NavigatingTags --> SearchMode : S Key
         SearchMode --> NavigatingTags : Esc Key
-        NavigatingTags --> ReadingValues : Enter Key
+        NavigatingTags --> Loading : Enter Key (Read Selected)
         NavigatingTags --> ServerList : Esc Key
     }
-
-    TagList --> TagValues : Success (Values Read)
 
     state "Tag Values" as TagValues {
         [*] --> ViewingValues
         ViewingValues --> WriteInput : W Key
         ViewingValues --> TagList : Esc Key
+        ViewingValues --> Loading : R Key (Manual Refresh)
     }
 
     state "Write Input" as WriteInput {
         [*] --> EnteringValue
-        EnteringValue --> Writing : Enter Key
-        Writing --> TagValues : Success (refresh)
-        Writing --> TagValues : Error (show message)
+        EnteringValue --> Loading : Enter Key (Contextual Parse & Send)
         EnteringValue --> TagValues : Esc Key
     }
 
-    Home --> [*] : Esc Key (Quit)
+    Home --> Exiting : Esc Key (Quit)
+    Exiting --> [*]
 ```
 
 ### Data Flow
@@ -280,13 +316,14 @@ graph TD
         Provider["trait OpcProvider"]
         Client["com::client (OpcDaClient)"]
         Worker["com::worker (ComWorker MTA)"]
-        Connector["com::connector (ComConnector)"]
+        Connector["com::connector (ServerConnector / ComConnector)"]
         Discovery["com::discovery (OpcServerListCatalog)"]
         Bindings["raw::bindings (OPCDA/OPCCOMN)"]
     end
     CLI --> Provider --> Client --> Worker --> Connector
-    Worker --> Discovery --> Bindings
+    Connector --> Discovery
     Connector --> Bindings --> WinCOM["Windows COM/DCOM"]
+    Discovery --> Bindings
     
     subgraph Rendering
         AppState --> |Read| View[UI Render Functions]
@@ -297,7 +334,6 @@ graph TD
         AppUpdate --> |Log| Tracing
         OpcProvider --> |Log| Tracing
         Tracing --> |Write| LogFile[logs/opc-cli.log]
-    end
 ```
 
 ### Error Propagation Flow

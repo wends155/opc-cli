@@ -1,5 +1,5 @@
-use crate::com::memory::{RemoteArray, RemotePointer, TryToLocal as _};
 use crate::errors::OpcResult;
+use crate::raw::memory::{RemoteArray, RemotePointer, TryToLocal as _};
 
 const MAX_CACHE_SIZE: usize = 16;
 const MAX_CACHE_SIZE_U32: u32 = 16;

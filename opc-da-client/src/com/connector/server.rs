@@ -16,7 +16,7 @@ use crate::types::{BrowseDirection, BrowseType, GroupHandle, OpcServerInfo, Serv
 use windows::Win32::System::Com::{CLSCTX_ALL, CLSIDFromProgID, CoCreateInstance};
 use windows::core::Interface;
 
-/// Resolve an OPC DA server [`ServerIdentifier`] to a connected `opc_da` Server instance.
+/// Resolve an OPC DA server [`ServerIdentifier`] to a connected COM [`crate::raw::bindings::da::IOPCServer`] instance.
 ///
 /// If connecting via [`ServerIdentifier::Clsid`], instantiates directly via `CoCreateInstance`.
 /// If connecting via [`ServerIdentifier::ProgId`], resolves the ProgID via the Windows registry.

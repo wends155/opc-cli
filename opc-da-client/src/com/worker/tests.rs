@@ -6,9 +6,10 @@ use crate::com::connector::{
 };
 use crate::com::guard::GroupGuard;
 use crate::errors::{OpcError, OpcResult};
-use crate::provider::{OpcQuality, OpcValue, TagCollector};
+use crate::provider::TagCollector;
 use crate::types::{
-    BrowseDirection, BrowseType, GroupHandle, ItemHandle, OpcServerInfo, ServerIdentifier,
+    BrowseDirection, BrowseType, GroupHandle, ItemHandle, OpcQuality, OpcServerInfo, OpcValue,
+    ServerIdentifier,
 };
 use std::sync::Arc;
 use std::sync::atomic::Ordering;

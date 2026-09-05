@@ -18,6 +18,16 @@ use ratatui::{
     widgets::{Block, Borders, Clear, List, ListItem, Paragraph, Wrap},
 };
 
+/// Renders the complete terminal user interface for the current application state.
+///
+/// Divides the available terminal frame into main display, message/status area,
+/// and contextual keybinding help footer, routing screen-specific rendering based
+/// on [`app.current_screen`](CurrentScreen).
+///
+/// # Arguments
+///
+/// * `f` - Mutable terminal frame from Ratatui.
+/// * `app` - Mutable reference to the application state.
 pub fn render(f: &mut Frame, app: &mut App) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
