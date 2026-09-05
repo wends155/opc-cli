@@ -1,5 +1,16 @@
 # Project Context Summary
 
+## 2026-09-05: Documentation Synchronization for GroupGuard and Telemetry (`opc-da-client`)
+> 📝 **Context Update:**
+> * **Feature:** Documentation sync for RAII `GroupGuard`, `OpcOperation`, structured `log_opc_err!` telemetry, and raw memory invariants.
+> * **Changes:**
+>   - Synchronized `opc-da-client/spec.md`: bumped verification hash to `f307252`; added `errors` telemetry module specification (`OpcOperation`, `log_opc_err!`, `log_opc_error`); updated `OpcDaClient` invariants for `GroupGuard`; documented `GroupGuard` struct, lifecycle, and methods in Section 1.4; documented `MockState::remove_group_count` in Section 1.7; documented move-only invariants for `RemotePointer` and `RemoteArray` in Section 1.8; and added 7 new unit tests to Section 4 test coverage checklists.
+>   - Updated `opc-da-client/README.md` features list highlighting `GroupGuard` RAII group teardown preventing COM server resource leaks.
+>   - Validated docs with `cargo doc --no-deps --all-features` and verified full 9-gate quality pipeline (`scripts/verify.ps1`) with exit code 0.
+>   - Committed changes as checkpoint `fd9c78c`.
+> * **New Constraints:** All future COM resource wrappers must be documented in `spec.md §1.4` and `architecture.md §8`. Any new telemetry macros/enums must be registered under `spec.md §1.2`.
+> * **Pruned:** Outdated verification hash `c1feee3` and manual group cleanup references in `spec.md`.
+
 ## 2026-09-05: RAII GroupGuard, Contextual Error Telemetry, and inspect_err Hardening (`opc-da-client`)
 > 📝 **Context Update:**
 > * **Feature:** Eliminate latent COM server group handle leaks using RAII `GroupGuard`, replace stringly-typed telemetry with strongly-typed `OpcOperation`, unify contextual error logging with `log_opc_err!`, decouple side-effect logging from error mapping via `inspect_err`, and add negative unit tests for group cleanup.
