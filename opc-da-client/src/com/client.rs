@@ -2,6 +2,7 @@ use crate::com::connector::{ComConnector, ServerConnector};
 use crate::com::worker::{ComRequest, ComWorker};
 use crate::errors::OpcResult;
 use crate::provider::{OpcProvider, OpcValue, TagCollector, TagValue, WriteResult};
+use crate::types::OpcServerInfo;
 use async_trait::async_trait;
 use std::sync::Arc;
 
@@ -76,6 +77,17 @@ impl<C: ServerConnector + 'static> OpcProvider for OpcDaClient<C> {
             .await
     }
 
+    #[tracing::instrument(level = "info", skip(self), err)]
+    async fn list_server_details(&self, host: &str) -> OpcResult<Vec<OpcServerInfo>> {
+        let host_owned = host.to_string();
+        self.worker
+            .send_request(|reply| ComRequest::ListServerDetails {
+                host: host_owned,
+                reply,
+            })
+            .await
+    }
+
     #[tracing::instrument(level = "info", skip(self, collector), err)]
     async fn browse_tags(&self, server: &str, collector: TagCollector) -> OpcResult<Vec<String>> {
         let server_owned = server.to_string();
@@ -121,5 +133,26 @@ impl<C: ServerConnector + 'static> OpcProvider for OpcDaClient<C> {
                 reply,
             })
             .await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::com::connector::MockServerConnector;
+
+    #[tokio::test]
+    async fn test_client_list_server_details() {
+        let connector = MockServerConnector::new().with_server_details(vec![OpcServerInfo {
+            prog_id: "Test.Server.1".into(),
+            clsid: windows::core::GUID::zeroed(),
+            user_type: Some("Test OPC Server".into()),
+            host: None,
+        }]);
+        let client = OpcDaClient::new(connector).unwrap();
+        let details = client.list_server_details("localhost").await.unwrap();
+        assert_eq!(details.len(), 1);
+        assert_eq!(details[0].prog_id, "Test.Server.1");
+        assert_eq!(details[0].display_name(), "Test OPC Server");
     }
 }

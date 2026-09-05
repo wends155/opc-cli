@@ -33,7 +33,10 @@ pub use crate::com::iterator::{GuidIterator, StringIterator};
 pub use crate::errors::{OpcError, OpcResult};
 pub use crate::provider::{OpcQuality, OpcValue};
 pub use crate::raw::memory::{LocalPointer, RemoteArray, RemotePointer};
-pub use crate::types::{BrowseDirection, BrowseType, GroupHandle, ItemHandle};
+pub use crate::types::{
+    BrowseDirection, BrowseType, GroupHandle, ItemHandle, OpcServerEndpoint, OpcServerInfo,
+    ServerIdentifier,
+};
 
 // ── Pure-Rust Data Transfer Objects ────────────────────────────────
 
@@ -121,8 +124,54 @@ pub trait ServerConnector: Send + Sync {
     /// Enumerate all OPC DA server ProgIDs on the local machine.
     fn enumerate_servers(&self) -> OpcResult<Vec<String>>;
 
+    /// Enumerate all OPC DA servers on the target host with rich catalog details.
+    ///
+    /// The default implementation falls back to [`Self::enumerate_servers`] and synthesizes
+    /// [`OpcServerInfo`] records with zeroed CLSIDs and `user_type: None`.
+    fn enumerate_server_details(&self, host: &str) -> OpcResult<Vec<OpcServerInfo>> {
+        let servers = self.enumerate_servers()?;
+        let host_opt =
+            if host.is_empty() || host.eq_ignore_ascii_case("localhost") || host == "127.0.0.1" {
+                None
+            } else {
+                Some(host.to_string())
+            };
+        Ok(servers
+            .into_iter()
+            .map(|prog_id| OpcServerInfo {
+                prog_id,
+                clsid: windows::core::GUID::zeroed(),
+                user_type: None,
+                host: host_opt.clone(),
+            })
+            .collect())
+    }
+
     /// Connect to the named OPC DA server and return a server facade.
     fn connect(&self, server_name: &str) -> OpcResult<Self::Server>;
+
+    /// Connect to an OPC DA server specified by a [`ServerIdentifier`].
+    ///
+    /// The default implementation delegates to [`Self::connect`] using the string representation.
+    fn connect_identifier(&self, identifier: &ServerIdentifier) -> OpcResult<Self::Server> {
+        match identifier {
+            ServerIdentifier::ProgId(prog_id) => self.connect(prog_id),
+            ServerIdentifier::Clsid(guid) => self.connect(&format!(
+                "{{{:08X}-{:04X}-{:04X}-{:02X}{:02X}-{:02X}{:02X}{:02X}{:02X}{:02X}{:02X}}}",
+                guid.data1,
+                guid.data2,
+                guid.data3,
+                guid.data4[0],
+                guid.data4[1],
+                guid.data4[2],
+                guid.data4[3],
+                guid.data4[4],
+                guid.data4[5],
+                guid.data4[6],
+                guid.data4[7]
+            )),
+        }
+    }
 }
 
 /// Facade over a connected OPC DA server instance.
@@ -190,31 +239,44 @@ pub(crate) fn guid_to_progid(guid: &windows::core::GUID) -> OpcResult<String> {
     RemotePointer::from(progid).into_string()
 }
 
-/// Resolve an OPC DA server `ProgID` to a connected `opc_da` Server instance.
+/// Resolve an OPC DA server [`ServerIdentifier`] to a connected `opc_da` Server instance.
 ///
-/// Converts the `ProgID` string to a `CLSID` via the Windows registry,
-/// then creates and returns a connected server handle.
+/// If connecting via [`ServerIdentifier::Clsid`], instantiates directly via `CoCreateInstance`.
+/// If connecting via [`ServerIdentifier::ProgId`], resolves the ProgID via the Windows registry.
 ///
 /// # Errors
 ///
 /// Returns `Err` if the `ProgID` cannot be resolved or the server
 /// cannot be instantiated.
 #[tracing::instrument(level = "info", err)]
-pub(crate) fn connect_server(server_name: &str) -> OpcResult<crate::raw::bindings::da::IOPCServer> {
-    // SAFETY: `server_wide` is null-terminated and lives until end of scope.
-    let clsid_raw = unsafe {
-        let server_wide: Vec<u16> = server_name
-            .encode_utf16()
-            .chain(std::iter::once(0))
-            .collect();
-        match CLSIDFromProgID(PCWSTR(server_wide.as_ptr())) {
-            Ok(guid) => guid,
-            Err(e) => {
-                tracing::error!(error = ?e, server = %server_name, "Failed to resolve ProgID to CLSID");
-                return Err(OpcError::connection_failed(server_name, e));
+pub(crate) fn connect_server_identifier(
+    identifier: &ServerIdentifier,
+) -> OpcResult<crate::raw::bindings::da::IOPCServer> {
+    let clsid_raw = match identifier {
+        ServerIdentifier::Clsid(guid) => *guid,
+        ServerIdentifier::ProgId(server_name) => {
+            // SAFETY: `server_wide` is null-terminated and lives until end of scope.
+            unsafe {
+                let server_wide: Vec<u16> = server_name
+                    .encode_utf16()
+                    .chain(std::iter::once(0))
+                    .collect();
+                match CLSIDFromProgID(PCWSTR(server_wide.as_ptr())) {
+                    Ok(guid) => guid,
+                    Err(e) => {
+                        tracing::error!(
+                            error = ?e,
+                            server = %server_name,
+                            "Failed to resolve ProgID to CLSID"
+                        );
+                        return Err(OpcError::connection_failed(server_name, e));
+                    }
+                }
             }
         }
     };
+
+    let server_desc = identifier.to_string();
     // SAFETY: Calling COM function CoCreateInstance with valid CLSID to instantiate IOPCServer.
     let server: crate::raw::bindings::da::IOPCServer = unsafe {
         windows::Win32::System::Com::CoCreateInstance(
@@ -225,10 +287,25 @@ pub(crate) fn connect_server(server_name: &str) -> OpcResult<crate::raw::binding
     }
     .inspect_err(|e| {
         let err = OpcError::from(e.clone());
-        crate::log_opc_err!(&err, crate::errors::OpcOperation::Connect, server = %server_name);
+        crate::log_opc_err!(&err, crate::errors::OpcOperation::Connect, server = %server_desc);
     })?;
-    tracing::debug!(server = %server_name, "Connected to OPC DA server");
+    tracing::debug!(server = %server_desc, "Connected to OPC DA server");
     Ok(server)
+}
+
+/// Resolve an OPC DA server `ProgID` or CLSID string to a connected `opc_da` Server instance.
+///
+/// Converts the `ProgID` string to a `CLSID` via the Windows registry (or parses
+/// direct CLSID syntax), then creates and returns a connected server handle.
+///
+/// # Errors
+///
+/// Returns `Err` if the `ProgID` cannot be resolved or the server
+/// cannot be instantiated.
+#[allow(dead_code)]
+#[tracing::instrument(level = "info", err)]
+pub(crate) fn connect_server(server_name: &str) -> OpcResult<crate::raw::bindings::da::IOPCServer> {
+    connect_server_identifier(&ServerIdentifier::from(server_name))
 }
 
 /// Real COM-backed server connector implementation.
@@ -248,7 +325,7 @@ impl ServerConnector for ComConnector {
         // SAFETY: Calling COM function CoCreateInstance to instantiate IOPCServerList interface.
         let servers: crate::raw::bindings::comn::IOPCServerList = unsafe {
             windows::Win32::System::Com::CoCreateInstance(
-                &id,
+                &raw const id,
                 None,
                 windows::Win32::System::Com::CLSCTX_ALL,
             )?
@@ -283,8 +360,15 @@ impl ServerConnector for ComConnector {
     }
 
     #[tracing::instrument(level = "info", skip(self), err)]
-    fn connect(&self, server_name: &str) -> OpcResult<Self::Server> {
-        let server = connect_server(server_name)?;
+    fn enumerate_server_details(&self, host: &str) -> OpcResult<Vec<OpcServerInfo>> {
+        tracing::debug!("Enumerating OPC DA Server catalog details via OpcServerListCatalog");
+        let catalog = crate::com::discovery::OpcServerListCatalog::new()?;
+        catalog.enumerate_details(host)
+    }
+
+    #[tracing::instrument(level = "info", skip(self), err)]
+    fn connect_identifier(&self, identifier: &ServerIdentifier) -> OpcResult<Self::Server> {
+        let server = connect_server_identifier(identifier)?;
 
         let common: crate::raw::bindings::comn::IOPCCommon = server.cast()?;
         let item_properties: crate::raw::bindings::da::IOPCItemProperties = server.cast()?;
@@ -301,6 +385,11 @@ impl ServerConnector for ComConnector {
             server_public_groups,
             browse_server_address_space,
         })
+    }
+
+    #[tracing::instrument(level = "info", skip(self), err)]
+    fn connect(&self, server_name: &str) -> OpcResult<Self::Server> {
+        self.connect_identifier(&ServerIdentifier::from(server_name))
     }
 }
 
@@ -933,6 +1022,8 @@ pub struct MockServerConnector {
     pub state: std::sync::Arc<MockState>,
     /// Simulated server ProgIDs returned by server enumeration.
     pub servers: std::sync::Arc<std::sync::Mutex<Vec<String>>>,
+    /// Simulated server details returned by structured server enumeration.
+    pub server_details: std::sync::Arc<std::sync::Mutex<Vec<OpcServerInfo>>>,
 }
 
 #[cfg(any(test, feature = "test-support"))]
@@ -955,12 +1046,19 @@ impl Default for MockServerConnector {
             ])),
             organization: std::sync::atomic::AtomicU32::new(1),
         });
+        let default_details = vec![OpcServerInfo {
+            prog_id: "Matrikon.OPC.Simulation.1".to_string(),
+            clsid: windows::core::GUID::zeroed(),
+            user_type: Some("Matrikon OPC Simulation Server".to_string()),
+            host: None,
+        }];
         Self {
             server,
             state,
             servers: std::sync::Arc::new(std::sync::Mutex::new(vec![
                 "Matrikon.OPC.Simulation.1".to_string(),
             ])),
+            server_details: std::sync::Arc::new(std::sync::Mutex::new(default_details)),
         }
     }
 }
@@ -995,10 +1093,17 @@ impl MockServerConnector {
             ])),
             organization: std::sync::atomic::AtomicU32::new(1),
         });
+        let default_details = vec![OpcServerInfo {
+            prog_id: "Mock.Server.1".to_string(),
+            clsid: windows::core::GUID::zeroed(),
+            user_type: Some("Mock Server 1".to_string()),
+            host: None,
+        }];
         Self {
             server,
             state,
             servers: std::sync::Arc::new(std::sync::Mutex::new(vec!["Mock.Server.1".to_string()])),
+            server_details: std::sync::Arc::new(std::sync::Mutex::new(default_details)),
         }
     }
 
@@ -1016,12 +1121,44 @@ impl MockServerConnector {
 
     /// Overrides simulated server ProgIDs returned during enumeration.
     ///
+    /// Also synchronizes synthesized [`OpcServerInfo`] records into `server_details`.
+    ///
     /// # Arguments
     /// * `servers` - Vector of server ProgID strings.
     #[must_use]
     pub fn with_servers(self, servers: Vec<String>) -> Self {
+        let synthesized: Vec<OpcServerInfo> = servers
+            .iter()
+            .map(|s| OpcServerInfo {
+                prog_id: s.clone(),
+                clsid: windows::core::GUID::zeroed(),
+                user_type: None,
+                host: None,
+            })
+            .collect();
         if let Ok(mut guard) = self.servers.lock() {
             *guard = servers;
+        }
+        if let Ok(mut guard) = self.server_details.lock() {
+            *guard = synthesized;
+        }
+        self
+    }
+
+    /// Overrides simulated structured server details returned during enumeration.
+    ///
+    /// Also synchronizes the ProgIDs into `servers`.
+    ///
+    /// # Arguments
+    /// * `details` - Vector of [`OpcServerInfo`] records.
+    #[must_use]
+    pub fn with_server_details(self, details: Vec<OpcServerInfo>) -> Self {
+        let prog_ids: Vec<String> = details.iter().map(|d| d.prog_id.clone()).collect();
+        if let Ok(mut guard) = self.server_details.lock() {
+            *guard = details;
+        }
+        if let Ok(mut guard) = self.servers.lock() {
+            *guard = prog_ids;
         }
         self
     }
@@ -1042,6 +1179,23 @@ impl ServerConnector for MockServerConnector {
 
         let servers = self.servers.lock()?;
         Ok(servers.clone())
+    }
+
+    fn enumerate_server_details(&self, _host: &str) -> OpcResult<Vec<OpcServerInfo>> {
+        if self
+            .state
+            .should_fail_connect
+            .load(std::sync::atomic::Ordering::Relaxed)
+        {
+            return Err(OpcError::Internal("Server enumeration failed".into()));
+        }
+
+        let details = self.server_details.lock()?;
+        Ok(details.clone())
+    }
+
+    fn connect_identifier(&self, identifier: &ServerIdentifier) -> OpcResult<Self::Server> {
+        self.connect(&identifier.to_string())
     }
 
     fn connect(&self, _server_name: &str) -> OpcResult<Self::Server> {
@@ -1227,5 +1381,19 @@ mod tests {
         } else {
             panic!("Expected OpcError::Com, got: {result:?}");
         }
+    }
+
+    #[test]
+    fn test_mock_server_connector_server_details() {
+        use crate::types::OpcServerInfo;
+        let mock = MockServerConnector::new().with_server_details(vec![OpcServerInfo {
+            prog_id: "Custom.Mock.1".into(),
+            clsid: windows::core::GUID::zeroed(),
+            user_type: Some("Custom Mock Title".into()),
+            host: None,
+        }]);
+        let details = mock.enumerate_server_details("localhost").unwrap();
+        assert_eq!(details.len(), 1);
+        assert_eq!(details[0].display_name(), "Custom Mock Title");
     }
 }

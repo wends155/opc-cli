@@ -6,6 +6,7 @@
 
 pub mod client;
 pub mod connector;
+pub mod discovery;
 pub mod guard;
 pub mod iterator;
 pub(crate) use crate::raw::memory;
@@ -16,3 +17,4 @@ pub use client::OpcDaClient;
 pub use connector::{
     ComConnector, ComGroup, ComServer, ConnectedGroup, ConnectedServer, ServerConnector,
 };
+pub use discovery::{OpcServerRegistration, OpcServerType, inspect_local_registration};

@@ -165,6 +165,8 @@ impl OpcError {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) enum OpcOperation {
     ListServers,
+    ListServerDetails,
+    InspectRegistration,
     Connect,
     DispatchConnectionError,
     DispatchReconnect,
@@ -200,6 +202,8 @@ impl std::fmt::Display for OpcOperation {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let op_str = match self {
             Self::ListServers => "list_servers",
+            Self::ListServerDetails => "list_server_details",
+            Self::InspectRegistration => "inspect_registration",
             Self::Connect => "connect",
             Self::DispatchConnectionError => "dispatch_with_retry:connection_error",
             Self::DispatchReconnect => "dispatch_with_retry:reconnect",

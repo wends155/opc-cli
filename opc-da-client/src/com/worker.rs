@@ -11,7 +11,10 @@ use crate::com::connector::{
 use crate::errors::{OpcError, OpcOperation, OpcResult};
 use crate::log_opc_err;
 use crate::provider::{OpcQuality, OpcValue, TagCollector, TagValue, WriteResult};
-use crate::types::{BrowseDirection, BrowseType, GroupHandle, ItemHandle, NamespaceType};
+use crate::types::{
+    BrowseDirection, BrowseType, GroupHandle, ItemHandle, NamespaceType, OpcServerInfo,
+    ServerIdentifier,
+};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::{mpsc, oneshot};
@@ -24,6 +27,13 @@ pub enum ComRequest {
         host: String,
         /// One-shot channel to send back the server enumeration result.
         reply: oneshot::Sender<OpcResult<Vec<String>>>,
+    },
+    /// Request to enumerate available OPC DA servers with rich metadata on a host.
+    ListServerDetails {
+        /// Hostname or IP address to target.
+        host: String,
+        /// One-shot channel to send back the structured server details result.
+        reply: oneshot::Sender<OpcResult<Vec<OpcServerInfo>>>,
     },
     /// Request to read current values, quality, and timestamps for tag IDs.
     ReadTagValues {
@@ -162,7 +172,7 @@ impl<C: ServerConnector + 'static> ComWorker<C> {
                 }
             };
 
-            let mut cache: HashMap<String, C::Server> = HashMap::new();
+            let mut cache: HashMap<ServerIdentifier, C::Server> = HashMap::new();
 
             while let Some(req) = rx.blocking_recv() {
                 match req {
@@ -184,6 +194,32 @@ impl<C: ServerConnector + 'static> ComWorker<C> {
                             log_opc_err!(
                                 e,
                                 OpcOperation::ListServers,
+                                host = %host,
+                                elapsed_ms =
+                                    u64::try_from(start.elapsed().as_millis()).unwrap_or(u64::MAX),
+                            );
+                        }
+                        let _ = reply.send(servers);
+                    }
+
+                    ComRequest::ListServerDetails { host, reply } => {
+                        let span = tracing::info_span!("opc.list_server_details", host = %host);
+                        let _enter = span.enter();
+                        #[cfg(feature = "dev-diagnostics")]
+                        tracing::trace!(host = %host, "list_server_details: starting operation");
+                        let start = std::time::Instant::now();
+                        let servers = connector.enumerate_server_details(&host);
+                        if let Ok(s) = &servers {
+                            tracing::info!(
+                                count = s.len(),
+                                elapsed_ms =
+                                    u64::try_from(start.elapsed().as_millis()).unwrap_or(u64::MAX),
+                                "list_server_details completed"
+                            );
+                        } else if let Err(e) = &servers {
+                            log_opc_err!(
+                                e,
+                                OpcOperation::ListServerDetails,
                                 host = %host,
                                 elapsed_ms =
                                     u64::try_from(start.elapsed().as_millis()).unwrap_or(u64::MAX),
@@ -278,7 +314,7 @@ impl<C: ServerConnector + 'static> ComWorker<C> {
 
     #[tracing::instrument(level = "debug", skip(cache, connector, operation))]
     fn dispatch_with_retry<F, R>(
-        cache: &mut HashMap<String, C::Server>,
+        cache: &mut HashMap<ServerIdentifier, C::Server>,
         connector: &Arc<C>,
         server_name: &str,
         operation: F,
@@ -286,14 +322,15 @@ impl<C: ServerConnector + 'static> ComWorker<C> {
     where
         F: Fn(&C::Server) -> OpcResult<R>,
     {
-        let server_ref = match cache.entry(server_name.to_string()) {
+        let identifier = ServerIdentifier::from(server_name);
+        let server_ref = match cache.entry(identifier.clone()) {
             std::collections::hash_map::Entry::Occupied(e) => {
                 tracing::trace!(server = %server_name, "Cache hit");
                 e.into_mut()
             }
             std::collections::hash_map::Entry::Vacant(e) => {
                 tracing::debug!(server = %server_name, "Cache miss, connecting");
-                let srv = connector.connect(server_name)?;
+                let srv = connector.connect_identifier(&identifier)?;
                 tracing::info!(server = %server_name, "Connection established, added to pool");
                 e.insert(srv)
             }
@@ -307,15 +344,18 @@ impl<C: ServerConnector + 'static> ComWorker<C> {
                     server = %server_name,
                     action = "evicting_stale_connection"
                 );
-                cache.remove(server_name);
+                cache.remove(&identifier);
                 tracing::debug!(server = %server_name, "Reconnecting");
-                let fresh_srv = connector.connect(server_name).inspect_err(|connect_e| {
-                    log_opc_err!(
-                        connect_e,
-                        OpcOperation::DispatchReconnect,
-                        server = %server_name
-                    );
-                })?;
+                let fresh_srv =
+                    connector
+                        .connect_identifier(&identifier)
+                        .inspect_err(|connect_e| {
+                            log_opc_err!(
+                                connect_e,
+                                OpcOperation::DispatchReconnect,
+                                server = %server_name
+                            );
+                        })?;
                 let fresh_ref = &fresh_srv;
                 let result = operation(fresh_ref);
                 if let Err(ref op_e) = result {
@@ -326,7 +366,7 @@ impl<C: ServerConnector + 'static> ComWorker<C> {
                     );
                 }
                 tracing::info!(server = %server_name, "Reconnection successful, pool updated");
-                cache.insert(server_name.to_string(), fresh_srv);
+                cache.insert(identifier, fresh_srv);
                 result
             }
             Err(e) => {
@@ -921,6 +961,14 @@ mod tests {
         fn enumerate_servers(&self) -> OpcResult<Vec<String>> {
             Ok(vec!["Mock.Server.1".into()])
         }
+        fn enumerate_server_details(&self, _host: &str) -> OpcResult<Vec<OpcServerInfo>> {
+            Ok(vec![OpcServerInfo {
+                prog_id: "Mock.Server.1".into(),
+                clsid: windows::core::GUID::zeroed(),
+                user_type: Some("Mock Server 1".into()),
+                host: None,
+            }])
+        }
         fn connect(&self, _server_name: &str) -> OpcResult<Self::Server> {
             Ok(WorkerMockServer)
         }
@@ -953,6 +1001,27 @@ mod tests {
             .await
             .unwrap();
         // Wait for implementation
+    }
+
+    #[tokio::test]
+    async fn test_worker_list_server_details() {
+        let worker = tokio::task::spawn_blocking(|| {
+            ComWorker::start(Arc::new(WorkerMockConnector)).unwrap()
+        })
+        .await
+        .unwrap();
+        let (reply, rx) = oneshot::channel();
+        worker
+            .sender
+            .send(ComRequest::ListServerDetails {
+                host: "localhost".into(),
+                reply,
+            })
+            .await
+            .unwrap();
+        let details = rx.await.unwrap().unwrap();
+        assert_eq!(details.len(), 1);
+        assert_eq!(details[0].prog_id, "Mock.Server.1");
     }
 
     struct MismatchedConnector;
@@ -1018,6 +1087,9 @@ mod tests {
     impl ServerConnector for MismatchedConnector {
         type Server = MismatchedServer;
         fn enumerate_servers(&self) -> OpcResult<Vec<String>> {
+            Ok(vec![])
+        }
+        fn enumerate_server_details(&self, _host: &str) -> OpcResult<Vec<OpcServerInfo>> {
             Ok(vec![])
         }
         fn connect(&self, _server_name: &str) -> OpcResult<Self::Server> {
@@ -1234,6 +1306,9 @@ mod tests {
             fn enumerate_servers(&self) -> OpcResult<Vec<String>> {
                 Err(OpcError::Internal("COM subsystem failed".into()))
             }
+            fn enumerate_server_details(&self, _host: &str) -> OpcResult<Vec<OpcServerInfo>> {
+                Err(OpcError::Internal("COM subsystem failed".into()))
+            }
             fn connect(&self, _name: &str) -> OpcResult<Self::Server> {
                 Err(OpcError::Internal("COM subsystem failed".into()))
             }
@@ -1362,6 +1437,14 @@ mod tests {
             type Server = QualityTestServer;
             fn enumerate_servers(&self) -> OpcResult<Vec<String>> {
                 Ok(vec!["Quality.Mock.Server".into()])
+            }
+            fn enumerate_server_details(&self, _host: &str) -> OpcResult<Vec<OpcServerInfo>> {
+                Ok(vec![OpcServerInfo {
+                    prog_id: "Quality.Mock.Server".into(),
+                    clsid: windows::core::GUID::zeroed(),
+                    user_type: Some("Quality Mock Server".into()),
+                    host: None,
+                }])
             }
             fn connect(&self, _name: &str) -> OpcResult<Self::Server> {
                 Ok(QualityTestServer)
@@ -1610,6 +1693,7 @@ mod tests {
             server: server.clone(),
             state: connector.state.clone(),
             servers: connector.servers.clone(),
+            server_details: connector.server_details.clone(),
         });
         let worker =
             tokio::task::spawn_blocking(move || ComWorker::start(custom_connector).unwrap())

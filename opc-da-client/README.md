@@ -17,6 +17,7 @@ OPC DA is deeply coupled to Windows COM/DCOM, which poses significant architectu
 ## Features
 
 - **Async/Await Trait Abstraction**: Built on `tokio` and `async-trait`, using the canonical `OpcProvider` trait for zero-cost abstraction, backend flexibility, and straightforward test mocking.
+- **Structured Server Discovery & Direct CLSID Connectivity**: Enumerate servers with rich catalog metadata (`OpcServerInfo`, `ProgID`, `CLSID`, user-friendly title) via `list_server_details`. Automatic GUID syntax detection seamlessly coerces string identifiers into direct CLSID connections, bypassing Win32 `CLSIDFromProgID`. Local registry inspection (`inspect_local_registration`) detects out-of-process (`LocalServer32`) vs in-process (`InprocServer32`) server binaries.
 - **Pure-Rust Connector Facade**: Strict isolation of low-level Win32 COM and FFI types behind the `ConnectedServer` and `ConnectedGroup` traits, keeping raw COM types and unsafe memory handling strictly internal.
 - **Transparent COM & Thread Management**: Automatically spawns and manages a dedicated MTA worker thread, maintaining strict thread affinity, connection pooling with auto-recovery for stale proxies, and RAII group teardown (`GroupGuard`) ensuring deterministic server cleanup across all return paths and panics.
 - **Strongly-Typed Domain Models**: `TagValue` uses `Option<OpcValue>` and `Option<std::time::SystemTime>` ensuring lossless, zero-allocation typed access on read results and writes.
@@ -76,6 +77,32 @@ async fn main() -> OpcResult<()> {
     for server in servers {
         println!("  - {}", server);
     }
+    Ok(())
+}
+```
+
+### Structured Server Enumeration & Direct CLSID Connection
+
+Query rich server details from the COM Component Categories catalog and connect directly via CLSID:
+
+```rust,no_run
+use opc_da_client::{OpcDaClient, OpcProvider, OpcResult, ServerIdentifier};
+
+#[tokio::main]
+async fn main() -> OpcResult<()> {
+    let client = OpcDaClient::default();
+
+    // Query structured server information (ProgID, CLSID, and human-readable title)
+    let server_details = client.list_server_details("localhost").await?;
+    for info in server_details {
+        println!("Server: {} ({})", info.display_name(), info.prog_id);
+        println!("  ↳ CLSID: {:?}", info.clsid);
+        println!("  ↳ Endpoint: {}", info.endpoint());
+    }
+
+    // Connect directly via 128-bit CLSID string without requiring ProgID lookup
+    let direct_id = ServerIdentifier::from("{28E68F9A-8D75-11D1-8DC3-3C302A000000}");
+    assert!(direct_id.is_clsid());
     Ok(())
 }
 ```
@@ -222,8 +249,14 @@ async fn main() -> OpcResult<()> {
 
 | Type / Trait | Kind | Purpose |
 |:---|:---|:---|
-| `OpcProvider` | `pub trait` | Async trait for OPC DA operations (`list_servers`, `browse_tags`, `read_tag_values`, `write_tag_value`). |
+| `OpcProvider` | `pub trait` | Async trait for OPC DA operations (`list_servers`, `list_server_details`, `browse_tags`, `read_tag_values`, `write_tag_value`). |
 | `OpcDaClient` | `pub struct` | Primary client implementation using Windows COM through a dedicated worker thread. |
+| `ServerIdentifier` | `pub enum` | Strongly-typed server identifier (`ProgId` vs `Clsid`) with automatic GUID syntax parsing. |
+| `OpcServerInfo` | `pub struct` | Rich catalog metadata record (`prog_id`, `clsid`, `user_type`, `host`) with `display_name()` and `endpoint()`. |
+| `OpcServerEndpoint` | `pub struct` | Endpoint binding target `host` with `identifier: ServerIdentifier`. |
+| `OpcServerRegistration` | `pub struct` | Detailed Windows registry diagnostics (`clsid`, `prog_id`, `binary_path`, `server_type`). |
+| `OpcServerType` | `pub enum` | Execution model classification (`LocalServer32` executable vs `InprocServer32` DLL). |
+| `inspect_local_registration` | `pub fn` | Diagnostic helper inspecting `HKCR\CLSID\{...}` across native and WOW64 registry views. |
 | `TagValue` | `pub struct` | Canonical read result (`tag_id`, `Option<OpcValue>`, `OpcQuality`, `Option<SystemTime>`) with `Display` and display helpers. |
 | `DisplayOptionOpcValue` | `pub struct` | Zero-allocation `Display` adapter streaming inner `OpcValue` or fallback directly into formatter. |
 | `DisplayOptionTimestamp` | `pub struct` | Zero-allocation `Display` adapter streaming formatted timestamp or fallback directly into formatter. |
@@ -247,9 +280,9 @@ async fn main() -> OpcResult<()> {
 
 The crate is architected in three decoupled layers:
 
-1. **Public Domain API (`provider.rs`, `types.rs`)**: Exposes the high-level async trait (`OpcProvider`), canonical data models (`TagValue`, `OpcValue`, `WriteResult`, `TagCollector`), pure protocol types (`GroupHandle`, `ItemHandle`, `BrowseType`, `BrowseDirection`), and zero-allocation quality word (`OpcQuality`).
-2. **COM Worker & Client Runtime (`com::client`, `com::worker`)**: The asynchronous client communicates via Tokio channels with a dedicated MTA background thread. The worker thread maintains connection pooling, proxy caching, and automatic recovery on stale connections.
-3. **Pure-Rust Connector Facade & Subsystem (`com::connector`, `com::variant`, `raw::`)**: COM servers and groups are accessed strictly via pure-Rust trait interfaces (`ConnectedServer`, `ConnectedGroup`), completely isolating Win32 COM pointers, apartments, and `VARIANT` structures from domain code.
+1. **Public Domain API (`provider.rs`, `types.rs`)**: Exposes the high-level async trait (`OpcProvider`), canonical data models (`TagValue`, `OpcValue`, `WriteResult`, `TagCollector`, `ServerIdentifier`, `OpcServerInfo`, `OpcServerEndpoint`), pure protocol types (`GroupHandle`, `ItemHandle`, `BrowseType`, `BrowseDirection`), and zero-allocation quality word (`OpcQuality`).
+2. **COM Worker & Client Runtime (`com::client`, `com::worker`)**: The asynchronous client communicates via Tokio channels with a dedicated MTA background thread. The worker thread maintains connection pooling, proxy caching (keyed by `ServerIdentifier`), and automatic recovery on stale connections.
+3. **Pure-Rust Connector Facade & Subsystem (`com::connector`, `com::discovery`, `com::variant`, `raw::`)**: COM servers and groups are accessed strictly via pure-Rust trait interfaces (`ConnectedServer`, `ConnectedGroup`), while `com::discovery` manages multi-tier catalog adapters (`IOPCServerList`/`IOPCServerList2`) and local registry inspection, completely isolating Win32 COM pointers, apartments, and `VARIANT` structures from domain code.
 
 See [architecture.md](./architecture.md) for in-depth architectural specifications and diagrams, and [spec.md](./spec.md) for behavioral contracts.
 

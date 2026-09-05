@@ -1,5 +1,5 @@
 use crate::errors::{OpcError, OpcResult};
-pub use crate::types::{OpcQuality, QualityLimit, QualityMajor, QualitySubstatus};
+pub use crate::types::{OpcQuality, OpcServerInfo, QualityLimit, QualityMajor, QualitySubstatus};
 use async_trait::async_trait;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -796,6 +796,40 @@ pub trait OpcProvider: Send + Sync {
     /// ```
     async fn list_servers(&self, host: &str) -> OpcResult<Vec<String>>;
 
+    /// List available OPC DA servers on the given host with rich catalog metadata.
+    ///
+    /// The default implementation delegates to [`OpcProvider::list_servers`] and synthesizes
+    /// [`OpcServerInfo`] records with zeroed CLSIDs and empty descriptions. Concrete implementations
+    /// (such as `OpcDaClient`) override this to query rich COM catalog metadata via
+    /// `IOPCServerList`/`IOPCServerList2`.
+    ///
+    /// # Arguments
+    /// * `host` - Hostname or IP address to target (e.g., `"localhost"`).
+    ///
+    /// # Returns
+    /// A list of [`OpcServerInfo`] records.
+    ///
+    /// # Errors
+    /// Returns [`crate::errors::OpcError`] if enumeration fails.
+    async fn list_server_details(&self, host: &str) -> OpcResult<Vec<OpcServerInfo>> {
+        let servers = self.list_servers(host).await?;
+        let host_opt =
+            if host.is_empty() || host.eq_ignore_ascii_case("localhost") || host == "127.0.0.1" {
+                None
+            } else {
+                Some(host.to_string())
+            };
+        Ok(servers
+            .into_iter()
+            .map(|prog_id| OpcServerInfo {
+                prog_id,
+                clsid: windows::core::GUID::zeroed(),
+                user_type: None,
+                host: host_opt.clone(),
+            })
+            .collect())
+    }
+
     /// Browse tags recursively using the supplied [`TagCollector`].
     ///
     /// The collector controls the capacity limit, tracks incremental discovery counts
@@ -1138,5 +1172,38 @@ mod tests {
         let tags = collector.harvest();
         assert_eq!(tags.len(), 400);
         assert_eq!(collector.len(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_provider_default_list_server_details() {
+        struct TestProvider;
+        #[async_trait::async_trait]
+        impl OpcProvider for TestProvider {
+            async fn list_servers(&self, _host: &str) -> OpcResult<Vec<String>> {
+                Ok(vec!["Server.A".into(), "Server.B".into()])
+            }
+            async fn browse_tags(&self, _s: &str, _c: TagCollector) -> OpcResult<Vec<String>> {
+                Ok(vec![])
+            }
+            async fn read_tag_values(&self, _s: &str, _t: Vec<String>) -> OpcResult<Vec<TagValue>> {
+                Ok(vec![])
+            }
+            async fn write_tag_value(
+                &self,
+                _s: &str,
+                _t: &str,
+                _v: OpcValue,
+            ) -> OpcResult<WriteResult> {
+                Ok(WriteResult::success("tag"))
+            }
+        }
+
+        let p = TestProvider;
+        let details = p.list_server_details("localhost").await.unwrap();
+        assert_eq!(details.len(), 2);
+        assert_eq!(details[0].prog_id, "Server.A");
+        assert_eq!(details[0].clsid, windows::core::GUID::zeroed());
+        assert_eq!(details[0].user_type, None);
+        assert_eq!(details[0].host, None);
     }
 }

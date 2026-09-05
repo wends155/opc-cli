@@ -46,11 +46,18 @@ pub use provider::{
     OpcValueOptionExt, QualityLimit, QualityMajor, QualitySubstatus, SystemTimeOptionExt,
     TagCollector, TagValue, WriteResult,
 };
-pub use types::{BrowseDirection, BrowseType, GroupHandle, ItemHandle};
+pub use types::{
+    BrowseDirection, BrowseType, GroupHandle, ItemHandle, OpcServerEndpoint, OpcServerInfo,
+    ServerIdentifier,
+};
 
 // Backend re-exports (conditional)
 #[cfg(feature = "opc-da-backend")]
-pub use com::{client::OpcDaClient, connector::ComConnector};
+pub use com::{
+    client::OpcDaClient,
+    connector::ComConnector,
+    discovery::{OpcServerRegistration, OpcServerType, inspect_local_registration},
+};
 
 // Test support re-export
 #[cfg(feature = "test-support")]

@@ -3,7 +3,7 @@
 > **Behavioral Source of Truth** for the `opc-da-client` library crate.
 > Defines *what* each module should do — independent of current implementation.
 >
-> Last verified against: adda254
+> Last verified against: eaba614
 
 ---
 
@@ -22,6 +22,7 @@ All methods use `#[async_trait]`.
 | Method | Signature | Description |
 | :--- | :--- | :--- |
 | `list_servers` | `async fn list_servers(&self, host: &str) -> OpcResult<Vec<String>>` | Enumerate OPC DA servers available on `host`. |
+| `list_server_details` | `async fn list_server_details(&self, host: &str) -> OpcResult<Vec<OpcServerInfo>>` | Enumerate OPC DA servers on `host` with rich metadata (`ProgID`, `CLSID`, user-readable name). Default implementation synthesizes records wrapping `list_servers`. |
 | `browse_tags` | `async fn browse_tags(&self, server: &str, collector: TagCollector) -> OpcResult<Vec<String>>` | Recursively discover tags on `server`, pushing each to `collector` as found. |
 | `read_tag_values` | `async fn read_tag_values(&self, server: &str, tag_ids: Vec<String>) -> OpcResult<Vec<TagValue>>` | Read current value, quality, and timestamp for the given tag IDs. |
 | `write_tag_value` | `async fn write_tag_value(&self, server: &str, tag_id: &str, value: OpcValue) -> OpcResult<WriteResult>` | Write a typed value to a single tag on `server`. |
@@ -32,6 +33,7 @@ All methods use `#[async_trait]`.
 | :--- | :--- | :--- |
 | `list_servers` | COM init failure | Windows COM subsystem unavailable. |
 | `list_servers` | Registry enumeration failure | OPC Core Components not installed or registry corrupt. |
+| `list_server_details` | COM init / catalog failure | Same as `list_servers`. |
 | `browse_tags` | ProgID resolution failure | `server` string does not map to a registered CLSID. |
 | `browse_tags` | Server connection failure | DCOM permissions, server offline, or licensing error. |
 | `browse_tags` | Namespace walk failure | Browse position corrupted (failed `UP` navigation). |
@@ -46,6 +48,7 @@ All methods use `#[async_trait]`.
 
 *   All methods are `Send + Sync` safe; they are safe to call from an async context.
 *   `list_servers` returns a **sorted, deduplicated** list of ProgID strings.
+*   `list_server_details` default implementation synthesizes `OpcServerInfo` with `GUID::zeroed()` and `user_type: None`, ensuring full backward compatibility.
 *   `browse_tags` **never** collects more than `collector.max_tags()` items.
 *   `browse_tags` pushes tags to `collector` incrementally; on timeout the caller can harvest partial results.
 *   `browse_tags` updates `collector` length atomically and lock-free for each discovered tag.
@@ -163,6 +166,63 @@ All methods use `#[async_trait]`.
 
 ---
 
+##### `enum ServerIdentifier`
+
+**Purpose:** Strongly-typed identifier referencing an OPC DA server either by its Programmatic Identifier (`ProgID`) or directly by its 128-bit COM Class ID (`CLSID`).
+
+| Variant | Inner Type | Description |
+| :--- | :--- | :--- |
+| `ProgId(String)` | `String` | Human-readable Programmatic Identifier (e.g. `"Matrikon.OPC.Simulation.1"`). |
+| `Clsid(windows::core::GUID)` | `GUID` | Direct 128-bit Windows COM Class ID. |
+
+**Conversions & Methods:**
+* `is_prog_id(&self) -> bool`: Returns `true` if this is a ProgID variant.
+* `is_clsid(&self) -> bool`: Returns `true` if this is a CLSID variant.
+* `From<&str>` and `From<String>`: Automatically checks if the string matches 128-bit GUID hex syntax (with or without `{}` braces). If valid GUID syntax, coerces directly into `ServerIdentifier::Clsid`; otherwise stores as `ServerIdentifier::ProgId`.
+* `From<windows::core::GUID>`: Converts directly to `ServerIdentifier::Clsid`.
+* `Display`: Formats `ProgId` as string literal; formats `Clsid` as canonical `{XXXXXXXX-XXXX-XXXX-XXXX-XXXXXXXXXXXX}`.
+
+**Derives:** `Debug`, `Clone`, `PartialEq`, `Eq`, `Hash`.
+
+---
+
+##### `struct OpcServerInfo`
+
+**Purpose:** Canonical structured record for an enumerated OPC DA server with rich catalog metadata.
+
+| Field | Type | Description |
+| :--- | :--- | :--- |
+| `prog_id` | `String` | Programmatic Identifier of the server. |
+| `clsid` | `windows::core::GUID` | 128-bit COM Class ID. |
+| `user_type` | `Option<String>` | Human-readable server title/description from catalog metadata, or `None` if unassigned. |
+| `host` | `Option<String>` | Target host machine (`None` for localhost). |
+
+**Methods:**
+* `display_name(&self) -> &str`: Returns `user_type` if present and non-empty, otherwise falls back to `prog_id`.
+* `endpoint(&self) -> OpcServerEndpoint`: Builds an `OpcServerEndpoint` targeting this server.
+
+**Derives:** `Debug`, `Clone`, `PartialEq`, `Eq`.
+
+---
+
+##### `struct OpcServerEndpoint`
+
+**Purpose:** Connection endpoint binding an optional host machine to a `ServerIdentifier`.
+
+| Field | Type | Description |
+| :--- | :--- | :--- |
+| `host` | `Option<String>` | Target machine hostname or IP address (`None` for localhost). |
+| `identifier` | `ServerIdentifier` | Strongly-typed server identifier (ProgID or direct CLSID). |
+
+**Methods:**
+* `local(identifier: impl Into<ServerIdentifier>) -> Self`: Creates local endpoint.
+* `remote(host: impl Into<String>, identifier: impl Into<ServerIdentifier>) -> Self`: Creates remote endpoint.
+* `Display`: Formats as `"{host}/{identifier}"` or `"{identifier}"`.
+
+**Derives:** `Debug`, `Clone`, `PartialEq`, `Eq`, `Hash`.
+
+---
+
 ### 1.2 `errors` — Canonical Error Handling & Hints
 
 **Purpose:** Define domain-specific error types (`OpcError`), result alias (`OpcResult<T>`), and inherent diagnostics.
@@ -240,15 +300,15 @@ All methods use `#[async_trait]`.
 
 | Item | Signature / Type | Purpose |
 | :--- | :--- | :--- |
-| `enum OpcOperation` | `pub(crate) enum OpcOperation` | Canonical strongly-typed operation identifiers for all OPC DA client operations. Implements `Display` formatting to snake_case/kebab keys. |
-| `log_opc_err!` | `macro_rules! log_opc_err` | Emits a consolidated, structured `tracing::error!` event containing `operation`, `hresult`, `hint`, `chain`, and arbitrary contextual fields (`server`, `tag`, `value`, `depth`, `branch`). Eliminates duplicate double logging. |
+| `enum OpcOperation` | `pub(crate) enum OpcOperation` | Canonical strongly-typed operation identifiers for all OPC DA client operations (`Connect`, `ListServers`, `ListServerDetails`, `InspectRegistration`, `BrowseTags`, `ReadTagValues`, `WriteTagValue`, `DispatchOperation`, `DispatchConnectionError`, `DispatchReconnect`, `DispatchRetriedOperation`). Implements `Display` formatting to snake_case/kebab keys. |
+| `log_opc_err!` | `macro_rules! log_opc_err` | Emits a consolidated, structured `tracing::error!` event containing `operation`, `hresult`, `hint`, `chain`, and arbitrary contextual fields (`server`, `tag`, `value`, `depth`, `branch`, `host`, `clsid`). Eliminates duplicate double logging. |
 | `log_opc_error` | `fn(error: &OpcError, operation: &str)` | Legacy compatibility wrapper delegating directly to `log_opc_err!`. |
 
 ---
 
-### 1.3 `com::client` — Default OPC DA Client
+### 1.3 `com::client` & `com::worker` — Default OPC DA Client & Apartment Worker
 
-**Purpose:** Concrete `OpcProvider` implementation backed by the consolidated `com` subsystem. Handles COM MTA initialization, server connection, namespace browsing, and synchronous I/O reads.
+**Purpose:** Concrete `OpcProvider` implementation backed by the consolidated `com` subsystem. Handles COM MTA initialization, server connection, namespace browsing, structured catalog discovery, and synchronous I/O reads.
 
 > [!NOTE]
 > Only compiled when feature `opc-da-backend` is enabled (default).
@@ -262,11 +322,11 @@ All methods use `#[async_trait]`.
 | `new(connector: C)` | `fn new(connector: C) -> OpcResult<Self>` | Constructs a new wrapper, launching the dedicated COM worker thread. |
 | `default()` | `fn default() -> Self` | Constructs an `OpcDaClient<ComConnector>` with default native COM connector. |
 
-Implements `OpcProvider` for all four trait methods by dispatching to the `ComWorker`.
+Implements `OpcProvider` for all five trait methods (`list_servers`, `list_server_details`, `browse_tags`, `read_tag_values`, `write_tag_value`) by dispatching to the `ComWorker`.
 
 **Invariants:**
 *   All COM work runs on a dedicated, long-lived `ComWorker` thread, avoiding repeated initialization overhead and solving COM thread-affinity constraints.
-*   Connections are pooled and cached automatically inside the worker, mapped by ProgID.
+*   Connections are pooled and cached automatically inside the worker, keyed by `ServerIdentifier` (supporting both ProgID and direct CLSID caching).
 *   Stale connections are transparently evicted and retried during request dispatch.
 *   GUID filtering: zeroed GUIDs are skipped during server enumeration.
 *   OPC groups created by `read_tag_values` and `write_tag_value` are **always** managed by `GroupGuard`, guaranteeing deterministic invocation of `remove_group(handle, true)` on `Drop` across all return paths, early returns with `?`, and thread panics.
@@ -375,23 +435,87 @@ Before calling `browse_recursive`, `browse_tags` attempts `browse_opc_item_ids(B
 
 ---
 
-### 1.7 `com::connector` — Pure-Rust Connector Facade & Reusable Mocks
+### 1.7 `com::discovery` — Catalog Adapter & Registry Inspection
 
-**Purpose:** Pure-Rust facade traits and DTOs that completely decouple `ComWorker` and consumers from raw Win32 COM / FFI types:
-- `ServerConnector`: Discovers servers via `enumerate_servers()` and connects via `connect()`. Implemented by `ComConnector` and `MockServerConnector`.
-- `ConnectedServer`: Introspects server namespace and adds/removes groups using `GroupConfig` and `CreatedGroup`. Implemented by `ComServer` and `MockConnectedServer`. Supports in-memory tag browsing via `StringIterator::from_vec`.
-- `ConnectedGroup`: Pure-Rust facade over OPC DA groups:
-  - `add_items(&self, items: &[GroupItemDef]) -> OpcResult<Vec<GroupItemResult>>`
-  - `read(&self, source: DataSource, server_handles: &[ItemHandle]) -> OpcResult<Vec<Result<GroupItemState, OpcError>>>`
-  - `write(&self, server_handles: &[ItemHandle], values: &[OpcValue]) -> OpcResult<Vec<Result<(), OpcError>>>`
-- Server connection helpers:
-  - `connect_server(server_name: &str) -> OpcResult<IOPCServer>`: Resolves ProgID to CLSID via registry (logging errors via `crate::log_opc_err!(&err, crate::errors::OpcOperation::Connect, server = %server_name)` and returning `OpcError::connection_failed`) and creates connected COM server handle.
-  - `guid_to_progid(guid: &GUID) -> OpcResult<String>`: Converts a COM GUID to its registered ProgID string using `RemotePointer<u16>::into_string(self)` with guaranteed COM allocator cleanup via RAII on both success and error paths.
-- `MockConnectedGroup`, `MockConnectedServer`, and `MockServerConnector`: Reusable pure-Rust mocks (under `#[cfg(any(test, feature = "test-support"))]` and exported at crate root under `test-support`) supporting pluggable closures, failure injection (`MockState`), tracking of cleanup invocations (`MockState::remove_group_count`), and simulated tag browsing without native COM allocators or unsafe blocks.
+**Purpose:** Provide structured server enumeration and local Windows registry diagnostics:
+
+#### Public API
+
+##### `struct OpcServerRegistration`
+
+**Purpose:** Detailed Windows registry configuration for an installed OPC DA server class.
+
+| Field | Type | Description |
+| :--- | :--- | :--- |
+| `clsid` | `windows::core::GUID` | 128-bit COM Class ID. |
+| `prog_id` | `String` | Programmatic Identifier. |
+| `version_independent_prog_id` | `Option<String>` | Version-independent ProgID, or `None` if unassigned. |
+| `binary_path` | `std::path::PathBuf` | Resolved executable or DLL file path on disk. |
+| `server_type` | `OpcServerType` | Execution model classification (`LocalServer32` vs `InprocServer32`). |
+
+**Derives:** `Debug`, `Clone`, `PartialEq`, `Eq`.
 
 ---
 
-### 1.8 `raw` — Crate-Internal Low-Level Win32/COM FFI Subsystem
+##### `enum OpcServerType`
+
+**Purpose:** Execution model classification of an installed COM server.
+
+| Variant | Description |
+| :--- | :--- |
+| `LocalServer32` | Out-of-process executable server (`.exe`). Formats as `"LocalServer32 (Executable)"`. |
+| `InprocServer32` | In-process DLL server (`.dll`). Formats as `"InprocServer32 (DLL)"`. |
+
+**Derives:** `Debug`, `Clone`, `Copy`, `PartialEq`, `Eq`, `Hash`. Implements `Display`.
+
+---
+
+##### `inspect_local_registration(clsid: &GUID, host: Option<&str>) -> OpcResult<OpcServerRegistration>`
+
+**Description:** Inspects the local machine Windows registry for an OPC DA server's registration details by querying `HKCR\CLSID\{...}` across both native and 32-bit (`KEY_WOW64_32KEY`) views.
+
+**Inputs:**
+* `clsid`: Reference to the 128-bit COM Class ID.
+* `host`: Target host machine. If `Some` and not localhost/127.0.0.1, returns [`OpcError::NotImplemented`].
+
+**Returns:**
+* `Ok(OpcServerRegistration)` with resolved binary path and server execution type.
+
+**Errors:**
+* [`OpcError::NotImplemented`] if `host` is a remote machine.
+* [`OpcError::Server`] if the CLSID is missing or neither `LocalServer32` nor `InprocServer32` registry keys exist.
+
+---
+
+#### Internal: `OpcServerListCatalog`
+
+**Purpose:** Adapter combining `IOPCServerList` and `IOPCServerList2`.
+* Uses `IOPCServerList::EnumClassesOfCategories` to enumerate category classes, bypassing the `IOPCEnumGUID` vs standard `IEnumGUID` COM vtable layout mismatch.
+* Employs a resilient 3-tier fallback to extract server details:
+  1. `IOPCServerList2::GetClassDetails` (v2 interface with version-independent ProgID)
+  2. `IOPCServerList::GetClassDetails` (v1 interface with ProgID and user type)
+  3. `guid_to_progid` fallback (resolving from registry via COM runtime)
+
+---
+
+### 1.8 `com::connector` — Pure-Rust Connector Facade & Reusable Mocks
+
+**Purpose:** Pure-Rust facade traits and DTOs that completely decouple `ComWorker` and consumers from raw Win32 COM / FFI types:
+* `ServerConnector`: Discovers servers via `enumerate_servers()` and `enumerate_server_details(host: &str) -> OpcResult<Vec<OpcServerInfo>>`, and connects via `connect(name)` and `connect_identifier(&ServerIdentifier)`. Implemented by `ComConnector` and `MockServerConnector`.
+* `ConnectedServer`: Introspects server namespace and adds/removes groups using `GroupConfig` and `CreatedGroup`. Implemented by `ComServer` and `MockConnectedServer`. Supports in-memory tag browsing via `StringIterator::from_vec`.
+* `ConnectedGroup`: Pure-Rust facade over OPC DA groups:
+  - `add_items(&self, items: &[GroupItemDef]) -> OpcResult<Vec<GroupItemResult>>`
+  - `read(&self, source: DataSource, server_handles: &[ItemHandle]) -> OpcResult<Vec<Result<GroupItemState, OpcError>>>`
+  - `write(&self, server_handles: &[ItemHandle], values: &[OpcValue]) -> OpcResult<Vec<Result<(), OpcError>>>`
+* Server connection helpers:
+  - `connect_server_identifier(identifier: &ServerIdentifier) -> OpcResult<IOPCServer>`: Directly calls `CoCreateInstance` when `ServerIdentifier::Clsid`, bypassing `CLSIDFromProgID`. When `ServerIdentifier::ProgId`, resolves ProgID to CLSID via registry.
+  - `connect_server(server_name: &str) -> OpcResult<IOPCServer>`: Convenience wrapper delegating to `connect_server_identifier(&ServerIdentifier::from(server_name))`.
+  - `guid_to_progid(guid: &GUID) -> OpcResult<String>`: Converts a COM GUID to its registered ProgID string using `RemotePointer<u16>::into_string(self)` with guaranteed COM allocator cleanup via RAII on both success and error paths.
+* `MockConnectedGroup`, `MockConnectedServer`, and `MockServerConnector`: Reusable pure-Rust mocks (under `#[cfg(any(test, feature = "test-support"))]` and exported at crate root under `test-support`) supporting pluggable closures, failure injection (`MockState`), tracking of cleanup invocations (`MockState::remove_group_count`), simulated structured server details (`server_details: Arc<Mutex<Vec<OpcServerInfo>>>`, `with_server_details`), bidirectional ProgID/detail sync, and simulated tag browsing without native COM allocators or unsafe blocks.
+
+---
+
+### 1.9 `raw` — Crate-Internal Low-Level Win32/COM FFI Subsystem
 
 **Purpose:** Strict crate-internal isolation (`pub(crate) mod raw;`) for all raw Win32 bindings and FFI memory management:
 - `raw::bindings`: Autogenerated Win32 COM bindings (`da`, `comn`).
@@ -482,6 +606,7 @@ Defined in § 1.1. See table above.
 
 - [x] `test_worker_starts_and_stops` — worker thread start & stop.
 - [x] `test_worker_list_servers` — server listing dispatch.
+- [x] `test_worker_list_server_details` — structured server listing dispatch & response receiving.
 - [x] `test_worker_write_tag_value` — write path dispatch & `WriteResult`.
 - [x] `test_worker_write_tag_value_failure` — write rejection error propagation & `OpcError::Com`.
 - [x] `test_connection_cache_reuse` — server connection pooling across requests (`connect_count == 1`).
@@ -509,6 +634,8 @@ Defined in § 1.1. See table above.
 - [x] `test_opc_quality_uncertain_limits` — validates Uncertain with EGU Exceeded & High Limited (0x0056) decoding and Display.
 - [x] `test_opc_quality_roundtrip_u16` — validates lossless roundtripping between u16 and OpcQuality.
 - [x] `test_opc_quality_from_str` — validates string conversion helpers.
+- [x] `test_server_identifier_conversions_and_display` — validates `ServerIdentifier` conversions from `&str`, `String`, `GUID`, GUID hex syntax auto-detection, and `Display` formatting.
+- [x] `test_opc_server_info_display_name_and_endpoint` — validates `OpcServerInfo` display name fallback and endpoint generation.
 
 ### Provider & TagCollector Unit Tests (in `provider.rs`)
 
@@ -524,8 +651,9 @@ Defined in § 1.1. See table above.
 - [x] `test_tag_collector_unbounded` — verifies unbounded collector construction and growth.
 - [x] `test_tag_collector_cancellation` — validates cooperative cancellation flag and rejection of post-cancellation pushes.
 - [x] `test_tag_collector_multithreaded` — validates concurrent multi-threaded push contention and atomic count integrity across 8 threads.
+- [x] `test_provider_default_list_server_details` — validates default `list_server_details` synthesis from `list_servers`.
 
-### Connector & Worker Unit Tests (in `com/connector.rs` and `com/worker.rs`)
+### Connector & Client Unit Tests (in `com/connector.rs` and `com/client.rs`)
 
 - [x] `test_string_iterator_from_vec` — verifies in-memory `StringIterator` collection and equality without COM interfaces.
 - [x] `test_mock_connector_browse` — verifies `MockConnectedServer::browse_opc_item_ids` returns in-memory simulated tags.
@@ -533,10 +661,19 @@ Defined in § 1.1. See table above.
 - [x] `test_mock_server_add_group_and_eviction` — verifies group handle generation and connection drop error injection.
 - [x] `test_group_item_def_and_state_cloning` — verifies DTO clone and display behavior.
 - [x] `test_guid_to_progid_zeroed_guid_returns_com_error` — verifies structured COM error preservation on zeroed GUID.
+- [x] `test_mock_server_connector_server_details` — verifies `MockServerConnector::with_server_details` and `enumerate_server_details`.
+- [x] `test_client_list_server_details` — verifies `OpcDaClient::list_server_details` dispatch through worker against mock connector.
 - [x] `test_worker_browse_tags_success` — verifies `ComWorker` tag discovery over hierarchical namespace using `MockServerConnector`.
 - [x] `test_worker_browse_tags_cancelled` — verifies `ComWorker` immediate return when `TagCollector` is cancelled prior to execution.
 - [x] `test_worker_browse_tags_capacity_cap` — verifies `ComWorker` tag accumulation halts when `TagCollector` capacity is reached.
 - [x] `test_worker_browse_tags_flat_organization` — verifies fast leaf browsing when server namespace organization is flat.
+
+### Discovery & Registry Inspection Unit Tests (in `com/discovery.rs`)
+
+- [x] `test_inspect_local_registration_remote_rejected` — verifies `inspect_local_registration` cleanly rejects remote machine addresses with `OpcError::NotImplemented`.
+- [x] `test_sanitize_binary_path_quoted` — verifies `sanitize_binary_path` strips surrounding double quotes from registry image paths.
+- [x] `test_sanitize_binary_path_unquoted_with_flag` — verifies `sanitize_binary_path` strips trailing CLI flags (`-Embedding`, `/automation`).
+- [x] `test_opc_server_type_display` — verifies `OpcServerType` Display formatting (`LocalServer32 (Executable)` vs `InprocServer32 (DLL)`).
 
 ### COM VARIANT Unit Tests (in `com/variant.rs`)
 
