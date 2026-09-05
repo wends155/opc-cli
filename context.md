@@ -1,5 +1,17 @@
 # Project Context Summary
 
+## 2026-09-05: Architecture Synchronization for Structured Server Discovery and 16-Section Standards (`architecture.md`, `opc-da-client`)
+> 📝 **Context Update:**
+> * **Feature:** Synchronize `opc-da-client/architecture.md` and workspace root `architecture.md` with active codebase architecture following structured server discovery and CLSID connectivity implementation.
+> * **Changes:**
+>   - Audited codebase via `/architecture` workflow, identified 2 dependency rule violations, missing discovery subsystem, undocumented canonical identity types, stale `helpers.rs` / `com/memory.rs` / `friendly_com_hint()` references, and missing Sections 15 & 16. Generated and approved [Architecture Recommendations Report](file:///C:/Users/WSALIGAN/.gemini/antigravity/brain/877306a9-3280-45bd-9dad-20713ca4a343/architecture_recommendations_report.md) and [Implementation Plan](file:///C:/Users/WSALIGAN/.gemini/antigravity/brain/877306a9-3280-45bd-9dad-20713ca4a343/implementation_plan.md).
+>   - Synchronized `opc-da-client/architecture.md`: registered `com::discovery` (`OpcServerRegistration`, `OpcServerType`, `inspect_local_registration`, `OpcServerListCatalog`) and canonical identity types (`ServerIdentifier`, `OpcServerInfo`, `OpcServerEndpoint`) in §1, §2, §4, §5, §6, §10, and §13; documented `GroupGuard` and `OpcError::connection_failed` in §8; documented `OpcOperation`, `log_opc_err!`, and tiered `#[tracing::instrument]` in §9; updated test inventory and metrics (93 unit tests, 55 doc tests) in §10; documented remote machine registry inspection constraint (`OpcError::NotImplemented`) in §14; and added §15 Data Model and §16 Environment Configuration achieving 100% compliance with `architecture-rules.md §1` (all 16 required sections).
+>   - Synchronized workspace root `architecture.md`: pruned dissolved `helpers.rs`, misplaced `com/memory.rs` (relocated to `raw/memory.rs`), and removed `anyhow` under `opc-da-client/Cargo.toml` in §4; replaced `friendly_com_hint()` with `OpcError::friendly_hint(&self)` in §2, §5, §8, and §13 sequence diagram; updated `ComWorker` connection pool caching to `HashMap<ServerIdentifier, Server>` in §5; updated dependency direction rules in §6; updated test metrics to 93 unit tests and 55 doc-tests in §10; and added `com::discovery` to Data Flow diagram in §13.
+>   - Verified full 9-gate quality pipeline (`pwsh -File scripts/verify.ps1`) passing with exit code 0 across both checkpoints.
+>   - Committed changes as checkpoints `cca0a1b` and `5f06c1c`.
+> * **New Constraints:** Both `opc-da-client/architecture.md` and workspace root `architecture.md` must maintain strict 16-section parity with `.agents/rules/architecture-rules.md §1`. Never re-introduce references to dissolved `helpers.rs` or `friendly_com_hint`.
+> * **Pruned:** Stale references to `helpers.rs`, misplaced `com/memory.rs`, outdated `HashMap<ProgID, Server>` connection cache keying, and legacy test count metrics.
+
 ## 2026-09-05: Documentation Synchronization for Structured Server Discovery and Direct CLSID Connectivity (`opc-da-client`)
 > 📝 **Context Update:**
 > * **Feature:** Documentation sync for structured server discovery (`list_server_details`), canonical identity types (`ServerIdentifier`, `OpcServerInfo`, `OpcServerEndpoint`), catalog adapter (`OpcServerListCatalog`), registry diagnostics (`inspect_local_registration`), and direct CLSID connectivity.
