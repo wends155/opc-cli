@@ -1,5 +1,32 @@
 # Project Context Summary
 
+## 2026-09-05: Documentation Synchronization for map_err Eradication and From Conversions (`opc-da-client`)
+> 📝 **Context Update:**
+> * **Feature:** Documentation sync for `map_err` eradication, `From` error conversions, `RemotePointer::into_string`, and `OpcError::connection_failed`.
+> * **Changes:**
+>   - Synchronized `opc-da-client/spec.md`: bumped verification hash to `adda254`; documented `OpcError::connection_failed` and standard `From` error conversions in Section 1.2; documented `into_string` RAII cleanup in Section 1.7 (`connector.rs`) and Section 1.8 (`raw::memory`); and added 3 unit tests plus 1 doc-test to Section 4 test coverage checklists.
+>   - Synchronized `opc-da-client/README.md`: updated Features list highlighting native `From` conversions and RAII unmanaged memory handling; added `OpcError::connection_failed` to API Surface reference table.
+>   - Validated docs with `cargo doc --workspace --no-deps --all-features` (0 warnings) and verified full 9-gate quality pipeline (`scripts/verify.ps1`) with exit code 0.
+>   - Committed changes as checkpoint `f79ffd9`.
+> * **New Constraints:** Maintain `spec.md` verification hash synchronization upon error model or memory wrapper changes. Any new standard `From` conversions on `OpcError` must be registered under `spec.md §1.2`.
+> * **Pruned:** Outdated verification hash `f307252` and stale manual cleanup descriptions in `spec.md`.
+
+## 2026-09-05: Eradication of `map_err` Across COM Subsystem via From Traits and RAII (`opc-da-client`)
+> 📝 **Context Update:**
+> * **Feature:** Eradicate all 16 `map_err` occurrences across the COM subsystem (`opc-da-client/src/com/`) via standard `From` error conversions, RAII `RemotePointer<u16>::into_string`, native `?` propagation, and unified `log_opc_err!` telemetry.
+> * **Changes:**
+>   - Implemented `From` on `OpcError` for `std::sync::mpsc::RecvError`, `tokio::sync::oneshot::error::RecvError`, `tokio::sync::mpsc::error::SendError<T>`, and `std::sync::PoisonError<T>` in `opc-da-client/src/errors.rs`, enabling native `?` propagation across thread/channel boundaries.
+>   - Added `OpcError::connection_failed` factory in `errors.rs` with executable doc-test and unit test assertions.
+>   - Implemented `RemotePointer<u16>::into_string(self) -> OpcResult<String>` in `opc-da-client/src/raw/memory.rs` consuming the pointer by value and releasing memory via `CoTaskMemFree` on `Drop`, removing manual `CoTaskMemFree` calls and `use windows::Win32::System::Com::CoTaskMemFree` from `connector.rs`.
+>   - Refactored `guid_to_progid` and `get_item_id` in `connector.rs` to use `into_string()`; harmonized `connect_server` with `log_opc_err!(e, OpcOperation::Connect)` and `OpcError::connection_failed`; removed redundant `map_err` in `EnumClassesOfCategories`, `add_group`, and mock lock acquisition.
+>   - Cleaned up `ComGuard::new` in `guard.rs` to propagate `hr.ok().inspect_err(...)?` directly without redundant `map_err`.
+>   - Modernized `StringIterator`, `GroupIterator`, and `ItemAttributeIterator` in `iterator.rs` to use `into_string()`, closure-scoped `?`, and `.inspect_err(...)` warnings without leaking errors or breaking iterator semantics.
+>   - Updated `ComWorker::start` and `ComWorker::send_request` in `worker.rs` to inspect channel errors via `tracing::error!` and propagate natively with `?`.
+>   - Added 3 new negative unit tests (`test_channel_error_conversions_and_lock_poison`, `test_remote_pointer_into_string_raii_safety`, `test_worker_channel_drop_error_propagation`), increasing client test count to 83 passed tests (+3 tests, 0 regressions).
+>   - Confirmed 0 matches for `rg "map_err" opc-da-client/src/com/` and passed all 9 verification gates in `scripts/verify.ps1` with exit code 0.
+> * **New Constraints:** `map_err` is strictly prohibited in `opc-da-client/src/com/`. Channel, oneshot, and lock poison errors must propagate via native `?` through `From` conversions. Unmanaged wide strings from COM APIs must be converted via `RemotePointer<u16>::into_string()`. Telemetry side effects must be captured with `.inspect_err(...)` prior to `?`.
+> * **Pruned:** All 16 legacy `map_err` call sites across `com/`, manual `CoTaskMemFree` invocations in `connector.rs`, and ad-hoc string formatting in `connect_server`.
+
 ## 2026-09-05: Documentation Synchronization for GroupGuard and Telemetry (`opc-da-client`)
 > 📝 **Context Update:**
 > * **Feature:** Documentation sync for RAII `GroupGuard`, `OpcOperation`, structured `log_opc_err!` telemetry, and raw memory invariants.
