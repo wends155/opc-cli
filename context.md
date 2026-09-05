@@ -1,5 +1,16 @@
 # Project Context Summary
 
+## 2026-09-05: Architecture Synchronization for Connector Decomposition and VARIANT RAII Guards (`architecture.md`)
+> 📝 **Context Update:**
+> * **Feature:** Synchronize workspace root `architecture.md` and crate-level `opc-da-client/architecture.md` with active connector decomposition into modular submodules, VARIANT RAII memory safety guards, canonical ProgID resolution relocation, dead code cleanup, and expanded test metrics.
+> * **Changes:**
+>   - Synchronized `opc-da-client/architecture.md`: Updated §4 Project Layout with `connector.rs` facade and `connector/` submodules tree; updated §5 Module Boundaries with `com::connector` submodules, removed dead `connect_server`, documented `guid_to_progid` under `com::discovery`, and documented `ScopedVariant` and `ItemStatesGuard` under `com::variant`; corrected §6 Dependency Direction table to reflect `com::connector` importing `guid_to_progid` from `com::discovery` (eliminating inverted dependency rule); updated §8 Error Handling with RAII memory safety guards; updated §9 Observability replacing `connect_server` with `connect_server_identifier`; updated §10 Testing Strategy with 107 unit tests.
+>   - Synchronized root `architecture.md`: Updated §4 Project Layout with `connector.rs` facade and `connector/` submodules tree; updated §5 Module Boundaries with `MockOpcDaClient` and connector submodules under `ComWorker`; updated §8 Error Handling with `ScopedVariant` and `ItemStatesGuard` RAII memory safety guards; updated §10 Testing Strategy to reflect 107 unit tests in `opc-da-client` (145 total workspace unit tests).
+>   - Verified full 8-gate quality pipeline (`pwsh -File scripts/verify.ps1`) passing with exit code 0 across all gates (107 unit tests in `opc-da-client`, 145 total workspace tests, 55 doc-tests).
+>   - Committed documentation synchronization as checkpoint `760f77a`.
+> * **New Constraints:** Keep both `architecture.md` files strictly aligned with codebase module layout, dependency directions, and test metrics.
+> * **Pruned:** Outdated monolithic `connector.rs` descriptions, dead `connect_server` references, inverted dependency rules for `guid_to_progid`, and stale 101 unit test counts.
+
 ## 2026-09-05: Documentation Synchronization for Connector Decomposition and Memory Safety (`opc-da-client`)
 > 📝 **Context Update:**
 > * **Feature:** Documentation sync for connector decomposition into modular submodules, VARIANT RAII memory safety guards, and mock infrastructure exports.
