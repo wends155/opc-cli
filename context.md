@@ -1,5 +1,17 @@
 # Project Context Summary
 
+## 2026-09-05: Documentation Drift Resolution & Intra-Doc Link Fix (`opc-da-client`)
+> 📝 **Context Update:**
+> * **Feature:** Documentation synchronization for `opc-da-client` via `/update-doc`.
+> * **Changes:**
+>   - Fixed private intra-doc link warning in `opc-da-client/src/com/discovery.rs` (`[`OpcServerListCatalog`]` changed to `` `OpcServerListCatalog` ``) to resolve `rustdoc::private_intra_doc_links`.
+>   - Verified 100% clean rustdoc compilation (`cargo doc --no-deps --package opc-da-client`) with zero warnings.
+>   - Verified alignment between `Cargo.toml [package.description]`, `src/lib.rs //!` overview, and `README.md`.
+>   - Verified 0-commit drift and updated `opc-da-client/spec.md` verification hash to checkpoint `4c1184b`.
+>   - Verified full 9-gate quality pipeline (`scripts/verify.ps1`) exiting 0.
+> * **New Constraints:** Do not use intra-doc bracket links `[`Type`]` on private types in public module documentation; use backtick-only code formatting `` `Type` `` instead.
+> * **Pruned:** Outdated verification hash `87d2ec2` and stale intra-doc link warning in `discovery.rs`.
+
 ## 2026-09-05: Worker Decomposition, Single-Responsibility Submodules, and RAII Position Guard (`opc-da-client`)
 > 📝 **Context Update:**
 > * **Feature:** Decompose the 1,734-line multi-domain `opc-da-client/src/com/worker.rs` into a slim facade and modular single-responsibility submodules (`com::worker::{pool, read, write, browse, tests}`), consolidate all RAII lifetime drop guards (`GroupGuard`, `BrowsePositionGuard`) in `com/guard.rs`, eliminate `#![allow(clippy::too_many_lines)]`, adopt strongly-typed `ServerIdentifier` across `ComRequest`, eliminate redundant string allocations via in-place `TagValue` population, and synchronize architectural and behavioral documentation.
