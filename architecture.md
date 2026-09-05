@@ -65,10 +65,16 @@ opc-cli/
 │       │   ├── client.rs       # OpcDaClient implementation
 │       │   ├── connector.rs    # ServerConnector trait, ComConnector / ComServer / ComGroup, test mocks
 │       │   ├── discovery.rs    # Server discovery, OpcServerListCatalog, registry inspection
-│       │   ├── guard.rs        # RAII CoInitializeEx / CoUninitialize guard
+│       │   ├── guard.rs        # RAII COM initialization/teardown (ComGuard), group cleanup (GroupGuard), and browse cursor protection (BrowsePositionGuard)
 │       │   ├── iterator.rs     # COM enumerators (StringIterator, GuidIterator)
-│       │   ├── variant.rs      # VARIANT & SafeArray conversion to/from OpcValue and string
-│       │   └── worker.rs       # Dedicated COM MTA worker thread & request channel
+│       │   ├── variant.rs      # Win32 VARIANT & SafeArray conversion to/from OpcValue and string
+│       │   ├── worker.rs       # Slim worker facade & ComRequest event loop (ComWorker)
+│       │   └── worker/         # Dedicated single-responsibility worker engines
+│       │       ├── pool.rs     # Connection caching, eviction & retry dispatch (dispatch_with_retry)
+│       │       ├── read.rs     # Synchronous tag reading engine with in-place mutation (handle_read)
+│       │       ├── write.rs    # Synchronous tag writing engine with error mapping (handle_write)
+│       │       ├── browse.rs   # Flat/hierarchical namespace traversal with RAII cursor protection (handle_browse)
+│       │       └── tests.rs    # Dedicated worker test suite & mock fixtures (22 unit tests)
 │       └── raw/                # Crate-internal low-level FFI subsystem (pub(crate))
 │           ├── mod.rs          # Raw module root
 │           ├── bindings/       # Frozen COM bindings (windgen output, read-only: da, comn)
@@ -97,13 +103,13 @@ opc-cli/
 - **Mock Availability**: Fully mockable via `MockOpcProvider` (compiled when `feature = "test-support"` is active in `opc-da-client`).
 
 ### `opc-da-client` (Core Client Library)
-- **Owns**: Public API (`OpcProvider`), canonical identity types (`ServerIdentifier`, `OpcServerInfo`, `OpcServerEndpoint`), data structs (`TagValue`, `OpcValue`, `WriteResult`, `TagCollector`), error definitions (`OpcError`), inherent diagnostic method (`OpcError::friendly_hint`), RAII group management (`GroupGuard`), and server discovery (`com::discovery`).
+- **Owns**: Public API (`OpcProvider`), canonical identity types (`ServerIdentifier`, `OpcServerInfo`, `OpcServerEndpoint`), data structs (`TagValue`, `OpcValue`, `WriteResult`, `TagCollector`), error definitions (`OpcError`), inherent diagnostic method (`OpcError::friendly_hint`), RAII group and cursor management (`GroupGuard`, `BrowsePositionGuard`), and server discovery (`com::discovery`).
 - **Does NOT Own**: Terminal rendering, direct COM worker loop implementation.
 - **Trait Interfaces**: Exports `OpcProvider`.
 - **Mock Availability**: Provides `MockOpcProvider` via `mockall`.
 
 ### `ComWorker` (MTA Worker Thread Pool)
-- **Owns**: Dedicated OS background thread, `CoInitializeEx(MTA)` lifecycle (`ComGuard`), connection pool caching keyed by `ServerIdentifier` (`HashMap<ServerIdentifier, Server>`), transparent stale connection eviction on RPC errors (`0x800706BA`), tag browse walking.
+- **Owns**: Dedicated OS background thread, `CoInitializeEx(MTA)` lifecycle (`ComGuard`), connection pool caching keyed by `ServerIdentifier` (`HashMap<ServerIdentifier, Server>`), transparent stale connection eviction on RPC errors (`0x800706BA`), and modular worker dispatch engines (`pool::dispatch_with_retry`, `read::handle_read`, `write::handle_write`, `browse::handle_browse`).
 - **Does NOT Own**: TUI state, UI rendering, high-level task timeouts.
 - **Trait Interfaces**: Uses internal `ServerConnector` trait.
 - **Mock Availability**: Fully unit-tested via consolidated `MockServerConnector` (exported under `feature = "test-support"`).
@@ -153,7 +159,7 @@ The project uses a unified dual-interface build system:
 
 - **Library Domain Errors**: `OpcError` (defined in `opc-da-client`) handles domain failures via `thiserror`.
 - **Friendly Hint Engine**: `OpcError::friendly_hint(&self)` and `raw::hresult::friendly_hresult_hint` map technical HRESULT codes (e.g. `0x800706BA` RPC Unavailable, `0x80070005` DCOM Access Denied) to actionable plain-English text.
-- **RAII Resource Management (`GroupGuard`)**: Temporary COM groups created during `read_tag_values` and `write_tag_value` are guarded by `GroupGuard<'_, S: ConnectedServer>`, guaranteeing deterministic `remove_group(handle, true)` invocation on `Drop` across all return paths, `?` operator exits, and thread panics.
+- **RAII Resource & Cursor Management (`GroupGuard`, `BrowsePositionGuard`)**: Temporary COM groups created during `read_tag_values` and `write_tag_value` are guarded by `GroupGuard<'_, S: ConnectedServer>`, guaranteeing deterministic `remove_group(handle, true)` invocation on `Drop` across all return paths, `?` operator exits, and thread panics. Namespace browsing uses `BrowsePositionGuard` to deterministically restore parent cursor position (`BrowseDirection::Up`) across error returns and thread panics.
 - **Breadcrumb Chains**: TUI uses `anyhow` displaying `{:#}` full error chains in status popups.
 - **No Swallowed Errors**: All fallible COM and background task operations propagate `Result<T, OpcError>`.
 
@@ -179,7 +185,7 @@ The project uses a unified dual-interface build system:
 ## 10. Testing Strategy
 
 - **Unit Testing**: Mock-based testing using `MockOpcProvider` (`mockall`). TUI navigation flow, state transitions, search cycling, and ring-buffer logic are verified without Windows COM dependencies (38 unit tests in `opc-cli`).
-- **COM Worker & Memory Safety Testing**: `ComWorker`, `com/discovery.rs`, and `raw/memory.rs` unit tests use `MockServerConnector` and synthetic allocations to test write paths, tag browsing (flat, hierarchical, cancellation, capacity limits), server connection pooling, stale connection eviction, thread panic safety, worker drop behaviors, tracing instrumentation execution, `GroupGuard` automatic drop cleanup on `add_items` failure, registry inspection validation, and non-cloneable remote pointer safe drop (93 unit tests in `opc-da-client`).
+- **COM Worker & Memory Safety Testing**: `ComWorker`, `com/discovery.rs`, and `raw/memory.rs` unit tests use `MockServerConnector` and synthetic allocations to test write paths, tag browsing (flat, hierarchical, cancellation, capacity limits), server connection pooling, stale connection eviction, thread panic safety, worker drop behaviors, tracing instrumentation execution, `GroupGuard` automatic drop cleanup on `add_items` failure, registry inspection validation, and non-cloneable remote pointer safe drop (101 unit tests in `opc-da-client`).
 - **Doc Testing**: Public API items include runnable doc tests verified via `cargo test --doc --workspace --all-features` (55 doc-tests, including pure-Rust mocking examples in `README.md` and `provider.rs`).
 - **Polyfill Build Gates**: Independent compilation of `compat/*` polyfill crates inside `scripts/verify.ps1`.
 - **AST-Grep Structural Safety Gates**: `sg scan` enforcement of zero unwrap/expect in production library code and mandatory `// SAFETY:` rationale on all unsafe blocks. Rules are validated via ast-grep unit tests before static scans.

@@ -1,5 +1,17 @@
 # Project Context Summary
 
+## 2026-09-05: Architecture Synchronization for Worker Decomposition and RAII Guards (`architecture.md`)
+> 📝 **Context Update:**
+> * **Feature:** Synchronize workspace root `architecture.md` with active `opc-da-client` architecture following worker decomposition into modular submodules and RAII browse position guards.
+> * **Changes:**
+>   - Synchronized `architecture.md §4 Project Layout`: Documented `BrowsePositionGuard` and `GroupGuard` under `com/guard.rs`; documented `com/worker.rs` as slim worker facade and event loop; added directory tree for `com/worker/` submodules (`pool.rs`, `read.rs`, `write.rs`, `browse.rs`, `tests.rs`).
+>   - Synchronized `architecture.md §5 Module Boundaries`: Documented `BrowsePositionGuard` RAII cursor management under `opc-da-client` ownership; documented delegated single-responsibility worker engines (`pool::dispatch_with_retry`, `read::handle_read`, `write::handle_write`, `browse::handle_browse`) under `ComWorker`.
+>   - Synchronized `architecture.md §8 Error Handling Strategy`: Documented deterministic namespace browse cursor restoration via `BrowsePositionGuard` alongside temporary group cleanup via `GroupGuard`.
+>   - Synchronized `architecture.md §10 Testing Strategy`: Updated `opc-da-client` test metrics to 101 unit tests (139 workspace unit tests, 55 doc-tests).
+>   - Verified full 9-gate quality pipeline (`scripts/verify.ps1`) passing with exit code 0.
+> * **New Constraints:** Keep workspace root `architecture.md` in lockstep with crate-level `opc-da-client/architecture.md` when submodules or guards are added or reorganized.
+> * **Pruned:** Outdated monolithic `worker.rs` description, missing worker submodules, and stale 93 unit test count in root `architecture.md`.
+
 ## 2026-09-05: Documentation Drift Resolution & Intra-Doc Link Fix (`opc-da-client`)
 > 📝 **Context Update:**
 > * **Feature:** Documentation synchronization for `opc-da-client` via `/update-doc`.
