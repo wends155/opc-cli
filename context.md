@@ -1,5 +1,19 @@
 # Project Context Summary
 
+## 2026-09-05: Windows Crate Feature Migration for Environment String Expansion (`opc-da-client`)
+> 📝 **Context Update:**
+> * **Feature:** Migrate environment variable expansion in `opc-da-client/src/com/discovery.rs` from an `unsafe extern "system"` foreign function declaration to the official `windows` crate `Win32_System_Environment` feature, eliminate raw pointer arithmetic in favor of safe slice bounds checking, add structured warning telemetry, validate crates.io manifest normalization, and synchronize architectural documentation.
+> * **Changes:**
+>   - Added `"Win32_System_Environment"` feature to `[workspace.dependencies.windows.features]` in root `Cargo.toml`. Verified that `cargo package --package opc-da-client --no-verify` automatically normalizes and injects this feature into the published crate manifest, guaranteeing zero crates.io compilation breakage.
+>   - Refactored `expand_environment_string` in `opc-da-client/src/com/discovery.rs` to call `windows::Win32::System::Environment::ExpandEnvironmentStringsW` using safe slice references (`Some(&mut buf)` and `Some(&mut dynamic_buf)`), completely eliminating manual `unsafe extern "system"` declarations, `PWSTR` pointer casts, and manual `u32::try_from` casting.
+>   - Added structured `tracing::warn!` logging on Win32 environment expansion failure (`req_size == 0` or `dynamic_req == 0`) capturing input string and `std::io::Error::last_os_error()`.
+>   - Expanded `test_expand_environment_string` unit test suite to thoroughly cover plain strings, undefined variables (`%NONEXISTENT_OPC_VAR_12345%`), unmatched `%` tokens, empty strings, and synthetic oversized strings (> 512 wide characters) validating dynamic allocation fallback.
+>   - Synchronized `opc-da-client/spec.md` (bumped verification hash to `3d38109`, updated Section 1.7 contract and Section 4 test checklist) and `opc-da-client/architecture.md` (updated §5 `com::discovery` ownership, §9 log level guidelines, §10 test inventory, and §12 `windows` dependency purpose).
+>   - Verified full 9-gate quality pipeline (`pwsh -File scripts/verify.ps1`) with exit code 0 across both checkpoints (135 unit tests, 55 doc-tests, zero clippy warnings, zero AST-grep/forbidden pattern violations).
+>   - Committed code as checkpoint `3d38109` and documentation as checkpoint `4c0d84b`.
+> * **New Constraints:** Win32 environment expansion must use `windows::Win32::System::Environment::ExpandEnvironmentStringsW` with safe slice syntax. Do not declare ad-hoc `unsafe extern "system"` blocks for APIs already exposed or exposable via the `windows` crate.
+> * **Pruned:** Ad-hoc `unsafe extern "system" { fn ExpandEnvironmentStringsW... }` declaration and raw pointer arithmetic in `com/discovery.rs`.
+
 ## 2026-09-05: Win32 Registry FFI Consolidation, Dynamic Buffer Resizing & Environment Variable Expansion (`opc-da-client`)
 > 📝 **Context Update:**
 > * **Feature:** Consolidate duplicated Win32 registry FFI calls, harden registry value buffers against `ERROR_MORE_DATA` (234), expand `REG_EXPAND_SZ` environment variable strings, replace magic numbers with canonical constants, deduplicate bracketed GUID formatting, and synchronize documentation.
