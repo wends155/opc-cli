@@ -3,7 +3,7 @@
 > **Behavioral Source of Truth** for the `opc-da-client` library crate.
 > Defines *what* each module should do — independent of current implementation.
 >
-> Last verified against: eaba614
+> Last verified against: 2a8e41c
 
 ---
 
@@ -472,7 +472,7 @@ Before calling `browse_recursive`, `browse_tags` attempts `browse_opc_item_ids(B
 
 ##### `inspect_local_registration(clsid: &GUID, host: Option<&str>) -> OpcResult<OpcServerRegistration>`
 
-**Description:** Inspects the local machine Windows registry for an OPC DA server's registration details by querying `HKCR\CLSID\{...}` across both native and 32-bit (`KEY_WOW64_32KEY`) views.
+**Description:** Inspects the local machine Windows registry for an OPC DA server's registration details by querying `HKCR\CLSID\{...}` across both native and 32-bit (`KEY_WOW64_32KEY`) views. Registry key traversal is consolidated through a private `open_reg_key` helper wrapping `RegOpenKeyExW` with `KEY_READ`. Registry value reading incorporates two-phase dynamic buffer reallocation on `ERROR_MORE_DATA` (234) and resolves `REG_EXPAND_SZ` strings using `ExpandEnvironmentStringsW`.
 
 **Inputs:**
 * `clsid`: Reference to the 128-bit COM Class ID.
@@ -483,7 +483,8 @@ Before calling `browse_recursive`, `browse_tags` attempts `browse_opc_item_ids(B
 
 **Errors:**
 * [`OpcError::NotImplemented`] if `host` is a remote machine.
-* [`OpcError::Server`] if the CLSID is missing or neither `LocalServer32` nor `InprocServer32` registry keys exist.
+* [`OpcError::Com`] with `REGDB_E_CLASSNOTREG` (`0x80040154`) if the CLSID registry key does not exist.
+* [`OpcError::Server`] if neither `LocalServer32` nor `InprocServer32` registry keys exist or if registry values cannot be parsed.
 
 ---
 
@@ -635,6 +636,7 @@ Defined in § 1.1. See table above.
 - [x] `test_opc_quality_roundtrip_u16` — validates lossless roundtripping between u16 and OpcQuality.
 - [x] `test_opc_quality_from_str` — validates string conversion helpers.
 - [x] `test_server_identifier_conversions_and_display` — validates `ServerIdentifier` conversions from `&str`, `String`, `GUID`, GUID hex syntax auto-detection, and `Display` formatting.
+- [x] `test_format_guid_bracketed` — validates bracketed GUID uppercase string formatting matching COM registry conventions.
 - [x] `test_opc_server_info_display_name_and_endpoint` — validates `OpcServerInfo` display name fallback and endpoint generation.
 
 ### Provider & TagCollector Unit Tests (in `provider.rs`)
@@ -674,6 +676,9 @@ Defined in § 1.1. See table above.
 - [x] `test_sanitize_binary_path_quoted` — verifies `sanitize_binary_path` strips surrounding double quotes from registry image paths.
 - [x] `test_sanitize_binary_path_unquoted_with_flag` — verifies `sanitize_binary_path` strips trailing CLI flags (`-Embedding`, `/automation`).
 - [x] `test_opc_server_type_display` — verifies `OpcServerType` Display formatting (`LocalServer32 (Executable)` vs `InprocServer32 (DLL)`).
+- [x] `test_open_reg_key_invalid` — verifies `open_reg_key` returns Windows error code when querying a non-existent registry subkey.
+- [x] `test_expand_environment_string` — verifies `expand_environment_string` resolves embedded `%VAR%` tokens against Windows environment variables.
+- [x] `test_inspect_local_registration_nonexistent_returns_classnotreg` — verifies `inspect_local_registration` maps non-existent CLSIDs to canonical `OpcError::Com(REGDB_E_CLASSNOTREG)`.
 
 ### COM VARIANT Unit Tests (in `com/variant.rs`)
 
