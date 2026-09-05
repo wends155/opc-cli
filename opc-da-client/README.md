@@ -24,7 +24,7 @@ OPC DA is deeply coupled to Windows COM/DCOM, which poses significant architectu
 - **Canonical Display Formatting**: `TagValue` implements `std::fmt::Display` rendering `"{tag_id} = {value} [{quality}] @ {timestamp}"` for clean, single-line logging and diagnostics.
 - **16-Bit Quality Decomposition**: Zero-allocation `OpcQuality` struct decomposes raw OPC DA quality words into major status, substatus, and limit states with rich, human-readable diagnostics.
 - **Native Windows Backend**: Implemented natively with `windows-rs` — eliminates heavy legacy C++ binaries and external OPC crate dependencies.
-- **Context-Rich Error Handling**: Domain-specific `OpcError` via `thiserror` with inherent `.friendly_hint()` method for actionable HRESULT troubleshooting.
+- **Context-Rich Error Handling**: Domain-specific `OpcError` via `thiserror` with inherent `.friendly_hint()` method for actionable HRESULT troubleshooting, native `From` conversions for standard channel and sync errors, and RAII unmanaged memory management.
 - **Thread-Safe Tag Collection & Cancellation**: `TagCollector` encapsulates bounded accumulation (`max_tags`), lock-free atomic length monitoring, and cooperative cancellation tokens to eliminate worker thread starvation.
 - **First-Class Test Support**: Includes pure-Rust mock implementations and an optional `MockOpcProvider` via the `test-support` feature flag.
 
@@ -239,6 +239,7 @@ async fn main() -> OpcResult<()> {
 | `BrowseDirection` | `pub enum` | Tag namespace traversal direction (`Up`, `Down`, `To`). |
 | `OpcError` | `pub enum` | Domain error enum covering connection, group, item, type, and COM HRESULT failures. |
 | `OpcError::friendly_hint` | `pub fn` | Inherent method translating Win32 COM and OPC HRESULT codes into actionable human-readable explanations. |
+| `OpcError::connection_failed` | `pub fn` | Inherent constructor producing an `OpcError::Connection` indicating CLSID resolution failure for a ProgID. |
 | `MockOpcProvider` | `pub struct` | Pure-Rust mock implementation of `OpcProvider` generated via `mockall` (under `feature = "test-support"`). |
 | `MockServerConnector` | `pub struct` | Pure-Rust mock implementation of `ServerConnector` providing simulated server enumeration and tag browsing (under `feature = "test-support"`). |
 
