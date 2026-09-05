@@ -1,5 +1,17 @@
 # Project Context Summary
 
+## 2026-09-05: Documentation Synchronization for Structured Server Discovery and Direct CLSID Connectivity (`opc-da-client`)
+> 📝 **Context Update:**
+> * **Feature:** Documentation sync for structured server discovery (`list_server_details`), canonical identity types (`ServerIdentifier`, `OpcServerInfo`, `OpcServerEndpoint`), catalog adapter (`OpcServerListCatalog`), registry diagnostics (`inspect_local_registration`), and direct CLSID connectivity.
+> * **Changes:**
+>   - Synchronized `opc-da-client/spec.md`: bumped verification hash to `eaba614`; added `list_server_details` to `OpcProvider` method table, error conditions, and invariants in Section 1.1; documented `ServerIdentifier`, `OpcServerInfo`, and `OpcServerEndpoint` in Section 1.1; registered `OpcOperation::ListServerDetails` and `OpcOperation::InspectRegistration` in Section 1.2; documented `ComRequest::ListServerDetails`, `ServerIdentifier` connection cache keying, and `OpcDaClient::list_server_details` in Section 1.3; created Section 1.7 for `com::discovery` documenting `OpcServerRegistration`, `OpcServerType`, `inspect_local_registration`, and `OpcServerListCatalog`; updated Section 1.8 `com::connector` with `enumerate_server_details` and `MockServerConnector` modernization; and appended 10 new unit tests to Section 4 test checklists (total 93 unit tests, 55 doc tests).
+>   - Synchronized `opc-da-client/README.md`: added structured server discovery and direct CLSID connectivity to Features list; added compiled runnable usage example demonstrating `list_server_details` and `ServerIdentifier::from("{...}")`; registered new types in API Surface reference table; and updated Architecture Layer 3 description to include `com::discovery`.
+>   - Confirmed semantic parity across `Cargo.toml [package.description]`, `lib.rs //!` overview, and `README.md` blockquote.
+>   - Verified full 9-gate quality pipeline (`pwsh -File scripts/verify.ps1`) with exit code 0.
+>   - Committed implementation and docs as checkpoint `8fc540c`.
+> * **New Constraints:** Any new server discovery interfaces or registry inspection tools must be documented in `spec.md §1.7` and `README.md`. Direct CLSID connections must support both braced and unbraced GUID string representations through `ServerIdentifier::from`.
+> * **Pruned:** Outdated verification hash `adda254` and 4-method `OpcProvider` table constraints.
+
 ## 2026-09-05: Documentation Synchronization for map_err Eradication and From Conversions (`opc-da-client`)
 > 📝 **Context Update:**
 > * **Feature:** Documentation sync for `map_err` eradication, `From` error conversions, `RemotePointer::into_string`, and `OpcError::connection_failed`.
