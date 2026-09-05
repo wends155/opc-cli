@@ -247,6 +247,26 @@ fn read_default_string(
     }
 }
 
+/// Resolve a COM CLSID GUID to its Programmatic Identifier (ProgID).
+///
+/// Calls Win32 `ProgIDFromCLSID` and converts the returned string pointer
+/// into a Rust [`String`].
+///
+/// # Errors
+///
+/// Returns an [`OpcError`] if `ProgIDFromCLSID` fails.
+#[tracing::instrument(level = "debug", err)]
+pub(crate) fn guid_to_progid(guid: &windows::core::GUID) -> OpcResult<String> {
+    // SAFETY: `ProgIDFromCLSID` is a Win32 FFI call that allocates a PWSTR via COM allocator.
+    let progid = unsafe { windows::Win32::System::Com::ProgIDFromCLSID(guid) }?;
+
+    if progid.is_null() {
+        return Ok(String::new());
+    }
+
+    RemotePointer::from(progid).into_string()
+}
+
 /// Inspects the local machine Windows registry for an OPC DA server's registration details.
 ///
 /// Queries `HKCR\CLSID\{...}` in both native and 32-bit (`KEY_WOW64_32KEY`) registry views
@@ -287,7 +307,7 @@ pub fn inspect_local_registration(
         if let Some(key_guard) = open_clsid_key(&clsid_str, view) {
             let key = key_guard.0;
             let prog_id = read_default_string(key, Some("ProgID"), view)
-                .or_else(|| crate::com::connector::guid_to_progid(clsid).ok())
+                .or_else(|| guid_to_progid(clsid).ok())
                 .unwrap_or_else(|| clsid_str.clone());
 
             let version_independent_prog_id =
@@ -440,7 +460,7 @@ impl OpcServerListCatalog {
 
             // Attempt 3: Fallback to guid_to_progid
             if prog_id_opt.is_none()
-                && let Ok(pid) = crate::com::connector::guid_to_progid(&guid)
+                && let Ok(pid) = guid_to_progid(&guid)
                 && !pid.trim().is_empty()
             {
                 prog_id_opt = Some(pid);
@@ -566,6 +586,18 @@ mod tests {
                 assert!(msg.contains("No LocalServer32 or InprocServer32 registry key found"));
             }
             other => panic!("Expected OpcError::Server with REGDB_E_CLASSNOTREG, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_guid_to_progid_zeroed_guid_returns_com_error() {
+        let zeroed = windows::core::GUID::zeroed();
+        let result = guid_to_progid(&zeroed);
+        assert!(result.is_err());
+        if let Err(OpcError::Com { .. }) = result {
+            // Expected: structured COM error preserved
+        } else {
+            panic!("Expected OpcError::Com, got: {result:?}");
         }
     }
 }

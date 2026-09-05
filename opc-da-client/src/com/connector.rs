@@ -17,7 +17,7 @@
     clippy::unreadable_literal
 )]
 
-use windows::Win32::System::Com::{CLSIDFromProgID, ProgIDFromCLSID};
+use windows::Win32::System::Com::CLSIDFromProgID;
 use windows::core::{Interface, PCWSTR};
 
 const _: () = assert!(
@@ -226,18 +226,7 @@ pub trait ConnectedGroup {
 
 // ── COM-backed implementations ──────────────────────────────────────
 
-/// Helper to convert GUID to `ProgID` using Windows API
-#[tracing::instrument(level = "debug", err)]
-pub(crate) fn guid_to_progid(guid: &windows::core::GUID) -> OpcResult<String> {
-    // SAFETY: `ProgIDFromCLSID` is a Win32 FFI call that allocates a PWSTR via COM allocator.
-    let progid = unsafe { ProgIDFromCLSID(guid) }?;
-
-    if progid.is_null() {
-        return Ok(String::new());
-    }
-
-    RemotePointer::from(progid).into_string()
-}
+pub(crate) use crate::com::discovery::guid_to_progid;
 
 /// Resolve an OPC DA server [`ServerIdentifier`] to a connected `opc_da` Server instance.
 ///
@@ -291,21 +280,6 @@ pub(crate) fn connect_server_identifier(
     })?;
     tracing::debug!(server = %server_desc, "Connected to OPC DA server");
     Ok(server)
-}
-
-/// Resolve an OPC DA server `ProgID` or CLSID string to a connected `opc_da` Server instance.
-///
-/// Converts the `ProgID` string to a `CLSID` via the Windows registry (or parses
-/// direct CLSID syntax), then creates and returns a connected server handle.
-///
-/// # Errors
-///
-/// Returns `Err` if the `ProgID` cannot be resolved or the server
-/// cannot be instantiated.
-#[allow(dead_code)]
-#[tracing::instrument(level = "info", err)]
-pub(crate) fn connect_server(server_name: &str) -> OpcResult<crate::raw::bindings::da::IOPCServer> {
-    connect_server_identifier(&ServerIdentifier::from(server_name))
 }
 
 /// Real COM-backed server connector implementation.
@@ -1369,18 +1343,6 @@ mod tests {
             .expect("MockConnectedServer should support browse");
         let tags: Vec<String> = iter.collect::<Result<Vec<_>, _>>().unwrap();
         assert!(!tags.is_empty(), "Mock browse should return simulated tags");
-    }
-
-    #[test]
-    fn test_guid_to_progid_zeroed_guid_returns_com_error() {
-        let zeroed = windows::core::GUID::zeroed();
-        let result = guid_to_progid(&zeroed);
-        assert!(result.is_err());
-        if let Err(OpcError::Com { .. }) = result {
-            // Expected: structured COM error preserved
-        } else {
-            panic!("Expected OpcError::Com, got: {result:?}");
-        }
     }
 
     #[test]
