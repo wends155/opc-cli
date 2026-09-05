@@ -249,6 +249,116 @@ pub fn opc_value_to_variant(value: &OpcValue) -> VARIANT {
     variant
 }
 
+/// RAII wrapper for a Win32 COM [`VARIANT`].
+///
+/// Ensures deterministic resource cleanup by calling [`windows::Win32::System::Variant::VariantClear`]
+/// when dropped, freeing any contained OLE Automation resources (such as `BSTR` or `SAFEARRAY`).
+///
+/// Marked `#[repr(transparent)]` so that `&[ScopedVariant]` or `Vec<ScopedVariant>` has the exact
+/// memory layout of `&[VARIANT]` or `Vec<VARIANT>`, allowing safe zero-copy pointer casting across FFI.
+#[repr(transparent)]
+#[derive(Debug)]
+#[allow(dead_code)]
+pub struct ScopedVariant(pub VARIANT);
+
+#[allow(dead_code)]
+impl ScopedVariant {
+    /// Creates an empty [`ScopedVariant`] with `vt` initialized to `VT_EMPTY`.
+    #[must_use]
+    pub fn empty() -> Self {
+        Self(VARIANT::default())
+    }
+
+    /// Converts an [`OpcValue`] into a [`ScopedVariant`].
+    #[must_use]
+    pub fn from_opc_value(value: &OpcValue) -> Self {
+        Self(opc_value_to_variant(value))
+    }
+
+    /// Returns an immutable reference to the inner raw [`VARIANT`].
+    #[must_use]
+    pub const fn as_raw(&self) -> &VARIANT {
+        &self.0
+    }
+
+    /// Returns a mutable reference to the inner raw [`VARIANT`].
+    pub fn as_raw_mut(&mut self) -> &mut VARIANT {
+        &mut self.0
+    }
+
+    /// Consumes the guard and extracts the inner raw [`VARIANT`] without running the destructor.
+    #[must_use]
+    pub fn into_inner(mut self) -> VARIANT {
+        let inner = std::mem::take(&mut self.0);
+        std::mem::forget(self);
+        inner
+    }
+
+    /// Clears any allocated resources in the variant and resets its type to `VT_EMPTY`.
+    pub fn clear(&mut self) {
+        // SAFETY: `self.0` is a valid VARIANT owned by this RAII guard.
+        // VariantClear releases any allocated BSTR or SAFEARRAY and resets vt to VT_EMPTY.
+        unsafe {
+            let _ = windows::Win32::System::Variant::VariantClear(&raw mut self.0);
+        }
+    }
+}
+
+impl From<VARIANT> for ScopedVariant {
+    fn from(v: VARIANT) -> Self {
+        Self(v)
+    }
+}
+
+impl std::ops::Deref for ScopedVariant {
+    type Target = VARIANT;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl std::ops::DerefMut for ScopedVariant {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
+}
+
+impl Drop for ScopedVariant {
+    fn drop(&mut self) {
+        self.clear();
+    }
+}
+
+/// RAII guard for an array of COM-allocated [`tagOPCITEMSTATE`].
+///
+/// Ensures [`windows::Win32::System::Variant::VariantClear`] is deterministically called
+/// on every item's `vDataValue` when the guard drops, preventing OLE Automation heap leaks
+/// for `BSTR` or `SAFEARRAY` data before the outer array memory is freed via `CoTaskMemFree`.
+#[allow(dead_code)]
+pub struct ItemStatesGuard<'a>(pub &'a mut [crate::raw::bindings::da::tagOPCITEMSTATE]);
+
+impl std::fmt::Debug for ItemStatesGuard<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ItemStatesGuard")
+            .field("len", &self.0.len())
+            .finish()
+    }
+}
+
+impl Drop for ItemStatesGuard<'_> {
+    fn drop(&mut self) {
+        for state in self.0.iter_mut() {
+            // SAFETY: `state.vDataValue` is a COM VARIANT populated by IOPCSyncIO::Read.
+            // VariantClear safely frees contained resources (BSTR, SAFEARRAY) and sets vt to VT_EMPTY.
+            // If vt is already VT_EMPTY (e.g. on item error), VariantClear is a safe no-op.
+            unsafe {
+                let _ = windows::Win32::System::Variant::VariantClear(&raw mut state.vDataValue);
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     #![allow(
@@ -565,5 +675,69 @@ mod tests {
         let v = VARIANT { Anonymous: outer };
 
         assert_eq!(variant_to_string(&v), "Error (0xDEADBEEF)");
+    }
+
+    #[test]
+    fn test_scoped_variant_drop_clears_bstr_and_resets_vt() {
+        let raw = opc_value_to_variant(&OpcValue::String("verification_test_bstr".into()));
+        let mut scoped = ScopedVariant::from(raw);
+        unsafe {
+            assert_eq!(scoped.as_raw().Anonymous.Anonymous.vt, VT_BSTR);
+        }
+        scoped.clear();
+        unsafe {
+            assert_eq!(scoped.as_raw().Anonymous.Anonymous.vt, VT_EMPTY);
+        }
+    }
+
+    #[test]
+    fn test_scoped_variant_into_inner_disarm() {
+        let scoped = ScopedVariant::from_opc_value(&OpcValue::Int(42));
+        let mut raw = scoped.into_inner();
+        unsafe {
+            assert_eq!(raw.Anonymous.Anonymous.vt, VT_I4);
+            let _ = windows::Win32::System::Variant::VariantClear(&mut raw);
+        }
+    }
+
+    #[test]
+    fn test_item_states_guard_drop_clears_variants() {
+        use crate::raw::bindings::da::tagOPCITEMSTATE;
+
+        let mut states = vec![
+            tagOPCITEMSTATE {
+                hClient: 1,
+                vDataValue: opc_value_to_variant(&OpcValue::String("guard_test_bstr".into())),
+                ..Default::default()
+            },
+            tagOPCITEMSTATE {
+                hClient: 2,
+                vDataValue: VARIANT::default(),
+                ..Default::default()
+            },
+        ];
+
+        unsafe {
+            assert_eq!(states[0].vDataValue.Anonymous.Anonymous.vt, VT_BSTR);
+        }
+
+        {
+            let _guard = ItemStatesGuard(&mut states);
+        }
+
+        unsafe {
+            assert_eq!(states[0].vDataValue.Anonymous.Anonymous.vt, VT_EMPTY);
+            assert_eq!(states[1].vDataValue.Anonymous.Anonymous.vt, VT_EMPTY);
+        }
+    }
+
+    #[test]
+    fn test_scoped_variant_empty_and_as_raw_mut() {
+        let mut scoped = ScopedVariant::empty();
+        unsafe {
+            assert_eq!(scoped.as_raw().Anonymous.Anonymous.vt, VT_EMPTY);
+            (*scoped.as_raw_mut().Anonymous.Anonymous).vt = VT_I4;
+            assert_eq!(scoped.as_raw().Anonymous.Anonymous.vt, VT_I4);
+        }
     }
 }
