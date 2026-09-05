@@ -1,6 +1,6 @@
 //! Server discovery, catalog adapter, and Windows registry inspection.
 //!
-//! Provides rich catalog queries through [`OpcServerListCatalog`] (adapting
+//! Provides rich catalog queries through `OpcServerListCatalog` (adapting
 //! `IOPCServerList2` and `IOPCServerList`), and diagnostic inspection of local
 //! machine COM registrations via [`inspect_local_registration`].
 
