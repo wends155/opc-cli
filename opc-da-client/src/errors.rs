@@ -76,6 +76,30 @@ impl From<std::num::TryFromIntError> for OpcError {
     }
 }
 
+impl From<std::sync::mpsc::RecvError> for OpcError {
+    fn from(err: std::sync::mpsc::RecvError) -> Self {
+        Self::Internal(format!("COM worker init channel disconnected: {err}"))
+    }
+}
+
+impl From<tokio::sync::oneshot::error::RecvError> for OpcError {
+    fn from(err: tokio::sync::oneshot::error::RecvError) -> Self {
+        Self::Internal(format!("COM worker shut down during request: {err}"))
+    }
+}
+
+impl<T> From<tokio::sync::mpsc::error::SendError<T>> for OpcError {
+    fn from(err: tokio::sync::mpsc::error::SendError<T>) -> Self {
+        Self::Internal(format!("COM worker channel closed (worker stopped): {err}"))
+    }
+}
+
+impl<T> From<std::sync::PoisonError<T>> for OpcError {
+    fn from(err: std::sync::PoisonError<T>) -> Self {
+        Self::Internal(format!("Synchronization lock poisoned: {err}"))
+    }
+}
+
 fn com_error_hint(source: &windows::core::Error) -> &'static str {
     #[cfg(feature = "opc-da-backend")]
     {
@@ -115,6 +139,24 @@ impl OpcError {
         {
             None
         }
+    }
+
+    /// Constructs an [`OpcError::Connection`] indicating failure to resolve a server name to a CLSID.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use opc_da_client::OpcError;
+    ///
+    /// let err = OpcError::connection_failed("Matrikon.OPC", "invalid ProgID");
+    /// assert!(matches!(err, OpcError::Connection(_)));
+    /// ```
+    #[inline]
+    #[must_use]
+    pub fn connection_failed(server: impl std::fmt::Display, err: impl std::fmt::Display) -> Self {
+        Self::Connection(format!(
+            "Failed to resolve ProgID '{server}' to CLSID: {err}"
+        ))
     }
 }
 
@@ -360,5 +402,35 @@ mod tests {
             server = "Matrikon.OPC.Simulation.1",
             tag_count = 5
         );
+    }
+
+    #[test]
+    fn test_channel_error_conversions_and_lock_poison() {
+        let mpsc_err = std::sync::mpsc::RecvError;
+        let opc_err: OpcError = mpsc_err.into();
+        assert!(matches!(opc_err, OpcError::Internal(msg) if msg.contains("channel disconnected")));
+
+        let (tx, rx) = tokio::sync::oneshot::channel::<()>();
+        drop(tx);
+        let oneshot_err = rx.blocking_recv().unwrap_err();
+        let opc_err: OpcError = oneshot_err.into();
+        assert!(
+            matches!(opc_err, OpcError::Internal(msg) if msg.contains("shut down during request"))
+        );
+
+        let (tx, rx) = tokio::sync::mpsc::channel::<()>(1);
+        drop(rx);
+        let send_err = tx.try_send(()).unwrap_err();
+        if let tokio::sync::mpsc::error::TrySendError::Closed(e) = send_err {
+            let opc_err: OpcError = tokio::sync::mpsc::error::SendError(e).into();
+            assert!(matches!(opc_err, OpcError::Internal(msg) if msg.contains("channel closed")));
+        }
+
+        let lock = std::sync::Mutex::new(0);
+        let opc_err: OpcError = std::sync::PoisonError::new(lock.lock().unwrap()).into();
+        assert!(matches!(opc_err, OpcError::Internal(msg) if msg.contains("lock poisoned")));
+
+        let conn_err = OpcError::connection_failed("Matrikon.OPC", "invalid CLSID");
+        assert!(matches!(conn_err, OpcError::Connection(msg) if msg.contains("Matrikon.OPC")));
     }
 }

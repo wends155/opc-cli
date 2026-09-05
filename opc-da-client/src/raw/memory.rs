@@ -290,6 +290,18 @@ impl RemotePointer<u16> {
     pub fn as_mut_pwstr_ptr(&mut self) -> *mut PWSTR {
         &mut self.inner as *mut *mut u16 as *mut PWSTR
     }
+
+    /// Consumes the pointer, returning the wide string as a Rust [`String`].
+    ///
+    /// The underlying COM allocation is freed via [`CoTaskMemFree`] on return or drop,
+    /// whether conversion succeeds or fails.
+    ///
+    /// # Errors
+    /// Returns [`crate::errors::OpcError::Com`] if the pointer is null or contains invalid UTF-16 data.
+    #[inline]
+    pub fn into_string(self) -> crate::errors::OpcResult<String> {
+        Ok(String::try_from(self)?)
+    }
 }
 
 impl<T: Sized> Drop for RemotePointer<T> {
@@ -654,5 +666,21 @@ mod tests {
         assert_eq!(default_arr.len(), 0);
         assert!(default_arr.is_empty());
         assert_eq!(default_arr.as_slice(), &[]);
+    }
+
+    #[test]
+    fn test_remote_pointer_into_string_raii_safety() {
+        use crate::errors::OpcError;
+
+        // Valid UTF-16 string conversion
+        let original = "Kepware.KEPServerEX.V6";
+        let ptr = RemotePointer::from(original);
+        let converted = ptr.into_string().expect("should convert valid string");
+        assert_eq!(converted, original);
+
+        // Null pointer returns error and does not panic or leak
+        let null_ptr: RemotePointer<u16> = RemotePointer::null();
+        let err = null_ptr.into_string().unwrap_err();
+        assert!(matches!(err, OpcError::Com { .. }));
     }
 }

@@ -238,9 +238,9 @@ impl<C: ServerConnector + 'static> ComWorker<C> {
             tracing::debug!("COM worker thread exiting cleanly");
         });
 
-        init_rx
-            .recv()
-            .map_err(|_| OpcError::Internal("COM worker thread panicked during init".into()))??;
+        init_rx.recv().inspect_err(
+            |e| tracing::error!(error = ?e, "COM worker thread disconnected during init"),
+        )??;
 
         tracing::debug!("COM worker thread started");
 
@@ -268,13 +268,12 @@ impl<C: ServerConnector + 'static> ComWorker<C> {
         let (tx, rx) = oneshot::channel();
         let req = req_builder(tx);
 
-        self.sender
-            .send(req)
-            .await
-            .map_err(|_| OpcError::Internal("COM worker channel closed (worker stopped)".into()))?;
+        self.sender.send(req).await.inspect_err(
+            |e| tracing::error!(error = ?e, "COM worker channel closed (worker stopped)"),
+        )?;
 
         rx.await
-            .map_err(|_| OpcError::Internal("COM worker shut down during request".into()))?
+            .inspect_err(|e| tracing::error!(error = ?e, "COM worker shut down during request"))?
     }
 
     #[tracing::instrument(level = "debug", skip(cache, connector, operation))]
@@ -1627,5 +1626,24 @@ mod tests {
 
         assert!(result.is_err());
         assert_eq!(server.state.remove_group_count.load(Ordering::Relaxed), 1);
+    }
+
+    #[tokio::test]
+    async fn test_worker_channel_drop_error_propagation() {
+        let (tx, rx) = tokio::sync::mpsc::channel(1);
+        drop(rx); // Drop receiver to simulate closed worker channel
+        let worker: ComWorker<MockServerConnector> = ComWorker {
+            sender: tx,
+            handle: None,
+            _phantom: std::marker::PhantomData,
+        };
+        let err = worker
+            .send_request(|reply| ComRequest::ListServers {
+                host: "localhost".into(),
+                reply,
+            })
+            .await
+            .unwrap_err();
+        assert!(matches!(err, OpcError::Internal(msg) if msg.contains("channel closed")));
     }
 }

@@ -17,7 +17,7 @@
     clippy::unreadable_literal
 )]
 
-use windows::Win32::System::Com::{CLSIDFromProgID, CoTaskMemFree, ProgIDFromCLSID};
+use windows::Win32::System::Com::{CLSIDFromProgID, ProgIDFromCLSID};
 use windows::core::{Interface, PCWSTR};
 
 const _: () = assert!(
@@ -181,23 +181,13 @@ pub trait ConnectedGroup {
 #[tracing::instrument(level = "debug", err)]
 pub(crate) fn guid_to_progid(guid: &windows::core::GUID) -> OpcResult<String> {
     // SAFETY: `ProgIDFromCLSID` is a Win32 FFI call that allocates a PWSTR via COM allocator.
-    // SAFETY: We read it and ensure `CoTaskMemFree` is always called before returning.
-    unsafe {
-        let progid = ProgIDFromCLSID(guid).map_err(|e| OpcError::Com { source: e })?;
+    let progid = unsafe { ProgIDFromCLSID(guid) }?;
 
-        if progid.is_null() {
-            return Ok(String::new());
-        }
-
-        let result = progid.to_string().map_err(|e| {
-            // SAFETY: Must free allocated PWSTR before returning Err to prevent COM task memory leak.
-            CoTaskMemFree(Some(progid.as_ptr().cast()));
-            OpcError::Conversion(format!("Failed to convert PWSTR: {e}"))
-        })?;
-
-        CoTaskMemFree(Some(progid.as_ptr().cast()));
-        Ok(result)
+    if progid.is_null() {
+        return Ok(String::new());
     }
+
+    RemotePointer::from(progid).into_string()
 }
 
 /// Resolve an OPC DA server `ProgID` to a connected `opc_da` Server instance.
@@ -217,11 +207,13 @@ pub(crate) fn connect_server(server_name: &str) -> OpcResult<crate::raw::binding
             .encode_utf16()
             .chain(std::iter::once(0))
             .collect();
-        CLSIDFromProgID(PCWSTR(server_wide.as_ptr())).map_err(|e| {
-            OpcError::Connection(format!(
-                "Failed to resolve ProgID '{server_name}' to CLSID: {e}"
-            ))
-        })?
+        match CLSIDFromProgID(PCWSTR(server_wide.as_ptr())) {
+            Ok(guid) => guid,
+            Err(e) => {
+                tracing::error!(error = ?e, server = %server_name, "Failed to resolve ProgID to CLSID");
+                return Err(OpcError::connection_failed(server_name, e));
+            }
+        }
     };
     // SAFETY: Calling COM function CoCreateInstance with valid CLSID to instantiate IOPCServer.
     let server: crate::raw::bindings::da::IOPCServer = unsafe {
@@ -232,11 +224,9 @@ pub(crate) fn connect_server(server_name: &str) -> OpcResult<crate::raw::binding
         )
     }
     .inspect_err(|e| {
-        let hint = crate::raw::hresult::friendly_hresult_hint(e.code())
-            .unwrap_or("Check DCOM configuration and server status");
-        tracing::error!(error = ?e, server = %server_name, hint, "create_server failed");
-    })
-    .map_err(|e| OpcError::Com { source: e })?;
+        let err = OpcError::from(e.clone());
+        crate::log_opc_err!(&err, crate::errors::OpcOperation::Connect, server = %server_name);
+    })?;
     tracing::debug!(server = %server_name, "Connected to OPC DA server");
     Ok(server)
 }
@@ -270,9 +260,7 @@ impl ServerConnector for ComConnector {
         let iter = unsafe {
             servers
                 .EnumClassesOfCategories(&versions, &versions)
-                .map_err(|e| {
-                    windows::core::Error::new(e.code(), "Failed to enumerate server classes")
-                })?
+                .inspect_err(|e| tracing::warn!(error = ?e, "Failed to enumerate server classes"))?
         };
 
         let guid_iter = GuidIterator::new(iter);
@@ -384,8 +372,7 @@ impl ConnectedServer for ComServer {
         let item_data_id = LocalPointer::from(item_name);
         // SAFETY: Calling COM interface method GetItemID with valid item_data_id string.
         let output = unsafe { iface.GetItemID(item_data_id.as_pwstr())? };
-        let ptr = RemotePointer::from(output);
-        ptr.try_into().map_err(OpcError::from)
+        RemotePointer::from(output).into_string()
     }
 
     #[tracing::instrument(level = "info", skip(self), err)]
@@ -422,9 +409,7 @@ impl ConnectedServer for ComServer {
             }),
             Some(group) => {
                 let unknown: windows::core::IUnknown = group.cast()?;
-                let group: ComGroup = unknown
-                    .try_into()
-                    .map_err(|source| OpcError::Com { source })?;
+                let group: ComGroup = unknown.try_into()?;
 
                 Ok(CreatedGroup {
                     group,
@@ -881,10 +866,7 @@ impl ConnectedServer for MockConnectedServer {
         _data_type: u16,
         _access_rights: u32,
     ) -> OpcResult<StringIterator> {
-        let tags = self
-            .tags
-            .lock()
-            .map_err(|_| OpcError::Internal("Mock tags lock poisoned".into()))?;
+        let tags = self.tags.lock()?;
         Ok(StringIterator::from_vec(tags.clone()))
     }
 
@@ -1058,10 +1040,7 @@ impl ServerConnector for MockServerConnector {
             return Err(OpcError::Internal("Server enumeration failed".into()));
         }
 
-        let servers = self
-            .servers
-            .lock()
-            .map_err(|_| OpcError::Internal("Mock servers lock poisoned".into()))?;
+        let servers = self.servers.lock()?;
         Ok(servers.clone())
     }
 

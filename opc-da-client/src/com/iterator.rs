@@ -9,7 +9,7 @@
 )]
 
 use crate::com::memory::{RemoteArray, RemotePointer, TryToLocal as _};
-use crate::errors::{OpcError, OpcResult};
+use crate::errors::OpcResult;
 
 const MAX_CACHE_SIZE: usize = 16;
 const STRING_CACHE_SIZE: usize = 256;
@@ -208,7 +208,11 @@ impl Iterator for StringIterator {
                     }
 
                     let current = RemotePointer::from(pwstr);
-                    return Some(current.try_into().map_err(OpcError::from));
+                    return Some(
+                        current
+                            .into_string()
+                            .inspect_err(|e| tracing::warn!(error = ?e, "StringIterator: failed to convert PWSTR to String"))
+                    );
                 }
             }
         }
@@ -273,14 +277,19 @@ impl<Group: TryFrom<windows::core::IUnknown, Error = windows::core::Error>> Iter
 
         let current = self.cache[self.index as usize].take();
         self.index += 1;
-        Some(match current {
-            Some(group) => group.try_into().map_err(OpcError::from),
+        let item: OpcResult<Group> = (|| match current {
+            Some(group) => Ok(group.try_into()?),
             None => Err(windows::core::Error::new(
                 windows::Win32::Foundation::E_POINTER,
                 "Failed to get group, returned null",
             )
             .into()),
-        })
+        })();
+        Some(
+            item.inspect_err(
+                |e| tracing::warn!(error = ?e, "GroupIterator: failed to convert group"),
+            ),
+        )
     }
 }
 
@@ -340,10 +349,12 @@ impl Iterator for ItemAttributeIterator {
             }
         }
 
-        let current: windows::core::Result<crate::raw::bridge::ItemAttributes> =
-            self.cache.as_slice()[self.index as usize].try_to_local();
+        let item: OpcResult<crate::raw::bridge::ItemAttributes> =
+            (|| Ok(self.cache.as_slice()[self.index as usize].try_to_local()?))();
         self.index += 1;
-        Some(current.map_err(OpcError::from))
+        Some(item.inspect_err(|e| {
+            tracing::warn!(error = ?e, "ItemAttributeIterator: failed to convert item attributes");
+        }))
     }
 }
 

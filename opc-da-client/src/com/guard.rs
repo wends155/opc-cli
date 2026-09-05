@@ -3,7 +3,7 @@
 //! Ensures `CoUninitialize` is called exactly once per successful
 //! `CoInitializeEx`, even on early returns or panics.
 
-use crate::errors::{OpcError, OpcResult};
+use crate::errors::OpcResult;
 use std::marker::PhantomData;
 use windows::Win32::System::Com::{COINIT_MULTITHREADED, CoInitializeEx, CoUninitialize};
 
@@ -53,8 +53,7 @@ impl ComGuard {
         let hr = unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) };
 
         hr.ok()
-            .inspect_err(|e| tracing::error!(error = ?e, "COM MTA initialization failed"))
-            .map_err(|e| OpcError::Com { source: e })?;
+            .inspect_err(|e| tracing::error!(error = ?e, "COM MTA initialization failed"))?;
 
         tracing::debug!("COM MTA initialized");
 
@@ -98,7 +97,7 @@ pub(crate) struct FailingComInit;
 #[cfg(test)]
 impl ComInitializer for FailingComInit {
     fn init() -> OpcResult<ComGuard> {
-        Err(OpcError::Internal(
+        Err(crate::errors::OpcError::Internal(
             "Synthetic COM init failure (test)".into(),
         ))
     }
