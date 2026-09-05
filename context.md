@@ -1,5 +1,24 @@
 # Project Context Summary
 
+## 2026-09-05: Worker Decomposition, Single-Responsibility Submodules, and RAII Position Guard (`opc-da-client`)
+> 📝 **Context Update:**
+> * **Feature:** Decompose the 1,734-line multi-domain `opc-da-client/src/com/worker.rs` into a slim facade and modular single-responsibility submodules (`com::worker::{pool, read, write, browse, tests}`), consolidate all RAII lifetime drop guards (`GroupGuard`, `BrowsePositionGuard`) in `com/guard.rs`, eliminate `#![allow(clippy::too_many_lines)]`, adopt strongly-typed `ServerIdentifier` across `ComRequest`, eliminate redundant string allocations via in-place `TagValue` population, and synchronize architectural and behavioral documentation.
+> * **Changes:**
+>   - Refactored `opc-da-client/src/com/guard.rs`: Generalized and relocated `GroupGuard` from worker to `com/guard.rs` alongside `ComGuard`. Implemented `BrowsePositionGuard<'a, S: ConnectedServer>` with RAII drop restoration of browse cursor position (`BrowseDirection::Up`) and disarm support. Added 4 unit tests for guard drop cleanup, disarm, and position recovery.
+>   - Created `opc-da-client/src/com/worker/pool.rs`: Extracted connection caching (`HashMap<ServerIdentifier, Server>`), transparent stale RPC error classification (`is_connection_error`), eviction, and reconnect dispatch (`dispatch_with_retry`).
+>   - Created `opc-da-client/src/com/worker/read.rs`: Extracted synchronous device tag reading engine (`handle_read`) with helper functions (`partition_item_results`, `populate_item_states`) and in-place `TagValue` slot mutation, eliminating redundant string allocations.
+>   - Created `opc-da-client/src/com/worker/write.rs`: Extracted synchronous tag writing engine (`handle_write`) using ephemeral group configuration and returning structured `WriteResult`.
+>   - Created `opc-da-client/src/com/worker/browse.rs`: Extracted namespace exploration engine (`handle_browse`) supporting fast flat enumeration and recursive branch traversal protected by `BrowsePositionGuard`.
+>   - Created `opc-da-client/src/com/worker/tests.rs`: Extracted all 22 worker unit tests and mock fixtures (`WorkerMockConnector`, `WorkerMockServer`, `WorkerMockGroup`, `QualityTestConnector`) into a dedicated 842-line test module.
+>   - Overwrote `opc-da-client/src/com/worker.rs` with a clean, slim facade (290 lines vs original 1,734 lines), completely eliminating the `#![allow(clippy::too_many_lines)]` lint suppression, and extracting `run_worker_thread` and `handle_request` event loop routines.
+>   - Updated `opc-da-client/src/com/client.rs`: Adopted strongly-typed `ServerIdentifier` in `ComRequest::BrowseTags`, `ComRequest::ReadTagValues`, and `ComRequest::WriteTagValue`.
+>   - Synchronized `opc-da-client/architecture.md`: Updated §4 file tree, §5 module boundaries (`com::guard` and `com::worker`), and §10 test metrics (101 unit tests, 55 doc-tests).
+>   - Synchronized `opc-da-client/spec.md`: Added `BrowsePositionGuard` specification in Section 1.4, detailed worker submodules in Section 1.3, and updated test inventory in Section 3.
+>   - Verified full 9-gate quality pipeline (`pwsh -File scripts/verify.ps1`) with exit code 0 across all gates (101 unit tests in `opc-da-client`, 139 total workspace unit tests, 55 doc-tests, zero clippy warnings with `-D warnings`, zero ast-grep/forbidden pattern violations).
+>   - Committed code as checkpoint `87d2ec2`.
+> * **New Constraints:** `worker.rs` must remain a slim coordinator under 300 lines; domain operations must reside in dedicated single-responsibility submodules under `src/com/worker/`. All RAII resource and cursor guards must reside in `src/com/guard.rs`. Never re-introduce `#![allow(clippy::too_many_lines)]`.
+> * **Pruned:** Monolithic 1,734-line `worker.rs` blob, `#![allow(clippy::too_many_lines)]` suppression, triple string allocation in tag reading, and untyped server strings in `ComRequest`.
+
 ## 2026-09-05: Windows Crate Feature Migration for Environment String Expansion (`opc-da-client`)
 > 📝 **Context Update:**
 > * **Feature:** Migrate environment variable expansion in `opc-da-client/src/com/discovery.rs` from an `unsafe extern "system"` foreign function declaration to the official `windows` crate `Win32_System_Environment` feature, eliminate raw pointer arithmetic in favor of safe slice bounds checking, add structured warning telemetry, validate crates.io manifest normalization, and synchronize architectural documentation.

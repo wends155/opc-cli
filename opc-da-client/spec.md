@@ -3,7 +3,7 @@
 > **Behavioral Source of Truth** for the `opc-da-client` library crate.
 > Defines *what* each module should do — independent of current implementation.
 >
-> Last verified against: 3d38109
+> Last verified against: 87d2ec2
 
 ---
 
@@ -400,6 +400,20 @@ Before calling `browse_recursive`, `browse_tags` attempts `browse_opc_item_ids(B
 *   Constructed immediately upon successful `add_group` return.
 *   Guarantees group destruction on all function exits (early `?` propagation, empty item slices, error returns, and panics).
 
+##### `struct BrowsePositionGuard<'a, S: ConnectedServer>` (Internal RAII Position Guard)
+
+**Purpose:** Provide an automatic RAII cursor restore guard for hierarchical namespace browsing in `handle_browse` and `browse_recursive`.
+
+| Method | Signature | Description |
+| :--- | :--- | :--- |
+| `enter(server: &'a S, branch: &str)` | `pub(crate) fn enter(server: &'a S, branch: &str) -> OpcResult<Self>` | Navigates down into branch via `server.change_browse_position(BrowseDirection::Down, branch)`. On success, wraps server with `active: true`. |
+| `disarm(&mut self)` | `pub(crate) fn disarm(&mut self)` | Disarms automatic cursor restore on drop. |
+
+**Drop behavior:** When dropped, if `active`, navigates back up via `self.server.change_browse_position(BrowseDirection::Up, "")`. Any errors are logged as warnings without panicking.
+
+**Invariants:**
+*   Guarantees cursor position restoration on all exits from recursive branch traversal (success, early return, error propagation, or panic).
+
 ---
 
 ### 1.5 `types` — Canonical Protocol Types & Handles
@@ -665,10 +679,38 @@ Defined in § 1.1. See table above.
 - [x] `test_guid_to_progid_zeroed_guid_returns_com_error` — verifies structured COM error preservation on zeroed GUID.
 - [x] `test_mock_server_connector_server_details` — verifies `MockServerConnector::with_server_details` and `enumerate_server_details`.
 - [x] `test_client_list_server_details` — verifies `OpcDaClient::list_server_details` dispatch through worker against mock connector.
+
+### COM RAII Guard Unit Tests (in `com/guard.rs`)
+
+- [x] `com_guard_new_returns_opc_result` — static compile test asserting `ComGuard::new()` returns `OpcResult<ComGuard>`.
+- [x] `test_group_guard_cleanup_on_drop` — verifies `GroupGuard` automatically invokes `remove_group` when dropped.
+- [x] `test_group_guard_disarm_prevents_cleanup` — verifies `GroupGuard::disarm` prevents `remove_group` cleanup invocation.
+- [x] `test_browse_position_guard_enter_and_drop` — verifies `BrowsePositionGuard::enter` navigates down and drop restores position by navigating up.
+- [x] `test_browse_position_guard_disarm` — verifies `BrowsePositionGuard::disarm` prevents `BrowseDirection::Up` navigation on drop.
+
+### COM Worker Subsystem Unit Tests (in `com/worker/tests.rs`)
+
+- [x] `test_worker_starts_and_stops` — verifies worker thread spawn, MTA initialization, and clean channel shutdown.
+- [x] `test_worker_list_servers` — verifies `ComRequest::ListServers` dispatch and server list reply.
+- [x] `test_worker_list_server_details` — verifies `ComRequest::ListServerDetails` dispatch with metadata attributes.
+- [x] `test_worker_read_tag_values_mismatched_lengths` — verifies defensive check against server returning mismatched item result lengths.
+- [x] `test_worker_write_tag_value` — verifies single tag writing success path via ephemeral group.
+- [x] `test_worker_write_tag_value_failure` — verifies single tag writing failure mapping to `WriteResult`.
+- [x] `test_connection_cache_reuse` — verifies connection caching by `ServerIdentifier` across repeated operations.
+- [x] `test_stale_connection_eviction` — verifies RPC failure triggers cache eviction, reconnect, and successful retry.
+- [x] `test_worker_panic_propagation` — verifies worker thread panic detection on subsequent client requests.
+- [x] `test_drop_during_active_request` — verifies channel disconnection behavior when client worker is dropped.
+- [x] `test_worker_init_failure` — verifies error propagation when thread COM initialization fails.
+- [x] `test_worker_read_tag_values_quality_decoding` — validates in-place read decoding of Good, LocalOverride, CommFailure, and EGU limits.
+- [x] `test_worker_com_init_failure_propagates_opc_error` — verifies custom initializer error propagation.
 - [x] `test_worker_browse_tags_success` — verifies `ComWorker` tag discovery over hierarchical namespace using `MockServerConnector`.
 - [x] `test_worker_browse_tags_cancelled` — verifies `ComWorker` immediate return when `TagCollector` is cancelled prior to execution.
 - [x] `test_worker_browse_tags_capacity_cap` — verifies `ComWorker` tag accumulation halts when `TagCollector` capacity is reached.
 - [x] `test_worker_browse_tags_flat_organization` — verifies fast leaf browsing when server namespace organization is flat.
+- [x] `test_worker_tracing_instrumentation_execution` — validates worker tracing span activation and logging.
+- [x] `test_group_guard_cleanup_on_drop` and `test_group_guard_disarm_prevents_cleanup` — verifies worker group guard drop cleanup.
+- [x] `test_worker_handle_read_error_cleans_group` — validates group removal even when `read` returns an error.
+- [x] `test_worker_channel_drop_error_propagation` — verifies channel drop error handling.
 
 ### Discovery & Registry Inspection Unit Tests (in `com/discovery.rs`)
 

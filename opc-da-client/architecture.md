@@ -81,10 +81,16 @@ opc-da-client/
     │   ├── client.rs       # OpcDaClient: concrete OpcProvider implementation
     │   ├── connector.rs    # Pure-Rust connector traits, ComServer/ComGroup, connect_server, test mocks
     │   ├── discovery.rs    # 3-tier catalog adapter, dual-view registry inspection (OpcServerRegistration)
-    │   ├── guard.rs        # RAII COM initialization/teardown (ComGuard)
+    │   ├── guard.rs        # RAII COM initialization/teardown (ComGuard), group cleanup (GroupGuard), and browse cursor protection (BrowsePositionGuard)
     │   ├── iterator.rs     # Safe wrappers for IEnumString and IEnumGUID
     │   ├── variant.rs      # Win32 VARIANT & SafeArray conversion to/from OpcValue and string
-    │   └── worker.rs       # Dedicated worker thread & request state machine (ComWorker)
+    │   ├── worker.rs       # Slim worker facade & ComRequest event loop (ComWorker)
+    │   └── worker/         # Dedicated single-responsibility worker engines
+    │       ├── pool.rs     # Connection caching, eviction & retry dispatch (dispatch_with_retry)
+    │       ├── read.rs     # Synchronous tag reading engine with in-place mutation (handle_read)
+    │       ├── write.rs    # Synchronous tag writing engine with error mapping (handle_write)
+    │       ├── browse.rs   # Flat/hierarchical namespace traversal with RAII cursor protection (handle_browse)
+    │       └── tests.rs    # Dedicated worker test suite & mock fixtures (22 unit tests)
     └── raw/                # STRICTLY CRATE-INTERNAL (pub(crate) mod raw;)
         ├── mod.rs          # Module declarations
         ├── bindings/       # Frozen Win32 COM interfaces (da, comn)
@@ -116,10 +122,28 @@ opc-da-client/
 - **Mock Availability**: N/A.
 
 ### `com`
-- **Owns**: COM apartment lifecycle (`ComGuard`), dedicated background worker thread (`ComWorker`) with `HashMap<ServerIdentifier, Server>` connection caching and transparent eviction, request channels (`ComRequest`), connector traits and pure-Rust DTOs (`ConnectedServer`, `ConnectedGroup`, `GroupItemDef`, `GroupItemState`), string iterators (`StringIterator`), Win32 server connection instantiation (`connect_server`, `connect_identifier`), server enumeration (`enumerate_servers`, `enumerate_server_details`), and CLSID/ProgID resolution (`guid_to_progid`).
+- **Owns**: Public COM client facade (`OpcDaClient`), request channels (`ComRequest`), connector traits and pure-Rust DTOs (`ConnectedServer`, `ConnectedGroup`, `GroupItemDef`, `GroupItemState`), string iterators (`StringIterator`), Win32 server connection instantiation (`connect_server`, `connect_identifier`), server enumeration (`enumerate_servers`, `enumerate_server_details`), and CLSID/ProgID resolution (`guid_to_progid`).
 - **Does NOT own**: Domain DTO definitions (`provider`), low-level raw FFI memory allocators or dormant C-struct bridges (`raw`).
 - **Trait Interfaces**: `ServerConnector`, `ConnectedServer`, `ConnectedGroup`.
 - **Mock Availability**: `MockServerConnector`, `MockConnectedServer`, `MockConnectedGroup` (`#[cfg(any(test, feature = "test-support"))]` in `connector.rs`, re-exported under `feature = "test-support"`).
+
+### `com::guard`
+- **Owns**: Consolidated RAII resource lifetime drop guards:
+  - `ComGuard`: Thread-level COM runtime initialization (`CoInitializeEx` MTA) and automatic teardown (`CoUninitialize`).
+  - `GroupGuard<'_, S: ConnectedServer>`: Temporary OPC group lifecycle guard guaranteeing deterministic `remove_group` on `Drop` across all return/panic paths.
+  - `BrowsePositionGuard<'_, S: ConnectedServer>`: Hierarchical namespace cursor position guard guaranteeing `BrowseDirection::Up` navigation on `Drop` to restore server browse state upon traversal completion or early exit.
+- **Does NOT own**: Long-lived connection pooling or channel communication.
+- **Mock Availability**: Tested against `MockConnectedServer` and `MockConnectedGroup`.
+
+### `com::worker`
+- **Owns**: Dedicated background COM MTA thread runner (`ComWorker`) structured as a lightweight request-dispatching facade coordinating private single-responsibility submodules:
+  - `com::worker::pool`: Connection cache management (`HashMap<ServerIdentifier, Server>`), transparent stale RPC proxy eviction, and reconnection dispatch (`dispatch_with_retry`).
+  - `com::worker::read`: Synchronous tag reading engine (`handle_read`) performing in-place `TagValue` slot population to eliminate allocation overhead.
+  - `com::worker::write`: Synchronous tag writing engine (`handle_write`) with structured `WriteResult` error mapping.
+  - `com::worker::browse`: Namespace exploration engine (`handle_browse`) supporting fast flat enumeration and recursive branch traversal protected by `BrowsePositionGuard`.
+  - `com::worker::tests`: Dedicated 842-line test suite containing 22 unit tests and zero-FFI mock fixtures (`WorkerMockConnector`, `WorkerMockServer`, `WorkerMockGroup`, `QualityTestConnector`).
+- **Does NOT own**: Win32 COM FFI marshalling (delegated to `connector.rs`) or public client traits (delegated to `client.rs`).
+- **Mock Availability**: Exhaustive unit test coverage with pure-Rust connector mocks.
 
 ### `com::discovery`
 - **Owns**: 3-tier server catalog query adapter (`OpcServerListCatalog` adapting `IOPCServerList2` and `IOPCServerList`), dual-view Windows Registry inspection (`inspect_local_registration` via native and `KEY_WOW64_32KEY` with consolidated `open_reg_key`), dynamic buffer reallocation on `ERROR_MORE_DATA`, environment variable expansion (`windows::Win32::System::Environment::ExpandEnvironmentStringsW` for `REG_EXPAND_SZ` with slice bounds checking), server execution model classification (`OpcServerType`, `OpcServerRegistration`), and binary path sanitization (`sanitize_binary_path`).
@@ -251,14 +275,15 @@ Strongly-typed `OpcOperation` enum and `log_opc_err!` macro emit unified machine
 - **`errors.rs`**: `OpcError::friendly_hint(&self)` mapping across known COM error codes, non-COM variants returning `None`, standard `From` conversions, and `log_opc_err!` macro verification.
 - **`types.rs`**: `ServerIdentifier` conversion and display, `OpcServerInfo` display names and endpoints, 16-bit `OpcQuality` decomposition, major/substatus/limit roundtrips, string parsing, bracketed GUID formatting (`format_guid_bracketed`), and handle semantics.
 - **`com::iterator`**: `StringIterator` null-PWSTR skipping, empty streams, error handling, and in-memory test vectors.
+- **`com::guard.rs`**: Thread COM initialization result type assertions, `GroupGuard` drop cleanup and disarm behavior, and `BrowsePositionGuard` position restoration on drop and disarm behavior.
 
 ### 2. Pure-Rust Connector Mocks
 - **Location**: Co-located in `com/connector.rs` under `#[cfg(test)]`.
 - **Artifacts**: `MockConnectedServer`, `MockConnectedGroup`, `MockServerConnector`.
 - **Benefit**: Pluggable closures for adding items, reading, writing, and server metadata discovery (`with_server_details`); **zero** `CoTaskMemAlloc` calls and **zero** unsafe code required in test cases.
 
-### 3. Worker Integration Tests
-- **Location**: Co-located in `com/worker.rs` under `#[cfg(test)]`.
+### 3. Worker Unit and Integration Tests
+- **Location**: Dedicated test module in `com/worker/tests.rs` under `#[cfg(test)]` (22 unit tests).
 - **Coverage**: Connection cache reuse keyed by `ServerIdentifier`, stale connection eviction and automatic reconnect, `ComRequest::ListServerDetails` dispatch, worker thread panic propagation, per-item read quality decoding, and length mismatch defensive guards.
 
 ### 4. Downstream Provider Mocks
@@ -266,7 +291,7 @@ Strongly-typed `OpcOperation` enum and `log_opc_err!` macro emit unified machine
 - **Artifact**: `MockOpcProvider` via `mockall`, allowing downstream consumers (`opc-cli`) to mock the entire OPC DA backend on any OS without COM dependencies.
 
 ### 5. Documentation Tests
-- Verified with `cargo test --doc -p opc-da-client --all-features` (55 active doc-tests). Total unit test suite: 97 unit tests in `opc-da-client`.
+- Verified with `cargo test --doc -p opc-da-client --all-features` (55 active doc-tests). Total unit test suite: 101 unit tests in `opc-da-client`.
 
 ---
 
