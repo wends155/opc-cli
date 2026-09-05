@@ -106,7 +106,8 @@ fn open_reg_key(
 
 /// Expands Win32 environment variable strings (e.g. `%SystemRoot%\System32`).
 fn expand_environment_string(raw: &str) -> String {
-    use windows::core::{PCWSTR, PWSTR};
+    use windows::Win32::System::Environment::ExpandEnvironmentStringsW;
+    use windows::core::PCWSTR;
 
     if !raw.contains('%') {
         return raw.to_string();
@@ -114,23 +115,17 @@ fn expand_environment_string(raw: &str) -> String {
 
     let wide: Vec<u16> = raw.encode_utf16().chain(std::iter::once(0)).collect();
 
-    // SAFETY: Declaring Windows kernel32 function.
-    unsafe extern "system" {
-        fn ExpandEnvironmentStringsW(lpsrc: PCWSTR, lpdst: PWSTR, nsize: u32) -> u32;
-    }
-
     let mut buf = [0u16; 512];
 
-    // SAFETY: Calling Win32 ExpandEnvironmentStringsW with null-terminated wide string.
-    let req_size = unsafe {
-        ExpandEnvironmentStringsW(
-            PCWSTR(wide.as_ptr()),
-            PWSTR(buf.as_mut_ptr()),
-            u32::try_from(buf.len()).unwrap_or(512),
-        )
-    };
+    // SAFETY: Calling Win32 ExpandEnvironmentStringsW with null-terminated wide string slice.
+    let req_size = unsafe { ExpandEnvironmentStringsW(PCWSTR(wide.as_ptr()), Some(&mut buf)) };
 
     if req_size == 0 {
+        tracing::warn!(
+            raw = %raw,
+            error = ?std::io::Error::last_os_error(),
+            "failed to expand environment string in registry value; using raw string"
+        );
         return raw.to_string();
     }
 
@@ -139,16 +134,15 @@ fn expand_environment_string(raw: &str) -> String {
         String::from_utf16_lossy(&buf[..valid_len])
     } else {
         let mut dynamic_buf = vec![0u16; req_size as usize];
-        let dynamic_len = u32::try_from(dynamic_buf.len()).unwrap_or(req_size);
-        // SAFETY: Calling Win32 ExpandEnvironmentStringsW with dynamic buffer sized to req_size.
-        let dynamic_req = unsafe {
-            ExpandEnvironmentStringsW(
-                PCWSTR(wide.as_ptr()),
-                PWSTR(dynamic_buf.as_mut_ptr()),
-                dynamic_len,
-            )
-        };
+        // SAFETY: Calling Win32 ExpandEnvironmentStringsW with dynamically sized buffer slice.
+        let dynamic_req =
+            unsafe { ExpandEnvironmentStringsW(PCWSTR(wide.as_ptr()), Some(&mut dynamic_buf)) };
         if dynamic_req == 0 {
+            tracing::warn!(
+                raw = %raw,
+                error = ?std::io::Error::last_os_error(),
+                "failed to expand dynamic environment string in registry value; using raw string"
+            );
             raw.to_string()
         } else {
             let valid_len = (dynamic_req as usize).saturating_sub(1);
@@ -528,11 +522,34 @@ mod tests {
 
     #[test]
     fn test_expand_environment_string() {
+        // Standard variable expansion
         let expanded = expand_environment_string(r"%SystemRoot%\System32");
         assert!(!expanded.contains("%SystemRoot%"));
         assert!(expanded.to_ascii_lowercase().contains(r"\system32"));
+
+        // Plain string without variables
         let plain = expand_environment_string(r"C:\Program Files\OPC\server.exe");
         assert_eq!(plain, r"C:\Program Files\OPC\server.exe");
+
+        // Non-existent environment variable (Win32 preserves literal unexpanded token)
+        let nonexistent = expand_environment_string(r"%NONEXISTENT_OPC_VAR_12345%\server.exe");
+        assert!(nonexistent.contains("%NONEXISTENT_OPC_VAR_12345%"));
+
+        // Malformed / single % token
+        let malformed = expand_environment_string(r"C:\100%_working\server.exe");
+        assert_eq!(malformed, r"C:\100%_working\server.exe");
+
+        // Empty string
+        let empty = expand_environment_string("");
+        assert_eq!(empty, "");
+
+        // Comprehensive stress test: oversized synthetic string (> 512 characters) exercising dynamic buffer allocation
+        let repeated_token = "%SystemRoot%\\".repeat(50);
+        let oversized_raw = format!("{repeated_token}server.exe");
+        assert!(oversized_raw.len() > 512);
+        let oversized_expanded = expand_environment_string(&oversized_raw);
+        assert!(!oversized_expanded.contains("%SystemRoot%"));
+        assert!(oversized_expanded.ends_with("server.exe"));
     }
 
     #[test]
