@@ -1,7 +1,7 @@
 //! Win32 COM group management, item registration, and synchronous I/O.
 //!
 //! Provides [`ComGroup`] implementing [`ConnectedGroup`] with leak-free
-//! [`ScopedVariant`] and [`ItemStatesGuard`] resource management.
+//! `ScopedVariant` and `ItemStatesGuard` resource management.
 
 use crate::com::connector::traits::{
     ConnectedGroup, DataSource, GroupItemDef, GroupItemResult, GroupItemState,

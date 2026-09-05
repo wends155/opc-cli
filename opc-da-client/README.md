@@ -275,6 +275,9 @@ async fn main() -> OpcResult<()> {
 | `OpcError::connection_failed` | `pub fn` | Inherent constructor producing an `OpcError::Connection` indicating CLSID resolution failure for a ProgID. |
 | `MockOpcProvider` | `pub struct` | Pure-Rust mock implementation of `OpcProvider` generated via `mockall` (under `feature = "test-support"`). |
 | `MockServerConnector` | `pub struct` | Pure-Rust mock implementation of `ServerConnector` providing simulated server enumeration and tag browsing (under `feature = "test-support"`). |
+| `MockConnectedServer` | `pub struct` | Pure-Rust mock implementation of `ConnectedServer` with in-memory namespace and group registration (under `feature = "test-support"`). |
+| `MockConnectedGroup` | `pub struct` | Pure-Rust mock implementation of `ConnectedGroup` with configurable handlers for item registration and read/write I/O (under `feature = "test-support"`). |
+| `MockOpcDaClient` | `pub type` | Type alias for an `OpcDaClient` instantiated with `MockServerConnector` (under `feature = "test-support"` and `feature = "opc-da-backend"`). |
 
 ## Architecture
 

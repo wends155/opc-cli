@@ -3,7 +3,7 @@
 > **Behavioral Source of Truth** for the `opc-da-client` library crate.
 > Defines *what* each module should do — independent of current implementation.
 >
-> Last verified against: 4c1184b
+> Last verified against: d4a145e
 
 ---
 
@@ -282,11 +282,13 @@ All methods use `#[async_trait]`.
 
 ##### `com::variant` Module
 
-| Function | Signature | Purpose |
+| Item | Signature / Type | Purpose |
 | :--- | :--- | :--- |
 | `variant_to_string` | `fn(variant: &VARIANT) -> String` | Formats a COM VARIANT as a display string. Handles VT_EMPTY, VT_NULL, VT_I2, VT_I4, VT_R4, VT_R8, VT_CY, VT_DATE, VT_BSTR, VT_ERROR, VT_BOOL, VT_I1, VT_UI1, VT_UI2, VT_UI4, VT_I8, VT_UI8, and VT_ARRAY composites. |
 | `variant_to_opc_value` | `fn(variant: &VARIANT) -> OpcValue` | Converts a COM `VARIANT` into a strongly-typed domain `OpcValue`. |
 | `opc_value_to_variant` | `fn(value: &OpcValue) -> VARIANT` | Converts a domain `OpcValue` to a COM `VARIANT`. |
+| `struct ScopedVariant` | `pub struct ScopedVariant(pub VARIANT)` | RAII wrapper with `#[repr(transparent)]` layout and deterministic `Drop` invoking `VariantClear(&raw mut self.0)`. Provides `empty()`, `from_opc_value(&OpcValue)`, `into_inner(self)`, `as_raw_mut(&mut self)`, and `clear(&mut self)`. |
+| `struct ItemStatesGuard<'a>` | `pub struct ItemStatesGuard<'a>(pub &'a mut [tagOPCITEMSTATE])` | RAII guard invoking `VariantClear` on each element's `vDataValue: VARIANT` upon `Drop`. Implements `std::ops::Deref<Target = [tagOPCITEMSTATE]>`. |
 
 ##### `raw::hresult` Module
 
@@ -511,22 +513,38 @@ Before calling `browse_recursive`, `browse_tags` attempts `browse_opc_item_ids(B
   2. `IOPCServerList::GetClassDetails` (v1 interface with ProgID and user type)
   3. `guid_to_progid` fallback (resolving from registry via COM runtime)
 
+##### `fn guid_to_progid(guid: &GUID) -> OpcResult<String>`
+
+**Purpose:** Converts a COM GUID to its registered ProgID string using `RemotePointer<u16>::into_string(self)` with guaranteed COM allocator cleanup via RAII on both success and error paths.
+
 ---
 
-### 1.8 `com::connector` — Pure-Rust Connector Facade & Reusable Mocks
+### 1.8 `com::connector` — Pure-Rust Connector Facade & Modular Submodules
 
-**Purpose:** Pure-Rust facade traits and DTOs that completely decouple `ComWorker` and consumers from raw Win32 COM / FFI types:
-* `ServerConnector`: Discovers servers via `enumerate_servers()` and `enumerate_server_details(host: &str) -> OpcResult<Vec<OpcServerInfo>>`, and connects via `connect(name)` and `connect_identifier(&ServerIdentifier)`. Implemented by `ComConnector` and `MockServerConnector`.
-* `ConnectedServer`: Introspects server namespace and adds/removes groups using `GroupConfig` and `CreatedGroup`. Implemented by `ComServer` and `MockConnectedServer`. Supports in-memory tag browsing via `StringIterator::from_vec`.
-* `ConnectedGroup`: Pure-Rust facade over OPC DA groups:
-  - `add_items(&self, items: &[GroupItemDef]) -> OpcResult<Vec<GroupItemResult>>`
-  - `read(&self, source: DataSource, server_handles: &[ItemHandle]) -> OpcResult<Vec<Result<GroupItemState, OpcError>>>`
-  - `write(&self, server_handles: &[ItemHandle], values: &[OpcValue]) -> OpcResult<Vec<Result<(), OpcError>>>`
-* Server connection helpers:
+**Purpose:** Pure-Rust facade traits, DTOs, and concrete Win32 COM / mock implementations partitioned into cohesive single-responsibility submodules:
+
+* `com::connector::traits`:
+  - `ServerConnector`: Discovers servers via `enumerate_servers()` and `enumerate_server_details(host: &str) -> OpcResult<Vec<OpcServerInfo>>`, and connects via `connect(name)` and `connect_identifier(&ServerIdentifier)`. Implemented by `ComConnector` and `MockServerConnector`.
+  - `ConnectedServer`: Introspects server namespace and adds/removes groups using `GroupConfig` and `CreatedGroup`. Implemented by `ComServer` and `MockConnectedServer`. Supports in-memory tag browsing via `StringIterator::from_vec`.
+  - `ConnectedGroup`: Pure-Rust facade over OPC DA groups:
+    - `add_items(&self, items: &[GroupItemDef]) -> OpcResult<Vec<GroupItemResult>>`
+    - `read(&self, source: DataSource, server_handles: &[ItemHandle]) -> OpcResult<Vec<Result<GroupItemState, OpcError>>>`
+    - `write(&self, server_handles: &[ItemHandle], values: &[OpcValue]) -> OpcResult<Vec<Result<(), OpcError>>>`
+  - DTOs: `GroupItemDef`, `GroupItemResult`, `GroupItemState`, `DataSource`, `GroupConfig`, `CreatedGroup`.
+* `com::connector::server`:
+  - `ComConnector`: Connects to servers via `connect_server_identifier` and enumerates servers via Component Categories catalog.
+  - `ComServer`: Wraps native `IOPCServer` and `IOPCBrowseServerAddressSpace`, managing namespace queries and group creation.
   - `connect_server_identifier(identifier: &ServerIdentifier) -> OpcResult<IOPCServer>`: Directly calls `CoCreateInstance` when `ServerIdentifier::Clsid`, bypassing `CLSIDFromProgID`. When `ServerIdentifier::ProgId`, resolves ProgID to CLSID via registry.
-  - `connect_server(server_name: &str) -> OpcResult<IOPCServer>`: Convenience wrapper delegating to `connect_server_identifier(&ServerIdentifier::from(server_name))`.
-  - `guid_to_progid(guid: &GUID) -> OpcResult<String>`: Converts a COM GUID to its registered ProgID string using `RemotePointer<u16>::into_string(self)` with guaranteed COM allocator cleanup via RAII on both success and error paths.
-* `MockConnectedGroup`, `MockConnectedServer`, and `MockServerConnector`: Reusable pure-Rust mocks (under `#[cfg(any(test, feature = "test-support"))]` and exported at crate root under `test-support`) supporting pluggable closures, failure injection (`MockState`), tracking of cleanup invocations (`MockState::remove_group_count`), simulated structured server details (`server_details: Arc<Mutex<Vec<OpcServerInfo>>>`, `with_server_details`), bidirectional ProgID/detail sync, and simulated tag browsing without native COM allocators or unsafe blocks.
+* `com::connector::group`:
+  - `ComGroup`: Wraps native group COM interfaces (`IOPCItemMgt`, `IOPCSyncIO`, `IOPCGroupStateMgt`, etc.).
+  - Protected by `ScopedVariant` on synchronous write paths and `ItemStatesGuard` on synchronous read paths, guaranteeing zero `VARIANT` memory leaks.
+* `com::connector::mock`:
+  - `MockConnectedGroup`, `MockConnectedServer`, and `MockServerConnector`: Reusable pure-Rust mocks (under `#[cfg(any(test, feature = "test-support"))]` and exported at crate root under `test-support`) supporting pluggable closures, failure injection (`MockState`), tracking of cleanup invocations (`MockState::remove_group_count`), simulated structured server details (`server_details: Arc<Mutex<Vec<OpcServerInfo>>>`, `with_server_details`), bidirectional ProgID/detail sync, and simulated tag browsing without native COM allocators or unsafe blocks.
+  - Mock handler type aliases: `MockAddItemsFn`, `MockReadFn`, `MockWriteFn`.
+* `com::connector` (Facade):
+  - Slim 43-line coordinator facade re-exporting all submodule items with zero blanket `#![allow(...)]` headers.
+* Crate Root Re-Export:
+  - `pub type MockOpcDaClient = com::client::OpcDaClient<com::connector::MockServerConnector>;` exported under `#[cfg(all(feature = "test-support", feature = "opc-da-backend"))]`.
 
 ---
 
@@ -669,15 +687,16 @@ Defined in § 1.1. See table above.
 - [x] `test_tag_collector_multithreaded` — validates concurrent multi-threaded push contention and atomic count integrity across 8 threads.
 - [x] `test_provider_default_list_server_details` — validates default `list_server_details` synthesis from `list_servers`.
 
-### Connector & Client Unit Tests (in `com/connector.rs` and `com/client.rs`)
+### Connector & Client Unit Tests (in `com/connector/` and `com/client.rs`)
 
 - [x] `test_string_iterator_from_vec` — verifies in-memory `StringIterator` collection and equality without COM interfaces.
 - [x] `test_mock_connector_browse` — verifies `MockConnectedServer::browse_opc_item_ids` returns in-memory simulated tags.
 - [x] `test_mock_group_defaults` and `test_mock_group_custom_handlers` — verifies mock group default results and custom read handlers.
 - [x] `test_mock_server_add_group_and_eviction` — verifies group handle generation and connection drop error injection.
 - [x] `test_group_item_def_and_state_cloning` — verifies DTO clone and display behavior.
-- [x] `test_guid_to_progid_zeroed_guid_returns_com_error` — verifies structured COM error preservation on zeroed GUID.
 - [x] `test_mock_server_connector_server_details` — verifies `MockServerConnector::with_server_details` and `enumerate_server_details`.
+- [x] `test_mock_server_connector_type_aliases_and_dispatch` — verifies `MockAddItemsFn`, `MockReadFn`, and `MockWriteFn` custom handlers and default fallback.
+- [x] `test_com_group_preconditions` — verifies `ComGroup::add_items`, `read`, and `write` precondition assertions (empty slices, length mismatch) returning `OpcError::InvalidState`.
 - [x] `test_client_list_server_details` — verifies `OpcDaClient::list_server_details` dispatch through worker against mock connector.
 
 ### COM RAII Guard Unit Tests (in `com/guard.rs`)
@@ -721,6 +740,7 @@ Defined in § 1.1. See table above.
 - [x] `test_open_reg_key_invalid` — verifies `open_reg_key` returns Windows error code when querying a non-existent registry subkey.
 - [x] `test_expand_environment_string` — verifies `expand_environment_string` resolves embedded `%VAR%` tokens via `windows::Win32::System::Environment::ExpandEnvironmentStringsW`, preserves unassigned tokens and unmatched `%`, handles empty strings, and dynamically reallocates on oversized paths (> 512 wide chars).
 - [x] `test_inspect_local_registration_nonexistent_returns_classnotreg` — verifies `inspect_local_registration` maps non-existent CLSIDs to canonical `OpcError::Com(REGDB_E_CLASSNOTREG)`.
+- [x] `test_guid_to_progid_zeroed_guid_returns_com_error` — verifies structured COM error preservation on zeroed GUID.
 
 ### COM VARIANT Unit Tests (in `com/variant.rs`)
 
@@ -732,6 +752,10 @@ Defined in § 1.1. See table above.
 - [x] `test_variant_to_string_unknown_vt` — verifies fallback formatting for unrecognized VARENUM types.
 - [x] `test_variant_to_string_safearray_i4` — validates 1-D SafeArray traversal and formatting.
 - [x] `test_variant_to_string_vt_error_known` and `test_variant_to_string_vt_error_unknown` — validates `VT_ERROR` HRESULT diagnostic mapping.
+- [x] `test_scoped_variant_empty_and_as_raw_mut` — verifies `ScopedVariant::empty()` initializes with `VT_EMPTY` and `as_raw_mut` provides valid pointer.
+- [x] `test_scoped_variant_drop_clears_bstr_and_resets_vt` — verifies `ScopedVariant` drop safely invokes `VariantClear`, freeing `BSTR` without memory leaks.
+- [x] `test_scoped_variant_into_inner_disarm` — verifies `ScopedVariant::into_inner` disarms the RAII guard and preserves internal `VARIANT`.
+- [x] `test_item_states_guard_drop_clears_variants` — verifies `ItemStatesGuard` drop iterates all `tagOPCITEMSTATE` elements and safely clears `vDataValue`.
 
 ### Error & Diagnostic Unit Tests (in `errors.rs`)
 
