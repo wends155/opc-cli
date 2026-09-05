@@ -1,5 +1,17 @@
 # Project Context Summary
 
+## 2026-09-05: Documentation Synchronization for Connector Decomposition and Memory Safety (`opc-da-client`)
+> 📝 **Context Update:**
+> * **Feature:** Documentation sync for connector decomposition into modular submodules, VARIANT RAII memory safety guards, and mock infrastructure exports.
+> * **Changes:**
+>   - Updated `opc-da-client/spec.md`: bumped verification hash to `d4a145e`; documented `ScopedVariant` and `ItemStatesGuard` in §1.3; documented canonical `guid_to_progid` in §1.7; documented connector decomposition into `traits`, `server`, `group`, and `mock` submodules with slim 43-line coordinator facade and `MockOpcDaClient` type alias in §1.8; updated §4 test inventory (107 unit tests).
+>   - Updated `opc-da-client/README.md`: registered `MockConnectedServer`, `MockConnectedGroup`, and `MockOpcDaClient` in the API Surface table under `test-support`.
+>   - Fixed private intra-doc links in `opc-da-client/src/com/connector/group.rs` to maintain 0 rustdoc warnings.
+>   - Verified full 8-gate quality pipeline (`pwsh -File scripts/verify.ps1`) passing with exit code 0 across all gates.
+>   - Committed documentation as checkpoint `8de1814`.
+> * **New Constraints:** Keep `opc-da-client/spec.md §1.8` and `README.md` API surface aligned whenever connector mock structures or type aliases are added or modified.
+> * **Pruned:** Stale references to deleted `connect_server` in `spec.md`, obsolete 101 unit test inventory, and private intra-doc link warnings in `group.rs`.
+
 ## 2026-09-05: Connector Decomposition, VARIANT Memory Leak Eradication, and Blanket Lint Elimination (`opc-da-client`)
 > 📝 **Context Update:**
 > * **Feature:** Decompose `opc-da-client/src/com/connector.rs` into modular submodules (`com::connector::{traits, server, group, mock}`), implement RAII `ScopedVariant` and `ItemStatesGuard` for leak-free COM `VARIANT` lifecycle, eliminate all 9 blanket file-level Clippy lints, canonically relocate `guid_to_progid` to `com/discovery.rs`, eliminate dead code `connect_server`, and export `MockOpcDaClient`.
