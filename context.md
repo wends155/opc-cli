@@ -1,5 +1,19 @@
 # Project Context Summary
 
+## 2026-09-05: RAII GroupGuard, Contextual Error Telemetry, and inspect_err Hardening (`opc-da-client`)
+> 📝 **Context Update:**
+> * **Feature:** Eliminate latent COM server group handle leaks using RAII `GroupGuard`, replace stringly-typed telemetry with strongly-typed `OpcOperation`, unify contextual error logging with `log_opc_err!`, decouple side-effect logging from error mapping via `inspect_err`, and add negative unit tests for group cleanup.
+> * **Changes:**
+>   - Implemented `GroupGuard<'_, S: ConnectedServer>` in `opc-da-client/src/com/worker.rs` with `Drop` invoking `self.server.remove_group(self.handle, true)` on all return paths (errors, `?`, panics). Encapsulated group handles immediately after `add_group` in both `handle_read` and `handle_write`, eliminating manual cleanup boilerplate and mutating cleanup inside `inspect_err`.
+>   - Introduced strongly-typed `OpcOperation` enum in `opc-da-client/src/errors.rs` implementing `Display` to canonicalize operation identifiers across all subsystems.
+>   - Implemented `log_opc_err!` macro in `opc-da-client/src/errors.rs` capturing `operation`, `hresult`, `hint`, `chain`, and arbitrary contextual fields (`server`, `tag`, `value`, `branch`, `depth`), eliminating duplicate adjacent `tracing::warn!` and `tracing::error!` statements.
+>   - Decoupled error mapping pipelines in `worker.rs:261` (`map_err` converted to `inspect_err`), `guard.rs:55` (`.inspect_err(...).map_err(...)`), and `connector.rs:234` (`.inspect_err(...).map_err(...)`).
+>   - Added negative unit testing: `MockState` in `MockServerConnector` tracks `remove_group_count`; added `test_group_guard_cleanup_on_drop`, `test_group_guard_disarm_prevents_cleanup`, and `test_worker_handle_read_error_cleans_group` verifying group cleanup on `add_items` failure.
+>   - Ran the complete 9-gate quality verification pipeline (`scripts/verify.ps1`) with all 9 gates passing (80 unit & integration tests, 53 doc tests, 0 clippy warnings).
+>   - Committed changes as checkpoint `841d4b7`.
+> * **New Constraints:** Temporary COM group handles created during `read_tag_values` and `write_tag_value` must always be managed by `GroupGuard`. Error logging must use `log_opc_err!` with `OpcOperation` variants rather than ad-hoc stringly-typed messages. Never mix logging side-effects into `map_err` closures; use `.inspect_err(...)` prior to `.map_err(...)`.
+> * **Pruned:** Manual `remove_group` calls across error exits in `handle_read` and `handle_write`, stringly-typed operation identifiers, duplicate logging calls, and legacy `map_err` closures returning identity errors.
+
 ## 2026-09-05: Observability Instrumentation & COM Memory Safety Hardening (`opc-da-client`, `opc-cli`)
 > 📝 **Context Update:**
 > * **Feature:** Eliminate critical COM memory safety hazards in `raw/memory.rs`, remove blanket compiler/clippy allows, uniformly instrument low-level COM FFI gateway methods, background worker dispatch, public provider methods, and application actions with `#[tracing::instrument]`.

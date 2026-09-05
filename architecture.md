@@ -150,6 +150,7 @@ The project uses a unified dual-interface build system:
 
 - **Library Domain Errors**: `OpcError` (defined in `opc-da-client`) handles domain failures via `thiserror`.
 - **Friendly Hint Engine**: `friendly_com_hint()` maps technical HRESULT codes (e.g. `0x800706BA` RPC Unavailable, `0x80070005` DCOM Access Denied) to actionable plain-English text.
+- **RAII Resource Management (`GroupGuard`)**: Temporary COM groups created during `read_tag_values` and `write_tag_value` are guarded by `GroupGuard<'_, S: ConnectedServer>`, guaranteeing deterministic `remove_group(handle, true)` invocation on `Drop` across all return paths, `?` operator exits, and thread panics.
 - **Breadcrumb Chains**: TUI uses `anyhow` displaying `{:#}` full error chains in status popups.
 - **No Swallowed Errors**: All fallible COM and background task operations propagate `Result<T, OpcError>`.
 
@@ -166,7 +167,7 @@ The project uses a unified dual-interface build system:
 - **Two-Tier Diagnostics**:
   - **Dynamic Field Tier**: Runtime verbosity count flags `-v` (debug) / `-vv` (trace) mapped to `EnvFilter` levels to dynamically control logging without recompilation.
   - **Compile-Time Dev Tier**: Opt-in `dev-diagnostics` Cargo feature that compiles verbose trace-level MTA request/response argument dumps into `ComWorker` method executions.
-- **Structured Error Logging**: `log_opc_error(error, operation)` logs machine-parseable errors with fields (`operation`, `hresult`, `hint`, `chain`).
+- **Structured Error Logging**: Strongly-typed `OpcOperation` enum and `log_opc_err!` macro emit unified machine-parseable `tracing::error!` events containing `operation`, `hresult`, `hint`, `chain`, and contextual fields (`server`, `tag`, `value`, `depth`, `branch`). Eliminates duplicate double logging and stringly-typed operation identifiers.
 - **State Audits**: Centralized screen transition auditing hook (`App::log_transition()`) logs all transitions with named info fields.
 - **Log Inspector**: `scripts/check-logs.ps1` provides log scanning, severity filtering, timing statistics, and deep analysis modes:
   - **§E: HRESULT Aggregation**: Accumulates top 10 HRESULT failure codes.
@@ -175,7 +176,7 @@ The project uses a unified dual-interface build system:
 ## 10. Testing Strategy
 
 - **Unit Testing**: Mock-based testing using `MockOpcProvider` (`mockall`). TUI navigation flow, state transitions, search cycling, and ring-buffer logic are verified without Windows COM dependencies (38 unit tests in `opc-cli`).
-- **COM Worker & Memory Safety Testing**: `ComWorker` and `raw/memory.rs` unit tests use `MockServerConnector` and synthetic allocations to test write paths, tag browsing (flat, hierarchical, cancellation, capacity limits), server connection pooling, stale connection eviction, thread panic safety, worker drop behaviors, tracing instrumentation execution, and non-cloneable remote pointer safe drop (75 unit tests in `opc-da-client`).
+- **COM Worker & Memory Safety Testing**: `ComWorker` and `raw/memory.rs` unit tests use `MockServerConnector` and synthetic allocations to test write paths, tag browsing (flat, hierarchical, cancellation, capacity limits), server connection pooling, stale connection eviction, thread panic safety, worker drop behaviors, tracing instrumentation execution, `GroupGuard` automatic drop cleanup on `add_items` failure, and non-cloneable remote pointer safe drop (80 unit tests in `opc-da-client`).
 - **Doc Testing**: Public API items include runnable doc tests verified via `cargo test --doc --workspace --all-features` (53 doc-tests, including pure-Rust mocking examples in `README.md` and `provider.rs`).
 - **Polyfill Build Gates**: Independent compilation of `compat/*` polyfill crates inside `scripts/verify.ps1`.
 - **AST-Grep Structural Safety Gates**: `sg scan` enforcement of zero unwrap/expect in production library code and mandatory `// SAFETY:` rationale on all unsafe blocks. Rules are validated via ast-grep unit tests before static scans.
