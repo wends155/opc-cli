@@ -2,7 +2,7 @@ use crate::com::connector::{ComConnector, ServerConnector};
 use crate::com::worker::{ComRequest, ComWorker};
 use crate::errors::OpcResult;
 use crate::provider::{OpcProvider, OpcValue, TagCollector, TagValue, WriteResult};
-use crate::types::OpcServerInfo;
+use crate::types::{OpcServerInfo, ServerIdentifier};
 use async_trait::async_trait;
 use std::sync::Arc;
 
@@ -90,10 +90,10 @@ impl<C: ServerConnector + 'static> OpcProvider for OpcDaClient<C> {
 
     #[tracing::instrument(level = "info", skip(self, collector), err)]
     async fn browse_tags(&self, server: &str, collector: TagCollector) -> OpcResult<Vec<String>> {
-        let server_owned = server.to_string();
+        let server_id = ServerIdentifier::from(server);
         self.worker
             .send_request(|reply| ComRequest::BrowseTags {
-                server: server_owned,
+                server: server_id,
                 collector,
                 reply,
             })
@@ -106,10 +106,10 @@ impl<C: ServerConnector + 'static> OpcProvider for OpcDaClient<C> {
         server: &str,
         tag_ids: Vec<String>,
     ) -> OpcResult<Vec<TagValue>> {
-        let server_owned = server.to_string();
+        let server_id = ServerIdentifier::from(server);
         self.worker
             .send_request(|reply| ComRequest::ReadTagValues {
-                server: server_owned,
+                server: server_id,
                 tag_ids,
                 reply,
             })
@@ -123,11 +123,11 @@ impl<C: ServerConnector + 'static> OpcProvider for OpcDaClient<C> {
         tag_id: &str,
         value: OpcValue,
     ) -> OpcResult<WriteResult> {
-        let server_owned = server.to_string();
+        let server_id = ServerIdentifier::from(server);
         let tag_id_owned = tag_id.to_string();
         self.worker
             .send_request(|reply| ComRequest::WriteTagValue {
-                server: server_owned,
+                server: server_id,
                 tag_id: tag_id_owned,
                 value,
                 reply,

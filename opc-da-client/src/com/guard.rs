@@ -3,7 +3,9 @@
 //! Ensures `CoUninitialize` is called exactly once per successful
 //! `CoInitializeEx`, even on early returns or panics.
 
+use crate::com::connector::ConnectedServer;
 use crate::errors::OpcResult;
+use crate::types::{BrowseDirection, GroupHandle};
 use std::marker::PhantomData;
 use windows::Win32::System::Com::{COINIT_MULTITHREADED, CoInitializeEx, CoUninitialize};
 
@@ -103,10 +105,99 @@ impl ComInitializer for FailingComInit {
     }
 }
 
+/// RAII drop guard for OPC DA server groups.
+///
+/// Ensures `ConnectedServer::remove_group(server_handle, true)` is called
+/// when the guard is dropped, preventing group handle leaks on the OPC server
+/// across early returns, error propagation with `?`, and panics.
+pub(crate) struct GroupGuard<'a, S: ConnectedServer> {
+    server: &'a S,
+    handle: GroupHandle,
+    disarmed: bool,
+}
+
+impl<'a, S: ConnectedServer> GroupGuard<'a, S> {
+    pub(crate) fn new(server: &'a S, handle: GroupHandle) -> Self {
+        Self {
+            server,
+            handle,
+            disarmed: false,
+        }
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn handle(&self) -> GroupHandle {
+        self.handle
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn disarm(&mut self) {
+        self.disarmed = true;
+    }
+}
+
+impl<S: ConnectedServer> Drop for GroupGuard<'_, S> {
+    fn drop(&mut self) {
+        if self.disarmed {
+            return;
+        }
+        if let Err(e) = self.server.remove_group(self.handle, true) {
+            tracing::warn!(
+                error = ?e,
+                handle = self.handle.0,
+                "Failed to remove OPC group during RAII drop cleanup"
+            );
+        }
+    }
+}
+
+/// RAII drop guard for OPC DA namespace browsing position.
+///
+/// Ensures `ConnectedServer::change_browse_position(BrowseDirection::Up, "")` is called
+/// when the guard is dropped, restoring the browse cursor to the parent branch
+/// across early returns, error propagation with `?`, and panics.
+pub(crate) struct BrowsePositionGuard<'a, S: ConnectedServer> {
+    server: &'a S,
+    active: bool,
+}
+
+impl<'a, S: ConnectedServer> BrowsePositionGuard<'a, S> {
+    /// Changes the server browse position down to `branch` and arms the guard.
+    pub(crate) fn enter(server: &'a S, branch: &str) -> OpcResult<Self> {
+        server.change_browse_position(BrowseDirection::Down, branch)?;
+        Ok(Self {
+            server,
+            active: true,
+        })
+    }
+
+    /// Disarms the guard so `BrowseDirection::Up` will not be invoked on drop.
+    #[allow(dead_code)]
+    pub(crate) fn disarm(&mut self) {
+        self.active = false;
+    }
+}
+
+impl<S: ConnectedServer> Drop for BrowsePositionGuard<'_, S> {
+    fn drop(&mut self) {
+        if !self.active {
+            return;
+        }
+        if let Err(e) = self.server.change_browse_position(BrowseDirection::Up, "") {
+            tracing::warn!(
+                error = ?e,
+                "Failed to restore OPC browse position during RAII drop cleanup"
+            );
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::com::connector::MockConnectedServer;
     use crate::errors::OpcResult;
+    use std::sync::atomic::Ordering;
 
     #[test]
     fn com_guard_new_returns_opc_result() {
@@ -122,5 +213,44 @@ mod tests {
         let guard = ComGuard::new();
         assert!(guard.is_ok(), "ComGuard::new() should succeed: {guard:?}");
         // Guard drops here — CoUninitialize runs.
+    }
+
+    #[test]
+    fn test_group_guard_cleanup_on_drop() {
+        let server = MockConnectedServer::default();
+        assert_eq!(server.state.remove_group_count.load(Ordering::Relaxed), 0);
+        {
+            let guard = GroupGuard::new(&server, GroupHandle(42));
+            assert_eq!(guard.handle(), GroupHandle(42));
+        }
+        assert_eq!(server.state.remove_group_count.load(Ordering::Relaxed), 1);
+    }
+
+    #[test]
+    fn test_group_guard_disarm_prevents_cleanup() {
+        let server = MockConnectedServer::default();
+        {
+            let mut guard = GroupGuard::new(&server, GroupHandle(42));
+            guard.disarm();
+        }
+        assert_eq!(server.state.remove_group_count.load(Ordering::Relaxed), 0);
+    }
+
+    #[test]
+    fn test_browse_position_guard_enter_and_drop() {
+        let server = MockConnectedServer::default();
+        {
+            let guard = BrowsePositionGuard::enter(&server, "Branch1");
+            assert!(guard.is_ok());
+        }
+    }
+
+    #[test]
+    fn test_browse_position_guard_disarm() {
+        let server = MockConnectedServer::default();
+        {
+            let mut guard = BrowsePositionGuard::enter(&server, "Branch1").unwrap();
+            guard.disarm();
+        }
     }
 }
