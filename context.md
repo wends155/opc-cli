@@ -1,5 +1,27 @@
 # Project Context Summary
 
+## 2026-09-07: Workspace Documentation & Architecture Synchronization (`spec.md`, `architecture.md`, `README.md`, rustdocs)
+> 📝 **Context Update:**
+> * **Feature:** Post-123 remediation synchronization across behavioral specification (`opc-da-client/spec.md`), system architecture (`architecture.md` and `opc-da-client/architecture.md`), public README documentation (`README.md` and `opc-da-client/README.md`), and in-source rustdoc documentation across all crates.
+> * **Changes:**
+>   - **Rustdoc Documentation Fortification:**
+>     - Enriched module and function documentation across `compat/synch-polyfill`, `compat/bcrypt-polyfill`, `opc-da-client/src/types/server.rs`, `opc-da-client/src/types/collection.rs`, and `opc-da-client/src/com/client.rs`.
+>     - All public items documented with `# Safety`, `# Arguments`, `# Returns`, `# Errors`/`# Panics`, and passing doctests (77 unit doc-tests + 2 compile-fail doc-tests).
+>   - **Behavioral Specification Parity (`opc-da-client/spec.md`):**
+>     - Synchronized verification commit hash to `a1ea491`.
+>     - Documented `TagValue` quality semantics (`is_error` reflecting `outcome.is_err()`, `is_uncertain`, `is_bad`), `TagValues::get_as<T>` generic extractor, numeric getters (`get_u32`, `get_u64`, `get_i64`, `get_f32`), `TagExtractError` provenance preservation, and `OpcServerEndpoint` UNC parsing.
+>     - Documented `OpcDaClient<C, State>` typestates (`Unbound` vs `Bound`), `build_bound()`, and bound session methods.
+>     - Synchronized Section 5 test coverage checklists (49 CLI unit, 78 client doc tests, 173 client unit, 4 integration suites).
+>   - **Architectural Specification Parity (`architecture.md` & `opc-da-client/architecture.md`):**
+>     - Root `architecture.md`: Updated Sections 4, 5, 7, 10, and 13. Documented `App` deconstruction, `DialogState`, `AutoRefresher`, `AppAction` key handling, `[Cell; 4]` zero-allocation table rendering, Gate 5 polyfill tests, Gate 6 AST-grep rules (`no-deref-on-app`, `no-raw-unaligned-deref`), `search-todos` make target, and Mermaid Data Flow diagram.
+>     - `opc-da-client/architecture.md`: Updated Sections 1, 4, 5, 8, 10, and 13. Documented `OpcDaClient<C, State>` compile-time typestate, `register_item_group` worker engine deduplication, `decode_scalar_variant`, synchronized cache eviction, polyfill natural alignment/chunking invariants, `FILETIME` quotient/remainder arithmetic, and Mermaid typestate transition sequence diagrams.
+>   - **Public Readme Alignment (`README.md` & `opc-da-client/README.md`):**
+>     - Aligned features list, API surface tables, and usage examples with UNC endpoint syntax, typestate client architecture, and typed numeric getters.
+>   - **Verification Pipeline:**
+>     - All 9 gates of `scripts/verify.ps1` pass cleanly with exit code 0.
+> * **New Constraints:** Maintain 100% rustdoc validity across all workspace crates with zero warnings in `cargo test --doc --workspace --all-features`. All documentation snippets must reflect the typestate API and UNC endpoint syntax.
+> * **Pruned:** Documentation and architectural drift accumulated during the 123-finding remediation.
+
 ## 2026-09-06: 123-Finding Comprehensive Quality & Architectural Remediation, Typestate Client, Polyfill Hardening & TUI Deconstruction (`opc-da-client`, `opc-cli`, `compat`, `scripts`)
 > 📝 **Context Update:**
 > * **Feature:** Complete execution of the 40-step Master Implementation Plan addressing all 123 review findings from `comprehensive_review_report.md` across 5 phases under the TAR-S cycle and strict Builder rules with zero-warning standard across all 9 gates of `scripts/verify.ps1`.
