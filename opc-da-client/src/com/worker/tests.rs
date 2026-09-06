@@ -1,105 +1,38 @@
 use super::*;
 use crate::com::connector::{
-    ConnectedGroup, ConnectedServer, CreatedGroup, DataSource, GroupConfig, GroupItemDef,
     GroupItemResult, GroupItemState, MockConnectedGroup, MockConnectedServer, MockServerConnector,
-    MockState, ServerConnector, StringIterator,
+    MockState,
 };
 use crate::com::guard::GroupGuard;
-use crate::errors::{OpcError, OpcResult};
+use crate::errors::OpcError;
 use crate::types::{
-    BrowseDirection, BrowseType, ClientItemHandle, GroupHandle, NamespaceType, OpcQuality,
-    OpcServerEndpoint, OpcServerInfo, OpcValue, ServerIdentifier, ServerItemHandle, TagBatch,
-    TagCollector,
+    ClientItemHandle, OpcQuality, OpcServerEndpoint, OpcValue, ServerGroupHandle, ServerItemHandle,
+    TagBatch, TagCollector,
 };
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 use tokio::sync::oneshot;
 
-struct WorkerMockConnector;
-struct WorkerMockServer;
-struct WorkerMockGroup;
-
-impl ConnectedGroup for WorkerMockGroup {
-    fn add_items(&self, _items: &[GroupItemDef]) -> OpcResult<Vec<GroupItemResult>> {
-        Err(OpcError::NotImplemented("mock".into()))
-    }
-    fn read(
-        &self,
-        _source: DataSource,
-        _server_handles: &[ServerItemHandle],
-    ) -> OpcResult<Vec<Result<GroupItemState, OpcError>>> {
-        Err(OpcError::NotImplemented("mock".into()))
-    }
-    fn write(
-        &self,
-        _server_handles: &[ServerItemHandle],
-        _values: &[OpcValue],
-    ) -> OpcResult<Vec<Result<(), OpcError>>> {
-        Err(OpcError::NotImplemented("mock".into()))
-    }
-}
-
-impl ConnectedServer for WorkerMockServer {
-    type Group = WorkerMockGroup;
-    fn query_organization(&self) -> OpcResult<NamespaceType> {
-        Err(OpcError::NotImplemented("mock".into()))
-    }
-    fn browse_opc_item_ids(
-        &self,
-        _browse_type: BrowseType,
-        _filter: Option<&str>,
-        _data_type: u16,
-        _access_rights: u32,
-    ) -> OpcResult<StringIterator> {
-        Err(OpcError::NotImplemented("mock".into()))
-    }
-    fn change_browse_position(&self, _direction: BrowseDirection, _name: &str) -> OpcResult<()> {
-        Err(OpcError::NotImplemented("mock".into()))
-    }
-    fn get_item_id(&self, _item_name: &str) -> OpcResult<String> {
-        Err(OpcError::NotImplemented("mock".into()))
-    }
-    fn add_group(&self, _config: &GroupConfig<'_>) -> OpcResult<CreatedGroup<Self::Group>> {
-        Err(OpcError::NotImplemented("mock".into()))
-    }
-    fn remove_group(&self, _server_group: GroupHandle, _force: bool) -> OpcResult<()> {
-        Err(OpcError::NotImplemented("mock".into()))
-    }
-}
-
-impl ServerConnector for WorkerMockConnector {
-    type Server = WorkerMockServer;
-    fn enumerate_servers(&self, _host: &str) -> OpcResult<Vec<String>> {
-        Ok(vec!["Mock.Server.1".into()])
-    }
-    fn enumerate_server_details(&self, _host: &str) -> OpcResult<Vec<OpcServerInfo>> {
-        Ok(vec![OpcServerInfo {
-            prog_id: "Mock.Server.1".into(),
-            clsid: windows::core::GUID::zeroed(),
-            user_type: Some("Mock Server 1".into()),
-            host: None,
-        }])
-    }
-    fn connect_identifier(&self, _identifier: &ServerIdentifier) -> OpcResult<Self::Server> {
-        Ok(WorkerMockServer)
-    }
-}
-
 #[tokio::test]
 async fn test_worker_starts_and_stops() {
-    let worker =
-        tokio::task::spawn_blocking(|| ComWorker::start(Arc::new(WorkerMockConnector)).unwrap())
-            .await
-            .unwrap();
+    let worker = tokio::task::spawn_blocking(|| {
+        ComWorker::start(Arc::new(MockServerConnector::new())).unwrap()
+    })
+    .await
+    .unwrap();
     drop(worker);
 }
 
 #[tokio::test]
 async fn test_worker_list_servers() {
-    let worker =
-        tokio::task::spawn_blocking(|| ComWorker::start(Arc::new(WorkerMockConnector)).unwrap())
-            .await
-            .unwrap();
+    let worker = tokio::task::spawn_blocking(|| {
+        ComWorker::start(Arc::new(
+            MockServerConnector::new().with_servers(vec!["Mock.Server.1".into()]),
+        ))
+        .unwrap()
+    })
+    .await
+    .unwrap();
     let (reply, _rx) = oneshot::channel();
     worker
         .sender
@@ -113,10 +46,14 @@ async fn test_worker_list_servers() {
 
 #[tokio::test]
 async fn test_worker_list_server_details() {
-    let worker =
-        tokio::task::spawn_blocking(|| ComWorker::start(Arc::new(WorkerMockConnector)).unwrap())
-            .await
-            .unwrap();
+    let worker = tokio::task::spawn_blocking(|| {
+        ComWorker::start(Arc::new(
+            MockServerConnector::new().with_servers(vec!["Mock.Server.1".into()]),
+        ))
+        .unwrap()
+    })
+    .await
+    .unwrap();
     let (reply, rx) = oneshot::channel();
     worker
         .sender
@@ -131,81 +68,12 @@ async fn test_worker_list_server_details() {
     assert_eq!(details[0].prog_id, "Mock.Server.1");
 }
 
-struct MismatchedConnector;
-struct MismatchedServer;
-struct MismatchedGroup;
-
-impl ConnectedGroup for MismatchedGroup {
-    fn add_items(&self, _items: &[GroupItemDef]) -> OpcResult<Vec<GroupItemResult>> {
-        Ok(vec![])
-    }
-    fn read(
-        &self,
-        _source: DataSource,
-        _server_handles: &[ServerItemHandle],
-    ) -> OpcResult<Vec<Result<GroupItemState, OpcError>>> {
-        Ok(vec![])
-    }
-    fn write(
-        &self,
-        _server_handles: &[ServerItemHandle],
-        _values: &[OpcValue],
-    ) -> OpcResult<Vec<Result<(), OpcError>>> {
-        Ok(vec![])
-    }
-}
-
-impl ConnectedServer for MismatchedServer {
-    type Group = MismatchedGroup;
-    fn query_organization(&self) -> OpcResult<NamespaceType> {
-        Ok(NamespaceType::Hierarchy)
-    }
-    fn browse_opc_item_ids(
-        &self,
-        _b: BrowseType,
-        _f: Option<&str>,
-        _d: u16,
-        _a: u32,
-    ) -> OpcResult<StringIterator> {
-        Err(OpcError::NotImplemented("mock".into()))
-    }
-    fn change_browse_position(&self, _direction: BrowseDirection, _name: &str) -> OpcResult<()> {
-        Ok(())
-    }
-    fn get_item_id(&self, _item_name: &str) -> OpcResult<String> {
-        Ok(String::new())
-    }
-    fn add_group(&self, config: &GroupConfig<'_>) -> OpcResult<CreatedGroup<Self::Group>> {
-        Ok(CreatedGroup {
-            group: MismatchedGroup,
-            server_handle: GroupHandle::new(1),
-            revised_update_rate_ms: config.update_rate_ms,
-        })
-    }
-    fn remove_group(&self, _server_group: GroupHandle, _force: bool) -> OpcResult<()> {
-        Ok(())
-    }
-}
-
-impl ServerConnector for MismatchedConnector {
-    type Server = MismatchedServer;
-    fn enumerate_servers(&self, _host: &str) -> OpcResult<Vec<String>> {
-        Ok(vec![])
-    }
-    fn enumerate_server_details(&self, _host: &str) -> OpcResult<Vec<OpcServerInfo>> {
-        Ok(vec![])
-    }
-    fn connect_identifier(&self, _identifier: &ServerIdentifier) -> OpcResult<Self::Server> {
-        Ok(MismatchedServer)
-    }
-}
-
 #[tokio::test]
 async fn test_worker_read_tag_values_mismatched_lengths() {
-    let worker =
-        tokio::task::spawn_blocking(|| ComWorker::start(Arc::new(MismatchedConnector)).unwrap())
-            .await
-            .unwrap();
+    let connector = Arc::new(MockServerConnector::new().with_add_items_fn(|_| Ok(vec![])));
+    let worker = tokio::task::spawn_blocking(move || ComWorker::start(connector).unwrap())
+        .await
+        .unwrap();
 
     let result = worker
         .send_request(|reply| ComRequest::ReadTagValues {
@@ -448,24 +316,13 @@ async fn test_drop_during_active_request() {
 
 #[tokio::test]
 async fn test_worker_init_failure() {
-    struct FailingInitConnector;
-    impl ServerConnector for FailingInitConnector {
-        type Server = std::sync::Arc<MockConnectedServer>;
-        fn enumerate_servers(&self, _host: &str) -> OpcResult<Vec<String>> {
-            Err(OpcError::Internal("COM subsystem failed".into()))
-        }
-        fn enumerate_server_details(&self, _host: &str) -> OpcResult<Vec<OpcServerInfo>> {
-            Err(OpcError::Internal("COM subsystem failed".into()))
-        }
-        fn connect_identifier(&self, _identifier: &ServerIdentifier) -> OpcResult<Self::Server> {
-            Err(OpcError::Internal("COM subsystem failed".into()))
-        }
-    }
-
-    let worker =
-        tokio::task::spawn_blocking(|| ComWorker::start(Arc::new(FailingInitConnector)).unwrap())
-            .await
-            .unwrap();
+    let state = Arc::new(MockState::default());
+    state.should_fail_connect.store(true, Ordering::Relaxed);
+    let worker = tokio::task::spawn_blocking(move || {
+        ComWorker::start(Arc::new(MockServerConnector::with_state(state))).unwrap()
+    })
+    .await
+    .unwrap();
 
     let result = worker
         .send_request(|reply| ComRequest::ListServers {
@@ -480,128 +337,61 @@ async fn test_worker_init_failure() {
     );
 }
 
-struct QualityTestConnector;
-struct QualityTestServer;
-struct QualityTestGroup;
-
-impl ConnectedGroup for QualityTestGroup {
-    fn add_items(&self, items: &[GroupItemDef]) -> OpcResult<Vec<GroupItemResult>> {
-        Ok(items
-            .iter()
-            .enumerate()
-            .map(|(i, _)| {
-                if i == 4 {
-                    GroupItemResult {
-                        server_handle: ServerItemHandle::new(0),
-                        canonical_type: 0,
-                        error: Some(OpcError::Com {
-                            source: windows::core::Error::from_hresult(
-                                windows::Win32::Foundation::E_FAIL,
-                            ),
-                        }),
-                    }
-                } else {
-                    GroupItemResult {
-                        #[allow(clippy::cast_possible_truncation)]
-                        server_handle: ServerItemHandle::new((i + 1) as u32),
-                        canonical_type: 8,
-                        error: None,
-                    }
-                }
-            })
-            .collect())
-    }
-
-    fn read(
-        &self,
-        _source: DataSource,
-        server_handles: &[ServerItemHandle],
-    ) -> OpcResult<Vec<Result<GroupItemState, OpcError>>> {
-        let qualities: [u16; 4] = [0x00C0, 0x00D8, 0x0018, 0x0056];
-        Ok(server_handles
-            .iter()
-            .enumerate()
-            .map(|(i, &h)| {
-                let val = if i != 2 {
-                    OpcValue::Int(42)
-                } else {
-                    OpcValue::String(String::new())
-                };
-                Ok(GroupItemState {
-                    client_handle: ClientItemHandle::new(h.as_raw()),
-                    value: val,
-                    quality: OpcQuality::from(qualities[i % qualities.len()]),
-                    timestamp: std::time::SystemTime::UNIX_EPOCH,
-                })
-            })
-            .collect())
-    }
-
-    fn write(
-        &self,
-        _server_handles: &[ServerItemHandle],
-        _values: &[OpcValue],
-    ) -> OpcResult<Vec<Result<(), OpcError>>> {
-        Ok(vec![])
-    }
-}
-
-impl ConnectedServer for QualityTestServer {
-    type Group = QualityTestGroup;
-    fn query_organization(&self) -> OpcResult<NamespaceType> {
-        Ok(NamespaceType::Hierarchy)
-    }
-    fn browse_opc_item_ids(
-        &self,
-        _b: BrowseType,
-        _f: Option<&str>,
-        _d: u16,
-        _a: u32,
-    ) -> OpcResult<StringIterator> {
-        Err(OpcError::NotImplemented("mock".into()))
-    }
-    fn change_browse_position(&self, _d: BrowseDirection, _n: &str) -> OpcResult<()> {
-        Ok(())
-    }
-    fn get_item_id(&self, _n: &str) -> OpcResult<String> {
-        Ok(String::new())
-    }
-    fn add_group(&self, config: &GroupConfig<'_>) -> OpcResult<CreatedGroup<Self::Group>> {
-        Ok(CreatedGroup {
-            group: QualityTestGroup,
-            server_handle: GroupHandle::new(1),
-            revised_update_rate_ms: config.update_rate_ms,
-        })
-    }
-    fn remove_group(&self, _server_group: GroupHandle, _force: bool) -> OpcResult<()> {
-        Ok(())
-    }
-}
-
-impl ServerConnector for QualityTestConnector {
-    type Server = QualityTestServer;
-    fn enumerate_servers(&self, _host: &str) -> OpcResult<Vec<String>> {
-        Ok(vec!["Quality.Mock.Server".into()])
-    }
-    fn enumerate_server_details(&self, _host: &str) -> OpcResult<Vec<OpcServerInfo>> {
-        Ok(vec![OpcServerInfo {
-            prog_id: "Quality.Mock.Server".into(),
-            clsid: windows::core::GUID::zeroed(),
-            user_type: Some("Quality Mock Server".into()),
-            host: None,
-        }])
-    }
-    fn connect_identifier(&self, _identifier: &ServerIdentifier) -> OpcResult<Self::Server> {
-        Ok(QualityTestServer)
-    }
-}
-
 #[tokio::test]
+#[allow(clippy::too_many_lines)]
 async fn test_worker_read_tag_values_quality_decoding() {
     use crate::types::{QualityLimit, QualityMajor, QualitySubstatus};
 
+    let connector = MockServerConnector::new()
+        .with_add_items_fn(|items| {
+            Ok(items
+                .iter()
+                .enumerate()
+                .map(|(i, _)| {
+                    if i == 4 {
+                        GroupItemResult {
+                            server_handle: ServerItemHandle::new(0),
+                            canonical_type: 0,
+                            error: Some(OpcError::Com {
+                                source: windows::core::Error::from_hresult(
+                                    windows::Win32::Foundation::E_FAIL,
+                                ),
+                            }),
+                        }
+                    } else {
+                        GroupItemResult {
+                            #[allow(clippy::cast_possible_truncation)]
+                            server_handle: ServerItemHandle::new((i + 1) as u32),
+                            canonical_type: 8,
+                            error: None,
+                        }
+                    }
+                })
+                .collect())
+        })
+        .with_read_fn(|_source, server_handles| {
+            let qualities: [u16; 4] = [0x00C0, 0x00D8, 0x0018, 0x0056];
+            Ok(server_handles
+                .iter()
+                .enumerate()
+                .map(|(i, &h)| {
+                    let val = if i != 2 {
+                        OpcValue::Int(42)
+                    } else {
+                        OpcValue::String(String::new())
+                    };
+                    Ok(GroupItemState {
+                        client_handle: ClientItemHandle::new(h.as_raw()),
+                        value: val,
+                        quality: OpcQuality::from(qualities[i % qualities.len()]),
+                        timestamp: std::time::SystemTime::UNIX_EPOCH,
+                    })
+                })
+                .collect())
+        });
+
     let worker =
-        tokio::task::spawn_blocking(|| ComWorker::start(Arc::new(QualityTestConnector)).unwrap())
+        tokio::task::spawn_blocking(move || ComWorker::start(Arc::new(connector)).unwrap())
             .await
             .unwrap();
 
@@ -627,11 +417,14 @@ async fn test_worker_read_tag_values_quality_decoding() {
 
     // Tag 0: Good standard (0x00C0)
     assert_eq!(results[0].tag_id, "Tag.Good");
-    assert_eq!(results[0].value, Some(OpcValue::Int(42)));
+    assert_eq!(results[0].value(), Some(&OpcValue::Int(42)));
     assert_eq!(results[0].display_value(), "42");
-    assert_eq!(results[0].quality.major, QualityMajor::Good);
-    assert_eq!(results[0].quality.substatus, QualitySubstatus::NonSpecific);
-    assert_eq!(results[0].quality.limit, QualityLimit::NotLimited);
+    assert_eq!(results[0].quality.major(), QualityMajor::Good);
+    assert_eq!(
+        results[0].quality.substatus(),
+        QualitySubstatus::NonSpecific
+    );
+    assert_eq!(results[0].quality.limit(), QualityLimit::NotLimited);
     assert_eq!(results[0].quality.to_string(), "Good");
     assert!(results[0].quality.is_good());
     assert!(!results[0].quality.is_bad());
@@ -640,28 +433,34 @@ async fn test_worker_read_tag_values_quality_decoding() {
 
     // Tag 1: Good with Local Override (0x00D8)
     assert_eq!(results[1].tag_id, "Tag.Override");
-    assert_eq!(results[1].value, Some(OpcValue::Int(42)));
-    assert_eq!(results[1].quality.major, QualityMajor::Good);
+    assert_eq!(results[1].value(), Some(&OpcValue::Int(42)));
+    assert_eq!(results[1].quality.major(), QualityMajor::Good);
     assert_eq!(
-        results[1].quality.substatus,
+        results[1].quality.substatus(),
         QualitySubstatus::LocalOverride
     );
     assert_eq!(results[1].quality.to_string(), "Good (Local Override)");
 
     // Tag 2: Bad with Comm Failure (0x0018)
     assert_eq!(results[2].tag_id, "Tag.Comm");
-    assert_eq!(results[2].value, Some(OpcValue::String(String::new())));
-    assert_eq!(results[2].quality.major, QualityMajor::Bad);
-    assert_eq!(results[2].quality.substatus, QualitySubstatus::CommFailure);
+    assert_eq!(results[2].value(), Some(&OpcValue::String(String::new())));
+    assert_eq!(results[2].quality.major(), QualityMajor::Bad);
+    assert_eq!(
+        results[2].quality.substatus(),
+        QualitySubstatus::CommFailure
+    );
     assert_eq!(results[2].quality.to_string(), "Bad (Comm Failure)");
     assert!(results[2].quality.is_bad());
 
     // Tag 3: Uncertain with EGU Exceeded and High Limited (0x0056)
     assert_eq!(results[3].tag_id, "Tag.Limit");
-    assert_eq!(results[3].value, Some(OpcValue::Int(42)));
-    assert_eq!(results[3].quality.major, QualityMajor::Uncertain);
-    assert_eq!(results[3].quality.substatus, QualitySubstatus::EguExceeded);
-    assert_eq!(results[3].quality.limit, QualityLimit::HighLimited);
+    assert_eq!(results[3].value(), Some(&OpcValue::Int(42)));
+    assert_eq!(results[3].quality.major(), QualityMajor::Uncertain);
+    assert_eq!(
+        results[3].quality.substatus(),
+        QualitySubstatus::EguExceeded
+    );
+    assert_eq!(results[3].quality.limit(), QualityLimit::HighLimited);
     assert_eq!(
         results[3].quality.to_string(),
         "Uncertain (EGU Exceeded) [High Limited]"
@@ -671,7 +470,7 @@ async fn test_worker_read_tag_values_quality_decoding() {
 
     // Tag 4: Rejected at add_items
     assert_eq!(results[4].tag_id, "Tag.Rejected");
-    assert_eq!(results[4].value, None);
+    assert_eq!(results[4].value(), None);
     assert_eq!(results[4].display_value(), "Error");
     assert_eq!(results[4].timestamp, None);
     assert_eq!(results[4].formatted_timestamp(), "N/A");
@@ -715,7 +514,7 @@ async fn test_worker_browse_tags_success() {
 
     assert_eq!(result.len(), 3);
     assert_eq!(result, vec!["Random.Int4", "Random.Real8", "Random.String"]);
-    assert_eq!(collector.len(), 0);
+    assert_eq!(collector.len(), 3);
 }
 
 #[tokio::test]
@@ -759,7 +558,7 @@ async fn test_worker_browse_tags_capacity_cap() {
 
     assert_eq!(result.len(), 2);
     assert_eq!(result, vec!["Random.Int4", "Random.Real8"]);
-    assert!(collector.is_empty());
+    assert_eq!(collector.len(), 2);
 }
 
 #[tokio::test]
@@ -805,8 +604,8 @@ fn test_group_guard_cleanup_on_drop() {
     let server = MockConnectedServer::default();
     assert_eq!(server.state.remove_group_count.load(Ordering::Relaxed), 0);
     {
-        let guard = GroupGuard::new(&server, GroupHandle::new(42));
-        assert_eq!(guard.handle(), GroupHandle::new(42));
+        let guard = GroupGuard::new(&server, ServerGroupHandle::new(42));
+        assert_eq!(guard.handle(), ServerGroupHandle::new(42));
     }
     assert_eq!(server.state.remove_group_count.load(Ordering::Relaxed), 1);
 }
@@ -815,7 +614,7 @@ fn test_group_guard_cleanup_on_drop() {
 fn test_group_guard_disarm_prevents_cleanup() {
     let server = MockConnectedServer::default();
     {
-        let mut guard = GroupGuard::new(&server, GroupHandle::new(42));
+        let mut guard = GroupGuard::new(&server, ServerGroupHandle::new(42));
         guard.disarm();
     }
     assert_eq!(server.state.remove_group_count.load(Ordering::Relaxed), 0);

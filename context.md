@@ -1,6 +1,48 @@
 # Project Context Summary
 
-## 2026-09-06: Comprehensive 37-Finding Systemic Architecture, Memory Safety, Typestate Domains & TUI Remediation (`opc-da-client` & `opc-cli`)
+## 2026-09-06: 52-Finding Architectural Remediation, Systemic Hardening, ISP Trait Segregation & TUI Deconstruction (`opc-da-client` & `opc-cli`)
+> 📝 **Context Update:**
+> * **Feature:** Complete execution of the 31-step Master Implementation Plan resolving all 52 qualitative review findings from `review_report.md` across 6 phases and 5 parallel execution lanes with strict TDD discipline, FFI soundness, ISP trait segregation, typestate domains, TUI God object deconstruction, and 9-gate quality verification.
+> * **Changes:**
+>   - **Low-Level FFI Soundness & Memory Safety (Phase 1 / Lane A):**
+>     - Marked `RemotePointer::from_raw` as `unsafe fn`, enforcing strict caller safety invariant justification.
+>     - Introduced `CoTaskPwstr(pub PWSTR)` RAII drop guard for unmanaged COM wide strings, deterministically invoking `CoTaskMemFree`.
+>     - Implemented safe non-freeing borrow decoding via `decode_borrowed_pwstr`.
+>     - Added deep element drop in `RemoteArray<PWSTR>` drop implementation to recursively free wide string buffers.
+>     - Stripped blanket `#![allow]` attributes from `raw/memory.rs` and unexported unmanaged memory wrappers from `lib.rs` to completely seal the crate boundary.
+>   - **Domain Types, Typestates & Integer Precision Foundation (Phase 2 / Lane B):**
+>     - Expanded `OpcValue` to `Int(i64)` and `UInt(u64)` with full numeric conversions and adaptive 32-bit `VT_I4`/`VT_UI4` coercion in `opc_value_to_variant`, preventing industrial data truncation and classic OPC server rejections.
+>     - Sealed `OpcQuality` internal fields (`major`, `substatus`, `limit`, `raw`) as private with accessor methods.
+>     - Encapsulated `TagValue` read outcomes as `Result<OpcValue, OpcError>`, completely eliminating incoherent states.
+>     - Introduced `ClientGroupHandle(u32)` and `ServerGroupHandle(u32)` typestates in `types/handles.rs` alongside `ClientItemHandle` and `ServerItemHandle`, preventing group handle cross-contamination at compile time.
+>     - Added `TagBatch::InlineSingle(&'a str)` and `Borrowed(&'a [&'a str])` with `iter()` and `iter_str()`, and implemented `normalize_host` / `is_remote_host` in `types/server.rs`.
+>     - Enhanced `TagValues` collection with `get_index`, `clear`, `push`, and `Deref<Target = [TagValue]>`.
+>   - **Connector SPI & Worker Engine Hardening (Phase 3 / Lane C):**
+>     - Paired write parameters in `ConnectedGroup::write` via `ItemWrite { handle: ServerItemHandle, value: OpcValue }`.
+>     - Added `GroupRemovalMode` (`Force` / `Normal`) to `ConnectedServer::remove_group`.
+>     - Implemented `GroupGuard::disarm()` for ownership transfer to active group caching.
+>     - Replaced linear manual loops with iterator combinators (`find_map`, `filter_map`, `zip`).
+>     - Implemented generic `dispatch_pooled_request` in `com/worker.rs` with transparent stale connection eviction on RPC errors (`0x800706BA`) and panic proxy recovery, eliminating >120 lines of repetitive dispatch boilerplate.
+>     - Deleted 4 redundant mock struct hierarchies (>260 lines) in `com/worker/tests.rs` in favor of standard `MockServerConnector`.
+>   - **Service Abstractions, Client Facade & Trait Segregation (Phase 4 / Lane D):**
+>     - Segregated `OpcProvider` into 4 cohesive single-responsibility role traits: `ServerDiscovery`, `TagBrowser`, `TagReader`, and `TagWriter`, with a composite blanket implementation for `OpcProvider`.
+>     - Updated `TagReader::read_tag_values` and `OpcDaClient::read_tag_values` to accept polymorphic `TagBatch` and return rich `TagValues`.
+>     - Enhanced client connection semantics with `bind`, `bind_remote`, and `connect_eager`.
+>     - Preserved 100% backward compatibility for `mockall::mock!` test suites.
+>   - **Application TUI Deconstruction & UI Performance (Phase 5 / Lane E):**
+>     - Deconstructed monolithic `App` (59 KB God object) into 4 cohesive sub-states: `NavigationState`, `TaskManager`, `SearchEngine`, and `ViewState`.
+>     - Resolved loading screen deadlock by wiring cooperative cancellation on `Esc` during `CurrentScreen::Loading`, aborting active background tasks, signalling `TagCollector` cancellation, and restoring `previous_screen`.
+>     - Implemented $O(1)$ search matching mask and zero-allocation lowercase cache in `SearchEngine`, reducing keystroke search allocations from 10k heap strings to 0.
+>     - Replaced parallel `selected_tags: Vec<bool>` with a tag-ID keyed `HashSet<String>`.
+>     - Centralized background channel polling with `poll_channel` and deduplicated read task spawning via `spawn_read_task`.
+>     - Added comprehensive test fixtures (`test_app()` and `TestAppBuilder`).
+>   - **Documentation & Universal 9-Gate Verification (Phase 6):**
+>     - Synchronized `architecture.md` and `opc-da-client/spec.md` with all architectural changes.
+>     - All 9 gates of `scripts/verify.ps1` passed with exit code 0: 173 client unit tests + 4 integration tests + 49 CLI unit tests (226 total tests), 67 doc-tests (including compile-fail tests), zero clippy warnings (`-D warnings`), zero AST-grep violations, zero forbidden patterns, clean polyfills, clean PowerShell syntax.
+> * **New Constraints:** `RemotePointer::from_raw` is strictly `unsafe` and requires explicit `// SAFETY:` invariants. Public `OpcValue` integers are 64-bit (`Int(i64)`, `UInt(u64)`) and adaptively coerced in COM bridges. `TagValue` read outcomes are encapsulated in `Result<OpcValue, OpcError>`. `ClientGroupHandle` and `ServerGroupHandle` are non-interchangeable typestates. `App` state must be accessed and mutated through its decomposed sub-states (`nav`, `tasks`, `search`, `view`).
+> * **Pruned:** Monolithic `App` struct sprawl, loading screen deadlock, unmanaged COM string memory leaks, blanket `#![allow]` headers, redundant mock hierarchies in `worker/tests.rs`, lossy 32-bit integer truncation, and incoherent `TagValue` states.
+> 
+> ## 2026-09-06: Comprehensive 37-Finding Systemic Architecture, Memory Safety, Typestate Domains & TUI Remediation (`opc-da-client` & `opc-cli`)
 > 📝 **Context Update:**
 > * **Feature:** Complete end-to-end execution of the 38-step Master Implementation Plan addressing all 37 qualitative review findings across Phase 1, Phase 2, and Phase 3 in `opc-da-client` and `opc-cli` with strict TDD discipline, handle domain typestate sealing, two-tier state machine extraction, zero-allocation TUI borrowing, and 9-gate quality verification.
 > * **Changes:**

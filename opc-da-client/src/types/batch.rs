@@ -10,12 +10,43 @@ pub enum TagBatch {
     Static(&'static [&'static str]),
     /// Single static string slice literal (e.g. `"Random.Int4"`).
     StaticSingle(&'static str),
+    /// Single inline tag string up to 31 bytes (zero-allocation dynamic single-tag reads).
+    InlineSingle([u8; 31], u8),
     /// Shared reference-counted slice of strings.
     Shared(Arc<[String]>),
     /// Owned vector of heap strings (e.g. from `browse_tags` or dynamic configuration).
     Owned(Vec<String>),
     /// Single owned heap string.
     OwnedSingle(String),
+}
+
+impl TagBatch {
+    /// Creates a single-tag batch from a string slice without heap allocation
+    /// if the string is 31 bytes or shorter.
+    #[must_use]
+    pub fn from_str_lenient(s: &str) -> Self {
+        if s.len() <= 31 {
+            let mut buf = [0u8; 31];
+            buf[..s.len()].copy_from_slice(s.as_bytes());
+            #[allow(clippy::cast_possible_truncation)]
+            Self::InlineSingle(buf, s.len() as u8)
+        } else {
+            Self::OwnedSingle(s.to_string())
+        }
+    }
+
+    /// Creates an empty static tag batch.
+    #[must_use]
+    pub const fn empty() -> Self {
+        Self::Static(&[])
+    }
+}
+
+impl Default for TagBatch {
+    #[inline]
+    fn default() -> Self {
+        Self::empty()
+    }
 }
 
 impl TagBatch {
@@ -38,7 +69,7 @@ impl TagBatch {
     pub fn len(&self) -> usize {
         match self {
             Self::Static(slice) => slice.len(),
-            Self::StaticSingle(_) | Self::OwnedSingle(_) => 1,
+            Self::StaticSingle(_) | Self::InlineSingle(_, _) | Self::OwnedSingle(_) => 1,
             Self::Shared(slice) => slice.len(),
             Self::Owned(vec) => vec.len(),
         }
@@ -51,6 +82,10 @@ impl TagBatch {
         match self {
             Self::Static(slice) => Self::Static(slice),
             Self::StaticSingle(s) => Self::StaticSingle(s),
+            Self::InlineSingle(buf, len) => {
+                let s = std::str::from_utf8(&buf[..len as usize]).unwrap_or_default();
+                Self::Shared(Arc::from(vec![s.to_string()].into_boxed_slice()))
+            }
             Self::Shared(slice) => Self::Shared(slice),
             Self::Owned(vec) => Self::Shared(Arc::from(vec.into_boxed_slice())),
             Self::OwnedSingle(s) => Self::Shared(Arc::from(vec![s].into_boxed_slice())),
@@ -97,10 +132,21 @@ impl TagBatch {
         match self {
             Self::Static(slice) => TagBatchIter::Static(slice.iter()),
             Self::StaticSingle(s) => TagBatchIter::Single(Some(*s)),
+            Self::InlineSingle(buf, len) => {
+                let s = std::str::from_utf8(&buf[..*len as usize]).unwrap_or_default();
+                TagBatchIter::Single(Some(s))
+            }
             Self::Shared(slice) => TagBatchIter::Ref(slice.iter()),
             Self::Owned(vec) => TagBatchIter::Ref(vec.iter()),
             Self::OwnedSingle(s) => TagBatchIter::Single(Some(s.as_str())),
         }
+    }
+
+    /// Returns an iterator yielding string slices (`&str`) for each tag in this batch.
+    #[inline]
+    #[must_use]
+    pub fn iter(&self) -> TagBatchIter<'_> {
+        self.iter_str()
     }
 
     /// Consumes the batch and converts it into a `Vec<String>`.
@@ -124,6 +170,10 @@ impl TagBatch {
         match self {
             Self::Static(slice) => slice.iter().map(|&s| s.to_string()).collect(),
             Self::StaticSingle(s) => vec![s.to_string()],
+            Self::InlineSingle(buf, len) => {
+                let s = std::str::from_utf8(&buf[..len as usize]).unwrap_or_default();
+                vec![s.to_string()]
+            }
             Self::Shared(slice) => slice.to_vec(),
             Self::Owned(vec) => vec,
             Self::OwnedSingle(s) => vec![s],
@@ -225,13 +275,6 @@ impl IntoTags for &[String] {
     }
 }
 
-impl IntoTags for &Vec<String> {
-    #[inline]
-    fn into_tag_batch(self) -> TagBatch {
-        TagBatch::Owned(self.clone())
-    }
-}
-
 impl IntoTags for Arc<[String]> {
     #[inline]
     fn into_tag_batch(self) -> TagBatch {
@@ -285,5 +328,25 @@ impl From<Arc<[String]>> for TagBatch {
     #[inline]
     fn from(a: Arc<[String]>) -> Self {
         Self::Shared(a)
+    }
+}
+
+impl IntoIterator for TagBatch {
+    type Item = String;
+    type IntoIter = std::vec::IntoIter<String>;
+
+    #[inline]
+    fn into_iter(self) -> Self::IntoIter {
+        self.into_vec().into_iter()
+    }
+}
+
+impl<'a> IntoIterator for &'a TagBatch {
+    type Item = &'a str;
+    type IntoIter = TagBatchIter<'a>;
+
+    #[inline]
+    fn into_iter(self) -> Self::IntoIter {
+        self.iter_str()
     }
 }

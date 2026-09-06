@@ -221,19 +221,20 @@ async fn main() -> OpcResult<()> {
         println!(
             "Tag: {:<25} | Value: {:<15} | Quality: {:<12} | Timestamp: {}",
             v.tag_id,
-            v.value.display(),
+            v.value().display(),
             v.quality,
             v.timestamp.display()
         );
 
         // 16-bit quality inspection
         if !v.quality.is_good() {
-            println!("  ↳ Substatus: {:?}, Limit: {:?}", v.quality.substatus, v.quality.limit);
+            println!("  ↳ Substatus: {:?}, Limit: {:?}", v.quality.substatus(), v.quality.limit());
         }
 
         // Lossless pattern matching on typed domain values
-        match v.value {
+        match v.value() {
             Some(OpcValue::Int(i)) => println!("  ↳ Decoded Integer: {}", i),
+            Some(OpcValue::UInt(u)) => println!("  ↳ Decoded Unsigned: {}", u),
             Some(OpcValue::Float(f)) => println!("  ↳ Decoded Float: {}", f),
             Some(OpcValue::Bool(b)) => println!("  ↳ Decoded Boolean: {}", b),
             Some(OpcValue::String(s)) => println!("  ↳ Decoded String: {}", s),
@@ -309,19 +310,20 @@ async fn main() -> OpcResult<()> {
         .returning(|_server, tags| {
             Ok(tags
                 .into_iter()
-                .map(|tag| TagValue {
-                    tag_id: tag,
-                    value: Some(OpcValue::Float(98.6)),
-                    quality: OpcQuality::GOOD,
-                    timestamp: Some(std::time::SystemTime::UNIX_EPOCH),
-                    ..Default::default()
+                .map(|tag| {
+                    TagValue::new(
+                        tag,
+                        Some(OpcValue::Float(98.6)),
+                        OpcQuality::GOOD,
+                        Some(std::time::SystemTime::UNIX_EPOCH),
+                    )
                 })
                 .collect())
         });
 
     let provider: Arc<dyn OpcProvider> = Arc::new(mock);
     let values = provider
-        .read_tag_values("SimulatedServer", vec!["Sensor.Temp".into()])
+        .read_tag_values("SimulatedServer", vec!["Sensor.Temp".into()].into())
         .await?;
 
     assert_eq!(values.len(), 1);

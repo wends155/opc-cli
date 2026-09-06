@@ -150,7 +150,7 @@ fn run_app<B: ratatui::backend::Backend>(
             handle_key_event(app, key);
         }
 
-        if app.current_screen == CurrentScreen::Exiting {
+        if app.nav.current_screen == CurrentScreen::Exiting {
             return Ok(());
         }
     }
@@ -161,16 +161,16 @@ fn handle_key_event(app: &mut App, key: event::KeyEvent) {
         return;
     }
 
-    match app.current_screen {
+    match app.nav.current_screen {
         CurrentScreen::Home => match key.code {
             KeyCode::Enter => {
                 app.start_fetch_servers();
             }
             KeyCode::Char(c) => {
-                app.host_input.push(c);
+                app.nav.host_input.push(c);
             }
             KeyCode::Backspace => {
-                app.host_input.pop();
+                app.nav.host_input.pop();
             }
             KeyCode::Esc => {
                 app.log_transition(CurrentScreen::Exiting, "user_quit");
@@ -192,7 +192,7 @@ fn handle_key_event(app: &mut App, key: event::KeyEvent) {
             _ => {}
         },
         CurrentScreen::TagList => {
-            if app.search_mode {
+            if app.search.search_mode {
                 match key.code {
                     KeyCode::Esc => app.exit_search_mode(),
                     KeyCode::Backspace => app.search_backspace(),
@@ -238,9 +238,9 @@ fn handle_key_event(app: &mut App, key: event::KeyEvent) {
         CurrentScreen::WriteInput => match key.code {
             KeyCode::Enter => app.start_write_value(),
             KeyCode::Esc => app.go_back(),
-            KeyCode::Char(c) => app.write_value_input.push(c),
+            KeyCode::Char(c) => app.nav.write_value_input.push(c),
             KeyCode::Backspace => {
-                app.write_value_input.pop();
+                app.nav.write_value_input.pop();
             }
             _ => {}
         },
@@ -272,7 +272,7 @@ mod tests {
             state: KeyEventState::empty(),
         };
         handle_key_event(&mut app, press_a);
-        assert_eq!(app.host_input, "localhosta");
+        assert_eq!(app.nav.host_input, "localhosta");
 
         // 2. Simulate Release 'b' (should be ignored)
         let release_b = KeyEvent {
@@ -282,7 +282,7 @@ mod tests {
             state: KeyEventState::empty(),
         };
         handle_key_event(&mut app, release_b);
-        assert_eq!(app.host_input, "localhosta"); // Still 'a', 'b' ignored
+        assert_eq!(app.nav.host_input, "localhosta"); // Still 'a', 'b' ignored
     }
 
     #[test]
@@ -305,23 +305,49 @@ mod tests {
         };
 
         // 1. Home Screen: Esc quits, 'q' does NOT quit (it's input)
-        app.current_screen = CurrentScreen::Home;
+        app.nav.current_screen = CurrentScreen::Home;
         handle_key_event(&mut app, quit_q);
-        assert_eq!(app.current_screen, CurrentScreen::Home);
-        assert!(app.host_input.ends_with('q'));
+        assert_eq!(app.nav.current_screen, CurrentScreen::Home);
+        assert!(app.nav.host_input.ends_with('q'));
 
         handle_key_event(&mut app, esc);
-        assert_eq!(app.current_screen, CurrentScreen::Exiting);
+        assert_eq!(app.nav.current_screen, CurrentScreen::Exiting);
 
         // 2. Server List: 'q' quits
-        app.current_screen = CurrentScreen::ServerList;
+        app.nav.current_screen = CurrentScreen::ServerList;
         handle_key_event(&mut app, quit_q);
-        assert_eq!(app.current_screen, CurrentScreen::Exiting);
+        assert_eq!(app.nav.current_screen, CurrentScreen::Exiting);
 
         // 3. Tag List: 'q' quits
-        app.current_screen = CurrentScreen::TagList;
+        app.nav.current_screen = CurrentScreen::TagList;
         handle_key_event(&mut app, quit_q);
-        assert_eq!(app.current_screen, CurrentScreen::Exiting);
+        assert_eq!(app.nav.current_screen, CurrentScreen::Exiting);
+    }
+
+    #[test]
+    fn test_loading_screen_esc_cancels_via_key_event() {
+        let mock = MockOpcProvider::new();
+        let mut app = App::new(Arc::new(mock));
+        app.nav.current_screen = CurrentScreen::ServerList;
+        app.log_transition(CurrentScreen::Loading, "test");
+        assert_eq!(app.nav.previous_screen, CurrentScreen::ServerList);
+
+        let esc = KeyEvent {
+            code: KeyCode::Esc,
+            modifiers: KeyModifiers::empty(),
+            kind: KeyEventKind::Press,
+            state: KeyEventState::empty(),
+        };
+
+        handle_key_event(&mut app, esc);
+        assert_eq!(app.nav.current_screen, CurrentScreen::ServerList);
+        assert!(
+            app.view
+                .messages
+                .back()
+                .unwrap()
+                .contains("Operation cancelled")
+        );
     }
 
     #[test]

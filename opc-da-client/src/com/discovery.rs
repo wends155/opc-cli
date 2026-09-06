@@ -6,7 +6,6 @@
 
 use crate::errors::{OpcError, OpcOperation, OpcResult};
 use crate::log_opc_err;
-use crate::raw::memory::RemotePointer;
 use crate::types::OpcServerInfo;
 use windows::core::Interface;
 
@@ -270,7 +269,12 @@ pub(crate) fn guid_to_progid(guid: &windows::core::GUID) -> OpcResult<String> {
         return Ok(String::new());
     }
 
-    RemotePointer::from(progid).into_string()
+    // SAFETY: `progid` was allocated by ProgIDFromCLSID via CoTaskMemAlloc.
+    unsafe {
+        crate::raw::memory::CoTaskPwstr::from_raw(progid)
+            .into_string()
+            .map_err(Into::into)
+    }
 }
 
 /// Inspects the local machine Windows registry for an OPC DA server's registration details.
@@ -290,18 +294,12 @@ pub fn inspect_local_registration(
     clsid: &windows::core::GUID,
     host: Option<&str>,
 ) -> OpcResult<OpcServerRegistration> {
-    if let Some(h) = host {
-        let trimmed = h.trim();
-        if !trimmed.is_empty()
-            && !trimmed.eq_ignore_ascii_case("localhost")
-            && trimmed != "127.0.0.1"
-        {
-            let err = OpcError::NotImplemented(
-                "Remote machine registry inspection is not supported".into(),
-            );
-            log_opc_err!(&err, OpcOperation::InspectRegistration, host = %h);
-            return Err(err);
-        }
+    if crate::types::is_remote_host(host) {
+        let err =
+            OpcError::NotImplemented("Remote machine registry inspection is not supported".into());
+        let h = host.unwrap_or_default();
+        log_opc_err!(&err, OpcOperation::InspectRegistration, host = %h);
+        return Err(err);
     }
 
     let clsid_str = crate::types::format_guid_bracketed(clsid);
@@ -348,6 +346,31 @@ pub fn inspect_local_registration(
     Err(err)
 }
 
+/// Helper to extract ProgID and UserType from raw COM string pointers.
+///
+/// # Safety
+///
+/// `progid_ptr` and `usertype_ptr` must be valid `CoTaskMem` allocated pointers or null.
+unsafe fn extract_progid_and_usertype(
+    progid_ptr: windows::core::PWSTR,
+    usertype_ptr: windows::core::PWSTR,
+) -> (Option<String>, Option<String>) {
+    // SAFETY: progid_ptr is guaranteed by caller to be CoTaskMem allocated or null.
+    let pid_res = unsafe { crate::raw::memory::CoTaskPwstr::from_raw(progid_ptr).into_string() };
+    // SAFETY: usertype_ptr is guaranteed by caller to be CoTaskMem allocated or null.
+    let ut_res =
+        unsafe { crate::raw::memory::CoTaskPwstr::from_raw(usertype_ptr).into_opt_string() };
+
+    if let Ok(pid) = pid_res
+        && !pid.trim().is_empty()
+    {
+        let ut = ut_res.ok().flatten().filter(|s| !s.trim().is_empty());
+        (Some(pid), ut)
+    } else {
+        (None, None)
+    }
+}
+
 /// COM-backed catalog adapter combining `IOPCServerList` and `IOPCServerList2`.
 pub(crate) struct OpcServerListCatalog {
     v1: crate::raw::bindings::comn::IOPCServerList,
@@ -358,8 +381,11 @@ impl OpcServerListCatalog {
     /// Creates a new catalog adapter by instantiating `OPC.ServerList.1` (or `CLSID_OPC_SERVER_LIST`),
     /// supporting remote hosts via `CoCreateInstanceEx` and applying DCOM proxy blanketing.
     pub(crate) fn new(host: Option<&str>, legacy_dcom: bool) -> OpcResult<Self> {
-        let is_remote_host = host
-            .filter(|h| !h.is_empty() && !h.eq_ignore_ascii_case("localhost") && *h != "127.0.0.1");
+        let is_remote_host = if crate::types::is_remote_host(host) {
+            host
+        } else {
+            None
+        };
 
         let v1: crate::raw::bindings::comn::IOPCServerList = if let Some(host_str) = is_remote_host
         {
@@ -414,13 +440,7 @@ impl OpcServerListCatalog {
 
         let guid_iter = crate::com::iterator::GuidIterator::new(iter);
         let mut servers = Vec::new();
-
-        let host_opt =
-            if host.is_empty() || host.eq_ignore_ascii_case("localhost") || host == "127.0.0.1" {
-                None
-            } else {
-                Some(host.to_string())
-            };
+        let host_opt = crate::types::normalize_host(Some(host));
 
         for guid in guid_iter.flatten() {
             if guid == windows::core::GUID::zeroed() {
@@ -447,15 +467,14 @@ impl OpcServerListCatalog {
                 };
 
                 if status.is_ok() {
-                    let pid_res = RemotePointer::from(progid_ptr).into_string();
-                    let ut_res = Option::<String>::try_from(RemotePointer::from(usertype_ptr));
-                    let _ = Option::<String>::try_from(RemotePointer::from(verind_ptr));
-
-                    if let Ok(pid) = pid_res
-                        && !pid.trim().is_empty()
-                    {
-                        prog_id_opt = Some(pid);
-                        user_type_opt = ut_res.ok().flatten().filter(|s| !s.trim().is_empty());
+                    // SAFETY: verind_ptr was allocated by GetClassDetails on success.
+                    let _ = unsafe { crate::raw::memory::CoTaskPwstr::from_raw(verind_ptr) };
+                    // SAFETY: progid_ptr and usertype_ptr were allocated by GetClassDetails on success.
+                    let (pid, ut) =
+                        unsafe { extract_progid_and_usertype(progid_ptr, usertype_ptr) };
+                    if pid.is_some() {
+                        prog_id_opt = pid;
+                        user_type_opt = ut;
                     }
                 }
             }
@@ -475,14 +494,12 @@ impl OpcServerListCatalog {
                 };
 
                 if status.is_ok() {
-                    let pid_res = RemotePointer::from(progid_ptr).into_string();
-                    let ut_res = Option::<String>::try_from(RemotePointer::from(usertype_ptr));
-
-                    if let Ok(pid) = pid_res
-                        && !pid.trim().is_empty()
-                    {
-                        prog_id_opt = Some(pid);
-                        user_type_opt = ut_res.ok().flatten().filter(|s| !s.trim().is_empty());
+                    // SAFETY: progid_ptr and usertype_ptr were allocated by v1 GetClassDetails on success.
+                    let (pid, ut) =
+                        unsafe { extract_progid_and_usertype(progid_ptr, usertype_ptr) };
+                    if pid.is_some() {
+                        prog_id_opt = pid;
+                        user_type_opt = ut;
                     }
                 }
             }
@@ -496,12 +513,12 @@ impl OpcServerListCatalog {
             }
 
             if let Some(prog_id) = prog_id_opt {
-                servers.push(OpcServerInfo {
+                servers.push(OpcServerInfo::new(
                     prog_id,
-                    clsid: guid,
-                    user_type: user_type_opt,
-                    host: host_opt.clone(),
-                });
+                    guid,
+                    user_type_opt,
+                    host_opt.clone(),
+                ));
             } else {
                 tracing::warn!(guid = ?guid, "Skipping unresolvable OPC server class");
             }

@@ -28,6 +28,39 @@ pub const RPC_C_AUTHZ_NONE: u32 = 0;
 /// Impersonation level (`RPC_C_IMP_LEVEL_IMPERSONATE` = 3).
 pub const RPC_C_IMP_LEVEL_IMPERSONATE: u32 = 3;
 
+/// DCOM authentication security level for remote RPC connections.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum DcomSecurityLevel {
+    /// Modern Windows default (post-KB5004442): packet integrity authentication (`RPC_C_AUTHN_LEVEL_PKT_INTEGRITY` = 5).
+    #[default]
+    PacketIntegrity,
+    /// Legacy DCOM connect authentication (`RPC_C_AUTHN_LEVEL_CONNECT` = 2).
+    Connect,
+}
+
+impl DcomSecurityLevel {
+    /// Maps from a boolean flag where `true` indicates legacy DCOM connect mode.
+    #[inline]
+    #[must_use]
+    pub const fn from_legacy_flag(legacy_dcom: bool) -> Self {
+        if legacy_dcom {
+            Self::Connect
+        } else {
+            Self::PacketIntegrity
+        }
+    }
+
+    /// Returns the raw Win32 RPC authentication level constant.
+    #[inline]
+    #[must_use]
+    pub const fn rpc_authn_level(self) -> u32 {
+        match self {
+            Self::Connect => RPC_C_AUTHN_LEVEL_CONNECT,
+            Self::PacketIntegrity => RPC_C_AUTHN_LEVEL_PKT_INTEGRITY,
+        }
+    }
+}
+
 /// Returns the RPC authentication level depending on whether legacy DCOM is requested.
 ///
 /// Under modern Windows environments (post-KB5004442), `RPC_C_AUTHN_LEVEL_PKT_INTEGRITY` (5)
@@ -36,11 +69,7 @@ pub const RPC_C_IMP_LEVEL_IMPERSONATE: u32 = 3;
 #[inline]
 #[must_use]
 pub const fn authn_level_for(legacy_dcom: bool) -> u32 {
-    if legacy_dcom {
-        RPC_C_AUTHN_LEVEL_CONNECT
-    } else {
-        RPC_C_AUTHN_LEVEL_PKT_INTEGRITY
-    }
+    DcomSecurityLevel::from_legacy_flag(legacy_dcom).rpc_authn_level()
 }
 
 /// Applies DCOM security blanketing to a COM interface proxy.
@@ -144,9 +173,9 @@ pub fn create_remote_instance<T: Interface>(
 
     let [mut result_mqi] = mqi_slice;
     if result_mqi.hr.is_err() {
-        return Err(crate::errors::OpcError::from(
-            windows::core::Error::from_hresult(result_mqi.hr),
-        ));
+        return Err(crate::errors::OpcError::from(windows::core::Error::from(
+            result_mqi.hr,
+        )));
     }
 
     // SAFETY: CoCreateInstanceEx succeeded with S_OK and populated result_mqi.pItf with a valid COM pointer.
@@ -168,6 +197,18 @@ mod tests {
 
     #[test]
     fn test_authn_level_defaults_and_legacy() {
+        assert_eq!(
+            DcomSecurityLevel::default(),
+            DcomSecurityLevel::PacketIntegrity
+        );
+        assert_eq!(
+            DcomSecurityLevel::PacketIntegrity.rpc_authn_level(),
+            RPC_C_AUTHN_LEVEL_PKT_INTEGRITY
+        );
+        assert_eq!(
+            DcomSecurityLevel::Connect.rpc_authn_level(),
+            RPC_C_AUTHN_LEVEL_CONNECT
+        );
         assert_eq!(authn_level_for(false), RPC_C_AUTHN_LEVEL_PKT_INTEGRITY);
         assert_eq!(authn_level_for(true), RPC_C_AUTHN_LEVEL_CONNECT);
     }

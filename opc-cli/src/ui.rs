@@ -22,7 +22,7 @@ use ratatui::{
 ///
 /// Divides the available terminal frame into main display, message/status area,
 /// and contextual keybinding help footer, routing screen-specific rendering based
-/// on [`app.current_screen`](CurrentScreen).
+/// on [`app.nav.current_screen`](CurrentScreen).
 ///
 /// # Arguments
 ///
@@ -45,19 +45,16 @@ pub fn render(f: &mut Frame, app: &mut App) {
     let status_area = chunks[1];
     let help_area = chunks[2];
 
-    match app.current_screen {
+    match app.nav.current_screen {
         CurrentScreen::Home => render_home(f, app, main_area),
         CurrentScreen::ServerList => render_server_list(f, app, main_area),
         CurrentScreen::TagList => render_tag_list(f, app, main_area),
         CurrentScreen::TagValues => render_tag_values(f, app, main_area),
         CurrentScreen::WriteInput => {
-            // Render TagValues in the background, then overlay the input popup
             render_tag_values(f, app, main_area);
             render_write_input(f, app, main_area);
         }
         CurrentScreen::Loading => {
-            // Render the last screen in the background if it makes sense,
-            // but for now let's just show the popup.
             render_loading_popup(f, app, main_area);
         }
         CurrentScreen::Exiting => {}
@@ -67,14 +64,14 @@ pub fn render(f: &mut Frame, app: &mut App) {
     render_help(f, app, help_area);
 }
 
-fn render_help(f: &mut Frame, app: &App, area: ratatui::layout::Rect) {
-    let msg = match app.current_screen {
+fn render_help(f: &mut Frame, app: &App, area: Rect) {
+    let msg = match app.nav.current_screen {
         CurrentScreen::Home => "Enter: Connect | Esc: Quit | Type hostname",
         CurrentScreen::ServerList => {
             "↑/↓: Nav | PgDn/PgUp: Page | Enter: Tags | Esc: Back | q: Quit"
         }
         CurrentScreen::TagList => {
-            if app.search_mode {
+            if app.search.search_mode {
                 "Type: Search | Tab: Next | Space: Select | Enter: Read | Esc: Cancel"
             } else {
                 "↑/↓: Nav | PgDn/PgUp: Page | Space: Select | s: Search | Enter: Read | Esc: Back | q: Quit"
@@ -82,7 +79,7 @@ fn render_help(f: &mut Frame, app: &App, area: ratatui::layout::Rect) {
         }
         CurrentScreen::TagValues => "↑/↓: Nav | PgDn/PgUp: Page | w: Write | Esc: Back | q: Quit",
         CurrentScreen::WriteInput => "Enter: Submit | Esc: Cancel | Type value",
-        CurrentScreen::Loading => "Please wait...",
+        CurrentScreen::Loading => "Please wait... | Esc: Cancel",
         CurrentScreen::Exiting => "Exiting...",
     };
 
@@ -90,8 +87,8 @@ fn render_help(f: &mut Frame, app: &App, area: ratatui::layout::Rect) {
     f.render_widget(Paragraph::new(span), area);
 }
 
-fn render_home(f: &mut Frame, app: &App, area: ratatui::layout::Rect) {
-    let display_text = format!("> {input}_", input = app.host_input);
+fn render_home(f: &mut Frame, app: &App, area: Rect) {
+    let display_text = format!("> {input}_", input = app.nav.host_input);
     let input = Paragraph::new(display_text)
         .style(Style::default().fg(Color::Yellow))
         .block(
@@ -123,8 +120,9 @@ fn render_home(f: &mut Frame, app: &App, area: ratatui::layout::Rect) {
     f.render_widget(input, horizontal_chunks[1]);
 }
 
-fn render_server_list(f: &mut Frame, app: &mut App, area: ratatui::layout::Rect) {
+fn render_server_list(f: &mut Frame, app: &mut App, area: Rect) {
     let items: Vec<ListItem> = app
+        .view
         .servers
         .iter()
         .map(|s| ListItem::new(Line::from(vec![Span::raw(s)])))
@@ -144,11 +142,11 @@ fn render_server_list(f: &mut Frame, app: &mut App, area: ratatui::layout::Rect)
         )
         .highlight_symbol(">> ");
 
-    f.render_stateful_widget(list, area, &mut app.list_state);
+    f.render_stateful_widget(list, area, &mut app.view.list_state);
 }
 
-fn render_tag_list(f: &mut Frame, app: &mut App, area: ratatui::layout::Rect) {
-    let list_chunks = if app.search_mode {
+fn render_tag_list(f: &mut Frame, app: &mut App, area: Rect) {
+    let list_chunks = if app.search.search_mode {
         Layout::default()
             .direction(Direction::Vertical)
             .constraints([Constraint::Length(3), Constraint::Min(0)])
@@ -159,8 +157,8 @@ fn render_tag_list(f: &mut Frame, app: &mut App, area: ratatui::layout::Rect) {
             .split(area)
     };
 
-    if app.search_mode {
-        let search_text = format!("Search: {query}_", query = app.search_query);
+    if app.search.search_mode {
+        let search_text = format!("Search: {query}_", query = app.search.search_query);
         let search_bar = Paragraph::new(search_text)
             .style(Style::default().fg(Color::Yellow))
             .block(
@@ -173,17 +171,18 @@ fn render_tag_list(f: &mut Frame, app: &mut App, area: ratatui::layout::Rect) {
     }
 
     let items: Vec<ListItem> = app
+        .view
         .tags
         .iter()
         .enumerate()
         .map(|(idx, t)| {
-            let checkbox = if app.selected_tags.get(idx).copied().unwrap_or(false) {
+            let checkbox = if app.view.is_selected(t) {
                 "[✓] "
             } else {
                 "[ ] "
             };
 
-            let is_match = app.search_mode && app.search_matches.contains(&idx);
+            let is_match = app.search.search_mode && app.search.is_match(idx);
             let style = if is_match {
                 Style::default().fg(Color::Yellow)
             } else {
@@ -197,11 +196,11 @@ fn render_tag_list(f: &mut Frame, app: &mut App, area: ratatui::layout::Rect) {
         })
         .collect();
 
-    let title = if app.search_mode {
+    let title = if app.search.search_mode {
         format!(
             " Step 3: Browse Tags ({}/{} matches) ",
-            app.search_matches.len(),
-            app.tags.len()
+            app.search.search_matches.len(),
+            app.view.tags.len()
         )
     } else {
         " Step 3: Browse Tags ".to_string()
@@ -212,15 +211,15 @@ fn render_tag_list(f: &mut Frame, app: &mut App, area: ratatui::layout::Rect) {
         .highlight_style(Style::default().bg(Color::Green).fg(Color::Black))
         .highlight_symbol(" * ");
 
-    let list_area = if app.search_mode {
+    let list_area = if app.search.search_mode {
         list_chunks[1]
     } else {
         list_chunks[0]
     };
-    f.render_stateful_widget(list, list_area, &mut app.list_state);
+    f.render_stateful_widget(list, list_area, &mut app.view.list_state);
 }
 
-fn render_tag_values(f: &mut Frame, app: &mut App, area: ratatui::layout::Rect) {
+fn render_tag_values(f: &mut Frame, app: &mut App, area: Rect) {
     use ratatui::widgets::{Cell, Row, Table};
 
     let header = Row::new(vec!["Tag ID", "Value", "Quality", "Timestamp"]).style(
@@ -230,12 +229,13 @@ fn render_tag_values(f: &mut Frame, app: &mut App, area: ratatui::layout::Rect) 
     );
 
     let rows: Vec<Row> = app
+        .view
         .tag_values
         .iter()
         .map(|tv| {
             Row::new(vec![
                 Cell::from(tv.tag_id.as_str()),
-                Cell::from(tv.value.display().to_string()),
+                Cell::from(tv.value().display().to_string()),
                 Cell::from(tv.quality.to_string()),
                 Cell::from(tv.timestamp.display().to_string()),
             ])
@@ -256,14 +256,15 @@ fn render_tag_values(f: &mut Frame, app: &mut App, area: ratatui::layout::Rect) 
                 .borders(Borders::ALL)
                 .title(" Step 4: Tag Values "),
         )
-        //.highlight_style(Style::default().bg(Color::Blue).fg(Color::White)) // Deprecated
         .row_highlight_style(Style::default().bg(Color::Blue).fg(Color::White))
         .highlight_symbol(">> ");
 
-    f.render_stateful_widget(table, area, &mut app.table_state);
+    f.render_stateful_widget(table, area, &mut app.view.table_state);
 }
+
 fn render_status_bar(f: &mut Frame, app: &App, area: Rect) {
     let display_messages: Vec<Line> = app
+        .view
         .messages
         .iter()
         .rev()
@@ -284,10 +285,10 @@ fn render_status_bar(f: &mut Frame, app: &App, area: Rect) {
 }
 
 fn render_write_input(f: &mut Frame, app: &App, area: Rect) {
-    let tag_id = app.write_tag_id.as_deref().unwrap_or("Unknown");
+    let tag_id = app.nav.write_tag_id.as_deref().unwrap_or("Unknown");
     let display_text = format!(
         "Tag: {tag_id}\nValue: {input}_",
-        input = app.write_value_input
+        input = app.nav.write_value_input
     );
 
     let popup_block = Block::default()
@@ -305,11 +306,11 @@ fn render_write_input(f: &mut Frame, app: &App, area: Rect) {
 }
 
 fn render_loading_popup(f: &mut Frame, app: &App, area: Rect) {
-    let progress = app.browse_collector.len();
+    let progress = app.loading_progress();
     let msg = if progress > 0 {
-        format!("Browsing OPC tags... ({progress} found so far)")
+        format!("Browsing OPC tags... ({progress} found so far)\nPress Esc to cancel")
     } else {
-        "Communicating with OPC Server...".to_string()
+        "Communicating with OPC Server...\nPress Esc to cancel".to_string()
     };
 
     let block = Block::default()
@@ -318,11 +319,11 @@ fn render_loading_popup(f: &mut Frame, app: &App, area: Rect) {
         .border_style(Style::default().fg(Color::Yellow));
 
     let area = centered_rect(60, 20, area);
-    f.render_widget(Clear, area); // This clears the background
+    f.render_widget(Clear, area);
     f.render_widget(Paragraph::new(msg).block(block), area);
 }
 
-/// helper function to create a centered rect using up certain percentage of the available rect `r`
+/// Helper function to create a centered rect using up certain percentage of the available rect `r`.
 fn centered_rect(percent_x: u16, percent_y: u16, r: Rect) -> Rect {
     let popup_layout = Layout::default()
         .direction(Direction::Vertical)
@@ -346,7 +347,7 @@ fn centered_rect(percent_x: u16, percent_y: u16, r: Rect) -> Rect {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use opc_da_client::{MockOpcProvider, OpcQuality, OpcValue, TagValue};
+    use opc_da_client::{MockOpcProvider, OpcQuality, OpcValue, TagValue, TagValues};
     use ratatui::{Terminal, backend::TestBackend};
     use std::sync::Arc;
 
@@ -358,7 +359,7 @@ mod tests {
     #[test]
     fn test_headless_render_home() {
         let mut app = create_test_app();
-        app.current_screen = CurrentScreen::Home;
+        app.nav.current_screen = CurrentScreen::Home;
         let backend = TestBackend::new(100, 30);
         let mut terminal = Terminal::new(backend).unwrap();
 
@@ -370,8 +371,8 @@ mod tests {
     #[test]
     fn test_headless_render_server_list() {
         let mut app = create_test_app();
-        app.current_screen = CurrentScreen::ServerList;
-        app.servers = vec!["Server.A".into(), "Server.B".into()];
+        app.nav.current_screen = CurrentScreen::ServerList;
+        app.view.servers = vec!["Server.A".into(), "Server.B".into()];
         let backend = TestBackend::new(100, 30);
         let mut terminal = Terminal::new(backend).unwrap();
 
@@ -383,9 +384,9 @@ mod tests {
     #[test]
     fn test_headless_render_tag_list() {
         let mut app = create_test_app();
-        app.current_screen = CurrentScreen::TagList;
-        app.tags = vec!["Tag.1".into(), "Tag.2".into()];
-        app.selected_tags = vec![true, false];
+        app.nav.current_screen = CurrentScreen::TagList;
+        app.view.tags = vec!["Tag.1".into(), "Tag.2".into()];
+        app.view.toggle_selection("Tag.1");
         let backend = TestBackend::new(100, 30);
         let mut terminal = Terminal::new(backend).unwrap();
 
@@ -397,8 +398,8 @@ mod tests {
     #[test]
     fn test_headless_render_tag_values() {
         let mut app = create_test_app();
-        app.current_screen = CurrentScreen::TagValues;
-        app.tag_values = vec![
+        app.nav.current_screen = CurrentScreen::TagValues;
+        app.view.tag_values = TagValues::from(vec![
             TagValue::new(
                 "Sensor.Temp",
                 Some(OpcValue::Float(98.6)),
@@ -410,7 +411,7 @@ mod tests {
                 OpcQuality::BAD_COMM_FAILURE,
                 opc_da_client::OpcError::Connection("Lost".into()),
             ),
-        ];
+        ]);
         let backend = TestBackend::new(120, 30);
         let mut terminal = Terminal::new(backend).unwrap();
 
@@ -422,18 +423,18 @@ mod tests {
     #[test]
     fn test_headless_render_write_input_and_loading() {
         let mut app = create_test_app();
-        app.current_screen = CurrentScreen::WriteInput;
-        app.write_tag_id = Some("Sensor.Setpoint".into());
-        app.write_value_input = "100.5".into();
+        app.nav.current_screen = CurrentScreen::WriteInput;
+        app.nav.write_tag_id = Some("Sensor.Setpoint".into());
+        app.nav.write_value_input = "100.5".into();
         let backend = TestBackend::new(100, 30);
         let mut terminal = Terminal::new(backend).unwrap();
 
         terminal.draw(|f| render(f, &mut app)).unwrap();
 
-        app.current_screen = CurrentScreen::Loading;
+        app.nav.current_screen = CurrentScreen::Loading;
         terminal.draw(|f| render(f, &mut app)).unwrap();
 
-        app.current_screen = CurrentScreen::Exiting;
+        app.nav.current_screen = CurrentScreen::Exiting;
         terminal.draw(|f| render(f, &mut app)).unwrap();
     }
 }

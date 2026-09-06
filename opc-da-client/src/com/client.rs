@@ -1,8 +1,13 @@
 use crate::com::connector::{ComConnector, ServerConnector};
 use crate::com::worker::{ComRequest, ComWorker};
 use crate::errors::{OpcError, OpcResult};
-use crate::provider::{OpcProvider, OpcValue, TagCollector, TagValue, WriteResult};
-use crate::types::{IntoTags, OpcServerEndpoint, OpcServerInfo, ServerIdentifier, TagValues};
+use crate::provider::{
+    OpcValue, ServerDiscovery, TagBrowser, TagCollector, TagReader, TagValue, TagWriter,
+    WriteResult,
+};
+use crate::types::{
+    IntoTags, OpcServerEndpoint, OpcServerInfo, ServerIdentifier, TagBatch, TagValues,
+};
 use async_trait::async_trait;
 use std::sync::Arc;
 
@@ -174,6 +179,28 @@ impl<C: ServerConnector + 'static> OpcDaClientBuilder<C> {
     /// # Arguments
     ///
     /// * `connector` - Connector instance to use.
+    fn build_internal(
+        connector: C,
+        host: Option<String>,
+        server: Option<ServerIdentifier>,
+        timeout: Option<std::time::Duration>,
+    ) -> OpcResult<OpcDaClient<C>> {
+        let mut client = OpcDaClient::new(connector)?;
+        client.timeout = timeout;
+        if let Some(server) = server {
+            client.endpoint = Some(OpcServerEndpoint {
+                host,
+                identifier: server,
+            });
+        }
+        Ok(client)
+    }
+
+    /// Builds the `OpcDaClient` using an explicit connector instance.
+    ///
+    /// # Arguments
+    ///
+    /// * `connector` - Connector instance to use.
     ///
     /// # Returns
     ///
@@ -183,15 +210,7 @@ impl<C: ServerConnector + 'static> OpcDaClientBuilder<C> {
     ///
     /// Returns [`OpcError::Connection`] if worker thread initialization fails.
     pub fn build_with_connector(self, connector: C) -> OpcResult<OpcDaClient<C>> {
-        let mut client = OpcDaClient::new(connector)?;
-        client.timeout = self.timeout;
-        if let Some(server) = self.server {
-            client.endpoint = Some(OpcServerEndpoint {
-                host: self.host,
-                identifier: server,
-            });
-        }
-        Ok(client)
+        Self::build_internal(connector, self.host, self.server, self.timeout)
     }
 }
 
@@ -218,15 +237,7 @@ impl<C: ServerConnector + Default + 'static> OpcDaClientBuilder<C> {
     /// ```
     pub fn build(self) -> OpcResult<OpcDaClient<C>> {
         let connector = self.connector.unwrap_or_default();
-        let mut client = OpcDaClient::new(connector)?;
-        client.timeout = self.timeout;
-        if let Some(server) = self.server {
-            client.endpoint = Some(OpcServerEndpoint {
-                host: self.host,
-                identifier: server,
-            });
-        }
-        Ok(client)
+        Self::build_internal(connector, self.host, self.server, self.timeout)
     }
 }
 
@@ -273,7 +284,72 @@ impl OpcDaClient<ComConnector> {
         OpcDaClientBuilder::new()
     }
 
+    /// Locally binds an `OpcDaClient` to a local OPC DA server by ProgID or CLSID.
+    ///
+    /// This initializes the local COM worker runtime without performing active network I/O.
+    /// To verify server reachability eagerly, call [`connect_eager`](Self::connect_eager) on the returned client.
+    ///
+    /// # Arguments
+    ///
+    /// * `server` - Target OPC server ProgID or GUID CLSID.
+    ///
+    /// # Returns
+    ///
+    /// A configured [`OpcDaClient`] bound to the target server.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`OpcError::Connection`] if worker thread initialization fails.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,no_run
+    /// use opc_da_client::OpcDaClient;
+    ///
+    /// let client = OpcDaClient::bind("Matrikon.OPC.Simulation.1")?;
+    /// # Ok::<(), opc_da_client::OpcError>(())
+    /// ```
+    pub fn bind(server: impl Into<ServerIdentifier>) -> OpcResult<Self> {
+        Self::builder().server(server).build()
+    }
+
+    /// Locally binds an `OpcDaClient` to a remote OPC DA server by host and ProgID or CLSID.
+    ///
+    /// This initializes the local COM worker runtime without performing active network I/O.
+    /// To verify server reachability eagerly, call [`connect_eager`](Self::connect_eager) on the returned client.
+    ///
+    /// # Arguments
+    ///
+    /// * `host` - Target remote host IP address or hostname.
+    /// * `server` - Target OPC server ProgID or GUID CLSID.
+    ///
+    /// # Returns
+    ///
+    /// A configured [`OpcDaClient`] bound to the target host and server.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`OpcError::Connection`] if worker thread initialization fails.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,no_run
+    /// use opc_da_client::OpcDaClient;
+    ///
+    /// let client = OpcDaClient::bind_remote("192.168.1.10", "Matrikon.OPC.Simulation.1")?;
+    /// # Ok::<(), opc_da_client::OpcError>(())
+    /// ```
+    pub fn bind_remote(
+        host: impl Into<String>,
+        server: impl Into<ServerIdentifier>,
+    ) -> OpcResult<Self> {
+        Self::builder().host(host).server(server).build()
+    }
+
     /// Quickly connects to a local OPC DA server by ProgID or CLSID.
+    ///
+    /// Note: This performs local client binding without active network I/O.
+    /// Prefer [`bind`](Self::bind) for local binding or [`connect_eager`](Self::connect_eager) for active verification.
     ///
     /// # Arguments
     ///
@@ -296,10 +372,13 @@ impl OpcDaClient<ComConnector> {
     /// # Ok::<(), opc_da_client::OpcError>(())
     /// ```
     pub fn connect(server: impl Into<ServerIdentifier>) -> OpcResult<Self> {
-        Self::builder().server(server).build()
+        Self::bind(server)
     }
 
     /// Quickly connects to a remote OPC DA server by host and ProgID or CLSID.
+    ///
+    /// Note: This performs local client binding without active network I/O.
+    /// Prefer [`bind_remote`](Self::bind_remote) for local binding or [`connect_eager`](Self::connect_eager) for active verification.
     ///
     /// # Arguments
     ///
@@ -326,7 +405,7 @@ impl OpcDaClient<ComConnector> {
         host: impl Into<String>,
         server: impl Into<ServerIdentifier>,
     ) -> OpcResult<Self> {
-        Self::builder().host(host).server(server).build()
+        Self::bind_remote(host, server)
     }
 }
 
@@ -357,59 +436,19 @@ impl<C: ServerConnector + 'static> OpcDaClient<C> {
         })
     }
 
-    /// Binds or overrides the target remote host on this client.
+    /// Eagerly verifies active connectivity and reachability to the configured OPC DA server.
     ///
-    /// # Arguments
+    /// Unlike [`bind`](Self::bind) which only configures local client state without network I/O,
+    /// `connect_eager` dispatches an initial probe request to the COM worker thread to verify that
+    /// the target server can be reached and instantiated via COM/DCOM.
     ///
-    /// * `host` - Target host IP address or hostname string.
+    /// # Errors
     ///
-    /// # Returns
-    ///
-    /// The updated [`OpcDaClient`].
-    #[must_use]
-    pub fn host(mut self, host: impl Into<String>) -> Self {
-        let h = host.into();
-        let endpoint = self.endpoint.get_or_insert_with(|| OpcServerEndpoint {
-            host: None,
-            identifier: ServerIdentifier::ProgId(String::new()),
-        });
-        endpoint.host = Some(h);
-        self
-    }
-
-    /// Binds or overrides the target server identifier on this client.
-    ///
-    /// # Arguments
-    ///
-    /// * `server` - Target OPC server ProgID or GUID CLSID.
-    ///
-    /// # Returns
-    ///
-    /// The updated [`OpcDaClient`].
-    #[must_use]
-    pub fn server(mut self, server: impl Into<ServerIdentifier>) -> Self {
-        let s = server.into();
-        let endpoint = self.endpoint.get_or_insert_with(|| OpcServerEndpoint {
-            host: None,
-            identifier: ServerIdentifier::ProgId(String::new()),
-        });
-        endpoint.identifier = s;
-        self
-    }
-
-    /// Configures or overrides operation timeout on this client.
-    ///
-    /// # Arguments
-    ///
-    /// * `timeout` - Duration before operations time out.
-    ///
-    /// # Returns
-    ///
-    /// The updated [`OpcDaClient`].
-    #[must_use]
-    pub fn timeout(mut self, timeout: std::time::Duration) -> Self {
-        self.timeout = Some(timeout);
-        self
+    /// Returns [`OpcError::InvalidState`] if the client is not bound to a server endpoint.
+    /// Returns [`OpcError::Connection`] if connecting or communicating with the server fails.
+    pub async fn connect_eager(&self) -> OpcResult<()> {
+        let _ = self.read_tag_values(TagBatch::default()).await?;
+        Ok(())
     }
 
     /// Returns the target OPC server endpoint if bound to a specific server.
@@ -481,6 +520,16 @@ impl<C: ServerConnector + 'static> OpcDaClient<C> {
         .await
     }
 
+    /// Reads a single tag and unwraps its value using the supplied extractor closure.
+    async fn read_single_typed<T, F>(&self, tag: &str, extract: F) -> OpcResult<T>
+    where
+        F: FnOnce(&TagValues, &str) -> Result<T, crate::types::TagExtractError>,
+    {
+        let batch = TagBatch::from_str_lenient(tag);
+        let values = self.read_tag_values(batch).await?;
+        extract(&values, tag).map_err(Into::into)
+    }
+
     /// Reads a single tag and unwraps its value as an `f64`.
     ///
     /// # Arguments
@@ -508,8 +557,7 @@ impl<C: ServerConnector + 'static> OpcDaClient<C> {
     /// # }
     /// ```
     pub async fn read_f64(&self, tag: &str) -> OpcResult<f64> {
-        let values = self.read_tag_values(tag.to_string()).await?;
-        values.get_f64(tag).map_err(Into::into)
+        self.read_single_typed(tag, TagValues::get_f64).await
     }
 
     /// Reads a single tag and unwraps its value as an `i32`.
@@ -539,8 +587,7 @@ impl<C: ServerConnector + 'static> OpcDaClient<C> {
     /// # }
     /// ```
     pub async fn read_i32(&self, tag: &str) -> OpcResult<i32> {
-        let values = self.read_tag_values(tag.to_string()).await?;
-        values.get_i32(tag).map_err(Into::into)
+        self.read_single_typed(tag, TagValues::get_i32).await
     }
 
     /// Reads a single tag and unwraps its value as a `bool`.
@@ -570,8 +617,7 @@ impl<C: ServerConnector + 'static> OpcDaClient<C> {
     /// # }
     /// ```
     pub async fn read_bool(&self, tag: &str) -> OpcResult<bool> {
-        let values = self.read_tag_values(tag.to_string()).await?;
-        values.get_bool(tag).map_err(Into::into)
+        self.read_single_typed(tag, TagValues::get_bool).await
     }
 
     /// Reads a single tag and unwraps its value as a `String`.
@@ -601,11 +647,8 @@ impl<C: ServerConnector + 'static> OpcDaClient<C> {
     /// # }
     /// ```
     pub async fn read_string(&self, tag: &str) -> OpcResult<String> {
-        let values = self.read_tag_values(tag.to_string()).await?;
-        values
-            .get_str(tag)
-            .map(ToString::to_string)
-            .map_err(Into::into)
+        self.read_single_typed(tag, |v, t| v.get_str(t).map(ToString::to_string))
+            .await
     }
 
     /// Reads a single tag and returns its full [`TagValue`].
@@ -622,7 +665,8 @@ impl<C: ServerConnector + 'static> OpcDaClient<C> {
     ///
     /// Returns [`OpcError`] if the read fails or the client is not bound to a server.
     pub async fn read_tag_value(&self, tag: &str) -> OpcResult<TagValue> {
-        let values = self.read_tag_values(tag.to_string()).await?;
+        let batch = TagBatch::from_str_lenient(tag);
+        let values = self.read_tag_values(batch).await?;
         values.into_vec().pop().ok_or_else(|| {
             OpcError::Internal(format!("Tag '{tag}' returned no response from server"))
         })
@@ -725,30 +769,10 @@ impl<C: ServerConnector + 'static> OpcDaClient<C> {
 
     /// Lists available OPC servers on a remote (or local) host.
     ///
-    /// # Arguments
+    /// # Deprecated
     ///
-    /// * `host` - Target host IP address or hostname.
-    ///
-    /// # Returns
-    ///
-    /// A vector of server ProgID strings.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`OpcError`] if catalog enumeration fails.
-    ///
-    /// # Examples
-    ///
-    /// ```rust,no_run
-    /// # #[tokio::main]
-    /// # async fn main() -> opc_da_client::OpcResult<()> {
-    /// use opc_da_client::OpcDaClient;
-    ///
-    /// let client = OpcDaClient::builder().build()?;
-    /// let servers = client.list_servers_on("localhost").await?;
-    /// # Ok(())
-    /// # }
-    /// ```
+    /// Prefer calling [`ServerDiscovery::list_servers`] or [`OpcProvider::list_servers`].
+    #[deprecated(since = "0.2.1", note = "use ServerDiscovery::list_servers instead")]
     pub async fn list_servers_on(&self, host: &str) -> OpcResult<Vec<String>> {
         self.list_servers(host).await
     }
@@ -846,11 +870,48 @@ impl<C: ServerConnector + 'static> OpcDaClient<C> {
         })
         .await
     }
+
+    /// Lists available OPC DA servers registered on the specified host.
+    pub async fn list_servers(&self, host: &str) -> OpcResult<Vec<String>> {
+        ServerDiscovery::list_servers(self, host).await
+    }
+
+    /// Lists available OPC DA servers with rich metadata registered on the specified host.
+    pub async fn list_server_details(&self, host: &str) -> OpcResult<Vec<OpcServerInfo>> {
+        ServerDiscovery::list_server_details(self, host).await
+    }
+
+    /// Discovers available tag identifiers on a specified target server namespace.
+    pub async fn browse_tags(
+        &self,
+        server: &str,
+        collector: TagCollector,
+    ) -> OpcResult<Vec<String>> {
+        TagBrowser::browse_tags(self, server, collector).await
+    }
+
+    /// Asynchronously writes a typed value to a tag on the specified target server.
+    pub async fn write_tag_value(
+        &self,
+        server: &str,
+        tag_id: &str,
+        value: OpcValue,
+    ) -> OpcResult<WriteResult> {
+        TagWriter::write_tag_value(self, server, tag_id, value).await
+    }
+
+    /// Asynchronously writes multiple tag values in a batch to the specified target server.
+    pub async fn write_tag_values(
+        &self,
+        server: &str,
+        writes: &[(String, OpcValue)],
+    ) -> OpcResult<Vec<WriteResult>> {
+        TagWriter::write_tag_values(self, server, writes).await
+    }
 }
 
-#[allow(clippy::too_many_lines)]
 #[async_trait]
-impl<C: ServerConnector + 'static> OpcProvider for OpcDaClient<C> {
+impl<C: ServerConnector + 'static> ServerDiscovery for OpcDaClient<C> {
     #[tracing::instrument(level = "info", skip(self), err)]
     async fn list_servers(&self, host: &str) -> OpcResult<Vec<String>> {
         let host_owned = host.to_string();
@@ -870,7 +931,10 @@ impl<C: ServerConnector + 'static> OpcProvider for OpcDaClient<C> {
         })
         .await
     }
+}
 
+#[async_trait]
+impl<C: ServerConnector + 'static> TagBrowser for OpcDaClient<C> {
     #[tracing::instrument(level = "info", skip(self, collector), err)]
     async fn browse_tags(&self, server: &str, collector: TagCollector) -> OpcResult<Vec<String>> {
         let endpoint = crate::types::OpcServerEndpoint::from(server);
@@ -881,25 +945,40 @@ impl<C: ServerConnector + 'static> OpcProvider for OpcDaClient<C> {
         })
         .await
     }
+}
 
-    #[tracing::instrument(level = "info", skip(self, tag_ids), fields(tag_count = tag_ids.len()), err)]
-    async fn read_tag_values(
-        &self,
-        server: &str,
-        tag_ids: Vec<String>,
-    ) -> OpcResult<Vec<TagValue>> {
+#[async_trait]
+impl<C: ServerConnector + 'static> TagReader for OpcDaClient<C> {
+    #[tracing::instrument(level = "info", skip(self, tags), fields(tag_count = tags.len()), err)]
+    async fn read_tag_values(&self, server: &str, tags: TagBatch) -> OpcResult<TagValues> {
         let endpoint = crate::types::OpcServerEndpoint::from(server);
-        let tags = crate::types::TagBatch::from(tag_ids);
-        let res = self
+        self.dispatch_request(|reply| ComRequest::ReadTagValues {
+            endpoint,
+            tags,
+            reply,
+        })
+        .await
+    }
+
+    #[tracing::instrument(level = "info", skip(self), err)]
+    async fn read_tag_value(&self, server: &str, tag_id: &str) -> OpcResult<TagValue> {
+        let endpoint = crate::types::OpcServerEndpoint::from(server);
+        let tags = TagBatch::from_str_lenient(tag_id);
+        let values = self
             .dispatch_request(|reply| ComRequest::ReadTagValues {
                 endpoint,
                 tags,
                 reply,
             })
             .await?;
-        Ok(res.into_vec())
+        values.into_vec().pop().ok_or_else(|| {
+            OpcError::Internal(format!("Tag '{tag_id}' returned no response from server"))
+        })
     }
+}
 
+#[async_trait]
+impl<C: ServerConnector + 'static> TagWriter for OpcDaClient<C> {
     #[tracing::instrument(level = "info", skip(self, value), err)]
     async fn write_tag_value(
         &self,
@@ -939,6 +1018,7 @@ impl<C: ServerConnector + 'static> OpcProvider for OpcDaClient<C> {
 mod tests {
     use super::*;
     use crate::com::connector::MockServerConnector;
+    use crate::provider::OpcProvider;
     use crate::types::{ClientItemHandle, OpcQuality, ServerItemHandle};
 
     #[tokio::test]
@@ -986,11 +1066,15 @@ mod tests {
             .expect("building unbound client should succeed");
         assert!(unbound_client.endpoint.is_none());
 
-        let servers = unbound_client
+        let servers = unbound_client.list_servers("192.168.1.50").await.unwrap();
+        assert_eq!(servers, vec!["Mock.Server.1".to_string()]);
+
+        #[allow(deprecated)]
+        let legacy_servers = unbound_client
             .list_servers_on("192.168.1.50")
             .await
             .unwrap();
-        assert_eq!(servers, vec!["Mock.Server.1".to_string()]);
+        assert_eq!(legacy_servers, vec!["Mock.Server.1".to_string()]);
     }
 
     #[tokio::test]
@@ -1134,7 +1218,7 @@ mod tests {
             .build()
             .expect("unbound client");
 
-        let servers = client.list_servers_on("192.168.1.100").await.unwrap();
+        let servers = client.list_servers("192.168.1.100").await.unwrap();
         assert_eq!(servers, vec!["Mock.Server.1".to_string()]);
         assert_eq!(
             state.last_enumerated_host.lock().unwrap().as_deref(),
@@ -1178,5 +1262,73 @@ mod tests {
         drop(rx);
 
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+
+    #[tokio::test]
+    async fn test_client_bind_and_connect_eager() {
+        let state = std::sync::Arc::new(crate::com::connector::mock::MockState::default());
+        let connector = MockServerConnector::with_state(state.clone());
+
+        let client = OpcDaClient::new(connector).unwrap();
+
+        // Calling connect_eager on unbound client fails with InvalidState
+        assert!(matches!(
+            client.connect_eager().await,
+            Err(OpcError::InvalidState(_))
+        ));
+
+        // Binding to a server endpoint succeeds locally
+        let bound = OpcDaClient::builder()
+            .server("Matrikon.OPC.Simulation.1")
+            .with_connector(MockServerConnector::with_state(state.clone()))
+            .build()
+            .unwrap();
+
+        assert!(bound.connect_eager().await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_client_role_traits_via_opc_provider() {
+        let state = std::sync::Arc::new(crate::com::connector::mock::MockState::default());
+        let connector = MockServerConnector::with_state(state.clone());
+
+        let client: Arc<dyn OpcProvider> = Arc::new(
+            OpcDaClient::builder()
+                .with_connector(connector)
+                .build()
+                .unwrap(),
+        );
+
+        // ServerDiscovery
+        let servers = client.list_servers("localhost").await.unwrap();
+        assert_eq!(servers, vec!["Mock.Server.1".to_string()]);
+
+        // TagBrowser
+        let tags = client
+            .browse_tags("Mock.Server.1", TagCollector::new(1000))
+            .await
+            .unwrap();
+        assert_eq!(
+            tags,
+            vec![
+                "Random.Int4".to_string(),
+                "Random.Real8".to_string(),
+                "Random.String".to_string()
+            ]
+        );
+
+        // TagReader
+        let values = client
+            .read_tag_values("Mock.Server.1", TagBatch::from(vec!["Tag1".into()]))
+            .await
+            .unwrap();
+        assert_eq!(values.len(), 1);
+
+        // TagWriter
+        let res = client
+            .write_tag_value("Mock.Server.1", "Tag1", OpcValue::Int(10))
+            .await
+            .unwrap();
+        assert!(res.is_success());
     }
 }

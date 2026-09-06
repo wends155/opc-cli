@@ -5,14 +5,14 @@
 
 use crate::com::connector::traits::{
     ConnectedGroup, ConnectedServer, CreatedGroup, DataSource, GroupConfig, GroupItemDef,
-    GroupItemResult, GroupItemState, ServerConnector,
+    GroupItemResult, GroupItemState, GroupRemovalMode, ItemWrite, ServerConnector,
 };
 use crate::com::iterator::StringIterator;
 use crate::errors::{OpcError, OpcResult};
 use crate::raw::hresult::RPC_S_SERVER_UNAVAILABLE;
 use crate::types::{
-    BrowseDirection, BrowseType, ClientItemHandle, GroupHandle, NamespaceType, OpcQuality,
-    OpcServerInfo, OpcValue, ServerIdentifier, ServerItemHandle,
+    BrowseDirection, BrowseType, ClientItemHandle, NamespaceType, OpcQuality, OpcServerInfo,
+    OpcValue, ServerGroupHandle, ServerIdentifier, ServerItemHandle,
 };
 
 /// Type alias for mock `add_items` closure.
@@ -27,9 +27,8 @@ pub type MockReadFn = Box<
 >;
 
 /// Type alias for mock `write` closure.
-pub type MockWriteFn = Box<
-    dyn Fn(&[ServerItemHandle], &[OpcValue]) -> OpcResult<Vec<Result<(), OpcError>>> + Send + Sync,
->;
+pub type MockWriteFn =
+    Box<dyn Fn(&[ItemWrite]) -> OpcResult<Vec<Result<(), OpcError>>> + Send + Sync>;
 
 /// Shared atomic state for mock failure injection and counters.
 #[derive(Default, Debug)]
@@ -111,10 +110,7 @@ impl MockConnectedGroup {
     #[must_use]
     pub fn with_write_fn<F>(self, f: F) -> Self
     where
-        F: Fn(&[ServerItemHandle], &[OpcValue]) -> OpcResult<Vec<Result<(), OpcError>>>
-            + Send
-            + Sync
-            + 'static,
+        F: Fn(&[ItemWrite]) -> OpcResult<Vec<Result<(), OpcError>>> + Send + Sync + 'static,
     {
         if let Ok(mut guard) = self.write_fn.lock() {
             *guard = Some(Box::new(f));
@@ -190,20 +186,9 @@ impl ConnectedGroup for MockConnectedGroup {
             .collect())
     }
 
-    fn write(
-        &self,
-        server_handles: &[ServerItemHandle],
-        values: &[OpcValue],
-    ) -> OpcResult<Vec<Result<(), OpcError>>> {
-        if server_handles.is_empty() {
-            return Err(OpcError::InvalidState(
-                "server_handles cannot be empty".to_string(),
-            ));
-        }
-        if server_handles.len() != values.len() {
-            return Err(OpcError::InvalidState(
-                "server_handles and values must have the same length".to_string(),
-            ));
+    fn write(&self, items: &[ItemWrite]) -> OpcResult<Vec<Result<(), OpcError>>> {
+        if items.is_empty() {
+            return Err(OpcError::InvalidState("items cannot be empty".to_string()));
         }
 
         if self
@@ -226,7 +211,7 @@ impl ConnectedGroup for MockConnectedGroup {
             .should_fail_write
             .load(std::sync::atomic::Ordering::Relaxed)
         {
-            return Ok(server_handles
+            return Ok(items
                 .iter()
                 .map(|_| {
                     Err(OpcError::Com {
@@ -241,10 +226,10 @@ impl ConnectedGroup for MockConnectedGroup {
         if let Ok(guard) = self.write_fn.lock()
             && let Some(f) = guard.as_ref()
         {
-            return f(server_handles, values);
+            return f(items);
         }
 
-        Ok(server_handles.iter().map(|_| Ok(())).collect())
+        Ok(items.iter().map(|_| Ok(())).collect())
     }
 }
 
@@ -261,12 +246,8 @@ impl ConnectedGroup for std::sync::Arc<MockConnectedGroup> {
         (**self).read(source, server_handles)
     }
 
-    fn write(
-        &self,
-        server_handles: &[ServerItemHandle],
-        values: &[OpcValue],
-    ) -> OpcResult<Vec<Result<(), OpcError>>> {
-        (**self).write(server_handles, values)
+    fn write(&self, items: &[ItemWrite]) -> OpcResult<Vec<Result<(), OpcError>>> {
+        (**self).write(items)
     }
 }
 
@@ -388,12 +369,16 @@ impl ConnectedServer for MockConnectedServer {
 
         Ok(CreatedGroup {
             group: self.group.clone(),
-            server_handle: GroupHandle::new(1),
+            server_handle: ServerGroupHandle::new(1),
             revised_update_rate_ms: config.update_rate_ms,
         })
     }
 
-    fn remove_group(&self, _server_group: GroupHandle, _force: bool) -> OpcResult<()> {
+    fn remove_group(
+        &self,
+        _server_group: ServerGroupHandle,
+        _mode: GroupRemovalMode,
+    ) -> OpcResult<()> {
         self.state
             .remove_group_count
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -587,10 +572,7 @@ impl MockServerConnector {
     #[must_use]
     pub fn with_write_fn<F>(self, f: F) -> Self
     where
-        F: Fn(&[ServerItemHandle], &[OpcValue]) -> OpcResult<Vec<Result<(), OpcError>>>
-            + Send
-            + Sync
-            + 'static,
+        F: Fn(&[ItemWrite]) -> OpcResult<Vec<Result<(), OpcError>>> + Send + Sync + 'static,
     {
         if let Ok(mut guard) = self.server.group.write_fn.lock() {
             *guard = Some(Box::new(f));
@@ -658,7 +640,26 @@ impl ServerConnector for MockServerConnector {
     }
 
     fn connect_identifier(&self, identifier: &ServerIdentifier) -> OpcResult<Self::Server> {
-        self.connect_endpoint(&crate::types::OpcServerEndpoint::from(identifier.clone()))
+        self.state
+            .connect_count
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+
+        if let Ok(mut lock) = self.state.last_connected_endpoint.lock() {
+            *lock = Some(crate::types::OpcServerEndpoint::from(identifier.clone()));
+        }
+
+        if self
+            .state
+            .should_fail_connect
+            .load(std::sync::atomic::Ordering::Relaxed)
+        {
+            return Err(OpcError::connection_failed(
+                identifier.to_string(),
+                windows::core::Error::from_hresult(windows::Win32::Foundation::E_FAIL),
+            ));
+        }
+
+        Ok(self.server.clone())
     }
 }
 
@@ -691,14 +692,19 @@ impl ConnectedServer for std::sync::Arc<MockConnectedServer> {
         (**self).add_group(config)
     }
 
-    fn remove_group(&self, server_group: GroupHandle, force: bool) -> OpcResult<()> {
-        (**self).remove_group(server_group, force)
+    fn remove_group(
+        &self,
+        server_group: ServerGroupHandle,
+        mode: GroupRemovalMode,
+    ) -> OpcResult<()> {
+        (**self).remove_group(server_group, mode)
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::types::ClientGroupHandle;
 
     #[test]
     fn test_mock_group_defaults() {
@@ -738,7 +744,7 @@ mod tests {
         assert_eq!(states[0].as_ref().unwrap().quality, OpcQuality::GOOD);
 
         let write_res = group
-            .write(&[ServerItemHandle::new(1)], &[OpcValue::Int(100)])
+            .write(&[ItemWrite::new(ServerItemHandle::new(1), OpcValue::Int(100))])
             .unwrap();
         assert_eq!(write_res.len(), 1);
         assert!(write_res[0].is_ok());
@@ -801,14 +807,14 @@ mod tests {
             name: "test_group",
             active: true,
             update_rate_ms: 500,
-            client_handle: GroupHandle::new(10),
+            client_handle: ClientGroupHandle::new(10),
             time_bias: 0,
             percent_deadband: 0.0,
             locale_id: 0,
         };
 
         let created = server.add_group(&config).unwrap();
-        assert_eq!(created.server_handle, GroupHandle::new(1));
+        assert_eq!(created.server_handle, ServerGroupHandle::new(1));
         assert_eq!(created.revised_update_rate_ms, 500);
 
         server
@@ -876,15 +882,7 @@ mod tests {
             Err(OpcError::InvalidState(_))
         ));
 
-        assert!(matches!(
-            group.write(&[], &[]),
-            Err(OpcError::InvalidState(_))
-        ));
-
-        assert!(matches!(
-            group.write(&[ServerItemHandle::new(1)], &[]),
-            Err(OpcError::InvalidState(_))
-        ));
+        assert!(matches!(group.write(&[]), Err(OpcError::InvalidState(_))));
     }
 
     #[test]
@@ -998,7 +996,9 @@ mod tests {
         );
 
         // Remove group
-        server.remove_group(GroupHandle::new(1), true).unwrap();
+        server
+            .remove_group(ServerGroupHandle::new(1), GroupRemovalMode::Force)
+            .unwrap();
         assert_eq!(
             state
                 .remove_group_count

@@ -265,6 +265,74 @@ fn run_worker_thread<C, I>(
     tracing::debug!("COM worker thread exiting cleanly");
 }
 
+/// Dispatches a discovery operation wrapped in exception safety handling.
+fn dispatch_discovery_request<R, F>(
+    host: &str,
+    op: OpcOperation,
+    reply: oneshot::Sender<OpcResult<R>>,
+    f: F,
+) where
+    F: FnOnce(&str) -> OpcResult<R>,
+{
+    let host_str = host.to_string();
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| f(host)));
+    match result {
+        Ok(res) => {
+            let _ = reply.send(res);
+        }
+        Err(payload) => {
+            let msg = extract_panic_message(&*payload);
+            log_opc_err!(
+                &OpcError::Internal(format!("COM worker panicked: {msg}")),
+                op,
+                host = %host_str,
+            );
+            let _ = reply.send(Err(OpcError::Internal(format!(
+                "COM worker panicked: {msg}"
+            ))));
+        }
+    }
+}
+
+/// Dispatches an operation against a pooled server connection with full panic containment,
+/// circuit breaker cooldown activation, and proxy eviction.
+fn dispatch_pooled_request<C, R, F>(
+    pool: &mut pool::ConnectionPool<C::Server>,
+    connector: &Arc<C>,
+    endpoint: &OpcServerEndpoint,
+    op: OpcOperation,
+    reply: oneshot::Sender<OpcResult<R>>,
+    mut f: F,
+) where
+    C: ServerConnector + 'static,
+    F: FnMut(&mut pool::PooledServer<C::Server>) -> OpcResult<R>,
+{
+    let endpoint_clone = endpoint.clone();
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        pool::dispatch_with_retry(pool, connector, endpoint, &mut f)
+    }));
+
+    match result {
+        Ok(res) => {
+            let _ = reply.send(res);
+        }
+        Err(payload) => {
+            let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                pool.remove(&endpoint_clone);
+            }));
+            let msg = extract_panic_message(&*payload);
+            log_opc_err!(
+                &OpcError::Internal(format!("COM worker panicked: {msg}")),
+                op,
+                server = %endpoint_clone,
+            );
+            let _ = reply.send(Err(OpcError::Internal(format!(
+                "COM worker panicked: {msg}"
+            ))));
+        }
+    }
+}
+
 /// Processes a single request dispatched to the COM worker thread.
 #[allow(clippy::too_many_lines)]
 fn handle_request<C: ServerConnector + 'static>(
@@ -274,14 +342,13 @@ fn handle_request<C: ServerConnector + 'static>(
 ) {
     match req {
         ComRequest::ListServers { host, reply } => {
-            let host_clone = host.clone();
-            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                let span = tracing::info_span!("opc.list_servers", host = %host);
+            dispatch_discovery_request(&host, OpcOperation::ListServers, reply, |h| {
+                let span = tracing::info_span!("opc.list_servers", host = %h);
                 let _enter = span.enter();
                 #[cfg(feature = "dev-diagnostics")]
-                tracing::trace!(host = %host, "list_servers: starting operation");
+                tracing::trace!(host = %h, "list_servers: starting operation");
                 let start = std::time::Instant::now();
-                let servers = connector.enumerate_servers(&host);
+                let servers = connector.enumerate_servers(h);
                 if let Ok(s) = &servers {
                     tracing::info!(
                         count = s.len(),
@@ -292,39 +359,22 @@ fn handle_request<C: ServerConnector + 'static>(
                     log_opc_err!(
                         e,
                         OpcOperation::ListServers,
-                        host = %host,
+                        host = %h,
                         elapsed_ms = elapsed_ms(start),
                     );
                 }
                 servers
-            }));
-            match result {
-                Ok(servers) => {
-                    let _ = reply.send(servers);
-                }
-                Err(payload) => {
-                    let msg = extract_panic_message(&*payload);
-                    log_opc_err!(
-                        &OpcError::Internal(format!("COM worker panicked: {msg}")),
-                        OpcOperation::ListServers,
-                        host = %host_clone,
-                    );
-                    let _ = reply.send(Err(OpcError::Internal(format!(
-                        "COM worker panicked: {msg}"
-                    ))));
-                }
-            }
+            });
         }
 
         ComRequest::ListServerDetails { host, reply } => {
-            let host_clone = host.clone();
-            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                let span = tracing::info_span!("opc.list_server_details", host = %host);
+            dispatch_discovery_request(&host, OpcOperation::ListServerDetails, reply, |h| {
+                let span = tracing::info_span!("opc.list_server_details", host = %h);
                 let _enter = span.enter();
                 #[cfg(feature = "dev-diagnostics")]
-                tracing::trace!(host = %host, "list_server_details: starting operation");
+                tracing::trace!(host = %h, "list_server_details: starting operation");
                 let start = std::time::Instant::now();
-                let servers = connector.enumerate_server_details(&host);
+                let servers = connector.enumerate_server_details(h);
                 if let Ok(s) = &servers {
                     tracing::info!(
                         count = s.len(),
@@ -335,28 +385,12 @@ fn handle_request<C: ServerConnector + 'static>(
                     log_opc_err!(
                         e,
                         OpcOperation::ListServerDetails,
-                        host = %host,
+                        host = %h,
                         elapsed_ms = elapsed_ms(start),
                     );
                 }
                 servers
-            }));
-            match result {
-                Ok(servers) => {
-                    let _ = reply.send(servers);
-                }
-                Err(payload) => {
-                    let msg = extract_panic_message(&*payload);
-                    log_opc_err!(
-                        &OpcError::Internal(format!("COM worker panicked: {msg}")),
-                        OpcOperation::ListServerDetails,
-                        host = %host_clone,
-                    );
-                    let _ = reply.send(Err(OpcError::Internal(format!(
-                        "COM worker panicked: {msg}"
-                    ))));
-                }
-            }
+            });
         }
 
         ComRequest::ReadTagValues {
@@ -364,29 +398,14 @@ fn handle_request<C: ServerConnector + 'static>(
             tags,
             reply,
         } => {
-            let endpoint_clone = endpoint.clone();
-            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                pool::dispatch_with_retry(pool, connector, &endpoint, |opc_server| {
-                    read::handle_read(&endpoint, &tags, opc_server)
-                })
-            }));
-            match result {
-                Ok(res) => {
-                    let _ = reply.send(res);
-                }
-                Err(payload) => {
-                    pool.remove(&endpoint_clone);
-                    let msg = extract_panic_message(&*payload);
-                    log_opc_err!(
-                        &OpcError::Internal(format!("COM worker panicked: {msg}")),
-                        OpcOperation::ReadSync,
-                        server = %endpoint_clone,
-                    );
-                    let _ = reply.send(Err(OpcError::Internal(format!(
-                        "COM worker panicked: {msg}"
-                    ))));
-                }
-            }
+            dispatch_pooled_request(
+                pool,
+                connector,
+                &endpoint,
+                OpcOperation::ReadSync,
+                reply,
+                |opc_server| read::handle_read(&endpoint, &tags, opc_server),
+            );
         }
 
         ComRequest::WriteTagValue {
@@ -395,29 +414,14 @@ fn handle_request<C: ServerConnector + 'static>(
             value,
             reply,
         } => {
-            let endpoint_clone = endpoint.clone();
-            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                pool::dispatch_with_retry(pool, connector, &endpoint, |opc_server| {
-                    write::handle_write(&endpoint.identifier, &tag_id, &value, opc_server)
-                })
-            }));
-            match result {
-                Ok(res) => {
-                    let _ = reply.send(res);
-                }
-                Err(payload) => {
-                    pool.remove(&endpoint_clone);
-                    let msg = extract_panic_message(&*payload);
-                    log_opc_err!(
-                        &OpcError::Internal(format!("COM worker panicked: {msg}")),
-                        OpcOperation::WriteSync,
-                        server = %endpoint_clone,
-                    );
-                    let _ = reply.send(Err(OpcError::Internal(format!(
-                        "COM worker panicked: {msg}"
-                    ))));
-                }
-            }
+            dispatch_pooled_request(
+                pool,
+                connector,
+                &endpoint,
+                OpcOperation::WriteSync,
+                reply,
+                |opc_server| write::handle_write(&endpoint.identifier, &tag_id, &value, opc_server),
+            );
         }
 
         ComRequest::WriteTagValues {
@@ -425,29 +429,14 @@ fn handle_request<C: ServerConnector + 'static>(
             writes,
             reply,
         } => {
-            let endpoint_clone = endpoint.clone();
-            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                pool::dispatch_with_retry(pool, connector, &endpoint, |opc_server| {
-                    write::handle_write_batch(&endpoint.identifier, &writes, opc_server)
-                })
-            }));
-            match result {
-                Ok(res) => {
-                    let _ = reply.send(res);
-                }
-                Err(payload) => {
-                    pool.remove(&endpoint_clone);
-                    let msg = extract_panic_message(&*payload);
-                    log_opc_err!(
-                        &OpcError::Internal(format!("COM worker panicked: {msg}")),
-                        OpcOperation::WriteSync,
-                        server = %endpoint_clone,
-                    );
-                    let _ = reply.send(Err(OpcError::Internal(format!(
-                        "COM worker panicked: {msg}"
-                    ))));
-                }
-            }
+            dispatch_pooled_request(
+                pool,
+                connector,
+                &endpoint,
+                OpcOperation::WriteSync,
+                reply,
+                |opc_server| write::handle_write_batch(&endpoint.identifier, &writes, opc_server),
+            );
         }
 
         ComRequest::BrowseTags {
@@ -455,29 +444,14 @@ fn handle_request<C: ServerConnector + 'static>(
             collector,
             reply,
         } => {
-            let endpoint_clone = endpoint.clone();
-            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                pool::dispatch_with_retry(pool, connector, &endpoint, |opc_server| {
-                    browse::handle_browse(&endpoint.identifier, &collector, opc_server)
-                })
-            }));
-            match result {
-                Ok(res) => {
-                    let _ = reply.send(res);
-                }
-                Err(payload) => {
-                    pool.remove(&endpoint_clone);
-                    let msg = extract_panic_message(&*payload);
-                    log_opc_err!(
-                        &OpcError::Internal(format!("COM worker panicked: {msg}")),
-                        OpcOperation::BrowseTags,
-                        server = %endpoint_clone,
-                    );
-                    let _ = reply.send(Err(OpcError::Internal(format!(
-                        "COM worker panicked: {msg}"
-                    ))));
-                }
-            }
+            dispatch_pooled_request(
+                pool,
+                connector,
+                &endpoint,
+                OpcOperation::BrowseTags,
+                reply,
+                |opc_server| browse::handle_browse(&endpoint.identifier, &collector, opc_server),
+            );
         }
     }
 }

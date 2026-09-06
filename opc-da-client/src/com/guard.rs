@@ -3,9 +3,9 @@
 //! Ensures `CoUninitialize` is called exactly once per successful
 //! `CoInitializeEx`, even on early returns or panics.
 
-use crate::com::connector::ConnectedServer;
+use crate::com::connector::traits::{ConnectedServer, GroupRemovalMode};
 use crate::errors::OpcResult;
-use crate::types::{BrowseDirection, GroupHandle};
+use crate::types::{BrowseDirection, ServerGroupHandle};
 use std::marker::PhantomData;
 use windows::Win32::System::Com::{COINIT_MULTITHREADED, CoInitializeEx, CoUninitialize};
 
@@ -106,19 +106,19 @@ impl ComInitializer for FailingComInit {
     }
 }
 
-/// RAII drop guard for OPC DA server groups.
+/// RAII drop guard for OPC DA group lifetime.
 ///
-/// Ensures `ConnectedServer::remove_group(server_handle, true)` is called
+/// Ensures `ConnectedServer::remove_group(server_handle, GroupRemovalMode::Force)` is called
 /// when the guard is dropped, preventing group handle leaks on the OPC server
 /// across early returns, error propagation with `?`, and panics.
 pub(crate) struct GroupGuard<'a, S: ConnectedServer> {
     server: &'a S,
-    handle: GroupHandle,
+    handle: ServerGroupHandle,
     disarmed: bool,
 }
 
 impl<'a, S: ConnectedServer> GroupGuard<'a, S> {
-    pub(crate) fn new(server: &'a S, handle: GroupHandle) -> Self {
+    pub(crate) fn new(server: &'a S, handle: ServerGroupHandle) -> Self {
         Self {
             server,
             handle,
@@ -127,13 +127,13 @@ impl<'a, S: ConnectedServer> GroupGuard<'a, S> {
     }
 
     #[allow(dead_code)]
-    pub(crate) fn handle(&self) -> GroupHandle {
+    pub(crate) fn handle(&self) -> ServerGroupHandle {
         self.handle
     }
 
-    #[allow(dead_code)]
-    pub(crate) fn disarm(&mut self) {
+    pub(crate) fn disarm(&mut self) -> ServerGroupHandle {
         self.disarmed = true;
+        self.handle
     }
 }
 
@@ -142,7 +142,10 @@ impl<S: ConnectedServer> Drop for GroupGuard<'_, S> {
         if self.disarmed {
             return;
         }
-        if let Err(e) = self.server.remove_group(self.handle, true) {
+        if let Err(e) = self
+            .server
+            .remove_group(self.handle, GroupRemovalMode::Force)
+        {
             tracing::warn!(
                 error = ?e,
                 handle = self.handle.as_raw(),
@@ -221,8 +224,8 @@ mod tests {
         let server = MockConnectedServer::default();
         assert_eq!(server.state.remove_group_count.load(Ordering::Relaxed), 0);
         {
-            let guard = GroupGuard::new(&server, GroupHandle::new(42));
-            assert_eq!(guard.handle(), GroupHandle::new(42));
+            let guard = GroupGuard::new(&server, ServerGroupHandle::new(42));
+            assert_eq!(guard.handle(), ServerGroupHandle::new(42));
         }
         assert_eq!(server.state.remove_group_count.load(Ordering::Relaxed), 1);
     }
@@ -231,8 +234,9 @@ mod tests {
     fn test_group_guard_disarm_prevents_cleanup() {
         let server = MockConnectedServer::default();
         {
-            let mut guard = GroupGuard::new(&server, GroupHandle::new(42));
-            guard.disarm();
+            let mut guard = GroupGuard::new(&server, ServerGroupHandle::new(42));
+            let handle = guard.disarm();
+            assert_eq!(handle, ServerGroupHandle::new(42));
         }
         assert_eq!(server.state.remove_group_count.load(Ordering::Relaxed), 0);
     }

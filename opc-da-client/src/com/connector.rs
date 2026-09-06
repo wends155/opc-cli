@@ -25,8 +25,9 @@ pub use crate::com::iterator::{GuidIterator, StringIterator};
 pub use crate::errors::{OpcError, OpcResult};
 #[allow(deprecated)]
 pub use crate::types::{
-    BrowseDirection, BrowseType, ClientItemHandle, GroupHandle, ItemHandle, OpcQuality,
-    OpcServerEndpoint, OpcServerInfo, OpcValue, ServerIdentifier, ServerItemHandle,
+    BrowseDirection, BrowseType, ClientGroupHandle, ClientItemHandle, GroupHandle, ItemHandle,
+    OpcQuality, OpcServerEndpoint, OpcServerInfo, OpcValue, ServerGroupHandle, ServerIdentifier,
+    ServerItemHandle,
 };
 
 pub use group::ComGroup;
@@ -38,5 +39,5 @@ pub use mock::{
 pub use server::{ComConnector, ComServer};
 pub use traits::{
     ConnectedGroup, ConnectedServer, CreatedGroup, DataSource, GroupConfig, GroupItemDef,
-    GroupItemResult, GroupItemState, ServerConnector,
+    GroupItemResult, GroupItemState, GroupRemovalMode, ItemWrite, ServerConnector,
 };

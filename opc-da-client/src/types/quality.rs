@@ -73,23 +73,90 @@ pub enum QualitySubstatus {
 ///
 /// let quality = OpcQuality::from(0x00C0);
 /// assert!(quality.is_good());
-/// assert_eq!(quality.major, QualityMajor::Good);
-/// assert_eq!(quality.substatus, QualitySubstatus::NonSpecific);
+/// assert_eq!(quality.major(), QualityMajor::Good);
+/// assert_eq!(quality.substatus(), QualitySubstatus::NonSpecific);
 /// assert_eq!(quality.to_string(), "Good");
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub struct OpcQuality {
-    /// Major quality category.
-    pub major: QualityMajor,
-    /// Specific substatus explanation.
-    pub substatus: QualitySubstatus,
-    /// Limit condition flag.
-    pub limit: QualityLimit,
-    /// Original 16-bit raw quality word from the COM server.
-    pub raw: u16,
+    major: QualityMajor,
+    substatus: QualitySubstatus,
+    limit: QualityLimit,
+    raw: u16,
 }
 
 impl OpcQuality {
+    /// Constructs an `OpcQuality` from individual components, synthesizing the 16-bit raw quality word.
+    #[must_use]
+    pub const fn new(
+        major: QualityMajor,
+        substatus: QualitySubstatus,
+        limit: QualityLimit,
+    ) -> Self {
+        let major_raw: u16 = match major {
+            QualityMajor::Good => 0x00C0,
+            QualityMajor::Uncertain => 0x0040,
+            QualityMajor::Bad => 0x0000,
+        };
+
+        let limit_raw: u16 = match limit {
+            QualityLimit::NotLimited => 0x0000,
+            QualityLimit::LowLimited => 0x0001,
+            QualityLimit::HighLimited => 0x0002,
+            QualityLimit::Constant => 0x0003,
+        };
+
+        #[allow(clippy::match_same_arms)]
+        let substatus_raw: u16 = match (major, substatus) {
+            (QualityMajor::Bad, QualitySubstatus::ConfigurationError) => 0x0004,
+            (QualityMajor::Bad, QualitySubstatus::NotConnected) => 0x0008,
+            (QualityMajor::Bad, QualitySubstatus::DeviceFailure) => 0x000C,
+            (QualityMajor::Bad, QualitySubstatus::SensorFailure) => 0x0010,
+            (QualityMajor::Bad, QualitySubstatus::LastUsableValue) => 0x0014,
+            (QualityMajor::Bad, QualitySubstatus::CommFailure) => 0x0018,
+            (QualityMajor::Bad, QualitySubstatus::OutOfService) => 0x001C,
+            (QualityMajor::Uncertain, QualitySubstatus::LastUsableValue) => 0x0004,
+            (QualityMajor::Uncertain, QualitySubstatus::SensorCalibrating) => 0x0010,
+            (QualityMajor::Uncertain, QualitySubstatus::EguExceeded) => 0x0014,
+            (QualityMajor::Uncertain, QualitySubstatus::SubNormal) => 0x0018,
+            (QualityMajor::Good, QualitySubstatus::LocalOverride) => 0x0018,
+            _ => 0x0000,
+        };
+
+        let raw = major_raw | substatus_raw | limit_raw;
+
+        Self {
+            major,
+            substatus,
+            limit,
+            raw,
+        }
+    }
+
+    /// Returns the major quality category.
+    #[must_use]
+    pub const fn major(&self) -> QualityMajor {
+        self.major
+    }
+
+    /// Returns the specific substatus explanation.
+    #[must_use]
+    pub const fn substatus(&self) -> QualitySubstatus {
+        self.substatus
+    }
+
+    /// Returns the limit condition flag.
+    #[must_use]
+    pub const fn limit(&self) -> QualityLimit {
+        self.limit
+    }
+
+    /// Returns the original 16-bit raw quality word from the COM server.
+    #[must_use]
+    pub const fn raw(&self) -> u16 {
+        self.raw
+    }
+
     /// Standard Good quality (`0x00C0`).
     pub const GOOD: Self = Self {
         major: QualityMajor::Good,
@@ -227,11 +294,15 @@ impl std::str::FromStr for OpcQuality {
     type Err = ParseQualityError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s.trim().to_lowercase().as_str() {
-            "good" => Ok(Self::GOOD),
-            "uncertain" => Ok(Self::UNCERTAIN),
-            "bad" => Ok(Self::BAD),
-            other => Err(ParseQualityError(other.to_string())),
+        let trimmed = s.trim();
+        if trimmed.eq_ignore_ascii_case("good") {
+            Ok(Self::GOOD)
+        } else if trimmed.eq_ignore_ascii_case("uncertain") {
+            Ok(Self::UNCERTAIN)
+        } else if trimmed.eq_ignore_ascii_case("bad") {
+            Ok(Self::BAD)
+        } else {
+            Err(ParseQualityError(trimmed.to_string()))
         }
     }
 }

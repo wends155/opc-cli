@@ -20,8 +20,10 @@ use std::fmt;
 pub enum OpcValue {
     /// String value (`VT_BSTR`) — server may coerce to target type.
     String(String),
-    /// 32-bit integer (`VT_I4`).
-    Int(i32),
+    /// 64-bit signed integer (`VT_I8` or widened `VT_I1`/`VT_I2`/`VT_I4`).
+    Int(i64),
+    /// 64-bit unsigned integer (`VT_UI8` or widened `VT_UI1`/`VT_UI2`/`VT_UI4`).
+    UInt(u64),
     /// 64-bit float (`VT_R8`).
     Float(f64),
     /// Boolean (`VT_BOOL`).
@@ -37,6 +39,7 @@ impl fmt::Display for OpcValue {
         match self {
             Self::String(s) => write!(f, "{s}"),
             Self::Int(i) => write!(f, "{i}"),
+            Self::UInt(u) => write!(f, "{u}"),
             Self::Float(fl) => write!(f, "{fl}"),
             Self::Bool(b) => write!(f, "{b}"),
             Self::Empty => write!(f, "Empty"),
@@ -50,12 +53,26 @@ impl OpcValue {
     ///
     /// # Returns
     ///
-    /// Returns `Some(i32)` if this value is [`OpcValue::Int`], or `None` otherwise.
+    /// Returns `Some(i64)` if this value is [`OpcValue::Int`], or `None` otherwise.
     #[inline]
     #[must_use]
-    pub const fn as_int(&self) -> Option<i32> {
+    pub const fn as_int(&self) -> Option<i64> {
         match self {
             Self::Int(i) => Some(*i),
+            _ => None,
+        }
+    }
+
+    /// Returns the unsigned integer value if this is an [`OpcValue::UInt`].
+    ///
+    /// # Returns
+    ///
+    /// Returns `Some(u64)` if this value is [`OpcValue::UInt`], or `None` otherwise.
+    #[inline]
+    #[must_use]
+    pub const fn as_uint(&self) -> Option<u64> {
+        match self {
+            Self::UInt(u) => Some(*u),
             _ => None,
         }
     }
@@ -128,7 +145,56 @@ impl OpcValue {
 impl From<i32> for OpcValue {
     #[inline]
     fn from(val: i32) -> Self {
+        Self::Int(i64::from(val))
+    }
+}
+
+impl From<i64> for OpcValue {
+    #[inline]
+    fn from(val: i64) -> Self {
         Self::Int(val)
+    }
+}
+
+impl From<u32> for OpcValue {
+    #[inline]
+    fn from(val: u32) -> Self {
+        Self::UInt(u64::from(val))
+    }
+}
+
+impl From<u64> for OpcValue {
+    #[inline]
+    fn from(val: u64) -> Self {
+        Self::UInt(val)
+    }
+}
+
+impl From<u16> for OpcValue {
+    #[inline]
+    fn from(val: u16) -> Self {
+        Self::UInt(u64::from(val))
+    }
+}
+
+impl From<i16> for OpcValue {
+    #[inline]
+    fn from(val: i16) -> Self {
+        Self::Int(i64::from(val))
+    }
+}
+
+impl From<u8> for OpcValue {
+    #[inline]
+    fn from(val: u8) -> Self {
+        Self::UInt(u64::from(val))
+    }
+}
+
+impl From<i8> for OpcValue {
+    #[inline]
+    fn from(val: i8) -> Self {
+        Self::Int(i64::from(val))
     }
 }
 
@@ -160,6 +226,153 @@ impl From<&str> for OpcValue {
     }
 }
 
+#[allow(
+    clippy::use_self,
+    clippy::cast_possible_truncation,
+    clippy::cast_precision_loss,
+    clippy::cast_lossless
+)]
+impl TryFrom<OpcValue> for i64 {
+    type Error = crate::errors::OpcError;
+
+    fn try_from(value: OpcValue) -> Result<Self, Self::Error> {
+        match value {
+            OpcValue::Int(i) => Ok(i),
+            OpcValue::UInt(u) => i64::try_from(u)
+                .map_err(|_| crate::errors::OpcError::Conversion("UInt exceeds i64 range".into())),
+            OpcValue::Float(f)
+                if f.fract() == 0.0 && f >= i64::MIN as f64 && f <= i64::MAX as f64 =>
+            {
+                Ok(f as i64)
+            }
+            other => Err(crate::errors::OpcError::Conversion(format!(
+                "Cannot convert {other:?} to i64"
+            ))),
+        }
+    }
+}
+
+#[allow(
+    clippy::use_self,
+    clippy::cast_possible_truncation,
+    clippy::cast_precision_loss,
+    clippy::cast_lossless
+)]
+impl TryFrom<OpcValue> for i32 {
+    type Error = crate::errors::OpcError;
+
+    fn try_from(value: OpcValue) -> Result<Self, Self::Error> {
+        match value {
+            OpcValue::Int(i) => i32::try_from(i)
+                .map_err(|_| crate::errors::OpcError::Conversion("Int exceeds i32 range".into())),
+            OpcValue::UInt(u) => i32::try_from(u)
+                .map_err(|_| crate::errors::OpcError::Conversion("UInt exceeds i32 range".into())),
+            OpcValue::Float(f)
+                if f.fract() == 0.0 && f >= i32::MIN as f64 && f <= i32::MAX as f64 =>
+            {
+                Ok(f as i32)
+            }
+            other => Err(crate::errors::OpcError::Conversion(format!(
+                "Cannot convert {other:?} to i32"
+            ))),
+        }
+    }
+}
+
+#[allow(
+    clippy::use_self,
+    clippy::cast_possible_truncation,
+    clippy::cast_precision_loss,
+    clippy::cast_lossless,
+    clippy::cast_sign_loss
+)]
+impl TryFrom<OpcValue> for u64 {
+    type Error = crate::errors::OpcError;
+
+    fn try_from(value: OpcValue) -> Result<Self, Self::Error> {
+        match value {
+            OpcValue::UInt(u) => Ok(u),
+            OpcValue::Int(i) => u64::try_from(i).map_err(|_| {
+                crate::errors::OpcError::Conversion("Negative Int cannot convert to u64".into())
+            }),
+            OpcValue::Float(f) if f.fract() == 0.0 && f >= 0.0 && f <= u64::MAX as f64 => {
+                Ok(f as u64)
+            }
+            other => Err(crate::errors::OpcError::Conversion(format!(
+                "Cannot convert {other:?} to u64"
+            ))),
+        }
+    }
+}
+
+#[allow(
+    clippy::use_self,
+    clippy::cast_possible_truncation,
+    clippy::cast_precision_loss,
+    clippy::cast_lossless,
+    clippy::cast_sign_loss
+)]
+impl TryFrom<OpcValue> for u32 {
+    type Error = crate::errors::OpcError;
+
+    fn try_from(value: OpcValue) -> Result<Self, Self::Error> {
+        match value {
+            OpcValue::UInt(u) => u32::try_from(u)
+                .map_err(|_| crate::errors::OpcError::Conversion("UInt exceeds u32 range".into())),
+            OpcValue::Int(i) => u32::try_from(i)
+                .map_err(|_| crate::errors::OpcError::Conversion("Int out of u32 range".into())),
+            OpcValue::Float(f) if f.fract() == 0.0 && f >= 0.0 && f <= u32::MAX as f64 => {
+                Ok(f as u32)
+            }
+            other => Err(crate::errors::OpcError::Conversion(format!(
+                "Cannot convert {other:?} to u32"
+            ))),
+        }
+    }
+}
+
+impl TryFrom<OpcValue> for f64 {
+    type Error = crate::errors::OpcError;
+
+    #[allow(clippy::cast_precision_loss)]
+    fn try_from(value: OpcValue) -> Result<Self, Self::Error> {
+        match value {
+            OpcValue::Float(f) => Ok(f),
+            OpcValue::Int(i) => Ok(i as Self),
+            OpcValue::UInt(u) => Ok(u as Self),
+            other => Err(crate::errors::OpcError::Conversion(format!(
+                "Cannot convert {other:?} to f64"
+            ))),
+        }
+    }
+}
+
+impl TryFrom<OpcValue> for bool {
+    type Error = crate::errors::OpcError;
+
+    fn try_from(value: OpcValue) -> Result<Self, Self::Error> {
+        match value {
+            OpcValue::Bool(b) => Ok(b),
+            OpcValue::Int(i) => Ok(i != 0),
+            OpcValue::UInt(u) => Ok(u != 0),
+            other => Err(crate::errors::OpcError::Conversion(format!(
+                "Cannot convert {other:?} to bool"
+            ))),
+        }
+    }
+}
+
+impl TryFrom<OpcValue> for String {
+    type Error = crate::errors::OpcError;
+
+    fn try_from(value: OpcValue) -> Result<Self, Self::Error> {
+        match value {
+            OpcValue::String(s) => Ok(s),
+            other => Ok(other.to_string()),
+        }
+    }
+}
+
 impl std::str::FromStr for OpcValue {
     type Err = std::convert::Infallible;
 
@@ -180,8 +393,11 @@ impl std::str::FromStr for OpcValue {
         if trimmed.eq_ignore_ascii_case("null") {
             return Ok(Self::Null);
         }
-        if let Ok(i) = trimmed.parse::<i32>() {
+        if let Ok(i) = trimmed.parse::<i64>() {
             return Ok(Self::Int(i));
+        }
+        if let Ok(u) = trimmed.parse::<u64>() {
+            return Ok(Self::UInt(u));
         }
         if let Ok(f) = trimmed.parse::<f64>() {
             return Ok(Self::Float(f));
@@ -290,5 +506,35 @@ impl SystemTimeOptionExt for Option<std::time::SystemTime> {
             opt: *self,
             fallback,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_opc_value_int_uint_and_try_from() {
+        let v_int = OpcValue::Int(42);
+        assert_eq!(v_int.as_int(), Some(42));
+        assert_eq!(v_int.as_uint(), None);
+        assert_eq!(i32::try_from(v_int.clone()).unwrap(), 42);
+        assert_eq!(i64::try_from(v_int.clone()).unwrap(), 42);
+        assert_eq!(u32::try_from(v_int.clone()).unwrap(), 42);
+        assert_eq!(u64::try_from(v_int).unwrap(), 42);
+
+        let val_u64 = OpcValue::UInt(4_294_967_295);
+        assert_eq!(val_u64.as_uint(), Some(4_294_967_295));
+        assert_eq!(val_u64.as_int(), None);
+        assert_eq!(u32::try_from(val_u64.clone()).unwrap(), 4_294_967_295);
+        assert_eq!(u64::try_from(val_u64.clone()).unwrap(), 4_294_967_295);
+        assert_eq!(i64::try_from(val_u64.clone()).unwrap(), 4_294_967_295);
+        assert!(i32::try_from(val_u64).is_err()); // Exceeds i32 range
+
+        let parsed: OpcValue = "100".parse().unwrap();
+        assert_eq!(parsed, OpcValue::Int(100));
+
+        let parsed_uint: OpcValue = "9223372036854775808".parse().unwrap();
+        assert_eq!(parsed_uint, OpcValue::UInt(9_223_372_036_854_775_808));
     }
 }

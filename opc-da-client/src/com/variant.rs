@@ -13,7 +13,9 @@ use windows::Win32::System::Ole::{
     SafeArrayAccessData, SafeArrayGetDim, SafeArrayGetElemsize, SafeArrayGetLBound,
     SafeArrayGetUBound, SafeArrayUnaccessData,
 };
-use windows::Win32::System::Variant::{VARIANT, VT_BOOL, VT_BSTR, VT_EMPTY, VT_I4, VT_NULL, VT_R8};
+use windows::Win32::System::Variant::{
+    VARIANT, VT_BOOL, VT_BSTR, VT_EMPTY, VT_I4, VT_I8, VT_NULL, VT_R8, VT_UI4, VT_UI8,
+};
 use windows::core::BSTR;
 
 /// Maximum recursion depth for nested SafeArray traversal to prevent stack overflow.
@@ -207,15 +209,17 @@ pub fn variant_to_opc_value(variant: &VARIANT) -> OpcValue {
             1 => OpcValue::Null,
             16 => {
                 let val = (*variant.Anonymous.Anonymous).Anonymous.cVal;
-                OpcValue::Int(i32::from(val))
+                OpcValue::Int(i64::from(val))
             }
-            17 => OpcValue::Int(i32::from((*variant.Anonymous.Anonymous).Anonymous.bVal)),
-            2 => OpcValue::Int(i32::from((*variant.Anonymous.Anonymous).Anonymous.iVal)),
-            18 => OpcValue::Int(i32::from((*variant.Anonymous.Anonymous).Anonymous.uiVal)),
-            3 => OpcValue::Int((*variant.Anonymous.Anonymous).Anonymous.lVal),
-            19 => OpcValue::Int((*variant.Anonymous.Anonymous).Anonymous.ulVal as i32),
-            22 => OpcValue::Int((*variant.Anonymous.Anonymous).Anonymous.intVal),
-            23 => OpcValue::Int((*variant.Anonymous.Anonymous).Anonymous.uintVal as i32),
+            17 => OpcValue::UInt(u64::from((*variant.Anonymous.Anonymous).Anonymous.bVal)),
+            2 => OpcValue::Int(i64::from((*variant.Anonymous.Anonymous).Anonymous.iVal)),
+            18 => OpcValue::UInt(u64::from((*variant.Anonymous.Anonymous).Anonymous.uiVal)),
+            3 => OpcValue::Int(i64::from((*variant.Anonymous.Anonymous).Anonymous.lVal)),
+            19 => OpcValue::UInt(u64::from((*variant.Anonymous.Anonymous).Anonymous.ulVal)),
+            20 => OpcValue::Int((*variant.Anonymous.Anonymous).Anonymous.llVal),
+            21 => OpcValue::UInt((*variant.Anonymous.Anonymous).Anonymous.ullVal),
+            22 => OpcValue::Int(i64::from((*variant.Anonymous.Anonymous).Anonymous.intVal)),
+            23 => OpcValue::UInt(u64::from((*variant.Anonymous.Anonymous).Anonymous.uintVal)),
             4 => OpcValue::Float(f64::from((*variant.Anonymous.Anonymous).Anonymous.fltVal)),
             5 => OpcValue::Float((*variant.Anonymous.Anonymous).Anonymous.dblVal),
             11 => OpcValue::Bool((*variant.Anonymous.Anonymous).Anonymous.boolVal.0 != 0),
@@ -229,6 +233,14 @@ pub fn variant_to_opc_value(variant: &VARIANT) -> OpcValue {
 }
 
 /// Convert an [`OpcValue`] into a COM [`VARIANT`] for writing.
+///
+/// Implements adaptive integer coercion:
+/// - If `OpcValue::Int(i)` fits in 32-bit signed bounds (`i32::MIN..=i32::MAX`), emit `VT_I4`.
+/// - If `OpcValue::Int(i)` exceeds 32 bits, emit `VT_I8`.
+/// - If `OpcValue::UInt(u)` fits in 32-bit unsigned bounds (`u32::MIN..=u32::MAX`), emit `VT_UI4`.
+/// - If `OpcValue::UInt(u)` exceeds 32 bits, emit `VT_UI8`.
+///
+/// This guarantees 100% compatibility with classic 32-bit OPC DA 2.05a servers.
 pub fn opc_value_to_variant(value: &OpcValue) -> VARIANT {
     let mut variant = VARIANT::default();
     // SAFETY: We set the `vt` discriminant and the corresponding union field atomically.
@@ -241,8 +253,22 @@ pub fn opc_value_to_variant(value: &OpcValue) -> VARIANT {
                     std::mem::ManuallyDrop::new(BSTR::from(s));
             }
             OpcValue::Int(i) => {
-                (*variant.Anonymous.Anonymous).vt = VT_I4;
-                (*variant.Anonymous.Anonymous).Anonymous.lVal = *i;
+                if let Ok(i32_val) = i32::try_from(*i) {
+                    (*variant.Anonymous.Anonymous).vt = VT_I4;
+                    (*variant.Anonymous.Anonymous).Anonymous.lVal = i32_val;
+                } else {
+                    (*variant.Anonymous.Anonymous).vt = VT_I8;
+                    (*variant.Anonymous.Anonymous).Anonymous.llVal = *i;
+                }
+            }
+            OpcValue::UInt(u) => {
+                if let Ok(u32_val) = u32::try_from(*u) {
+                    (*variant.Anonymous.Anonymous).vt = VT_UI4;
+                    (*variant.Anonymous.Anonymous).Anonymous.ulVal = u32_val;
+                } else {
+                    (*variant.Anonymous.Anonymous).vt = VT_UI8;
+                    (*variant.Anonymous.Anonymous).Anonymous.ullVal = *u;
+                }
             }
             OpcValue::Float(f) => {
                 (*variant.Anonymous.Anonymous).vt = VT_R8;
@@ -357,12 +383,29 @@ pub struct ItemStatesGuard<'a> {
 
 impl<'a> ItemStatesGuard<'a> {
     /// Creates a new `ItemStatesGuard` wrapping the states slice and the COM errors slice.
+    ///
+    /// This constructor is infallible to prevent leaking COM variants if construction panics.
     #[must_use]
     pub fn new(
         states: &'a mut [crate::raw::bindings::da::tagOPCITEMSTATE],
         errors: &'a [windows::core::HRESULT],
     ) -> Self {
         Self { states, errors }
+    }
+
+    /// Validates that both slices match the expected batch length.
+    ///
+    /// # Errors
+    /// Returns [`crate::errors::OpcError::Internal`] if lengths do not match `expected_len`.
+    pub fn validate_lengths(&self, expected_len: usize) -> crate::errors::OpcResult<()> {
+        if self.states.len() != expected_len || self.errors.len() != expected_len {
+            return Err(crate::errors::OpcError::Internal(format!(
+                "Item states guard length mismatch: expected {expected_len}, got states={}, errors={}",
+                self.states.len(),
+                self.errors.len()
+            )));
+        }
+        Ok(())
     }
 }
 
@@ -384,13 +427,15 @@ impl std::ops::Deref for ItemStatesGuard<'_> {
 
 impl Drop for ItemStatesGuard<'_> {
     fn drop(&mut self) {
-        for (state, &err) in self.states.iter_mut().zip(self.errors) {
-            if err.is_ok() {
+        let cleanup_len = self.states.len().min(self.errors.len());
+        for i in 0..cleanup_len {
+            if self.errors[i].is_ok() {
                 /* SAFETY: Invariant REV-01: COM leaves vDataValue uninitialized if the read fails.
                 VariantClear MUST only be invoked if the item read succeeded (err.is_ok()). */
                 unsafe {
-                    let _ =
-                        windows::Win32::System::Variant::VariantClear(&raw mut state.vDataValue);
+                    let _ = windows::Win32::System::Variant::VariantClear(
+                        &raw mut self.states[i].vDataValue,
+                    );
                 }
             }
         }

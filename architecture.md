@@ -112,21 +112,37 @@ opc-cli/
 ## 5. Module Boundaries
 
 ### `opc-cli` (TUI Application)
-- **Owns**: Terminal UI rendering, keyboard input handling, navigation state machine (`CurrentScreen`), background async task spawning (`tokio::spawn`), status bar notifications, and context-aware write parsing with boolean coercion (`App::resolve_write_value`).
+- **Owns**: Terminal UI rendering (`ui.rs`), keyboard input handling (`main.rs`), and decomposed application state machine (`app.rs`):
+  - `NavigationState`: Screen navigation (`CurrentScreen`), history tracking (`previous_screen`), cursor indexes for server and tag lists, and contextual input buffers (`host_input`, `write_input`).
+  - `TaskManager`: Asynchronous background task tracking (`ActiveTask`), cooperative cancellation on `Esc` key during loading, centralized channel draining (`poll_channel`), and task deduplication (`spawn_read_task`).
+  - `SearchEngine`: $O(1)$ search matching mask, case-insensitive substring searching without per-keystroke allocations, and tag filter navigation.
+  - `ViewState`: Server list, tag list, monitored values (`TagValues`), selection set (`HashSet<String>`), and status message ring buffer.
 - **Does NOT Own**: Raw COM initialization, registry enumeration, OPC group creation, HRESULT interpretation logic.
-- **Trait Interfaces**: Consumes `dyn OpcProvider` asynchronously.
-- **Mock Availability**: Fully mockable via `MockOpcProvider` (compiled when `feature = "test-support"` is active in `opc-da-client`).
+- **Trait Interfaces**: Consumes composite `OpcProvider` (or sub-traits `ServerDiscovery`, `TagBrowser`, `TagReader`, `TagWriter`) asynchronously.
+- **Mock Availability**: Fully mockable via `MockOpcProvider` (compiled when `feature = "test-support"` is active in `opc-da-client`) and unit test fixtures (`test_app()`, `TestAppBuilder`).
 
 ### `opc-da-client` (Core Client Library)
-- **Owns**: Public API (`OpcProvider` with `read_tag_value` and `write_tag_values` defaults), canonical domain types in `types/` (`OpcValue`, `OpcQuality` with `FromStr`, `ServerIdentifier`, type-safe sealed `GroupHandle`, `ClientItemHandle`, `ServerItemHandle` and legacy `ItemHandle` alias), data structs (`TagValue`, `TagSuccess`, `TagFailure`, `TagResult = Result<TagSuccess, TagFailure>`, `WriteResult`, `TagCollector` with $O(1)$ `harvest` and `#[must_use] push`, `TagBatch` enum with zero-alloc `into_shareable`, `IntoTags` trait, `TagValues` collection with lenient typed extractions and numeric coercion, `TagExtractError`), error definitions (`OpcError::is_connection_error`, `OpcError::Timeout`, `From<windows::core::HRESULT>`), inherent diagnostic method (`OpcError::friendly_hint`), RAII guards (`ComGuard`, `GroupGuard`, `BrowsePositionGuard`, `ItemStatesGuard`), server discovery (`com::discovery`), and modular connector coordinator facade (`com::connector`).
+- **Owns**: Public API:
+  - Segregated role traits in `provider.rs`: `ServerDiscovery`, `TagBrowser`, `TagReader`, `TagWriter`, and composite `pub trait OpcProvider: ServerDiscovery + TagBrowser + TagReader + TagWriter`.
+  - Canonical domain types in `types/`:
+    - `OpcValue`: Expanded enum supporting `Int(i64)`, `UInt(u64)`, `Float(f64)`, `String(String)`, `Bool(bool)`, `Empty`, `Null`.
+    - `OpcQuality`: Strongly-typed 16-bit OPC quality word with private fields and getter methods (`major()`, `substatus()`, `limit()`, `raw()`).
+    - `TagValue`: Result-like outcome facade (`Result<OpcValue, OpcError>`) with `.outcome()`, `.value()`, `.error()`, preventing incoherent state.
+    - `TagValues`: Collection wrapper for tag values with $O(1)$ indexing, case-insensitive lookups, and lenient typed extractions.
+    - `TagBatch`: Zero-allocation polymorphic tag batching (`InlineSingle`, `Borrowed`, `Static`, `Shared`, `Owned`).
+    - `handles`: Distinct typestates: `ClientGroupHandle`, `ServerGroupHandle`, `ClientItemHandle`, `ServerItemHandle`, and `ItemHandle` alias.
+    - `server`: `ServerIdentifier`, `OpcServerEndpoint`, `OpcServerInfo`, `ServerStatus`, `GroupState`.
+  - Error definitions in `errors.rs`: `OpcError`, `OpcResult`, `OpcOperation`, and `log_opc_err!`.
+  - RAII guards: `ComGuard`, `GroupGuard` with `.disarm()`, `BrowsePositionGuard`, `ItemStatesGuard`, `ScopedVariant`.
+  - Modular connector SPI: `com::connector::{traits, server, group, mock}` with `ItemWrite` pairs and `GroupRemovalMode`.
 - **Does NOT Own**: Terminal rendering, direct COM worker loop implementation.
-- **Trait Interfaces**: Exports `OpcProvider`.
+- **Trait Interfaces**: Exports `OpcProvider`, `ServerDiscovery`, `TagBrowser`, `TagReader`, `TagWriter`.
 - **Mock Availability**: Provides `MockOpcProvider` via `mockall`, and exports `MockOpcDaClient` type alias and `Default` implementation under `all(feature = "test-support", feature = "opc-da-backend")`.
 
 ### `opc-da-client::com::client` (Public Client Implementation)
-- **Owns**: Public concrete `OpcDaClient` struct implementing `OpcProvider`, fluent builder `OpcDaClientBuilder` (`builder()`), server-bound constructors (`connect`, `connect_remote`), inherent async readers and writers (`read_tag_values`, `read_tag_value`, `read_f64`, `read_i32`, `read_bool`, `read_string`, `write`, `write_batch`, `browse`), remote server discovery (`list_servers_on`), Layer 2 subscription polling stream (`subscribe` with zero-allocation shareable batch clones), request dispatch channel management (`mpsc::Sender<ComRequest>`), and public constructors (`OpcDaClient::new`).
+- **Owns**: Public concrete `OpcDaClient` struct implementing `OpcProvider`, fluent builder `OpcDaClientBuilder` (`builder()`), local binding constructors (`bind`, `bind_remote`), eager connection constructors (`connect`, `connect_remote`, `connect_eager`), inherent async readers and writers (`read_tag_values`, `read_tag_value`, `read_f64`, `read_i32`, `read_bool`, `read_string`, `write`, `write_batch`, `browse`), remote server discovery (`list_servers_on`), Layer 2 subscription polling stream (`subscribe` with zero-allocation shareable batch clones), request dispatch channel management (`mpsc::Sender<ComRequest>`), and public constructors (`OpcDaClient::new`).
 - **Does NOT Own**: In-apartment Win32 COM operations, unmanaged memory pointers, or direct FFI calls (all delegated across channels to `ComWorker`).
-- **Trait Interfaces**: Implements `OpcProvider`.
+- **Trait Interfaces**: Implements `OpcProvider`, `ServerDiscovery`, `TagBrowser`, `TagReader`, `TagWriter`.
 - **Mock Availability**: `MockOpcDaClient` alias available under `all(feature = "test-support", feature = "opc-da-backend")`.
 
 ### `opc-da-client::com::iterator` (Safe COM Enumerators)
@@ -142,7 +158,7 @@ opc-cli/
 - **Mock Availability**: N/A (stateless helpers operating on Win32 COM interfaces).
 
 ### `opc-da-client::raw::memory` (Unmanaged COM Memory Allocator)
-- **Owns**: RAII wrappers for unmanaged Win32 COM memory allocations (`RemoteArray<T>`, `RemotePointer<T>`, `LocalPointer<T>`), guaranteeing safe deallocation via `CoTaskMemFree` on `Drop`, move-only ownership, and zero-allocation slice projections.
+- **Owns**: RAII wrappers for unmanaged Win32 COM memory allocations (`RemoteArray<T>`, `RemotePointer<T>`, `LocalPointer<T>`, `CoTaskPwstr`), safe borrowing via `decode_borrowed_pwstr`, guaranteeing safe deallocation via `CoTaskMemFree` on `Drop`, move-only ownership, and zero-allocation slice projections. `RemotePointer::from_raw` is strictly `unsafe`. Unmanaged types are crate-private and unexported from `lib.rs`.
 - **Does NOT Own**: Higher-level COM abstractions, domain models, or thread synchronization.
 - **Trait Interfaces**: `TryFromNative`, `TryToNative`.
 - **Mock Availability**: N/A (sealed internal FFI memory abstraction, verified by co-located unit tests).
@@ -154,7 +170,7 @@ opc-cli/
 - **Mock Availability**: N/A (sealed internal FFI structures).
 
 ### `ComWorker` (MTA Worker Thread Pool)
-- **Owns**: Dedicated OS background thread, 2-tier `catch_unwind` panic resilience with priority queue dispatch favoring reads and writes over background browses, `CoInitializeEx(MTA)` lifecycle (`ComGuard`), connection pool caching keyed by `ServerIdentifier` with active group reuse (`PooledServer`), 5-second failure cooldown circuit breaker, native batch writes (`handle_write_batch`), transparent stale connection eviction on RPC errors (`0x800706BA`), and modular worker dispatch engines (`pool::dispatch_with_retry`, `read::handle_read`, `write::handle_write`, `browse::handle_browse`).
+- **Owns**: Dedicated OS background thread, 2-tier `catch_unwind` panic resilience with priority queue dispatch favoring reads and writes over background browses, `CoInitializeEx(MTA)` lifecycle (`ComGuard`), connection pool caching keyed by `ServerIdentifier` with active group reuse (`PooledServer`), 5-second failure cooldown circuit breaker, native batch writes (`handle_write_batch`), generic `dispatch_pooled_request` with transparent stale connection eviction on RPC errors (`0x800706BA`), and modular worker dispatch engines (`pool::dispatch_with_retry`, `read::handle_read`, `write::handle_write`, `browse::handle_browse`).
 - **Does NOT Own**: TUI state, UI rendering, high-level task timeouts.
 - **Trait Interfaces**: Uses internal `ServerConnector` trait and connector submodules (`com::connector::{traits, server, group, mock}`).
 - **Mock Availability**: Fully unit-tested via modular `MockServerConnector` (exported under `feature = "test-support"`).
@@ -215,8 +231,9 @@ The project uses a unified dual-interface build system:
 - **Library Domain Errors**: `OpcError` (defined in `opc-da-client`) handles domain failures via `thiserror` across 7 structured variants: `Com`, `Connection`, `Server`, `Conversion`, `InvalidState`, `NotImplemented`, and `Internal`.
 - **Connection Failure Factory & Predicates**: `OpcError::connection_failed(source)` constructs actionable connection failures, while `OpcError::is_connection_error(&self)` identifies recoverable transport/RPC dropouts.
 - **Friendly Hint Engine**: `OpcError::friendly_hint(&self)` and `raw::hresult::friendly_hresult_hint` map technical HRESULT codes (e.g. `0x800706BA` RPC Unavailable, `0x80070005` DCOM Access Denied) to actionable plain-English text.
-- **RAII Resource & Cursor Management (`GroupGuard`, `BrowsePositionGuard`)**: Temporary COM groups created during `read_tag_values` and `write_tag_value` are guarded by `GroupGuard<'_, S: ConnectedServer>`, guaranteeing deterministic `remove_group(handle, true)` invocation on `Drop` across all return paths, `?` operator exits, and thread panics. Namespace browsing uses `BrowsePositionGuard` to deterministically restore parent cursor position (`BrowseDirection::Up`) across error returns and thread panics.
-- **RAII Memory Safety Guards (`ScopedVariant`, `ItemStatesGuard`, `ItemResultsBlobGuard`)**: Win32 COM `VARIANT` allocations are strictly encapsulated in RAII drop guards: `ScopedVariant` guarantees deterministic `VariantClear` on `Drop` across tag write paths; `ItemStatesGuard` wraps `tagOPCITEMSTATE` slices across read paths, ensuring `VariantClear` is executed across all element variants before unmanaged memory is freed; `ItemResultsBlobGuard` wraps `tagOPCITEMRESULT` arrays and cleans up allocated blob pointers on `Drop`.
+- **Coherent Tag Outcomes (`TagValue`)**: `TagValue` encapsulates reading outcomes as `Result<OpcValue, OpcError>`, accessed via `.outcome()`, `.value()`, and `.error()` accessors, completely eradicating invalid states (such as simultaneous `Some(val)` and `Some(err)` or both `None`).
+- **RAII Resource & Cursor Management (`GroupGuard`, `BrowsePositionGuard`)**: Temporary COM groups created during `read_tag_values` and `write_tag_value` are guarded by `GroupGuard<'_, S: ConnectedServer>` supporting `.disarm()`, guaranteeing deterministic `remove_group(handle, true)` invocation on `Drop` across all return paths, `?` operator exits, and thread panics. Namespace browsing uses `BrowsePositionGuard` to deterministically restore parent cursor position (`BrowseDirection::Up`) across error returns and thread panics.
+- **RAII Memory Safety Guards (`ScopedVariant`, `ItemStatesGuard`, `ItemResultsBlobGuard`, `CoTaskPwstr`)**: Win32 COM `VARIANT` allocations are strictly encapsulated in RAII drop guards: `ScopedVariant` guarantees deterministic `VariantClear` on `Drop` across tag write paths; `ItemStatesGuard` wraps `tagOPCITEMSTATE` slices across read paths, ensuring `VariantClear` is executed across all element variants before unmanaged memory is freed; `ItemResultsBlobGuard` wraps `tagOPCITEMRESULT` arrays and cleans up allocated blob pointers on `Drop`; `CoTaskPwstr` ensures dynamically allocated COM `PWSTR` strings are freed deterministically via `CoTaskMemFree` on `Drop`.
 - **Breadcrumb Chains**: TUI uses `anyhow` displaying `{:#}` full error chains in status popups.
 - **No Swallowed Errors**: All fallible COM and background task operations propagate `Result<T, OpcError>`.
 
@@ -241,9 +258,9 @@ The project uses a unified dual-interface build system:
 
 ## 10. Testing Strategy
 
-- **Unit Testing**: Mock-based testing using `MockOpcProvider` (`mockall`). TUI navigation flow, state transitions (`CurrentScreen`), search cycling, context-aware write parsing with boolean coercion (`App::resolve_write_value`), and ring-buffer logic are verified without Windows COM dependencies (39 unit tests in `opc-cli`).
-- **COM Worker & Memory Safety Testing**: `ComWorker`, `com/discovery.rs`, `com/variant.rs` (`ScopedVariant`, `ItemStatesGuard`), `com/connector/` submodules (`traits.rs`, `server.rs`, `group.rs`, `mock.rs`), `com/security.rs`, `raw/memory.rs`, and `raw/bridge.rs` unit tests use `MockServerConnector` and synthetic allocations to test write paths, tag browsing (flat, hierarchical, cancellation, capacity limits), server connection pooling, active group caching, stale connection eviction, 2-tier panic isolation and recovery (`test_worker_thread_recovery_after_panic`), worker drop behaviors, tracing instrumentation execution, `GroupGuard` automatic drop cleanup on `add_items` failure, registry inspection validation, non-cloneable remote pointer safe drop, safe slice copying, blob guard double-free prevention, and zero-leak COM memory guards (150 unit tests in `opc-da-client`, 189 total workspace unit tests).
-- **Doc Testing**: Public API items include runnable doc tests verified via `cargo test --doc -p opc-da-client --all-features` (33 doc-tests, including pure-Rust mocking examples in `README.md`, `types.rs`, and `com/client.rs`).
+- **Unit Testing**: Mock-based testing using `MockOpcProvider` (`mockall`). TUI navigation flow, state transitions (`CurrentScreen`), loading cancellation on `Esc`, search cycling, context-aware write parsing with boolean coercion (`App::resolve_write_value`), and ring-buffer logic are verified without Windows COM dependencies (49 unit tests in `opc-cli`).
+- **COM Worker & Memory Safety Testing**: `ComWorker`, `com/discovery.rs`, `com/variant.rs` (`ScopedVariant`, `ItemStatesGuard`), `com/connector/` submodules (`traits.rs`, `server.rs`, `group.rs`, `mock.rs`), `com/security.rs`, `raw/memory.rs`, and `raw/bridge.rs` unit tests use `MockServerConnector` and synthetic allocations to test write paths, tag browsing (flat, hierarchical, cancellation, capacity limits), server connection pooling, active group caching, stale connection eviction, 2-tier panic isolation and recovery (`test_worker_thread_recovery_after_panic`), worker drop behaviors, tracing instrumentation execution, `GroupGuard` automatic drop cleanup on `add_items` failure, registry inspection validation, non-cloneable remote pointer safe drop, safe slice copying, blob guard double-free prevention, and zero-leak COM memory guards (173 unit tests + 4 integration tests in `opc-da-client`, 226 total workspace tests).
+- **Doc Testing**: Public API items include runnable and compile-fail doc tests verified via `cargo test --doc -p opc-da-client --all-features` (67 doc-tests, including type safety enforcement and pure-Rust mocking examples in `README.md`, `types.rs`, and `com/client.rs`).
 - **Polyfill Build Gates**: Independent compilation of `compat/*` polyfill crates inside `scripts/verify.ps1`.
 - **AST-Grep Structural Safety Gates**: `sg scan` enforcement of zero unwrap/expect in production library code and mandatory `// SAFETY:` rationale on all unsafe blocks. Rules are validated via ast-grep unit tests before static scans.
 - **Forbidden Macro Scanner**: Automated `rg` scan ensuring zero `println!`, `dbg!`, or `todo!` macros in `opc-da-client/src/`.
@@ -317,37 +334,34 @@ stateDiagram-v2
 ### Data Flow
 ```mermaid
 graph TD
-    User[User Input] --> |Key/Mouse Event| EventLoop[Main Event Loop]
-    EventLoop --> |Dispatch| AppUpdate[App::update()]
+    User[User Input] --> |Key/Mouse Event| EventLoop[Main Event Loop in main.rs]
+    EventLoop --> |Route Events| App[App Coordinator]
     
-    subgraph Core Logic
-        AppUpdate --> |Request Data| OpcProvider[Trait: OpcProvider]
-        OpcProvider --> |Call| Lib[opc-da-client]
-        Lib --> |COM/DCOM| Server[OPC Server]
-        Server --> |Data| Lib
-        Lib --> |Result| AppUpdate
-        AppUpdate --> |Mutate| AppState[App State Model]
+    subgraph "App Decomposed State Model (opc-cli)"
+        App --> Nav[NavigationState]
+        App --> Tasks[TaskManager: Cooperative Esc Cancellation]
+        App --> Search[SearchEngine: O(1) Match Mask]
+        App --> View[ViewState: Monitored TagValues & Selected Tags]
     end
-    CLI["opc-cli (Composition Root in main.rs)"]
-    subgraph "opc-da-client"
-        Provider["trait OpcProvider"]
-        Client["com::client (OpcDaClient)"]
-        Worker["com::worker (ComWorker MTA)"]
-        Connector["com::connector (ServerConnector / ComConnector)"]
-        Discovery["com::discovery (OpcServerListCatalog)"]
-        Security["com::security (apply_proxy_blanket)"]
-        Bindings["raw::bindings (OPCDA/OPCCOMN)"]
+
+    subgraph "Service Trait Segregation (opc-da-client)"
+        Tasks --> |Dispatch Async| Provider["trait OpcProvider"]
+        Provider --> Discovery["ServerDiscovery"]
+        Provider --> Browser["TagBrowser"]
+        Provider --> Reader["TagReader"]
+        Provider --> Writer["TagWriter"]
     end
-    CLI --> Provider --> Client --> Worker --> Connector
-    Connector --> Discovery
-    Connector --> Security
-    Discovery --> Security
-    Connector --> Bindings --> WinCOM["Windows COM/DCOM"]
-    Discovery --> Bindings
+
+    subgraph "MTA Worker & Hardware Abstraction"
+        Reader & Writer & Browser & Discovery --> Client["com::client (OpcDaClient)"]
+        Client --> Worker["com::worker (ComWorker MTA)"]
+        Worker --> Connector["com::connector (ServerConnector SPI)"]
+        Connector --> NativeCOM["Windows COM/DCOM Server"]
+    end
     
     subgraph Rendering
-        AppState --> |Read| View[UI Render Functions]
-        View --> |Draw| Terminal[Ratatui / Crossterm]
+        View & Nav & Search --> |Read| UIRender[UI Render in ui.rs]
+        UIRender --> |Draw| Terminal[Ratatui / Crossterm]
     end
 
     subgraph Logging

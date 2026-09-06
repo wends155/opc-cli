@@ -55,10 +55,10 @@ fn browse_direction_try_from_rejects_invalid() {
 #[test]
 fn test_opc_quality_good_standard() {
     let q = OpcQuality::from(0x00C0);
-    assert_eq!(q.major, QualityMajor::Good);
-    assert_eq!(q.substatus, QualitySubstatus::NonSpecific);
-    assert_eq!(q.limit, QualityLimit::NotLimited);
-    assert_eq!(q.raw, 0x00C0);
+    assert_eq!(q.major(), QualityMajor::Good);
+    assert_eq!(q.substatus(), QualitySubstatus::NonSpecific);
+    assert_eq!(q.limit(), QualityLimit::NotLimited);
+    assert_eq!(q.raw(), 0x00C0);
     assert!(q.is_good());
     assert!(!q.is_bad());
     assert!(!q.is_uncertain());
@@ -69,18 +69,18 @@ fn test_opc_quality_good_standard() {
 #[test]
 fn test_opc_quality_good_local_override() {
     let q = OpcQuality::from(0x00D8);
-    assert_eq!(q.major, QualityMajor::Good);
-    assert_eq!(q.substatus, QualitySubstatus::LocalOverride);
-    assert_eq!(q.limit, QualityLimit::NotLimited);
+    assert_eq!(q.major(), QualityMajor::Good);
+    assert_eq!(q.substatus(), QualitySubstatus::LocalOverride);
+    assert_eq!(q.limit(), QualityLimit::NotLimited);
     assert_eq!(q.to_string(), "Good (Local Override)");
 }
 
 #[test]
 fn test_opc_quality_bad_comm_failure() {
     let q = OpcQuality::from(0x0018);
-    assert_eq!(q.major, QualityMajor::Bad);
-    assert_eq!(q.substatus, QualitySubstatus::CommFailure);
-    assert_eq!(q.limit, QualityLimit::NotLimited);
+    assert_eq!(q.major(), QualityMajor::Bad);
+    assert_eq!(q.substatus(), QualitySubstatus::CommFailure);
+    assert_eq!(q.limit(), QualityLimit::NotLimited);
     assert!(q.is_bad());
     assert_eq!(q.to_string(), "Bad (Comm Failure)");
 }
@@ -88,12 +88,25 @@ fn test_opc_quality_bad_comm_failure() {
 #[test]
 fn test_opc_quality_uncertain_limits() {
     let q = OpcQuality::from(0x0056);
-    assert_eq!(q.major, QualityMajor::Uncertain);
-    assert_eq!(q.substatus, QualitySubstatus::EguExceeded);
-    assert_eq!(q.limit, QualityLimit::HighLimited);
+    assert_eq!(q.major(), QualityMajor::Uncertain);
+    assert_eq!(q.substatus(), QualitySubstatus::EguExceeded);
+    assert_eq!(q.limit(), QualityLimit::HighLimited);
     assert!(q.is_uncertain());
     assert!(q.is_limited());
     assert_eq!(q.to_string(), "Uncertain (EGU Exceeded) [High Limited]");
+}
+
+#[test]
+fn test_opc_quality_new_constructor() {
+    let q = OpcQuality::new(
+        QualityMajor::Uncertain,
+        QualitySubstatus::EguExceeded,
+        QualityLimit::HighLimited,
+    );
+    assert_eq!(q.major(), QualityMajor::Uncertain);
+    assert_eq!(q.substatus(), QualitySubstatus::EguExceeded);
+    assert_eq!(q.limit(), QualityLimit::HighLimited);
+    assert_eq!(q.raw(), 0x0056);
 }
 
 #[test]
@@ -237,11 +250,23 @@ fn test_tag_batch_into_tags_conversions() {
     assert_eq!(batch.iter_str().collect::<Vec<_>>(), vec!["S1", "S2"]);
     assert_eq!(batch.into_vec(), vec!["S1", "S2"]);
 
-    // 6. &Vec<String>
-    let ref_vec = &vec!["Ref1".to_string(), "Ref2".to_string()];
-    let batch = ref_vec.into_tag_batch();
-    assert_eq!(batch.len(), 2);
-    assert_eq!(batch.iter_str().collect::<Vec<_>>(), vec!["Ref1", "Ref2"]);
+    // 6. TagBatch::from_str_lenient
+    let inline_batch = TagBatch::from_str_lenient("Short.Tag");
+    assert_eq!(inline_batch.len(), 1);
+    assert_eq!(
+        inline_batch.iter_str().collect::<Vec<_>>(),
+        vec!["Short.Tag"]
+    );
+    assert_eq!(inline_batch.clone().into_vec(), vec!["Short.Tag"]);
+    assert_eq!(inline_batch.into_shareable().len(), 1);
+
+    let long_batch =
+        TagBatch::from_str_lenient("Very.Long.Tag.That.Exceeds.Thirty.One.Bytes.Identifier");
+    assert_eq!(long_batch.len(), 1);
+    assert_eq!(
+        long_batch.iter_str().collect::<Vec<_>>(),
+        vec!["Very.Long.Tag.That.Exceeds.Thirty.One.Bytes.Identifier"]
+    );
 
     // 7. Arc<[String]>
     let arc_slice: Arc<[String]> =
@@ -503,4 +528,95 @@ fn test_tag_result_decomposition_and_conversions() {
     assert_eq!(results.len(), 2);
     assert!(results[0].is_ok());
     assert!(results[1].is_err());
+}
+
+#[test]
+fn test_tag_value_outcome_facade() {
+    let success = TagValue::success("Tag1", OpcValue::Int(10), OpcQuality::GOOD, None);
+    assert!(success.is_good());
+    assert!(!success.is_error());
+    assert_eq!(success.value(), Some(&OpcValue::Int(10)));
+    assert_eq!(success.error(), None);
+    assert_eq!(success.outcome(), Ok(&OpcValue::Int(10)));
+    assert_eq!(success.display_value(), "10");
+
+    let failure = TagValue::with_error(
+        "Tag2",
+        OpcQuality::BAD_COMM_FAILURE,
+        OpcError::Connection("Disconnected".into()),
+    );
+    assert!(!failure.is_good());
+    assert!(failure.is_error());
+    assert_eq!(failure.value(), None);
+    assert!(failure.error().is_some());
+    assert!(failure.outcome().is_err());
+    assert_eq!(failure.display_value(), "Error");
+
+    let converted = failure.into_result();
+    assert!(converted.is_err());
+}
+
+#[test]
+fn test_tag_values_deref() {
+    let tv1 = TagValue::new("Tag1", Some(OpcValue::Int(1)), OpcQuality::GOOD, None);
+    let tv2 = TagValue::new("Tag2", Some(OpcValue::Int(2)), OpcQuality::GOOD, None);
+    let tvs = TagValues::new(vec![tv1, tv2]);
+
+    // Test deref to slice
+    assert_eq!(tvs.len(), 2);
+    assert_eq!(tvs[0].tag_id, "Tag1");
+    assert_eq!(tvs[1].tag_id, "Tag2");
+
+    let slice: &[TagValue] = &tvs;
+    assert_eq!(slice.len(), 2);
+}
+
+#[test]
+fn test_host_normalization_and_remote_detection() {
+    assert_eq!(normalize_host(None), None);
+    assert_eq!(normalize_host(Some("")), None);
+    assert_eq!(normalize_host(Some("   ")), None);
+    assert_eq!(normalize_host(Some("localhost")), None);
+    assert_eq!(normalize_host(Some("LOCALHOST")), None);
+    assert_eq!(normalize_host(Some("127.0.0.1")), None);
+    assert_eq!(normalize_host(Some("::1")), None);
+
+    assert_eq!(
+        normalize_host(Some("192.168.1.50")),
+        Some("192.168.1.50".to_string())
+    );
+    assert_eq!(
+        normalize_host(Some("  plc-host  ")),
+        Some("plc-host".to_string())
+    );
+
+    assert!(!is_remote_host(None));
+    assert!(!is_remote_host(Some("")));
+    assert!(!is_remote_host(Some("localhost")));
+    assert!(!is_remote_host(Some("127.0.0.1")));
+    assert!(!is_remote_host(Some("::1")));
+    assert!(is_remote_host(Some("remote-server")));
+
+    let local_ep = OpcServerEndpoint::local("Test.Server");
+    assert!(!local_ep.is_remote());
+    assert_eq!(local_ep.host, None);
+
+    let remote_local = OpcServerEndpoint::remote("localhost", "Test.Server");
+    assert!(!remote_local.is_remote());
+    assert_eq!(remote_local.host, None);
+
+    let remote_ep = OpcServerEndpoint::remote("10.0.0.1", "Test.Server");
+    assert!(remote_ep.is_remote());
+    assert_eq!(remote_ep.host, Some("10.0.0.1".to_string()));
+
+    let info = OpcServerInfo::new(
+        "Test.Server",
+        windows::core::GUID::zeroed(),
+        Some("Test Title".to_string()),
+        Some("localhost".to_string()),
+    );
+    assert_eq!(info.host, None);
+    assert_eq!(info.display_name(), "Test Title");
+    let ep = info.endpoint();
+    assert!(!ep.is_remote());
 }

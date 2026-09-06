@@ -5,6 +5,7 @@ use crate::com::connector::{
     ConnectedGroup, ConnectedServer, DataSource, GroupConfig, GroupItemDef, GroupItemResult,
     GroupItemState,
 };
+use crate::com::guard::GroupGuard;
 use crate::errors::{OpcError, OpcOperation, OpcResult};
 use crate::log_opc_err;
 use crate::types::{
@@ -51,17 +52,16 @@ pub fn handle_read<S: ConnectedServer>(
             .iter()
             .map(|tag_id| TagValue {
                 tag_id: tag_id.clone(),
-                value: None,
+                outcome: Err(OpcError::Internal("Not read".into())),
                 quality: OpcQuality::BAD_CONFIG_ERROR,
                 timestamp: None,
-                error: None,
             })
             .collect();
 
         // Populate remembered errors for items that were rejected during add_items
         for &(idx, ref err) in &cached.rejected_errors {
             tag_values[idx].quality = OpcQuality::BAD_CONFIG_ERROR;
-            tag_values[idx].error = Some(err.clone());
+            tag_values[idx].outcome = Err(err.clone());
         }
 
         if !cached.server_item_handles.is_empty() {
@@ -110,6 +110,7 @@ pub fn handle_read<S: ConnectedServer>(
             );
         })?;
     let group = created.group;
+    let mut group_guard = GroupGuard::new(&pooled.server, created.server_handle);
 
     let tag_ids: Vec<String> = tags.iter_str().map(ToString::to_string).collect();
     let item_defs: Vec<GroupItemDef> = tag_ids
@@ -123,19 +124,14 @@ pub fn handle_read<S: ConnectedServer>(
         })
         .collect();
 
-    let results = match group.add_items(&item_defs) {
-        Ok(r) => r,
-        Err(e) => {
-            log_opc_err!(
-                &e,
-                OpcOperation::ReadAddItems,
-                server = %endpoint.identifier,
-                tag_count = tag_ids.len()
-            );
-            let _ = pooled.server.remove_group(created.server_handle, true);
-            return Err(e);
-        }
-    };
+    let results = group.add_items(&item_defs).inspect_err(|e| {
+        log_opc_err!(
+            e,
+            OpcOperation::ReadAddItems,
+            server = %endpoint.identifier,
+            tag_count = tag_ids.len()
+        );
+    })?;
 
     if results.len() != tag_ids.len() {
         let err = OpcError::Internal("OPC server returned mismatched result array sizes".into());
@@ -146,7 +142,6 @@ pub fn handle_read<S: ConnectedServer>(
             expected = tag_ids.len(),
             actual = results.len()
         );
-        let _ = pooled.server.remove_group(created.server_handle, true);
         return Err(err);
     }
 
@@ -154,10 +149,9 @@ pub fn handle_read<S: ConnectedServer>(
         .iter()
         .map(|tag_id| TagValue {
             tag_id: tag_id.clone(),
-            value: None,
+            outcome: Err(OpcError::Internal("Not read".into())),
             quality: OpcQuality::BAD_CONFIG_ERROR,
             timestamp: None,
-            error: None,
         })
         .collect();
 
@@ -165,19 +159,16 @@ pub fn handle_read<S: ConnectedServer>(
         partition_item_results(&results, &tag_ids, &endpoint.identifier, &mut tag_values);
 
     if !server_handles.is_empty() {
-        let item_states = match group.read(DataSource::Device, &server_handles) {
-            Ok(states) => states,
-            Err(e) => {
+        let item_states = group
+            .read(DataSource::Device, &server_handles)
+            .inspect_err(|e| {
                 log_opc_err!(
-                    &e,
+                    e,
                     OpcOperation::ReadSync,
                     server = %endpoint.identifier,
                     handle_count = server_handles.len()
                 );
-                let _ = pooled.server.remove_group(created.server_handle, true);
-                return Err(e);
-            }
-        };
+            })?;
 
         populate_item_states(
             item_states,
@@ -188,10 +179,12 @@ pub fn handle_read<S: ConnectedServer>(
         );
     }
 
+    let server_handle = group_guard.disarm();
+
     pooled.active_group = Some(CachedGroup {
         tags: tag_ids,
         group,
-        server_handle: created.server_handle,
+        server_handle,
         server_item_handles: server_handles,
         valid_indices,
         rejected_errors,
@@ -226,7 +219,7 @@ fn partition_item_results(
                 "read_tag_values: add_items rejected tag"
             );
             tag_values[idx].quality = OpcQuality::BAD_CONFIG_ERROR;
-            tag_values[idx].error = Some(err.clone());
+            tag_values[idx].outcome = Err(err.clone());
             rejected_errors.push((idx, err.clone()));
         } else {
             server_handles.push(item_result.server_handle);
@@ -248,10 +241,9 @@ fn populate_item_states(
     for (state_res, &idx) in item_states.into_iter().zip(valid_indices) {
         match state_res {
             Ok(state) => {
-                tag_values[idx].value = Some(state.value);
+                tag_values[idx].outcome = Ok(state.value);
                 tag_values[idx].quality = state.quality;
                 tag_values[idx].timestamp = Some(state.timestamp);
-                tag_values[idx].error = None;
             }
             Err(e) => {
                 log_opc_err!(
@@ -260,10 +252,9 @@ fn populate_item_states(
                     server = %server_id,
                     tag = %tag_ids[idx]
                 );
-                tag_values[idx].value = None;
+                tag_values[idx].outcome = Err(e);
                 tag_values[idx].quality = OpcQuality::BAD_COMM_FAILURE;
                 tag_values[idx].timestamp = None;
-                tag_values[idx].error = Some(e);
             }
         }
     }
@@ -297,6 +288,34 @@ mod tests {
         assert_eq!(results.len(), 2);
         assert_eq!(results.get("Random.Int4").unwrap().tag_id, "Random.Int4");
         assert_eq!(results.get("Random.Real8").unwrap().tag_id, "Random.Real8");
-        assert!(results.get("Random.Int4").unwrap().value.is_some());
+        assert!(results.get("Random.Int4").unwrap().value().is_some());
+    }
+
+    #[test]
+    fn test_group_guard_disarm_on_read() {
+        use std::sync::atomic::Ordering;
+
+        let server = MockConnectedServer::default();
+        let state = server.state.clone();
+        let mut pooled = PooledServer::new(server);
+        let endpoint = OpcServerEndpoint::from("Test.Server");
+        let tags = TagBatch::Static(&["Random.Int4"]);
+
+        // First read (cache miss): group added, guard disarmed, cached in pooled
+        let res = handle_read(&endpoint, &tags, &mut pooled);
+        assert!(res.is_ok());
+        assert_eq!(state.add_group_count.load(Ordering::Relaxed), 1);
+        assert_eq!(state.remove_group_count.load(Ordering::Relaxed), 0);
+        assert!(pooled.active_group.is_some());
+
+        // Second read with same tags (cache hit): no new group created or removed
+        let res2 = handle_read(&endpoint, &tags, &mut pooled);
+        assert!(res2.is_ok());
+        assert_eq!(state.add_group_count.load(Ordering::Relaxed), 1);
+        assert_eq!(state.remove_group_count.load(Ordering::Relaxed), 0);
+
+        // Explicit clear active group triggers remove_group
+        pooled.clear_active_group();
+        assert_eq!(state.remove_group_count.load(Ordering::Relaxed), 1);
     }
 }

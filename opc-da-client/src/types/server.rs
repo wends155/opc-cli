@@ -1,80 +1,28 @@
-//! OPC DA server identification, group configuration, and status models.
+//! OPC DA server identification, connection endpoints, and catalog metadata.
 
-use super::GroupHandle;
 use std::fmt;
 
-/// Supported OPC DA Specification versions.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Version {
-    /// OPC Data Access 1.0a specification.
-    V1,
-    /// OPC Data Access 2.05a specification.
-    V2,
-    /// OPC Data Access 3.0 specification.
-    V3,
+/// Normalizes a host string, returning `None` if it represents the local machine.
+///
+/// Strings that are empty, whitespace-only, `"localhost"`, `"127.0.0.1"`, or `"::1"`
+/// (case-insensitive) are normalized to `None`. All other hosts return `Some(trimmed_host)`.
+#[must_use]
+pub fn normalize_host(host: Option<&str>) -> Option<String> {
+    let h = host?.trim();
+    if h.is_empty() || h.eq_ignore_ascii_case("localhost") || h == "127.0.0.1" || h == "::1" {
+        None
+    } else {
+        Some(h.to_string())
+    }
 }
 
-/// Current state and properties of an active OPC group.
-#[derive(Debug, Clone, Default, PartialEq)]
-pub struct GroupState {
-    /// Actual update rate in milliseconds (may differ from requested).
-    pub update_rate: u32,
-    /// Whether the group is currently active (processing updates).
-    pub active: bool,
-    /// The unique name of the group.
-    pub name: String,
-    /// Time zone bias in minutes from UTC.
-    pub time_bias: i32,
-    /// Percent change for a tag value required to trigger an update.
-    pub percent_deadband: f32,
-    /// Locale ID used for formatting strings in this group.
-    pub locale_id: u32,
-    /// Handle assigned by the client for this group.
-    pub client_handle: GroupHandle,
-    /// Handle assigned by the server for this group.
-    pub server_handle: GroupHandle,
-}
-
-/// Current running state of the OPC server.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ServerState {
-    /// The server is running normally and actively processing data.
-    Running,
-    /// The server has encountered an unrecoverable failure and is not functioning.
-    Failed,
-    /// The server is running but has no configuration loaded.
-    NoConfig,
-    /// The server is temporarily suspended and not collecting data.
-    Suspended,
-    /// The server is operating in test or diagnostic mode.
-    Test,
-    /// The server cannot communicate with the underlying physical devices or network.
-    CommunicationFault,
-}
-
-/// Operational status and metadata of the connected server.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ServerStatus {
-    /// Time when the server was started.
-    pub start_time: std::time::SystemTime,
-    /// Current time at the server.
-    pub current_time: std::time::SystemTime,
-    /// Time of the last update sent by the server.
-    pub last_update_time: std::time::SystemTime,
-    /// Current operational state of the server.
-    pub server_state: ServerState,
-    /// Number of active groups managed by the server.
-    pub group_count: u32,
-    /// Current bandwidth utilization as reported by the server.
-    pub band_width: u32,
-    /// Major version of the server software.
-    pub major_version: u16,
-    /// Minor version of the server software.
-    pub minor_version: u16,
-    /// Build or revision number of the server software.
-    pub build_number: u16,
-    /// Vendor information string provided by the server.
-    pub vendor_info: String,
+/// Determines if a host specification represents a remote machine.
+///
+/// Returns `false` if `host` is `None`, empty, whitespace-only, `"localhost"`, `"127.0.0.1"`, or `"::1"`.
+#[inline]
+#[must_use]
+pub fn is_remote_host(host: Option<&str>) -> bool {
+    normalize_host(host).is_some()
 }
 
 /// Helper to parse a standard GUID string into a [`windows::core::GUID`].
@@ -223,6 +171,23 @@ pub struct OpcServerInfo {
 }
 
 impl OpcServerInfo {
+    /// Creates a new [`OpcServerInfo`] instance with normalized host specification.
+    #[must_use]
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn new(
+        prog_id: impl Into<String>,
+        clsid: windows::core::GUID,
+        user_type: Option<String>,
+        host: Option<String>,
+    ) -> Self {
+        Self {
+            prog_id: prog_id.into(),
+            clsid,
+            user_type,
+            host: normalize_host(host.as_deref()),
+        }
+    }
+
     /// Returns the user-friendly title if available, otherwise falls back to [`OpcServerInfo::prog_id`].
     #[must_use]
     pub fn display_name(&self) -> &str {
@@ -261,10 +226,17 @@ impl OpcServerEndpoint {
     /// Creates a new endpoint targeting a remote machine.
     #[must_use]
     pub fn remote(host: impl Into<String>, identifier: impl Into<ServerIdentifier>) -> Self {
+        let host_str = host.into();
         Self {
-            host: Some(host.into()),
+            host: normalize_host(Some(&host_str)),
             identifier: identifier.into(),
         }
+    }
+
+    /// Returns `true` if this endpoint targets a remote machine.
+    #[must_use]
+    pub fn is_remote(&self) -> bool {
+        is_remote_host(self.host.as_deref())
     }
 }
 

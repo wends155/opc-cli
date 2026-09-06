@@ -4,16 +4,19 @@
 //! the [`ServerConnector`] and [`ConnectedServer`] traits.
 
 use crate::com::connector::group::ComGroup;
-use crate::com::connector::traits::{ConnectedServer, CreatedGroup, GroupConfig, ServerConnector};
+use crate::com::connector::traits::{
+    ConnectedServer, CreatedGroup, GroupConfig, GroupRemovalMode, ServerConnector,
+};
 use crate::com::iterator::StringIterator;
 use crate::com::security::apply_proxy_blanket;
 use crate::errors::{OpcError, OpcResult};
 use crate::raw::bindings::da::{
     OPC_BRANCH, OPC_BROWSE_DOWN, OPC_BROWSE_TO, OPC_BROWSE_UP, OPC_FLAT, OPC_LEAF,
 };
-use crate::raw::memory::{LocalPointer, RemotePointer};
+use crate::raw::memory::LocalPointer;
 use crate::types::{
-    BrowseDirection, BrowseType, GroupHandle, NamespaceType, OpcServerInfo, ServerIdentifier,
+    BrowseDirection, BrowseType, NamespaceType, OpcServerInfo, ServerGroupHandle, ServerIdentifier,
+    is_remote_host,
 };
 use windows::Win32::System::Com::{CLSCTX_ALL, CLSIDFromProgID, CoCreateInstance};
 use windows::core::Interface;
@@ -45,12 +48,9 @@ pub(crate) fn connect_endpoint(
     };
 
     let server_desc = endpoint.to_string();
-    let is_remote_host = endpoint
-        .host
-        .as_deref()
-        .filter(|h| !h.is_empty() && !h.eq_ignore_ascii_case("localhost") && *h != "127.0.0.1");
+    let is_remote = endpoint.host.as_deref().filter(|h| is_remote_host(Some(h)));
 
-    let server: crate::raw::bindings::da::IOPCServer = if let Some(host) = is_remote_host {
+    let server: crate::raw::bindings::da::IOPCServer = if let Some(host) = is_remote {
         crate::com::security::create_remote_instance(&clsid_raw, host, legacy_dcom)
             .inspect_err(|err| {
                 crate::log_opc_err!(err, crate::errors::OpcOperation::Connect, server = %server_desc);
@@ -269,7 +269,12 @@ impl ConnectedServer for ComServer {
         let item_data_id = LocalPointer::from(item_name);
         // SAFETY: Calling COM interface method GetItemID with valid item_data_id string.
         let output = unsafe { iface.GetItemID(item_data_id.as_pwstr())? };
-        RemotePointer::from(output).into_string()
+        // SAFETY: `output` is allocated by IOPCBrowseServerAddressSpace::GetItemID via CoTaskMemAlloc.
+        unsafe {
+            crate::raw::memory::CoTaskPwstr::from_raw(output)
+                .into_string()
+                .map_err(Into::into)
+        }
     }
 
     #[tracing::instrument(level = "info", skip(self), err)]
@@ -311,7 +316,7 @@ impl ConnectedServer for ComServer {
 
                 Ok(CreatedGroup {
                     group,
-                    server_handle: GroupHandle::new(raw_server_handle),
+                    server_handle: ServerGroupHandle::new(raw_server_handle),
                     revised_update_rate_ms: revised_update_rate,
                 })
             }
@@ -319,10 +324,15 @@ impl ConnectedServer for ComServer {
     }
 
     #[tracing::instrument(level = "debug", skip(self), err)]
-    fn remove_group(&self, server_group: GroupHandle, force: bool) -> OpcResult<()> {
-        // SAFETY: Calling COM interface method RemoveGroup with server handle.
+    fn remove_group(
+        &self,
+        server_group: ServerGroupHandle,
+        mode: GroupRemovalMode,
+    ) -> OpcResult<()> {
+        // SAFETY: Calling COM interface method RemoveGroup with server handle and mode flag.
         unsafe {
-            self.server.RemoveGroup(server_group.as_raw(), force)?;
+            self.server
+                .RemoveGroup(server_group.as_raw(), mode.into())?;
         }
         Ok(())
     }

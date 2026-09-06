@@ -15,19 +15,35 @@
 
 #### Public API
 
-##### `trait OpcProvider: Send + Sync`
+##### Segregated Role Traits & Composite `OpcProvider`
 
 All methods use `#[async_trait]`.
 
+###### `trait ServerDiscovery: Send + Sync`
 | Method | Signature | Description |
 | :--- | :--- | :--- |
 | `list_servers` | `async fn list_servers(&self, host: &str) -> OpcResult<Vec<String>>` | Enumerate OPC DA servers available on `host`. |
 | `list_server_details` | `async fn list_server_details(&self, host: &str) -> OpcResult<Vec<OpcServerInfo>>` | Enumerate OPC DA servers on `host` with rich metadata (`ProgID`, `CLSID`, user-readable name). Default implementation synthesizes records wrapping `list_servers`. |
+
+###### `trait TagBrowser: Send + Sync`
+| Method | Signature | Description |
+| :--- | :--- | :--- |
 | `browse_tags` | `async fn browse_tags(&self, server: &str, collector: TagCollector) -> OpcResult<Vec<String>>` | Recursively discover tags on `server`, pushing each to `collector` as found. |
-| `read_tag_values` | `async fn read_tag_values(&self, server: &str, tag_ids: Vec<String>) -> OpcResult<Vec<TagValue>>` | Read current value, quality, and timestamp for the given tag IDs. |
+
+###### `trait TagReader: Send + Sync`
+| Method | Signature | Description |
+| :--- | :--- | :--- |
+| `read_tag_values` | `async fn read_tag_values(&self, server: &str, tag_ids: TagBatch) -> OpcResult<TagValues>` | Read current value, quality, and timestamp for the given tag IDs, returning a rich `TagValues` collection. |
 | `read_tag_value` | `async fn read_tag_value(&self, server: &str, tag_id: &str) -> OpcResult<TagValue>` | Convenience helper to read a single tag on `server`. Default implementation delegates to `read_tag_values`. |
+
+###### `trait TagWriter: Send + Sync`
+| Method | Signature | Description |
+| :--- | :--- | :--- |
 | `write_tag_value` | `async fn write_tag_value(&self, server: &str, tag_id: &str, value: OpcValue) -> OpcResult<WriteResult>` | Write a typed value to a single tag on `server`. |
 | `write_tag_values` | `async fn write_tag_values(&self, server: &str, writes: &[(String, OpcValue)]) -> OpcResult<Vec<WriteResult>>` | Convenience helper to write multiple tags sequentially on `server`. Default implementation iterates over `write_tag_value`. |
+
+###### `trait OpcProvider: ServerDiscovery + TagBrowser + TagReader + TagWriter + Send + Sync`
+Composite marker trait representing the full OPC DA client capability set. A blanket implementation is provided for any type implementing all four segregated role traits.
 
 **Error Conditions:**
 
@@ -50,30 +66,31 @@ All methods use `#[async_trait]`.
 *   `browse_tags` **never** collects more than `collector.max_tags()` items.
 *   `browse_tags` pushes tags to `collector` incrementally; on timeout the caller can harvest partial results.
 *   `browse_tags` updates `collector` length atomically and lock-free for each discovered tag.
-*   `read_tag_values` returns a `TagValue` entry for all requested tags, preserving the original array length and order. Items that fail to be added to the group receive quality `OpcQuality::BAD_CONFIG_ERROR` with `value: None` and `timestamp: None`, and items that fail reading receive `OpcQuality::BAD_COMM_FAILURE` with `value: None` and `timestamp: None`.
+*   `read_tag_values` returns a `TagValues` collection with an entry for all requested tags, preserving the original array length and order. Items that fail receive error quality with `outcome: Err(OpcError)`.
 *   `write_tag_value` returns `Ok(WriteResult)` in all non-fatal cases; per-tag success or error is reported inside `WriteResult.status` as a strongly-typed `Result<(), OpcError>`.
-
 
 ---
 
 ##### `struct TagValue`
 
-**Purpose:** Canonical representation of an OPC DA tag value with quality, timestamp, and optional per-item error.
+**Purpose:** Canonical representation of an OPC DA tag value with quality, timestamp, and encapsulated outcome.
 
 | Field | Type | Required | Description |
 | :--- | :--- | :--- | :--- |
 | `tag_id` | `String` | Yes | The fully-qualified tag identifier. |
-| `value` | `Option<OpcValue>` | Yes | The decoded value, or `None` if read failed. |
+| `outcome` | `Result<OpcValue, OpcError>` | Yes (Private) | Encapsulated read outcome (prevents incoherent states). |
 | `quality` | `OpcQuality` | Yes | Decomposed quality status. |
 | `timestamp` | `Option<SystemTime>` | Yes | Timestamp of last change, or `None` if unavailable. |
-| `error` | `Option<OpcError>` | No | Granular per-item server failure error, or `None` if read succeeded. |
 
 **Methods:**
-* `new(tag_id, value, quality, timestamp) -> Self`: Constructs a successful tag value without error.
-* `with_error(tag_id, quality, error) -> Self`: Constructs an error tag value with `None` value and `None` timestamp.
-* `is_good(&self) -> bool`: Returns `true` if quality is good, value is present, and error is `None`.
-* `is_error(&self) -> bool`: Returns `true` if quality is bad, value is absent, or error is present.
-* `Default`: Yields empty tag ID, `None` value, bad quality (`0x0000`), `None` timestamp, and `None` error.
+* `new(tag_id, value, quality, timestamp) -> Self`: Constructs a successful tag value (`Ok(value)`).
+* `with_error(tag_id, quality, error) -> Self`: Constructs an error tag value (`Err(error)`) with `None` timestamp.
+* `outcome(&self) -> Result<&OpcValue, &OpcError>`: Accesses borrowed reference to inner outcome.
+* `value(&self) -> Option<&OpcValue>`: Returns `Some(&OpcValue)` if successful.
+* `error(&self) -> Option<&OpcError>`: Returns `Some(&OpcError)` if failed.
+* `is_good(&self) -> bool`: Returns `true` if quality is good and outcome is `Ok`.
+* `is_error(&self) -> bool`: Returns `true` if quality is bad or outcome is `Err`.
+* `Default`: Yields empty tag ID, `Err(OpcError::InvalidState)`, bad quality (`0x0000`), and `None` timestamp.
 * `Display`: Canonical formatting rendering `"{tag_id} = {value} [{quality}] @ {timestamp}"`.
 
 **Derives:** `Debug`, `Clone`, `PartialEq`, `Default`.
@@ -86,6 +103,8 @@ All methods use `#[async_trait]`.
 
 | Variant | Inner Representation | Description |
 | :--- | :--- | :--- |
+| `InlineSingle(&'a str)` | `&'a str` | Single borrowed string slice without lifetime constraints. |
+| `Borrowed(&'a [&'a str])` | `&'a [&'a str]` | Borrowed slice of string slices. |
 | `Static(&'static [&'static str])` | `&'static [&'static str]` | Zero-allocation static literal tag slice. |
 | `StaticSingle(&'static str)` | `&'static str` | Single static literal string slice. |
 | `Shared(Arc<[String]>)` | `Arc<[String]>` | Shared reference-counted tag array. |
@@ -96,6 +115,7 @@ All methods use `#[async_trait]`.
 * `len(&self) -> usize`: Returns tag count across all variants.
 * `is_empty(&self) -> bool`: Returns `true` if empty.
 * `iter_str(&self) -> TagBatchIter<'_>`: Zero-allocation string iterator projecting `&str` over all variants.
+* `iter(&self) -> TagBatchIter<'_>`: Alias for `iter_str(&self)`.
 * `into_vec(self) -> Vec<String>`: Converts into owned vector, reusing existing allocations where possible.
 
 **Derives:** `Debug`, `Clone`, `PartialEq`, `Eq`.
@@ -182,20 +202,22 @@ Implemented for:
 | Variant | Data Type | Description | COM VT Type |
 | :--- | :--- | :--- | :--- |
 | `String(String)` | `String` | Raw string value. | `VT_BSTR` |
-| `Int(i32)` | `i32` | 32-bit signed integer. | `VT_I4` |
+| `Int(i64)` | `i64` | Signed integer (64-bit with adaptive 32-bit `VT_I4` coercion). | `VT_I4` / `VT_I8` |
+| `UInt(u64)` | `u64` | Unsigned integer (64-bit with adaptive 32-bit `VT_UI4` coercion). | `VT_UI4` / `VT_UI8` |
 | `Float(f64)` | `f64` | 64-bit float. | `VT_R8` |
 | `Bool(bool)` | `bool` | Boolean value. | `VT_BOOL` |
 | `Empty` | N/A | Empty variant (uninitialized). | `VT_EMPTY` |
 | `Null` | N/A | Explicitly null variant. | `VT_NULL` |
 
 **Methods & Conversions:**
-* `as_int(&self) -> Option<i32>`: Returns `Some(i32)` if this value is [`OpcValue::Int`], or `None` otherwise.
+* `as_int(&self) -> Option<i64>`: Returns `Some(i64)` if this value is [`OpcValue::Int`], or `None` otherwise.
+* `as_uint(&self) -> Option<u64>`: Returns `Some(u64)` if this value is [`OpcValue::UInt`], or `None` otherwise.
 * `as_float(&self) -> Option<f64>`: Returns `Some(f64)` if this value is [`OpcValue::Float`], or `None` otherwise.
 * `as_bool(&self) -> Option<bool>`: Returns `Some(bool)` if this value is [`OpcValue::Bool`], or `None` otherwise.
 * `as_str(&self) -> Option<&str>`: Returns borrowed string slice if this value is [`OpcValue::String`], or `None` otherwise.
 * `is_empty(&self) -> bool`: Returns `true` if `self` is [`OpcValue::Empty`].
 * `is_null(&self) -> bool`: Returns `true` if `self` is [`OpcValue::Null`].
-* `From<i32>`, `From<i16>`, `From<u16>`, `From<f64>`, `From<f32>`, `From<bool>`, `From<String>`, `From<&str>`: Primitive lossless conversions into `OpcValue`.
+* `From<i64>`, `From<u64>`, `From<i32>`, `From<u32>`, `From<i16>`, `From<u16>`, `From<i8>`, `From<u8>`, `From<f64>`, `From<f32>`, `From<bool>`, `From<String>`, `From<&str>`: Primitive lossless conversions into `OpcValue`.
 * `std::str::FromStr`: Parses integer, float, boolean, or falls back to String.
 * `Display`: Formats variant value as display string.
 
@@ -558,11 +580,14 @@ Before calling `browse_recursive`, `browse_tags` attempts `browse_opc_item_ids(B
 
 #### Public API
 
-- `GroupHandle`: Encapsulated opaque newtype with private inner `.0`, constructor `new(u32)`, and accessors `as_raw(&self) -> u32`, `into_raw(self) -> u32`.
-- `ItemHandle`: Encapsulated opaque newtype with private inner `.0`, constructor `new(u32)`, and accessors `as_raw(&self) -> u32`, `into_raw(self) -> u32`.
-- `OpcQuality`: Fully decomposed, zero-allocation 16-bit OPC DA quality word (`major: QualityMajor`, `substatus: QualitySubstatus`, `limit: QualityLimit`, `raw: u16`). Implements `From<u16>`, `From<OpcQuality> for u16`, `Display` (rich human-readable diagnostics), `std::str::FromStr` returning `Result<Self, ParseQualityError>`, and predicates (`is_good`, `is_bad`, `is_uncertain`, `is_limited`).
+- `ClientGroupHandle`: Encapsulated opaque typestate newtype representing client-assigned group identifier, with constructor `new(u32)`, and accessors `as_raw(&self) -> u32`, `into_raw(self) -> u32`.
+- `ServerGroupHandle`: Encapsulated opaque typestate newtype representing server-assigned group identifier, with constructor `new(u32)`, and accessors `as_raw(&self) -> u32`, `into_raw(self) -> u32`.
+- `ClientItemHandle`: Encapsulated opaque typestate newtype representing client-assigned item identifier, with constructor `new(u32)`, and accessors `as_raw(&self) -> u32`, `into_raw(self) -> u32`.
+- `ServerItemHandle`: Encapsulated opaque typestate newtype representing server-assigned item identifier, with constructor `new(u32)`, and accessors `as_raw(&self) -> u32`, `into_raw(self) -> u32`.
+- `ItemHandle`: Legacy backward-compatible type alias for `ServerItemHandle`.
+- `OpcQuality`: Fully decomposed, zero-allocation 16-bit OPC DA quality word with private fields and getter methods (`major()`, `substatus()`, `limit()`, `raw()`). Implements `From<u16>`, `From<OpcQuality> for u16`, `Display` (rich human-readable diagnostics), `std::str::FromStr` returning `Result<Self, ParseQualityError>`, and predicates (`is_good`, `is_bad`, `is_uncertain`, `is_limited`).
 - `ParseQualityError`: Error struct returned when parsing an invalid quality string via `FromStr`. Implements `Display` and `std::error::Error`.
-- `OpcValue`: Canonical domain value enum (`String(String)`, `Int(i32)`, `Float(f64)`, `Bool(bool)`, `Empty`, `Null`). Implements `std::str::FromStr`, `From` for primitive types, and typed accessors (`as_str`, `as_int`, `as_float`, `as_bool`, `is_empty`, `is_null`).
+- `OpcValue`: Canonical domain value enum (`String(String)`, `Int(i64)`, `UInt(u64)`, `Float(f64)`, `Bool(bool)`, `Empty`, `Null`). Implements `std::str::FromStr`, `From` for primitive integer, float, boolean, and string types, and typed accessors (`as_str`, `as_int`, `as_uint`, `as_float`, `as_bool`, `is_empty`, `is_null`).
 - `QualityMajor`: Major OPC DA quality status (`Good`, `Bad`, `Uncertain`, `Unknown(u8)`).
 - `QualitySubstatus`: Detailed substatus reason code (all OPC DA 2.05a codes: `NonSpecific`, `ConfigurationError`, `NotConnected`, `DeviceFailure`, `SensorFailure`, `LastKnownValue`, `CommFailure`, `OutOfService`, `WaitingForInitialData`, `LastUsableValue`, `SensorCalNeeded`, `EguExceeded`, `SubNormal`, `LocalOverride`, and `Raw(u8)`).
 - `QualityLimit`: Limit conditions on the tag value (`NotLimited`, `LowLimited`, `HighLimited`, `Constant`).
@@ -662,12 +687,12 @@ Before calling `browse_recursive`, `browse_tags` attempts `browse_opc_item_ids(B
 
 * `com::connector::traits`:
   - `ServerConnector`: Discovers servers via `enumerate_servers(host: &str) -> OpcResult<Vec<String>>` and `enumerate_server_details(host: &str) -> OpcResult<Vec<OpcServerInfo>>`, and connects via `connect_endpoint(&OpcServerEndpoint)` (primary required method), `connect_identifier(&ServerIdentifier)`, and `connect(name)`. Implemented by `ComConnector` and `MockServerConnector`.
-  - `ConnectedServer`: Introspects server namespace and adds/removes groups using `GroupConfig` and `CreatedGroup`. Implemented by `ComServer` and `MockConnectedServer`. Supports in-memory tag browsing via `StringIterator::from_vec`.
+  - `ConnectedServer`: Introspects server namespace and adds/removes groups using `GroupConfig`, `CreatedGroup`, `ServerGroupHandle`, and `GroupRemovalMode`. Implemented by `ComServer` and `MockConnectedServer`. Supports in-memory tag browsing via `StringIterator::from_vec`.
   - `ConnectedGroup`: Pure-Rust facade over OPC DA groups:
     - `add_items(&self, items: &[GroupItemDef]) -> OpcResult<Vec<GroupItemResult>>`
-    - `read(&self, source: DataSource, server_handles: &[ItemHandle]) -> OpcResult<Vec<Result<GroupItemState, OpcError>>>`
-    - `write(&self, server_handles: &[ItemHandle], values: &[OpcValue]) -> OpcResult<Vec<Result<(), OpcError>>>`
-  - DTOs: `GroupItemDef`, `GroupItemResult`, `GroupItemState`, `DataSource`, `GroupConfig`, `CreatedGroup`.
+    - `read(&self, source: DataSource, server_handles: &[ServerItemHandle]) -> OpcResult<Vec<Result<GroupItemState, OpcError>>>`
+    - `write(&self, items: &[ItemWrite]) -> OpcResult<Vec<Result<(), OpcError>>>`
+  - DTOs: `GroupItemDef`, `GroupItemResult`, `GroupItemState`, `ItemWrite`, `DataSource`, `GroupConfig`, `CreatedGroup`, `GroupRemovalMode`.
 * `com::connector::server`:
   - `ComConnector`: Connects to local and remote servers via `connect_server_endpoint` and enumerates servers via Component Categories catalog and `CLSID_OPC_SERVER_LIST`.
   - `ComServer`: Wraps native `IOPCServer` and `IOPCBrowseServerAddressSpace`, managing namespace queries and group creation.
@@ -679,7 +704,7 @@ Before calling `browse_recursive`, `browse_tags` attempts `browse_opc_item_ids(B
   - `MockConnectedGroup`, `MockConnectedServer`, and `MockServerConnector`: Reusable pure-Rust mocks (under `#[cfg(any(test, feature = "test-support"))]` and exported at crate root under `test-support`) supporting pluggable closures, failure injection (`MockState` with `add_group_count`, `remove_group_count`, `read_count`, `write_count`, `connect_count`), simulated structured server details (`server_details: Arc<Mutex<Vec<OpcServerInfo>>>`, `with_server_details`), bidirectional ProgID/detail sync, and simulated tag browsing without native COM allocators or unsafe blocks.
   - Mock handler type aliases: `MockAddItemsFn`, `MockReadFn`, `MockWriteFn`.
 * `com::connector` (Facade):
-  - Slim 43-line coordinator facade re-exporting all submodule items with zero blanket `#![allow(...)]` headers.
+  - Slim coordinator facade re-exporting all submodule items with zero blanket `#![allow(...)]` headers.
 * Crate Root Re-Export:
   - `pub type MockOpcDaClient = com::client::OpcDaClient<com::connector::MockServerConnector>;` exported under `#[cfg(all(feature = "test-support", feature = "opc-da-backend"))]`.
 
@@ -689,7 +714,7 @@ Before calling `browse_recursive`, `browse_tags` attempts `browse_opc_item_ids(B
 
 **Purpose:** Strict crate-internal isolation (`pub(crate) mod raw;`) for all raw Win32 bindings and FFI memory management:
 - `raw::bindings`: Autogenerated Win32 COM bindings (`da`, `comn`).
-- `raw::memory`: Unsafe memory wrappers (`RemoteArray`, `RemotePointer`, `LocalPointer`) managing `CoTaskMemAlloc` / `CoTaskMemFree`. `RemotePointer` and `RemoteArray` are strictly move-only types (`Clone` prohibited) to prevent double-free heap corruptions on unmanaged memory. `RemotePointer<u16>::into_string(self) -> OpcResult<String>` consumes ownership by value and safely converts null-terminated UTF-16 wide strings into `String`, automatically invoking `CoTaskMemFree` on drop.
+- `raw::memory`: Unsafe memory wrappers (`RemoteArray`, `RemotePointer`, `LocalPointer`, `CoTaskPwstr`) managing `CoTaskMemAlloc` / `CoTaskMemFree`. `RemotePointer::from_raw` is strictly `unsafe`. `CoTaskPwstr` manages RAII freeing of wide strings. Non-freeing borrows are handled via `decode_borrowed_pwstr`. `RemotePointer` and `RemoteArray` are strictly move-only types (`Clone` prohibited) to prevent double-free heap corruptions on unmanaged memory.
 - `raw::bridge`: Dormant COM bridge structures (`ItemDef`, `ItemState`, etc.) preserved for binary compatibility and low-level Win32 conversions.
 - **Invariant:** `raw` types must NEVER leak into the public API or domain types (`types.rs`).
 
@@ -722,6 +747,7 @@ The terminal user interface executes a hierarchical navigation state machine:
 | `Home` | User enters host + `Enter` | `Loading` | Spawns `list_servers` background task via `start_fetch_servers`. |
 | `Loading` | Server fetch resolves `Ok(servers)` | `ServerList` | Populates servers, selects first row, logs transition. |
 | `Loading` | Server fetch resolves `Err` | `Home` | Displays friendly error message in status log. |
+| `Loading` | `Esc` / `go_back` | `previous_screen` | Cancels active background task, signals collector cancellation, and restores previous screen. |
 | `ServerList` | User highlights server + `Enter` | `Loading` | Spawns `browse_tags` task via `start_browse_tags`. |
 | `ServerList` | `Esc` / `go_back` | `Home` | Clears server list and resets cursor selection. |
 | `Loading` | Tag browse resolves `Ok(tags)` | `TagList` | Populates tags, pre-allocates selection flags, selects first tag. |

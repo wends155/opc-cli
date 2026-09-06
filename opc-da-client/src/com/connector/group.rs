@@ -4,13 +4,17 @@
 //! `ScopedVariant` and `ItemStatesGuard` resource management.
 
 use crate::com::connector::traits::{
-    ConnectedGroup, DataSource, GroupItemDef, GroupItemResult, GroupItemState,
+    ConnectedGroup, DataSource, GroupItemDef, GroupItemResult, GroupItemState, ItemWrite,
 };
 use crate::com::variant::{ItemStatesGuard, ScopedVariant};
 use crate::errors::{OpcError, OpcResult};
 use crate::raw::memory::RemoteArray;
-use crate::types::{ClientItemHandle, OpcQuality, OpcValue, ServerItemHandle};
+use crate::types::{ClientItemHandle, OpcQuality, ServerItemHandle};
 use windows::core::Interface;
+
+fn to_wide_null(s: &str) -> Vec<u16> {
+    s.encode_utf16().chain(std::iter::once(0)).collect()
+}
 
 /// RAII container ensuring wide-character strings live as long as the `tagOPCITEMDEF` slice.
 ///
@@ -25,9 +29,7 @@ impl<'a> ItemDefBatch<'a> {
     pub fn new(items: &'a [GroupItemDef]) -> Self {
         let mut wide_names = Vec::with_capacity(items.len());
         for item in items {
-            let mut wide: Vec<u16> = item.item_id.encode_utf16().collect();
-            wide.push(0);
-            wide_names.push(wide);
+            wide_names.push(to_wide_null(&item.item_id));
         }
 
         let mut defs = Vec::with_capacity(items.len());
@@ -189,13 +191,7 @@ impl ConnectedGroup for ComGroup {
         // RAII guard ensures VariantClear is invoked on all valid item states before RemoteArray frees memory,
         // even if the function returns early due to validation errors.
         let guard = ItemStatesGuard::new(states_slice, errors_slice);
-
-        if guard.len() < server_handles.len() || errors_slice.len() < server_handles.len() {
-            return Err(OpcError::InvalidState(
-                "COM server returned fewer item states or errors than requested server handles"
-                    .to_string(),
-            ));
-        }
+        guard.validate_lengths(server_handles.len())?;
 
         let mut states = Vec::with_capacity(server_handles.len());
 
@@ -224,26 +220,18 @@ impl ConnectedGroup for ComGroup {
         Ok(states)
     }
 
-    #[tracing::instrument(level = "debug", skip(self, server_handles, values), err)]
-    fn write(
-        &self,
-        server_handles: &[ServerItemHandle],
-        values: &[OpcValue],
-    ) -> OpcResult<Vec<Result<(), OpcError>>> {
-        if server_handles.is_empty() {
-            return Err(OpcError::InvalidState(
-                "server_handles cannot be empty".to_string(),
-            ));
-        }
-        if server_handles.len() != values.len() {
-            return Err(OpcError::InvalidState(
-                "server_handles and values must have the same length".to_string(),
-            ));
+    #[tracing::instrument(level = "debug", skip(self, items), err)]
+    fn write(&self, items: &[ItemWrite]) -> OpcResult<Vec<Result<(), OpcError>>> {
+        if items.is_empty() {
+            return Err(OpcError::InvalidState("items cannot be empty".to_string()));
         }
 
-        let len = server_handles.len().try_into()?;
-        let variants: Vec<ScopedVariant> =
-            values.iter().map(ScopedVariant::from_opc_value).collect();
+        let len = items.len().try_into()?;
+        let server_handles: Vec<ServerItemHandle> = items.iter().map(|item| item.handle).collect();
+        let variants: Vec<ScopedVariant> = items
+            .iter()
+            .map(|item| ScopedVariant::from_opc_value(&item.value))
+            .collect();
         let mut errors = RemoteArray::new(len);
 
         // SAFETY: Calling COM Write with valid server handle and transparent ScopedVariant array (Drop calls VariantClear).
@@ -257,21 +245,19 @@ impl ConnectedGroup for ComGroup {
         }
 
         let errors_slice = errors.as_slice();
-        if errors_slice.len() < server_handles.len() {
+        if errors_slice.len() < items.len() {
             return Err(OpcError::InvalidState(
                 "COM server returned fewer errors than written handles".to_string(),
             ));
         }
 
-        let results = errors_slice[..server_handles.len()]
+        let results = errors_slice[..items.len()]
             .iter()
             .map(|&hr| {
                 if hr.is_ok() {
                     Ok(())
                 } else {
-                    Err(OpcError::Com {
-                        source: windows::core::Error::from_hresult(hr),
-                    })
+                    Err(OpcError::Com { source: hr.into() })
                 }
             })
             .collect();
@@ -343,16 +329,7 @@ mod tests {
         ));
 
         // Test empty write returns InvalidState
-        assert!(matches!(
-            group.write(&[], &[]),
-            Err(OpcError::InvalidState(_))
-        ));
-
-        // Test mismatched write lengths returns InvalidState
-        assert!(matches!(
-            group.write(&[ServerItemHandle::new(1)], &[]),
-            Err(OpcError::InvalidState(_))
-        ));
+        assert!(matches!(group.write(&[]), Err(OpcError::InvalidState(_))));
     }
 
     #[test]

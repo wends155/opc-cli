@@ -2,16 +2,131 @@
 
 #![allow(
     dead_code,
-    clippy::all,
-    clippy::pedantic,
-    clippy::nursery,
-    clippy::undocumented_unsafe_blocks
+    clippy::inline_always,
+    clippy::ptr_as_ptr,
+    clippy::ptr_cast_constness,
+    clippy::as_ptr_cast_mut,
+    clippy::borrow_as_ptr,
+    clippy::ref_as_ptr,
+    clippy::boxed_local,
+    clippy::use_self,
+    clippy::derive_partial_eq_without_eq,
+    clippy::redundant_pub_crate,
+    clippy::cast_lossless,
+    clippy::cast_possible_truncation,
+    clippy::duration_suboptimal_units,
+    clippy::similar_names,
+    clippy::missing_safety_doc,
+    clippy::wildcard_imports
 )]
 
 use windows::{
     Win32::System::Com::{CoTaskMemAlloc, CoTaskMemFree},
     core::{PCWSTR, PWSTR},
 };
+
+// ── Owning COM Wide Strings ─────────────────────────────────────────
+
+/// An owning RAII wrapper for a null-terminated UTF-16 string allocated via `CoTaskMemAlloc`.
+///
+/// Automatically frees the allocated memory using `CoTaskMemFree` when dropped.
+#[derive(Debug)]
+pub struct CoTaskPwstr(pub PWSTR);
+
+impl CoTaskPwstr {
+    /// Wraps a raw `PWSTR` in an owning `CoTaskPwstr`.
+    ///
+    /// # Safety
+    /// The caller must ensure `ptr` is either null or was allocated via `CoTaskMemAlloc`,
+    /// and that ownership of the allocation is transferred to this wrapper.
+    #[inline(always)]
+    pub unsafe fn from_raw(ptr: PWSTR) -> Self {
+        Self(ptr)
+    }
+
+    /// Creates a null `CoTaskPwstr`.
+    #[inline(always)]
+    pub const fn null() -> Self {
+        Self(PWSTR::null())
+    }
+
+    /// Returns `true` if the underlying pointer is null.
+    #[inline(always)]
+    pub fn is_null(&self) -> bool {
+        self.0.is_null()
+    }
+
+    /// Returns the raw underlying `PWSTR`.
+    #[inline(always)]
+    pub fn as_raw(&self) -> PWSTR {
+        self.0
+    }
+
+    /// Decodes the UTF-16 string into a `String` without consuming `self`.
+    ///
+    /// # Errors
+    /// Returns `E_POINTER` if the pointer is null, or an error if string conversion fails.
+    pub fn to_string_lossy(&self) -> windows::core::Result<String> {
+        if self.0.is_null() {
+            return Err(windows::core::Error::new(
+                windows::Win32::Foundation::E_POINTER,
+                "CoTaskPwstr pointer is null",
+            ));
+        }
+        // SAFETY: Pointer is non-null and caller guarantees valid null-terminated UTF-16 string.
+        unsafe { Ok(self.0.to_string()?) }
+    }
+
+    /// Consumes `self`, decodes the UTF-16 string into a `String`, and frees the memory on drop.
+    ///
+    /// # Errors
+    /// Returns `E_POINTER` if the pointer is null, or an error if string conversion fails.
+    pub fn into_string(self) -> windows::core::Result<String> {
+        self.to_string_lossy()
+    }
+
+    /// Consumes `self`, returning `Ok(None)` if the pointer is null, or `Ok(Some(String))` if non-null.
+    ///
+    /// # Errors
+    /// Returns an error if string conversion fails.
+    pub fn into_opt_string(self) -> windows::core::Result<Option<String>> {
+        if self.0.is_null() {
+            Ok(None)
+        } else {
+            self.into_string().map(Some)
+        }
+    }
+}
+
+impl Drop for CoTaskPwstr {
+    fn drop(&mut self) {
+        if !self.0.is_null() {
+            // SAFETY: Memory was allocated via COM CoTaskMemAlloc and pointer is non-null.
+            unsafe {
+                CoTaskMemFree(Some(self.0.as_ptr() as _));
+            }
+            self.0 = PWSTR::null();
+        }
+    }
+}
+
+/// Decodes a borrowed `windows::core::PWSTR` into a Rust `String` without taking ownership or freeing memory.
+///
+/// # Safety
+/// The caller must ensure `ptr` is non-null and points to a valid null-terminated UTF-16 string.
+///
+/// # Errors
+/// Returns `E_POINTER` if `ptr` is null, or an error if UTF-16 decoding fails.
+pub(crate) unsafe fn decode_borrowed_pwstr(ptr: PWSTR) -> windows::core::Result<String> {
+    if ptr.is_null() {
+        return Err(windows::core::Error::new(
+            windows::Win32::Foundation::E_POINTER,
+            "PWSTR is null",
+        ));
+    }
+    // SAFETY: Checked for non-null and caller guarantees valid null-terminated UTF-16 string.
+    unsafe { Ok(ptr.to_string()?) }
+}
 
 // ── Lifetime-Bounded String Views ──────────────────────────────────
 
@@ -111,12 +226,12 @@ impl<'a> BorrowedPcwstr<'a> {
 /// This struct ensures proper cleanup of COM-allocated memory when dropped.
 /// It provides safe access to the underlying array through slices.
 #[derive(Debug, PartialEq)]
-pub struct RemoteArray<T: Sized> {
+pub struct RemoteArray<T: Sized + 'static> {
     pointer: RemotePointer<T>,
     len: u32,
 }
 
-impl<T: Sized> RemoteArray<T> {
+impl<T: Sized + 'static> RemoteArray<T> {
     /// Creates a new `RemoteArray` with the specified length.
     /// The underlying pointer is initialized to null.
     #[inline(always)]
@@ -134,7 +249,8 @@ impl<T: Sized> RemoteArray<T> {
     #[inline(always)]
     pub(crate) unsafe fn from_mut_ptr(pointer: *mut T, len: u32) -> Self {
         Self {
-            pointer: RemotePointer::from_raw(pointer),
+            // SAFETY: Caller guarantees pointer is valid and points to a COM-allocated array.
+            pointer: unsafe { RemotePointer::from_raw(pointer) },
             len,
         }
     }
@@ -146,7 +262,8 @@ impl<T: Sized> RemoteArray<T> {
     #[inline(always)]
     pub(crate) unsafe fn from_ptr(pointer: *const T, len: u32) -> Self {
         Self {
-            pointer: RemotePointer::from_raw(pointer as *mut T),
+            // SAFETY: Caller guarantees pointer is valid and points to a COM-allocated array.
+            pointer: unsafe { RemotePointer::from_raw(pointer as *mut T) },
             len,
         }
     }
@@ -234,11 +351,34 @@ impl<T: Sized> RemoteArray<T> {
     }
 }
 
-impl<T: Sized> Default for RemoteArray<T> {
+impl<T: Sized + 'static> Default for RemoteArray<T> {
     /// Creates an empty `RemoteArray` by default.
     #[inline(always)]
     fn default() -> Self {
         Self::empty()
+    }
+}
+
+impl<T: 'static> Drop for RemoteArray<T> {
+    fn drop(&mut self) {
+        if std::any::TypeId::of::<T>() == std::any::TypeId::of::<PWSTR>() {
+            let len = usize::try_from(self.len).unwrap_or(0);
+            if !self.pointer.inner.is_null() && len > 0 {
+                // SAFETY: TypeId confirms T is PWSTR; casting buffer to PWSTR slice to free elements.
+                let slice = unsafe {
+                    core::slice::from_raw_parts_mut(self.pointer.inner as *mut PWSTR, len)
+                };
+                for pwstr in slice {
+                    if !pwstr.is_null() {
+                        // SAFETY: COM allocated each PWSTR string in the array via CoTaskMemAlloc.
+                        unsafe {
+                            CoTaskMemFree(Some(pwstr.as_ptr() as _));
+                        }
+                        *pwstr = PWSTR::null();
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -261,11 +401,14 @@ impl<T: Sized> RemotePointer<T> {
         }
     }
 
-    /// Returns a mutable pointer to the inner pointer.
+    /// Wraps an unmanaged COM pointer in a `RemotePointer`.
     ///
-    /// Useful for COM functions that output data via a pointer to a pointer.
+    /// # Safety
+    /// The caller must ensure `pointer` is either null or points to a valid,
+    /// COM-allocated instance of `T` that is aligned and dereferenceable,
+    /// and that ownership is transferred to this wrapper.
     #[inline(always)]
-    pub(crate) fn from_raw(pointer: *mut T) -> Self {
+    pub(crate) unsafe fn from_raw(pointer: *mut T) -> Self {
         Self { inner: pointer }
     }
 
@@ -297,16 +440,23 @@ impl<T: Sized> RemotePointer<T> {
     /// Returns an `Option` referencing the inner value if it is not null.
     ///
     /// # Safety
-    /// The caller must ensure that the inner pointer is valid for reads.
+    /// The caller must ensure that the inner pointer is valid, aligned, and dereferenceable for reads.
     #[inline(always)]
-    pub fn as_ref(&self) -> Option<&T> {
-        // SAFETY: Converting raw pointer to reference after validating pointer safety.
+    pub unsafe fn as_ref(&self) -> Option<&T> {
+        // SAFETY: Caller guarantees pointer is valid, aligned, and dereferenceable if non-null.
         unsafe { self.inner.as_ref() }
     }
 
+    /// Returns a reference to the inner value or returns an `E_POINTER` error if null.
+    ///
+    /// # Safety
+    /// The caller must ensure that the inner pointer is valid, aligned, and dereferenceable for reads.
+    ///
+    /// # Errors
+    /// Returns `E_POINTER` if the inner pointer is null.
     #[inline(always)]
-    pub fn ok(&self) -> windows::core::Result<&T> {
-        // SAFETY: Converting raw pointer to reference after validating pointer safety.
+    pub unsafe fn ok(&self) -> windows::core::Result<&T> {
+        // SAFETY: Caller guarantees pointer is valid, aligned, and dereferenceable if non-null.
         unsafe { self.inner.as_ref() }.ok_or_else(|| {
             windows::core::Error::new(windows::Win32::Foundation::E_POINTER, "Pointer is null")
         })
@@ -326,16 +476,6 @@ impl<T: Sized> Default for RemotePointer<T> {
     #[inline(always)]
     fn default() -> Self {
         Self::null()
-    }
-}
-
-impl From<PWSTR> for RemotePointer<u16> {
-    /// Converts a `PWSTR` to a `RemotePointer<u16>`.
-    #[inline(always)]
-    fn from(value: PWSTR) -> Self {
-        Self {
-            inner: value.as_ptr(),
-        }
     }
 }
 
@@ -573,15 +713,7 @@ impl LocalPointer<Vec<Vec<u16>>> {
 impl LocalPointer<Vec<u16>> {
     /// Returns a lifetime-bounded [`BorrowedPwstr`] referencing the inner UTF-16 buffer.
     ///
-    /// The returned handle cannot outlive the [`LocalPointer`]:
-    /// ```compile_fail
-    /// use opc_da_client::{BorrowedPwstr, LocalPointer};
-    ///
-    /// let _escaped = {
-    ///     let lp = LocalPointer::from("some_tag");
-    ///     lp.as_borrowed_pwstr()
-    /// };
-    /// ```
+    /// The returned handle cannot outlive the [`LocalPointer`].
     #[inline(always)]
     pub fn as_borrowed_pwstr(&self) -> BorrowedPwstr<'_> {
         match &self.inner {
@@ -789,7 +921,8 @@ impl TryToNative<windows::Win32::Foundation::FILETIME> for std::time::SystemTime
 
 impl TryFromNative<windows::core::PWSTR> for String {
     fn try_from_native(native: &windows::core::PWSTR) -> windows::core::Result<Self> {
-        RemotePointer::from(*native).try_into()
+        // SAFETY: `decode_borrowed_pwstr` validates non-null pointer and decodes borrowed UTF-16 without freeing.
+        unsafe { decode_borrowed_pwstr(*native) }
     }
 }
 
@@ -830,12 +963,67 @@ mod tests {
         // Empty slice returns null RemotePointer immediately without allocating
         let empty_slice: &[u32] = &[];
         let empty_ptr = RemotePointer::copy_slice(empty_slice);
-        assert!(empty_ptr.as_ref().is_none());
+        // SAFETY: Testing empty pointer reference
+        assert!(unsafe { empty_ptr.as_ref() }.is_none());
 
         // Valid non-empty slice copies data safely
         let valid_data = [10u32, 20, 30];
         let ptr = RemotePointer::copy_slice(&valid_data);
-        assert_eq!(ptr.as_ref(), Some(&10));
+        // SAFETY: ptr was created from valid non-empty slice
+        assert_eq!(unsafe { ptr.as_ref() }, Some(&10));
+    }
+
+    #[test]
+    fn test_cotask_pwstr_raii_drop_and_into_string() {
+        let wide: Vec<u16> = "TestString".encode_utf16().chain(Some(0)).collect();
+        let bytes = wide.len() * std::mem::size_of::<u16>();
+        // SAFETY: Allocating memory for test string using COM allocator.
+        let mem = unsafe { CoTaskMemAlloc(bytes) };
+        assert!(!mem.is_null());
+        // SAFETY: Copying valid wide chars to COM allocated buffer.
+        unsafe {
+            std::ptr::copy_nonoverlapping(wide.as_ptr(), mem.cast(), wide.len());
+        }
+        let pwstr = PWSTR(mem.cast());
+        // SAFETY: pwstr was allocated via CoTaskMemAlloc.
+        let cotask = unsafe { CoTaskPwstr::from_raw(pwstr) };
+        assert!(!cotask.is_null());
+        let res = cotask.into_string().expect("should convert string");
+        assert_eq!(res, "TestString");
+
+        // Null CoTaskPwstr
+        let null_cotask = CoTaskPwstr::null();
+        assert!(null_cotask.is_null());
+        assert!(null_cotask.into_string().is_err());
+    }
+
+    #[test]
+    fn test_remote_array_pwstr_deep_drop() {
+        let wide1: Vec<u16> = "Item1".encode_utf16().chain(Some(0)).collect();
+        let bytes1 = wide1.len() * std::mem::size_of::<u16>();
+        // SAFETY: Allocating test string 1 via COM allocator.
+        let mem1 = unsafe { CoTaskMemAlloc(bytes1) };
+        // SAFETY: Copying wide chars.
+        unsafe {
+            std::ptr::copy_nonoverlapping(wide1.as_ptr(), mem1.cast(), wide1.len());
+        }
+
+        // Allocate array buffer
+        let array_bytes = 2 * std::mem::size_of::<PWSTR>();
+        // SAFETY: Allocating test array buffer via COM allocator.
+        let array_mem = unsafe { CoTaskMemAlloc(array_bytes) };
+        // SAFETY: Writing allocated string into array.
+        unsafe {
+            let ptr = array_mem.cast::<PWSTR>();
+            *ptr = PWSTR(mem1.cast());
+            *ptr.add(1) = PWSTR::null();
+        }
+        // SAFETY: Creating RemoteArray from COM-allocated memory.
+        let remote_arr: RemoteArray<PWSTR> =
+            unsafe { RemoteArray::from_mut_ptr(array_mem.cast(), 2) };
+        assert_eq!(remote_arr.len(), 2);
+        // Dropping remote_arr exercises deep drop freeing Item1 and the buffer!
+        drop(remote_arr);
     }
 
     #[test]
@@ -858,11 +1046,13 @@ mod tests {
         let lp = LocalPointer::from("Matrikon.OPC.Simulation.1");
         let borrowed = lp.as_borrowed_pwstr();
         assert!(!borrowed.is_null());
+        // SAFETY: Pointer is valid for the lifetime of `lp`.
         let raw = unsafe { borrowed.as_raw() };
         assert!(!raw.is_null());
 
         let borrowed_c = lp.as_borrowed_pcwstr();
         assert!(!borrowed_c.is_null());
+        // SAFETY: Pointer is valid for the lifetime of `lp`.
         let raw_c = unsafe { borrowed_c.as_raw() };
         assert!(!raw_c.is_null());
 

@@ -4,7 +4,6 @@
 //! as well as an in-memory test surrogate for offline testing.
 
 use crate::errors::OpcResult;
-use crate::raw::memory::RemotePointer;
 
 const MAX_CACHE_SIZE: usize = 16;
 const MAX_CACHE_SIZE_U32: u32 = 16;
@@ -223,11 +222,13 @@ impl Iterator for StringIterator {
                         continue; // Loop back to try the next entry
                     }
 
-                    let current = RemotePointer::from(pwstr);
+                    // SAFETY: `pwstr` was allocated by COM IEnumString::Next via CoTaskMemAlloc.
+                    let current = unsafe { crate::raw::memory::CoTaskPwstr::from_raw(pwstr) };
                     return Some(
                         current
                             .into_string()
-                            .inspect_err(|e| tracing::warn!(error = ?e, "StringIterator: failed to convert PWSTR to String"))
+                            .map_err(Into::into)
+                            .inspect_err(|e: &crate::errors::OpcError| tracing::warn!(error = ?e, "StringIterator: failed to convert PWSTR to String"))
                     );
                 }
             }

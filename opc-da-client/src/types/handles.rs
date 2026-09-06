@@ -2,24 +2,16 @@
 
 use std::fmt;
 
-/// Opaque handle for an OPC group.
+/// Type-safe client-assigned group handle.
 ///
-/// This wrapper type enhances type safety when interacting with OPC COM interfaces,
-/// preventing accidental mixing of group and item handles.
-///
-/// # Examples
-///
-/// ```
-/// use opc_da_client::GroupHandle;
-/// let handle = GroupHandle::new(123u32);
-/// assert_eq!(handle.as_raw(), 123u32);
-/// ```
+/// In OPC DA COM interfaces (`IOPCServer::AddGroup`), `hClientGroup` is provided by the client application.
+/// It cannot be used directly where a server-assigned group handle is required.
 #[repr(transparent)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
-pub struct GroupHandle(u32);
+pub struct ClientGroupHandle(u32);
 
-impl GroupHandle {
-    /// Creates a new `GroupHandle` from a raw 32-bit unsigned integer.
+impl ClientGroupHandle {
+    /// Creates a new `ClientGroupHandle` from a raw 32-bit unsigned integer.
     #[inline]
     #[must_use]
     pub const fn new(raw: u32) -> Self {
@@ -34,25 +26,95 @@ impl GroupHandle {
     }
 }
 
-impl From<u32> for GroupHandle {
+impl From<u32> for ClientGroupHandle {
     #[inline]
     fn from(raw: u32) -> Self {
         Self(raw)
     }
 }
 
-impl From<GroupHandle> for u32 {
+impl From<ClientGroupHandle> for u32 {
     #[inline]
-    fn from(handle: GroupHandle) -> Self {
+    fn from(handle: ClientGroupHandle) -> Self {
         handle.0
     }
 }
 
-impl fmt::Display for GroupHandle {
+impl fmt::Display for ClientGroupHandle {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}", self.0)
     }
 }
+
+/// Type-safe server-assigned group handle.
+///
+/// In OPC DA COM interfaces (`IOPCServer::RemoveGroup`, `IOPCGroupStateMgt`), operations targeting groups
+/// require the server-assigned handle (`phServerGroup`). Passing a [`ClientGroupHandle`] instead is
+/// prevented at compile-time by the type system.
+///
+/// # Examples
+///
+/// ```
+/// use opc_da_client::ServerGroupHandle;
+/// let handle = ServerGroupHandle::new(123u32);
+/// assert_eq!(handle.as_raw(), 123u32);
+/// ```
+///
+/// Compile-fail test ensuring [`ClientGroupHandle`] cannot be passed to a function expecting [`ServerGroupHandle`]:
+/// ```compile_fail
+/// use opc_da_client::{ClientGroupHandle, ServerGroupHandle};
+/// fn remove_group(_handle: ServerGroupHandle) {}
+/// let client = ClientGroupHandle::new(1);
+/// remove_group(client);
+/// ```
+#[repr(transparent)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub struct ServerGroupHandle(u32);
+
+impl ServerGroupHandle {
+    /// Creates a new `ServerGroupHandle` from a raw 32-bit unsigned integer.
+    #[inline]
+    #[must_use]
+    pub const fn new(raw: u32) -> Self {
+        Self(raw)
+    }
+
+    /// Returns the underlying raw 32-bit handle value.
+    #[inline]
+    #[must_use]
+    pub const fn as_raw(self) -> u32 {
+        self.0
+    }
+}
+
+impl From<u32> for ServerGroupHandle {
+    #[inline]
+    fn from(raw: u32) -> Self {
+        Self(raw)
+    }
+}
+
+impl From<ServerGroupHandle> for u32 {
+    #[inline]
+    fn from(handle: ServerGroupHandle) -> Self {
+        handle.0
+    }
+}
+
+impl fmt::Display for ServerGroupHandle {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+/// Legacy type alias for [`ServerGroupHandle`].
+///
+/// Deprecated in favor of explicit [`ServerGroupHandle`] or [`ClientGroupHandle`] to ensure type safety.
+#[deprecated(
+    since = "0.2.1",
+    note = "Use ServerGroupHandle or ClientGroupHandle for type-safe handle domain separation"
+)]
+pub type GroupHandle = ServerGroupHandle;
 
 /// Type-safe client-assigned item handle.
 ///

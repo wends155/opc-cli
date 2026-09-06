@@ -15,25 +15,26 @@ pub mod com;
 pub use errors::{OpcError, OpcResult};
 pub use provider::{
     DisplayOptionOpcValue, DisplayOptionTimestamp, OpcProvider, OpcQuality, OpcValue,
-    OpcValueOptionExt, QualityLimit, QualityMajor, QualitySubstatus, SystemTimeOptionExt,
-    TagCollector, TagValue, WriteResult,
+    OpcValueOptionExt, QualityLimit, QualityMajor, QualitySubstatus, ServerDiscovery,
+    SystemTimeOptionExt, TagBrowser, TagCollector, TagReader, TagValue, TagWriter, WriteResult,
 };
 #[allow(deprecated)]
 pub use types::{
-    BrowseDirection, BrowseType, ClientItemHandle, GroupHandle, IntoTags, ItemHandle,
-    OpcServerEndpoint, OpcServerInfo, ParseQualityError, ServerIdentifier, ServerItemHandle,
-    TagBatch, TagBatchIter, TagExtractError, TagFailure, TagResult, TagSuccess, TagValues,
+    BrowseDirection, BrowseType, ClientGroupHandle, ClientItemHandle, GroupHandle, IntoTags,
+    ItemHandle, OpcServerEndpoint, OpcServerInfo, ParseQualityError, ServerGroupHandle,
+    ServerIdentifier, ServerItemHandle, TagBatch, TagBatchIter, TagExtractError, TagFailure,
+    TagResult, TagSuccess, TagValues,
 };
 
 // Backend re-exports (conditional)
 #[cfg(feature = "opc-da-backend")]
 pub use com::{
     client::{OpcDaClient, OpcDaClientBuilder},
-    connector::ComConnector,
+    connector::{
+        ComConnector, ConnectedGroup, ConnectedServer, GroupRemovalMode, ItemWrite, ServerConnector,
+    },
     discovery::{OpcServerRegistration, OpcServerType, inspect_local_registration},
 };
-#[cfg(feature = "opc-da-backend")]
-pub use raw::memory::{BorrowedPcwstr, BorrowedPwstr, LocalPointer};
 
 // Test support re-export
 #[cfg(feature = "test-support")]

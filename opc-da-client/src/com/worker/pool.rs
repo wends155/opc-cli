@@ -1,9 +1,9 @@
 //! Connection pool management, active group caching, and retry dispatch engine.
 
-use crate::com::connector::{ConnectedServer, ServerConnector};
+use crate::com::connector::traits::{ConnectedServer, GroupRemovalMode, ServerConnector};
 use crate::errors::{OpcError, OpcOperation, OpcResult};
 use crate::log_opc_err;
-use crate::types::{GroupHandle, NamespaceType, OpcServerEndpoint, ServerItemHandle};
+use crate::types::{NamespaceType, OpcServerEndpoint, ServerGroupHandle, ServerItemHandle};
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -19,7 +19,7 @@ pub struct CachedGroup<G> {
     /// Underlying connected group facade instance.
     pub group: G,
     /// Server-assigned handle for the group.
-    pub server_handle: GroupHandle,
+    pub server_handle: ServerGroupHandle,
     /// Server-assigned handles for items corresponding to `tags`.
     pub server_item_handles: Vec<ServerItemHandle>,
     /// Indices of items that were successfully registered on the server.
@@ -49,7 +49,9 @@ impl<S: ConnectedServer> PooledServer<S> {
     /// Explicitly removes and clears the cached active group from the server if one exists.
     pub fn clear_active_group(&mut self) {
         if let Some(cached) = self.active_group.take() {
-            let _ = self.server.remove_group(cached.server_handle, true);
+            let _ = self
+                .server
+                .remove_group(cached.server_handle, GroupRemovalMode::Force);
         }
     }
 }
@@ -110,8 +112,12 @@ impl<S: ConnectedServer> ConnectedServer for PooledServer<S> {
         self.server.add_group(config)
     }
 
-    fn remove_group(&self, server_group: GroupHandle, force: bool) -> OpcResult<()> {
-        self.server.remove_group(server_group, force)
+    fn remove_group(
+        &self,
+        server_group: ServerGroupHandle,
+        mode: GroupRemovalMode,
+    ) -> OpcResult<()> {
+        self.server.remove_group(server_group, mode)
     }
 }
 

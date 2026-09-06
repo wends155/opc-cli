@@ -1,5 +1,6 @@
 //! Tag writing engine with validation, native batching, and result mapping.
 
+use crate::com::connector::traits::ItemWrite;
 use crate::com::connector::{ConnectedGroup, ConnectedServer, GroupConfig, GroupItemDef};
 use crate::com::guard::GroupGuard;
 use crate::errors::{OpcError, OpcOperation, OpcResult};
@@ -90,8 +91,7 @@ pub fn handle_write_batch<S: ConnectedServer>(
         })
         .collect();
 
-    let mut valid_server_handles = Vec::with_capacity(results.len());
-    let mut valid_values = Vec::with_capacity(results.len());
+    let mut valid_writes = Vec::with_capacity(results.len());
     let mut valid_indices = Vec::with_capacity(results.len());
 
     for (idx, item_res) in results.iter().enumerate() {
@@ -105,23 +105,23 @@ pub fn handle_write_batch<S: ConnectedServer>(
             );
             write_results[idx] = WriteResult::failure(tag_id, e.clone());
         } else {
-            valid_server_handles.push(item_res.server_handle);
-            valid_values.push(writes[idx].1.clone());
+            valid_writes.push(ItemWrite::new(
+                item_res.server_handle,
+                writes[idx].1.clone(),
+            ));
             valid_indices.push(idx);
         }
     }
 
-    if !valid_server_handles.is_empty() {
-        let server_write_results = group
-            .write(&valid_server_handles, &valid_values)
-            .inspect_err(|e| {
-                log_opc_err!(
-                    e,
-                    OpcOperation::WriteSync,
-                    server = %server_id,
-                    handle_count = valid_server_handles.len()
-                );
-            })?;
+    if !valid_writes.is_empty() {
+        let server_write_results = group.write(&valid_writes).inspect_err(|e| {
+            log_opc_err!(
+                e,
+                OpcOperation::WriteSync,
+                server = %server_id,
+                handle_count = valid_writes.len()
+            );
+        })?;
 
         for (res, &orig_idx) in server_write_results.into_iter().zip(&valid_indices) {
             let tag_id = &writes[orig_idx].0;
@@ -221,11 +221,11 @@ mod tests {
                 })
                 .collect())
         })
-        .with_write_fn(|handles, _| {
-            Ok(handles
+        .with_write_fn(|items| {
+            Ok(items
                 .iter()
-                .map(|h| {
-                    if h.as_raw() == 3 {
+                .map(|item| {
+                    if item.handle.as_raw() == 3 {
                         Err(OpcError::InvalidState("Tag3 rejected in write".into()))
                     } else {
                         Ok(())

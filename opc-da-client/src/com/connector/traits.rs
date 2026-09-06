@@ -6,11 +6,70 @@
 use crate::com::iterator::StringIterator;
 use crate::errors::{OpcError, OpcResult};
 use crate::types::{
-    BrowseDirection, BrowseType, ClientItemHandle, GroupHandle, NamespaceType, OpcQuality,
-    OpcServerEndpoint, OpcServerInfo, OpcValue, ServerIdentifier, ServerItemHandle,
+    BrowseDirection, BrowseType, ClientGroupHandle, ClientItemHandle, NamespaceType, OpcQuality,
+    OpcServerEndpoint, OpcServerInfo, OpcValue, ServerGroupHandle, ServerIdentifier,
+    ServerItemHandle, normalize_host,
 };
 
 // ── Pure-Rust Data Transfer Objects ────────────────────────────────
+
+/// Specifies group removal behavior.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum GroupRemovalMode {
+    /// Normal removal; server may reject if outstanding references or asynchronous operations exist.
+    #[default]
+    Normal,
+    /// Force group removal even if outstanding references exist (`bForce = TRUE`).
+    Force,
+}
+
+impl GroupRemovalMode {
+    /// Returns `true` if this mode specifies forceful removal.
+    #[inline]
+    #[must_use]
+    pub const fn is_force(self) -> bool {
+        matches!(self, Self::Force)
+    }
+}
+
+impl From<bool> for GroupRemovalMode {
+    #[inline]
+    fn from(force: bool) -> Self {
+        if force { Self::Force } else { Self::Normal }
+    }
+}
+
+impl From<GroupRemovalMode> for bool {
+    #[inline]
+    fn from(mode: GroupRemovalMode) -> Self {
+        mode.is_force()
+    }
+}
+
+impl From<GroupRemovalMode> for windows::core::BOOL {
+    #[inline]
+    fn from(mode: GroupRemovalMode) -> Self {
+        Self::from(mode.is_force())
+    }
+}
+
+/// Pairing of a server item handle and its target value for writing.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ItemWrite {
+    /// Server-assigned handle identifying the target item.
+    pub handle: ServerItemHandle,
+    /// Value to write.
+    pub value: OpcValue,
+}
+
+impl ItemWrite {
+    /// Creates a new `ItemWrite` pairing.
+    #[inline]
+    #[must_use]
+    pub const fn new(handle: ServerItemHandle, value: OpcValue) -> Self {
+        Self { handle, value }
+    }
+}
 
 /// Definition of an item to be added to an OPC group.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -67,7 +126,7 @@ pub struct GroupConfig<'a> {
     /// Requested update rate in milliseconds.
     pub update_rate_ms: u32,
     /// Client-assigned group handle.
-    pub client_handle: GroupHandle,
+    pub client_handle: ClientGroupHandle,
     /// Time zone bias in minutes from UTC.
     pub time_bias: i32,
     /// Percent deadband for analog items.
@@ -84,7 +143,7 @@ impl<'a> GroupConfig<'a> {
             name,
             active: true,
             update_rate_ms: 1000,
-            client_handle: GroupHandle::new(1),
+            client_handle: ClientGroupHandle::new(1),
             time_bias: 0,
             percent_deadband: 0.0,
             locale_id: 0,
@@ -100,7 +159,7 @@ impl<'a> GroupConfig<'a> {
 
     /// Sets the client-assigned group handle.
     #[must_use]
-    pub const fn with_client_handle(mut self, client_handle: GroupHandle) -> Self {
+    pub const fn with_client_handle(mut self, client_handle: ClientGroupHandle) -> Self {
         self.client_handle = client_handle;
         self
     }
@@ -125,7 +184,7 @@ pub struct CreatedGroup<G> {
     /// Connected group instance.
     pub group: G,
     /// Server-assigned handle for the group.
-    pub server_handle: GroupHandle,
+    pub server_handle: ServerGroupHandle,
     /// Revised update rate in milliseconds provided by the server.
     pub revised_update_rate_ms: u32,
 }
@@ -154,19 +213,16 @@ pub trait ServerConnector: Send + Sync {
     /// Returns an [`OpcError`] if server enumeration fails.
     fn enumerate_server_details(&self, host: &str) -> OpcResult<Vec<OpcServerInfo>> {
         let servers = self.enumerate_servers(host)?;
-        let host_opt =
-            if host.is_empty() || host.eq_ignore_ascii_case("localhost") || host == "127.0.0.1" {
-                None
-            } else {
-                Some(host.to_string())
-            };
+        let host_opt = normalize_host(Some(host));
         Ok(servers
             .into_iter()
-            .map(|prog_id| OpcServerInfo {
-                prog_id,
-                clsid: windows::core::GUID::zeroed(),
-                user_type: None,
-                host: host_opt.clone(),
+            .map(|prog_id| {
+                OpcServerInfo::new(
+                    prog_id,
+                    windows::core::GUID::zeroed(),
+                    None,
+                    host_opt.clone(),
+                )
             })
             .collect())
     }
@@ -243,7 +299,11 @@ pub trait ConnectedServer {
     ///
     /// # Errors
     /// Returns an [`OpcError`] if group removal fails.
-    fn remove_group(&self, server_group: GroupHandle, force: bool) -> OpcResult<()>;
+    fn remove_group(
+        &self,
+        server_group: ServerGroupHandle,
+        mode: GroupRemovalMode,
+    ) -> OpcResult<()>;
 }
 
 /// Facade over an OPC DA group for item management and I/O.
@@ -264,15 +324,11 @@ pub trait ConnectedGroup {
         server_handles: &[ServerItemHandle],
     ) -> OpcResult<Vec<Result<GroupItemState, OpcError>>>;
 
-    /// Write values to the given server handles using pure Rust [`OpcValue`].
+    /// Write values to the given items using strongly-typed [`ItemWrite`] pairs.
     ///
     /// # Errors
     /// Returns an [`OpcError`] if write fails.
-    fn write(
-        &self,
-        server_handles: &[ServerItemHandle],
-        values: &[OpcValue],
-    ) -> OpcResult<Vec<Result<(), OpcError>>>;
+    fn write(&self, items: &[ItemWrite]) -> OpcResult<Vec<Result<(), OpcError>>>;
 }
 
 #[cfg(test)]
@@ -283,16 +339,42 @@ mod tests {
     fn test_group_config_ephemeral_and_builders() {
         let config = GroupConfig::ephemeral("TestGroup")
             .with_update_rate(500)
-            .with_client_handle(GroupHandle::new(42))
+            .with_client_handle(ClientGroupHandle::new(42))
             .with_active(false)
             .with_percent_deadband(0.5);
 
         assert_eq!(config.name, "TestGroup");
         assert!(!config.active);
         assert_eq!(config.update_rate_ms, 500);
-        assert_eq!(config.client_handle, GroupHandle::new(42));
+        assert_eq!(config.client_handle, ClientGroupHandle::new(42));
         assert!((config.percent_deadband - 0.5).abs() < f32::EPSILON);
         assert_eq!(config.time_bias, 0);
         assert_eq!(config.locale_id, 0);
+    }
+
+    #[test]
+    fn test_group_removal_mode_conversions() {
+        assert_eq!(GroupRemovalMode::default(), GroupRemovalMode::Normal);
+        assert!(!GroupRemovalMode::Normal.is_force());
+        assert!(GroupRemovalMode::Force.is_force());
+        assert_eq!(GroupRemovalMode::from(false), GroupRemovalMode::Normal);
+        assert_eq!(GroupRemovalMode::from(true), GroupRemovalMode::Force);
+        assert!(!bool::from(GroupRemovalMode::Normal));
+        assert!(bool::from(GroupRemovalMode::Force));
+        assert_eq!(
+            windows::core::BOOL::from(GroupRemovalMode::Normal),
+            windows::core::BOOL(0)
+        );
+        assert_eq!(
+            windows::core::BOOL::from(GroupRemovalMode::Force),
+            windows::core::BOOL(1)
+        );
+    }
+
+    #[test]
+    fn test_item_write_construction() {
+        let write = ItemWrite::new(ServerItemHandle::new(10), OpcValue::Int(42));
+        assert_eq!(write.handle, ServerItemHandle::new(10));
+        assert_eq!(write.value, OpcValue::Int(42));
     }
 }

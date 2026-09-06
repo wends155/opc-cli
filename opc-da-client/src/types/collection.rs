@@ -24,22 +24,31 @@ use crate::errors::OpcError;
 /// assert!(tv.is_good());
 /// assert_eq!(tv.display_value(), "42.5");
 /// ```
-#[derive(Debug, Clone, PartialEq, Default)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct TagValue {
     /// The fully qualified tag identifier (e.g., `"Channel1.Device1.Tag1"`).
     pub tag_id: String,
-    /// The decoded value, or `None` if the tag read failed or value is unavailable.
-    pub value: Option<OpcValue>,
+    /// The read outcome containing either the successfully decoded value or the server/communication error.
+    pub outcome: Result<OpcValue, OpcError>,
     /// OPC quality status, decomposed into major quality, substatus, and limit bits.
     pub quality: OpcQuality,
     /// Timestamp of the last value change (UTC-based), or `None` if unavailable.
     pub timestamp: Option<std::time::SystemTime>,
-    /// Underlying error if the tag read failed on the server.
-    pub error: Option<OpcError>,
+}
+
+impl Default for TagValue {
+    fn default() -> Self {
+        Self {
+            tag_id: String::new(),
+            outcome: Ok(OpcValue::Empty),
+            quality: OpcQuality::default(),
+            timestamp: None,
+        }
+    }
 }
 
 impl TagValue {
-    /// Creates a new `TagValue` without error.
+    /// Creates a new `TagValue`.
     #[inline]
     #[must_use]
     pub fn new(
@@ -50,10 +59,26 @@ impl TagValue {
     ) -> Self {
         Self {
             tag_id: tag_id.into(),
-            value,
+            outcome: Ok(value.unwrap_or(OpcValue::Empty)),
             quality,
             timestamp,
-            error: None,
+        }
+    }
+
+    /// Creates a new successful `TagValue`.
+    #[inline]
+    #[must_use]
+    pub fn success(
+        tag_id: impl Into<String>,
+        value: OpcValue,
+        quality: OpcQuality,
+        timestamp: Option<std::time::SystemTime>,
+    ) -> Self {
+        Self {
+            tag_id: tag_id.into(),
+            outcome: Ok(value),
+            quality,
+            timestamp,
         }
     }
 
@@ -63,19 +88,37 @@ impl TagValue {
     pub fn with_error(tag_id: impl Into<String>, quality: OpcQuality, error: OpcError) -> Self {
         Self {
             tag_id: tag_id.into(),
-            value: None,
+            outcome: Err(error),
             quality,
             timestamp: None,
-            error: Some(error),
         }
     }
 
-    /// Returns `true` if quality is good, a value is present, and no error occurred.
+    /// Returns a reference to the decoded value if present and successful.
+    #[inline]
+    #[must_use]
+    pub fn value(&self) -> Option<&OpcValue> {
+        self.outcome.as_ref().ok()
+    }
+
+    /// Returns a reference to the underlying error if the read failed.
+    #[inline]
+    #[must_use]
+    pub fn error(&self) -> Option<&OpcError> {
+        self.outcome.as_ref().err()
+    }
+
+    /// Returns a reference to the read outcome.
+    #[inline]
+    pub fn outcome(&self) -> Result<&OpcValue, &OpcError> {
+        self.outcome.as_ref()
+    }
+
+    /// Returns `true` if quality is good and the read was successful.
     ///
     /// # Returns
     ///
-    /// `true` if [`TagValue::quality`] satisfies [`OpcQuality::is_good`], [`TagValue::value`] is `Some`,
-    /// and [`TagValue::error`] is `None`.
+    /// `true` if [`TagValue::quality`] satisfies [`OpcQuality::is_good`] and [`TagValue::outcome`] is `Ok(_)`.
     ///
     /// # Examples
     ///
@@ -87,7 +130,7 @@ impl TagValue {
     /// ```
     #[must_use]
     pub fn is_good(&self) -> bool {
-        self.quality.is_good() && self.value.is_some() && self.error.is_none()
+        self.quality.is_good() && self.outcome.is_ok()
     }
 
     /// Returns `true` if quality is bad, value is missing, or an error occurred.
@@ -103,10 +146,9 @@ impl TagValue {
     ///
     /// let tv = TagValue {
     ///     tag_id: "Tag1".into(),
-    ///     value: None,
+    ///     outcome: Err(opc_da_client::OpcError::Connection("Comm error".into())),
     ///     quality: OpcQuality::BAD_COMM_FAILURE,
     ///     timestamp: None,
-    ///     error: None,
     /// };
     /// assert!(tv.is_error());
     /// ```
@@ -125,9 +167,9 @@ impl TagValue {
     /// A newly allocated [`String`] representation of the value, or `"Error"` if [`TagValue::value`] is `None`.
     #[must_use]
     pub fn display_value(&self) -> String {
-        match &self.value {
-            Some(v) => v.to_string(),
-            None => "Error".to_string(),
+        match &self.outcome {
+            Ok(v) => v.to_string(),
+            Err(_) => "Error".to_string(),
         }
     }
 
@@ -149,31 +191,36 @@ impl TagValue {
     /// If an error is present or value is missing, returns `Err(TagFailure)`.
     /// Otherwise returns `Ok(TagSuccess)`.
     pub fn into_result(self) -> TagResult {
-        if let Some(err) = self.error {
-            Err(TagFailure {
-                tag_id: self.tag_id,
-                quality: self.quality,
-                error: err,
-            })
-        } else if let Some(val) = self.value {
-            Ok(TagSuccess {
+        match self.outcome {
+            Ok(val) => Ok(TagSuccess {
                 tag_id: self.tag_id,
                 value: val,
                 quality: self.quality,
                 timestamp: self.timestamp,
-            })
-        } else {
-            Err(TagFailure {
+            }),
+            Err(err) => Err(TagFailure {
                 tag_id: self.tag_id,
                 quality: self.quality,
-                error: OpcError::Internal("Missing tag value without explicit error".into()),
-            })
+                error: err,
+            }),
         }
     }
 
     /// Converts a reference to this `TagValue` into a [`TagResult`].
     pub fn to_result(&self) -> TagResult {
-        self.clone().into_result()
+        match &self.outcome {
+            Ok(val) => Ok(TagSuccess {
+                tag_id: self.tag_id.clone(),
+                value: val.clone(),
+                quality: self.quality,
+                timestamp: self.timestamp,
+            }),
+            Err(err) => Err(TagFailure {
+                tag_id: self.tag_id.clone(),
+                quality: self.quality,
+                error: err.clone(),
+            }),
+        }
     }
 }
 
@@ -238,10 +285,9 @@ impl From<TagSuccess> for TagValue {
     fn from(s: TagSuccess) -> Self {
         Self {
             tag_id: s.tag_id,
-            value: Some(s.value),
+            outcome: Ok(s.value),
             quality: s.quality,
             timestamp: s.timestamp,
-            error: None,
         }
     }
 }
@@ -250,10 +296,9 @@ impl From<TagFailure> for TagValue {
     fn from(f: TagFailure) -> Self {
         Self {
             tag_id: f.tag_id,
-            value: None,
+            outcome: Err(f.error),
             quality: f.quality,
             timestamp: None,
-            error: Some(f.error),
         }
     }
 }
@@ -273,7 +318,7 @@ impl std::fmt::Display for TagValue {
             f,
             "{} = {} [{}] @ {}",
             self.tag_id,
-            self.value.display(),
+            self.value().display(),
             self.quality,
             self.timestamp.display()
         )
@@ -439,7 +484,24 @@ impl TagValues {
     /// ```
     #[must_use]
     pub fn get_value(&self, tag: &str) -> Option<&OpcValue> {
-        self.get(tag).and_then(|tv| tv.value.as_ref())
+        self.get(tag).and_then(|tv| tv.value())
+    }
+
+    /// Helper to look up an item and validate that it has an available value.
+    fn get_value_checked(&self, tag: &str) -> Result<&OpcValue, TagExtractError> {
+        let item = self
+            .get(tag)
+            .ok_or_else(|| TagExtractError::NotRequested(tag.to_string()))?;
+        match &item.outcome {
+            Ok(val) => match val {
+                OpcValue::Empty | OpcValue::Null => Err(TagExtractError::NoValue(tag.to_string())),
+                _ => Ok(val),
+            },
+            Err(err) => Err(TagExtractError::ReadFailed {
+                tag: tag.to_string(),
+                source: err.clone(),
+            }),
+        }
     }
 
     /// Extracts a 64-bit floating point value for the given tag,
@@ -469,26 +531,16 @@ impl TagValues {
     /// assert_eq!(values.get_f64("sensor.temp").unwrap(), 98.6);
     /// ```
     pub fn get_f64(&self, tag: &str) -> Result<f64, TagExtractError> {
-        let item = self
-            .get(tag)
-            .ok_or_else(|| TagExtractError::NotRequested(tag.to_string()))?;
-        if let Some(ref err) = item.error {
-            return Err(TagExtractError::ReadFailed {
-                tag: tag.to_string(),
-                source: err.clone(),
-            });
-        }
-        let val = item
-            .value
-            .as_ref()
-            .ok_or_else(|| TagExtractError::NoValue(tag.to_string()))?;
+        let val = self.get_value_checked(tag)?;
         match val {
             OpcValue::Float(f) => Ok(*f),
-            OpcValue::Int(i) => Ok(f64::from(*i)),
-            OpcValue::Empty | OpcValue::Null => Err(TagExtractError::NoValue(tag.to_string())),
-            other => Err(TagExtractError::TypeMismatch {
+            #[allow(clippy::cast_precision_loss)]
+            OpcValue::Int(i) => Ok(*i as f64),
+            #[allow(clippy::cast_precision_loss)]
+            OpcValue::UInt(u) => Ok(*u as f64),
+            _ => Err(TagExtractError::TypeMismatch {
                 tag: tag.to_string(),
-                value: other.to_string(),
+                value: val.to_string(),
                 expected: "f64",
             }),
         }
@@ -521,21 +573,18 @@ impl TagValues {
     /// assert_eq!(values.get_i32("counter").unwrap(), 100);
     /// ```
     pub fn get_i32(&self, tag: &str) -> Result<i32, TagExtractError> {
-        let item = self
-            .get(tag)
-            .ok_or_else(|| TagExtractError::NotRequested(tag.to_string()))?;
-        if let Some(ref err) = item.error {
-            return Err(TagExtractError::ReadFailed {
-                tag: tag.to_string(),
-                source: err.clone(),
-            });
-        }
-        let val = item
-            .value
-            .as_ref()
-            .ok_or_else(|| TagExtractError::NoValue(tag.to_string()))?;
+        let val = self.get_value_checked(tag)?;
         match val {
-            OpcValue::Int(i) => Ok(*i),
+            OpcValue::Int(i) => i32::try_from(*i).map_err(|_| TagExtractError::TypeMismatch {
+                tag: tag.to_string(),
+                value: val.to_string(),
+                expected: "i32",
+            }),
+            OpcValue::UInt(u) => i32::try_from(*u).map_err(|_| TagExtractError::TypeMismatch {
+                tag: tag.to_string(),
+                value: val.to_string(),
+                expected: "i32",
+            }),
             OpcValue::Float(f) => {
                 if f.is_nan()
                     || f.is_infinite()
@@ -553,10 +602,9 @@ impl TagValues {
                     Ok(*f as i32)
                 }
             }
-            OpcValue::Empty | OpcValue::Null => Err(TagExtractError::NoValue(tag.to_string())),
-            other => Err(TagExtractError::TypeMismatch {
+            _ => Err(TagExtractError::TypeMismatch {
                 tag: tag.to_string(),
-                value: other.to_string(),
+                value: val.to_string(),
                 expected: "i32",
             }),
         }
@@ -588,25 +636,12 @@ impl TagValues {
     /// assert_eq!(values.get_bool("pump.status").unwrap(), true);
     /// ```
     pub fn get_bool(&self, tag: &str) -> Result<bool, TagExtractError> {
-        let item = self
-            .get(tag)
-            .ok_or_else(|| TagExtractError::NotRequested(tag.to_string()))?;
-        if let Some(ref err) = item.error {
-            return Err(TagExtractError::ReadFailed {
-                tag: tag.to_string(),
-                source: err.clone(),
-            });
-        }
-        let val = item
-            .value
-            .as_ref()
-            .ok_or_else(|| TagExtractError::NoValue(tag.to_string()))?;
+        let val = self.get_value_checked(tag)?;
         match val {
             OpcValue::Bool(b) => Ok(*b),
-            OpcValue::Empty | OpcValue::Null => Err(TagExtractError::NoValue(tag.to_string())),
-            other => Err(TagExtractError::TypeMismatch {
+            _ => Err(TagExtractError::TypeMismatch {
                 tag: tag.to_string(),
-                value: other.to_string(),
+                value: val.to_string(),
                 expected: "bool",
             }),
         }
@@ -638,25 +673,12 @@ impl TagValues {
     /// assert_eq!(values.get_str("system.mode").unwrap(), "RUN");
     /// ```
     pub fn get_str(&self, tag: &str) -> Result<&str, TagExtractError> {
-        let item = self
-            .get(tag)
-            .ok_or_else(|| TagExtractError::NotRequested(tag.to_string()))?;
-        if let Some(ref err) = item.error {
-            return Err(TagExtractError::ReadFailed {
-                tag: tag.to_string(),
-                source: err.clone(),
-            });
-        }
-        let val = item
-            .value
-            .as_ref()
-            .ok_or_else(|| TagExtractError::NoValue(tag.to_string()))?;
+        let val = self.get_value_checked(tag)?;
         match val {
             OpcValue::String(s) => Ok(s.as_str()),
-            OpcValue::Empty | OpcValue::Null => Err(TagExtractError::NoValue(tag.to_string())),
-            other => Err(TagExtractError::TypeMismatch {
+            _ => Err(TagExtractError::TypeMismatch {
                 tag: tag.to_string(),
-                value: other.to_string(),
+                value: val.to_string(),
                 expected: "&str",
             }),
         }
@@ -723,6 +745,41 @@ impl TagValues {
     pub fn iter_results(&self) -> impl Iterator<Item = TagResult> + '_ {
         self.items.iter().map(TagValue::to_result)
     }
+
+    /// Looks up a tag value by numeric index in the collection.
+    #[inline]
+    #[must_use]
+    pub fn get_index(&self, index: usize) -> Option<&TagValue> {
+        self.items.get(index)
+    }
+
+    /// Clears all tag values from this collection.
+    #[inline]
+    pub fn clear(&mut self) {
+        self.items.clear();
+    }
+
+    /// Appends a new tag value to the end of this collection.
+    #[inline]
+    pub fn push(&mut self, item: TagValue) {
+        self.items.push(item);
+    }
+}
+
+impl std::ops::Deref for TagValues {
+    type Target = [TagValue];
+
+    #[inline]
+    fn deref(&self) -> &Self::Target {
+        &self.items
+    }
+}
+
+impl AsRef<[TagValue]> for TagValues {
+    #[inline]
+    fn as_ref(&self) -> &[TagValue] {
+        &self.items
+    }
 }
 
 impl From<Vec<TagValue>> for TagValues {
@@ -756,5 +813,12 @@ impl<'a> IntoIterator for &'a TagValues {
     #[inline]
     fn into_iter(self) -> Self::IntoIter {
         self.items.iter()
+    }
+}
+
+impl FromIterator<TagValue> for TagValues {
+    #[inline]
+    fn from_iter<I: IntoIterator<Item = TagValue>>(iter: I) -> Self {
+        Self::new(iter.into_iter().collect())
     }
 }
