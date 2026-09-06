@@ -29,7 +29,7 @@ pub use types::{
 // Backend re-exports (conditional)
 #[cfg(feature = "opc-da-backend")]
 pub use com::{
-    client::{OpcDaClient, OpcDaClientBuilder},
+    client::{Bound, OpcDaClient, OpcDaClientBuilder, Unbound},
     connector::{
         ComConnector, ConnectedGroup, ConnectedServer, GroupRemovalMode, ItemWrite, ServerConnector,
     },

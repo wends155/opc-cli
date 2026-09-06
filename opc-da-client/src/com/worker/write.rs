@@ -1,11 +1,10 @@
 //! Tag writing engine with validation, native batching, and result mapping.
 
 use crate::com::connector::traits::ItemWrite;
-use crate::com::connector::{ConnectedGroup, ConnectedServer, GroupConfig, GroupItemDef};
-use crate::com::guard::GroupGuard;
+use crate::com::connector::{ConnectedGroup, ConnectedServer};
 use crate::errors::{OpcError, OpcOperation, OpcResult};
 use crate::log_opc_err;
-use crate::types::{ClientItemHandle, OpcValue, ServerIdentifier, WriteResult};
+use crate::types::{OpcValue, ServerIdentifier, WriteResult};
 
 /// Executes synchronous batch writing across multiple tags in a single atomic COM group, returning
 /// a list of structured [`WriteResult`]s preserving the original index ordering.
@@ -35,51 +34,18 @@ pub fn handle_write_batch<S: ConnectedServer>(
     );
     let start = std::time::Instant::now();
 
-    let group_name = crate::com::worker::generate_group_name("opc-write");
-    let created = opc_server
-        .add_group(&GroupConfig::ephemeral(&group_name))
-        .inspect_err(|e| {
-            log_opc_err!(
-                e,
-                OpcOperation::WriteAddGroup,
-                server = %server_id,
-                write_count = writes.len()
-            );
-        })?;
-    let group = created.group;
-    let _group_guard = GroupGuard::new(opc_server, created.server_handle);
-
-    let item_defs: Vec<GroupItemDef> = writes
-        .iter()
-        .enumerate()
-        .map(|(idx, (tag_id, _))| GroupItemDef {
-            item_id: tag_id.clone(),
-            #[allow(clippy::cast_possible_truncation)]
-            client_handle: ClientItemHandle::new(idx as u32),
-            active: true,
-        })
-        .collect();
-
-    let results = group.add_items(&item_defs).inspect_err(|e| {
-        log_opc_err!(
-            e,
-            OpcOperation::WriteAddItems,
-            server = %server_id,
-            write_count = writes.len()
-        );
-    })?;
-
-    if results.len() != writes.len() {
-        let err = OpcError::Internal("Server returned mismatched item results length".to_string());
-        log_opc_err!(
-            &err,
-            OpcOperation::WriteEmptyItemResults,
-            server = %server_id,
-            expected = writes.len(),
-            actual = results.len()
-        );
-        return Err(err);
-    }
+    let tag_names: Vec<&str> = writes.iter().map(|(t, _)| t.as_str()).collect();
+    let reg = crate::com::worker::register_item_group(
+        opc_server,
+        server_id,
+        "opc-write",
+        &tag_names,
+        OpcOperation::WriteAddGroup,
+        OpcOperation::WriteAddItems,
+    )?;
+    let group = reg.group;
+    let _group_guard = reg.group_guard;
+    let results = reg.item_results;
 
     let mut write_results: Vec<WriteResult> = writes
         .iter()
@@ -175,6 +141,7 @@ pub fn handle_write<S: ConnectedServer>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::com::connector::GroupItemDef;
     use crate::com::connector::mock::MockConnectedServer;
     use crate::types::ServerItemHandle;
 

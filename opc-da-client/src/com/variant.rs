@@ -198,37 +198,73 @@ fn ole_date_to_string(ole_date: f64) -> String {
     )
 }
 
-/// Convert a COM [`VARIANT`] into a strongly-typed [`OpcValue`].
+/// Extracts a scalar value from a COM [`VARIANT`] into [`OpcValue`] if the `vt` represents a scalar type.
+///
+/// Returns `Some(OpcValue)` for recognized scalar VARTYPEs (VT_EMPTY, VT_NULL, integers, floats, bool, BSTR).
+/// Returns `None` if the variant is an array, error code, currency, date, or unsupported COM type.
 #[allow(clippy::cast_possible_wrap)]
-pub fn variant_to_opc_value(variant: &VARIANT) -> OpcValue {
+pub fn decode_scalar_variant(variant: &VARIANT) -> Option<OpcValue> {
     // SAFETY: Reading VARIANT union fields per vt discriminant.
     unsafe {
         let vt = variant.Anonymous.Anonymous.vt.0;
         match vt {
-            0 => OpcValue::Empty,
-            1 => OpcValue::Null,
+            0 => Some(OpcValue::Empty), // VT_EMPTY
+            1 => Some(OpcValue::Null),  // VT_NULL
             16 => {
                 let val = (*variant.Anonymous.Anonymous).Anonymous.cVal;
-                OpcValue::Int(i64::from(val))
-            }
-            17 => OpcValue::UInt(u64::from((*variant.Anonymous.Anonymous).Anonymous.bVal)),
-            2 => OpcValue::Int(i64::from((*variant.Anonymous.Anonymous).Anonymous.iVal)),
-            18 => OpcValue::UInt(u64::from((*variant.Anonymous.Anonymous).Anonymous.uiVal)),
-            3 => OpcValue::Int(i64::from((*variant.Anonymous.Anonymous).Anonymous.lVal)),
-            19 => OpcValue::UInt(u64::from((*variant.Anonymous.Anonymous).Anonymous.ulVal)),
-            20 => OpcValue::Int((*variant.Anonymous.Anonymous).Anonymous.llVal),
-            21 => OpcValue::UInt((*variant.Anonymous.Anonymous).Anonymous.ullVal),
-            22 => OpcValue::Int(i64::from((*variant.Anonymous.Anonymous).Anonymous.intVal)),
-            23 => OpcValue::UInt(u64::from((*variant.Anonymous.Anonymous).Anonymous.uintVal)),
-            4 => OpcValue::Float(f64::from((*variant.Anonymous.Anonymous).Anonymous.fltVal)),
-            5 => OpcValue::Float((*variant.Anonymous.Anonymous).Anonymous.dblVal),
-            11 => OpcValue::Bool((*variant.Anonymous.Anonymous).Anonymous.boolVal.0 != 0),
+                Some(OpcValue::Int(i64::from(val)))
+            } // VT_I1
+            17 => Some(OpcValue::UInt(u64::from(
+                (*variant.Anonymous.Anonymous).Anonymous.bVal,
+            ))), // VT_UI1
+            2 => Some(OpcValue::Int(i64::from(
+                (*variant.Anonymous.Anonymous).Anonymous.iVal,
+            ))), // VT_I2
+            18 => Some(OpcValue::UInt(u64::from(
+                (*variant.Anonymous.Anonymous).Anonymous.uiVal,
+            ))), // VT_UI2
+            3 => Some(OpcValue::Int(i64::from(
+                (*variant.Anonymous.Anonymous).Anonymous.lVal,
+            ))), // VT_I4
+            19 => Some(OpcValue::UInt(u64::from(
+                (*variant.Anonymous.Anonymous).Anonymous.ulVal,
+            ))), // VT_UI4
+            20 => Some(OpcValue::Int(
+                (*variant.Anonymous.Anonymous).Anonymous.llVal,
+            )), // VT_I8
+            21 => Some(OpcValue::UInt(
+                (*variant.Anonymous.Anonymous).Anonymous.ullVal,
+            )), // VT_UI8
+            22 => Some(OpcValue::Int(i64::from(
+                (*variant.Anonymous.Anonymous).Anonymous.intVal,
+            ))), // VT_INT
+            23 => Some(OpcValue::UInt(u64::from(
+                (*variant.Anonymous.Anonymous).Anonymous.uintVal,
+            ))), // VT_UINT
+            4 => Some(OpcValue::Float(f64::from(
+                (*variant.Anonymous.Anonymous).Anonymous.fltVal,
+            ))), // VT_R4
+            5 => Some(OpcValue::Float(
+                (*variant.Anonymous.Anonymous).Anonymous.dblVal,
+            )), // VT_R8
+            11 => Some(OpcValue::Bool(
+                (*variant.Anonymous.Anonymous).Anonymous.boolVal.0 != 0,
+            )), // VT_BOOL
             8 => {
                 let bstr = &(*variant.Anonymous.Anonymous).Anonymous.bstrVal;
-                OpcValue::String(bstr.to_string())
-            }
-            _ => OpcValue::String(variant_to_string(variant)),
+                Some(OpcValue::String(bstr.to_string()))
+            } // VT_BSTR
+            _ => None,
         }
+    }
+}
+
+/// Convert a COM [`VARIANT`] into a strongly-typed [`OpcValue`].
+pub fn variant_to_opc_value(variant: &VARIANT) -> OpcValue {
+    if let Some(val) = decode_scalar_variant(variant) {
+        val
+    } else {
+        OpcValue::String(variant_to_string(variant))
     }
 }
 
@@ -909,5 +945,32 @@ mod tests {
         }
         assert_eq!(buf.before, [0xAA; 16]);
         assert_eq!(buf.after, [0xBB; 16]);
+    }
+
+    #[test]
+    fn test_decode_scalar_variant() {
+        let v_empty = opc_value_to_variant(&OpcValue::Empty);
+        assert_eq!(decode_scalar_variant(&v_empty), Some(OpcValue::Empty));
+
+        let v_null = opc_value_to_variant(&OpcValue::Null);
+        assert_eq!(decode_scalar_variant(&v_null), Some(OpcValue::Null));
+
+        let v_int = opc_value_to_variant(&OpcValue::Int(42));
+        assert_eq!(decode_scalar_variant(&v_int), Some(OpcValue::Int(42)));
+
+        let v_float = opc_value_to_variant(&OpcValue::Float(3.125));
+        assert_eq!(
+            decode_scalar_variant(&v_float),
+            Some(OpcValue::Float(3.125))
+        );
+
+        let v_bool = opc_value_to_variant(&OpcValue::Bool(true));
+        assert_eq!(decode_scalar_variant(&v_bool), Some(OpcValue::Bool(true)));
+
+        let v_str = ScopedVariant::from_opc_value(&OpcValue::String("hello".into()));
+        assert_eq!(
+            decode_scalar_variant(v_str.as_raw()),
+            Some(OpcValue::String("hello".into()))
+        );
     }
 }

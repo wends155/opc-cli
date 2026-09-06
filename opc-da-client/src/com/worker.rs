@@ -8,11 +8,16 @@ mod write;
 #[cfg(test)]
 mod tests;
 
-use crate::com::connector::ServerConnector;
+use crate::com::connector::{
+    ConnectedGroup, ConnectedServer, GroupConfig, GroupItemDef, ServerConnector,
+};
+use crate::com::guard::GroupGuard;
 use crate::errors::{OpcError, OpcOperation, OpcResult};
 use crate::log_opc_err;
 use crate::provider::{TagCollector, WriteResult};
-use crate::types::{OpcServerEndpoint, OpcServerInfo, OpcValue};
+use crate::types::{
+    ClientItemHandle, OpcServerEndpoint, OpcServerInfo, OpcValue, ServerIdentifier,
+};
 use std::sync::Arc;
 use tokio::sync::{mpsc, oneshot};
 
@@ -29,6 +34,87 @@ pub fn generate_group_name(prefix: &str) -> String {
     let pid = std::process::id();
     let seq = GROUP_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     format!("{prefix}-{pid:x}-{seq:x}")
+}
+
+/// An ephemeral group created on an OPC server with items registered and validated.
+pub struct RegisteredItemGroup<'a, S: ConnectedServer> {
+    /// Connected group proxy.
+    pub group: S::Group,
+    /// Guard that deletes the group on drop unless disarmed.
+    pub group_guard: GroupGuard<'a, S>,
+    /// Results of the `add_items` call, matching the input tag order.
+    pub item_results: Vec<crate::com::connector::GroupItemResult>,
+}
+
+/// Helper to create an ephemeral group and register items on a connected OPC server.
+///
+/// # Arguments
+/// * `server` - Reference to the connected OPC server.
+/// * `server_id` - Server identifier for structured logging.
+/// * `prefix` - Prefix for the ephemeral group name (e.g. `"opc-read"` or `"opc-write"`).
+/// * `tags` - Slice of tag names to register in the group.
+/// * `add_group_op` - Operation name for group creation logging.
+/// * `add_items_op` - Operation name for item addition logging.
+pub fn register_item_group<'a, S: ConnectedServer>(
+    server: &'a S,
+    server_id: &ServerIdentifier,
+    prefix: &str,
+    tags: &[impl AsRef<str>],
+    add_group_op: OpcOperation,
+    add_items_op: OpcOperation,
+) -> OpcResult<RegisteredItemGroup<'a, S>> {
+    let group_name = generate_group_name(prefix);
+    let created = server
+        .add_group(&GroupConfig::ephemeral(&group_name))
+        .inspect_err(|e| {
+            log_opc_err!(
+                e,
+                add_group_op,
+                server = %server_id,
+                tag_count = tags.len()
+            );
+        })?;
+
+    let group = created.group;
+    let group_guard = GroupGuard::new(server, created.server_handle);
+
+    let item_defs: Vec<GroupItemDef> = tags
+        .iter()
+        .enumerate()
+        .map(|(idx, tag)| GroupItemDef {
+            item_id: tag.as_ref().to_string(),
+            #[allow(clippy::cast_possible_truncation)]
+            client_handle: ClientItemHandle::new(idx as u32),
+            active: true,
+        })
+        .collect();
+
+    let results = group.add_items(&item_defs).inspect_err(|e| {
+        log_opc_err!(
+            e,
+            add_items_op,
+            server = %server_id,
+            tag_count = tags.len()
+        );
+    })?;
+
+    if results.len() != tags.len() {
+        let err = OpcError::Internal("OPC server returned mismatched result array sizes".into());
+        log_opc_err!(
+            &err,
+            OpcOperation::ReadMismatchedResults,
+            server = %server_id,
+            expected = tags.len(),
+            actual = results.len()
+        );
+        return Err(err);
+    }
+
+    Ok(RegisteredItemGroup {
+        group,
+        group_guard,
+        item_results: results,
+    })
 }
 
 /// Represents an asynchronous request dispatched to the COM worker thread.

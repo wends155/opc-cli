@@ -2,15 +2,13 @@
 
 use super::pool::{CachedGroup, PooledServer};
 use crate::com::connector::{
-    ConnectedGroup, ConnectedServer, DataSource, GroupConfig, GroupItemDef, GroupItemResult,
-    GroupItemState,
+    ConnectedGroup, ConnectedServer, DataSource, GroupItemResult, GroupItemState,
 };
-use crate::com::guard::GroupGuard;
 use crate::errors::{OpcError, OpcOperation, OpcResult};
 use crate::log_opc_err;
 use crate::types::{
-    ClientItemHandle, OpcQuality, OpcServerEndpoint, ServerIdentifier, ServerItemHandle, TagBatch,
-    TagValue, TagValues,
+    OpcQuality, OpcServerEndpoint, ServerIdentifier, ServerItemHandle, TagBatch, TagValue,
+    TagValues,
 };
 
 /// Executes synchronous device tag reading through the pooled server's active OPC group,
@@ -97,53 +95,18 @@ pub fn handle_read<S: ConnectedServer>(
     // Cache miss: remove previous active group
     pooled.clear_active_group();
 
-    let group_name = super::generate_group_name("opc-read");
-    let created = pooled
-        .server
-        .add_group(&GroupConfig::ephemeral(&group_name))
-        .inspect_err(|e| {
-            log_opc_err!(
-                e,
-                OpcOperation::ReadAddGroup,
-                server = %endpoint.identifier,
-                tag_count = tags.len()
-            );
-        })?;
-    let group = created.group;
-    let mut group_guard = GroupGuard::new(&pooled.server, created.server_handle);
-
     let tag_ids: Vec<String> = tags.iter_str().map(ToString::to_string).collect();
-    let item_defs: Vec<GroupItemDef> = tag_ids
-        .iter()
-        .enumerate()
-        .map(|(idx, tag_id)| GroupItemDef {
-            item_id: tag_id.clone(),
-            #[allow(clippy::cast_possible_truncation)]
-            client_handle: ClientItemHandle::new(idx as u32),
-            active: true,
-        })
-        .collect();
-
-    let results = group.add_items(&item_defs).inspect_err(|e| {
-        log_opc_err!(
-            e,
-            OpcOperation::ReadAddItems,
-            server = %endpoint.identifier,
-            tag_count = tag_ids.len()
-        );
-    })?;
-
-    if results.len() != tag_ids.len() {
-        let err = OpcError::Internal("OPC server returned mismatched result array sizes".into());
-        log_opc_err!(
-            &err,
-            OpcOperation::ReadMismatchedResults,
-            server = %endpoint.identifier,
-            expected = tag_ids.len(),
-            actual = results.len()
-        );
-        return Err(err);
-    }
+    let reg = super::register_item_group(
+        &pooled.server,
+        &endpoint.identifier,
+        "opc-read",
+        &tag_ids,
+        OpcOperation::ReadAddGroup,
+        OpcOperation::ReadAddItems,
+    )?;
+    let group = reg.group;
+    let mut group_guard = reg.group_guard;
+    let results = reg.item_results;
 
     let mut tag_values: Vec<TagValue> = tag_ids
         .iter()

@@ -169,6 +169,18 @@ impl<S: ConnectedServer> ConnectionPool<S> {
     pub fn remove(&mut self, endpoint: &OpcServerEndpoint) -> Option<PooledServer<S>> {
         self.connections.remove(endpoint)
     }
+
+    /// Evicts an endpoint from the connection pool, synchronously clearing any active group proxy before removal.
+    ///
+    /// Returns `true` if an active connection was present and evicted.
+    pub fn evict(&mut self, endpoint: &OpcServerEndpoint) -> bool {
+        if let Some(mut pooled) = self.connections.remove(endpoint) {
+            pooled.clear_active_group();
+            true
+        } else {
+            false
+        }
+    }
 }
 
 /// Dispatches an operation against a pooled server connection, transparently evicting
@@ -230,7 +242,7 @@ where
                 server = %endpoint,
                 action = "evicting_stale_connection"
             );
-            pool.connections.remove(endpoint);
+            pool.evict(endpoint);
             tracing::debug!(server = %endpoint, "Reconnecting");
             let fresh_srv = match connector.connect_endpoint(endpoint) {
                 Ok(s) => s,
@@ -511,5 +523,43 @@ mod tests {
             state.connect_count.load(Ordering::SeqCst),
             connect_count_before + 1
         );
+    }
+
+    #[test]
+    fn test_pool_evict_synchronously_clears_active_group() {
+        use crate::com::connector::{ConnectedServer, GroupConfig};
+
+        let state = Arc::new(MockState::default());
+        let connector = Arc::new(MockServerConnector::with_state(state.clone()));
+        let mut pool = ConnectionPool::new();
+        let endpoint = OpcServerEndpoint::from("Matrikon.OPC.Simulation.1");
+
+        // Connect and create active group
+        let _ = dispatch_with_retry(&mut pool, &connector, &endpoint, |pooled| {
+            let group_config = GroupConfig::ephemeral("test-group");
+            let created = pooled.server.add_group(&group_config)?;
+            pooled.active_group = Some(CachedGroup {
+                tags: vec!["Tag1".to_string()],
+                group: created.group,
+                server_handle: created.server_handle,
+                server_item_handles: vec![ServerItemHandle::new(1)],
+                valid_indices: vec![0],
+                rejected_errors: Vec::new(),
+            });
+            Ok(())
+        });
+
+        assert_eq!(state.add_group_count.load(Ordering::SeqCst), 1);
+        assert_eq!(state.remove_group_count.load(Ordering::SeqCst), 0);
+        assert_eq!(pool.len(), 1);
+
+        // Evict endpoint
+        let evicted = pool.evict(&endpoint);
+        assert!(evicted);
+        assert_eq!(pool.len(), 0);
+        assert_eq!(state.remove_group_count.load(Ordering::SeqCst), 1);
+
+        // Second evict should return false
+        assert!(!pool.evict(&endpoint));
     }
 }

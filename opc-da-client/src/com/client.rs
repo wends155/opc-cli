@@ -184,7 +184,7 @@ impl<C: ServerConnector + 'static> OpcDaClientBuilder<C> {
         host: Option<String>,
         server: Option<ServerIdentifier>,
         timeout: Option<std::time::Duration>,
-    ) -> OpcResult<OpcDaClient<C>> {
+    ) -> OpcResult<OpcDaClient<C, Unbound>> {
         let mut client = OpcDaClient::new(connector)?;
         client.timeout = timeout;
         if let Some(server) = server {
@@ -204,12 +204,12 @@ impl<C: ServerConnector + 'static> OpcDaClientBuilder<C> {
     ///
     /// # Returns
     ///
-    /// A new [`OpcDaClient`] configured with the builder options.
+    /// A new [`OpcDaClient`] configured with the builder options in the [`Unbound`] typestate.
     ///
     /// # Errors
     ///
     /// Returns [`OpcError::Connection`] if worker thread initialization fails.
-    pub fn build_with_connector(self, connector: C) -> OpcResult<OpcDaClient<C>> {
+    pub fn build_with_connector(self, connector: C) -> OpcResult<OpcDaClient<C, Unbound>> {
         Self::build_internal(connector, self.host, self.server, self.timeout)
     }
 }
@@ -219,7 +219,7 @@ impl<C: ServerConnector + Default + 'static> OpcDaClientBuilder<C> {
     ///
     /// # Returns
     ///
-    /// A configured [`OpcDaClient`].
+    /// A configured [`OpcDaClient`] in the [`Unbound`] typestate.
     ///
     /// # Errors
     ///
@@ -235,35 +235,61 @@ impl<C: ServerConnector + Default + 'static> OpcDaClientBuilder<C> {
     ///     .build()?;
     /// # Ok::<(), opc_da_client::OpcError>(())
     /// ```
-    pub fn build(self) -> OpcResult<OpcDaClient<C>> {
+    pub fn build(self) -> OpcResult<OpcDaClient<C, Unbound>> {
         let connector = self.connector.unwrap_or_default();
         Self::build_internal(connector, self.host, self.server, self.timeout)
     }
+
+    /// Builds the `OpcDaClient` directly in the [`Bound`] typestate.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`OpcError::InvalidState`] if the builder does not have a server identifier configured.
+    /// Returns [`OpcError::Connection`] if worker thread initialization fails.
+    pub fn build_bound(self) -> OpcResult<OpcDaClient<C, Bound>> {
+        let unbound = self.build()?;
+        let ep = unbound.endpoint.clone().ok_or_else(|| {
+            OpcError::InvalidState(
+                "Cannot build bound client without configuring server identifier".into(),
+            )
+        })?;
+        Ok(unbound.bind(ep))
+    }
 }
+
+/// Marker typestate indicating an unbound [`OpcDaClient`] gateway capable of multi-server operations.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub struct Unbound;
+
+/// Marker typestate indicating a bound single-server session [`OpcDaClient`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub struct Bound;
 
 /// Concrete [`OpcProvider`] implementation for Windows OPC DA.
 ///
 /// Uses native `windows-rs` COM interop via the internal `com` subsystem.
-pub struct OpcDaClient<C: ServerConnector + 'static = ComConnector> {
+pub struct OpcDaClient<C: ServerConnector + 'static = ComConnector, State = Unbound> {
     /// Background MTA worker handle managing asynchronous request channels.
     pub(crate) worker: Arc<ComWorker<C>>,
     /// Target OPC server endpoint if bound to a specific server.
     pub endpoint: Option<OpcServerEndpoint>,
     /// Configured operation timeout.
     pub timeout: Option<std::time::Duration>,
+    pub(crate) _state: std::marker::PhantomData<State>,
 }
 
-impl<C: ServerConnector + 'static> Clone for OpcDaClient<C> {
+impl<C: ServerConnector + 'static, State> Clone for OpcDaClient<C, State> {
     fn clone(&self) -> Self {
         Self {
             worker: Arc::clone(&self.worker),
             endpoint: self.endpoint.clone(),
             timeout: self.timeout,
+            _state: std::marker::PhantomData,
         }
     }
 }
 
-impl OpcDaClient<ComConnector> {
+impl OpcDaClient<ComConnector, Unbound> {
     /// Returns a new fluent builder for configuring and connecting an `OpcDaClient`.
     ///
     /// # Returns
@@ -284,80 +310,15 @@ impl OpcDaClient<ComConnector> {
         OpcDaClientBuilder::new()
     }
 
-    /// Locally binds an `OpcDaClient` to a local OPC DA server by ProgID or CLSID.
-    ///
-    /// This initializes the local COM worker runtime without performing active network I/O.
-    /// To verify server reachability eagerly, call [`connect_eager`](Self::connect_eager) on the returned client.
-    ///
-    /// # Arguments
-    ///
-    /// * `server` - Target OPC server ProgID or GUID CLSID.
-    ///
-    /// # Returns
-    ///
-    /// A configured [`OpcDaClient`] bound to the target server.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`OpcError::Connection`] if worker thread initialization fails.
-    ///
-    /// # Examples
-    ///
-    /// ```rust,no_run
-    /// use opc_da_client::OpcDaClient;
-    ///
-    /// let client = OpcDaClient::bind("Matrikon.OPC.Simulation.1")?;
-    /// # Ok::<(), opc_da_client::OpcError>(())
-    /// ```
-    pub fn bind(server: impl Into<ServerIdentifier>) -> OpcResult<Self> {
-        Self::builder().server(server).build()
-    }
-
-    /// Locally binds an `OpcDaClient` to a remote OPC DA server by host and ProgID or CLSID.
-    ///
-    /// This initializes the local COM worker runtime without performing active network I/O.
-    /// To verify server reachability eagerly, call [`connect_eager`](Self::connect_eager) on the returned client.
-    ///
-    /// # Arguments
-    ///
-    /// * `host` - Target remote host IP address or hostname.
-    /// * `server` - Target OPC server ProgID or GUID CLSID.
-    ///
-    /// # Returns
-    ///
-    /// A configured [`OpcDaClient`] bound to the target host and server.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`OpcError::Connection`] if worker thread initialization fails.
-    ///
-    /// # Examples
-    ///
-    /// ```rust,no_run
-    /// use opc_da_client::OpcDaClient;
-    ///
-    /// let client = OpcDaClient::bind_remote("192.168.1.10", "Matrikon.OPC.Simulation.1")?;
-    /// # Ok::<(), opc_da_client::OpcError>(())
-    /// ```
-    pub fn bind_remote(
-        host: impl Into<String>,
-        server: impl Into<ServerIdentifier>,
-    ) -> OpcResult<Self> {
-        Self::builder().host(host).server(server).build()
-    }
-
     /// Quickly connects to a local OPC DA server by ProgID or CLSID.
     ///
-    /// Note: This performs local client binding without active network I/O.
-    /// Prefer [`bind`](Self::bind) for local binding or [`connect_eager`](Self::connect_eager) for active verification.
-    ///
     /// # Arguments
     ///
     /// * `server` - Target OPC server ProgID or GUID CLSID.
     ///
     /// # Returns
     ///
-    /// A connected [`OpcDaClient`] bound to the target server.
+    /// A connected [`OpcDaClient`] bound to the target server in the [`Bound`] typestate.
     ///
     /// # Errors
     ///
@@ -371,14 +332,15 @@ impl OpcDaClient<ComConnector> {
     /// let client = OpcDaClient::connect("Matrikon.OPC.Simulation.1")?;
     /// # Ok::<(), opc_da_client::OpcError>(())
     /// ```
-    pub fn connect(server: impl Into<ServerIdentifier>) -> OpcResult<Self> {
-        Self::bind(server)
+    pub fn connect(
+        server: impl Into<ServerIdentifier>,
+    ) -> OpcResult<OpcDaClient<ComConnector, Bound>> {
+        let endpoint = OpcServerEndpoint::from(server.into());
+        let client = Self::new(ComConnector::new())?;
+        Ok(client.bind(endpoint))
     }
 
     /// Quickly connects to a remote OPC DA server by host and ProgID or CLSID.
-    ///
-    /// Note: This performs local client binding without active network I/O.
-    /// Prefer [`bind_remote`](Self::bind_remote) for local binding or [`connect_eager`](Self::connect_eager) for active verification.
     ///
     /// # Arguments
     ///
@@ -387,7 +349,7 @@ impl OpcDaClient<ComConnector> {
     ///
     /// # Returns
     ///
-    /// A connected [`OpcDaClient`] bound to the target host and server.
+    /// A connected [`OpcDaClient`] bound to the target host and server in the [`Bound`] typestate.
     ///
     /// # Errors
     ///
@@ -404,13 +366,18 @@ impl OpcDaClient<ComConnector> {
     pub fn connect_remote(
         host: impl Into<String>,
         server: impl Into<ServerIdentifier>,
-    ) -> OpcResult<Self> {
-        Self::bind_remote(host, server)
+    ) -> OpcResult<OpcDaClient<ComConnector, Bound>> {
+        let endpoint = OpcServerEndpoint {
+            host: Some(host.into()),
+            identifier: server.into(),
+        };
+        let client = Self::new(ComConnector::new())?;
+        Ok(client.bind(endpoint))
     }
 }
 
-impl<C: ServerConnector + 'static> OpcDaClient<C> {
-    /// Creates a new `OpcDaClient` with the given connector.
+impl<C: ServerConnector + 'static> OpcDaClient<C, Unbound> {
+    /// Creates a new `OpcDaClient` with the given connector in the [`Unbound`] typestate.
     ///
     /// # Arguments
     ///
@@ -418,7 +385,7 @@ impl<C: ServerConnector + 'static> OpcDaClient<C> {
     ///
     /// # Returns
     ///
-    /// A new [`OpcDaClient`] instance ready for communication.
+    /// A new unbound [`OpcDaClient`] instance ready for communication.
     ///
     /// # Errors
     ///
@@ -433,13 +400,110 @@ impl<C: ServerConnector + 'static> OpcDaClient<C> {
             worker: Arc::new(worker),
             endpoint: None,
             timeout: None,
+            _state: std::marker::PhantomData,
         })
     }
 
+    /// Returns the target OPC server endpoint if bound to a specific server.
+    #[must_use]
+    pub fn endpoint(&self) -> Option<&OpcServerEndpoint> {
+        self.endpoint.as_ref()
+    }
+
+    /// Binds the unbound client to a target endpoint, transitioning it to the [`Bound`] typestate.
+    #[must_use]
+    pub fn bind<E: Into<OpcServerEndpoint>>(self, endpoint: E) -> OpcDaClient<C, Bound> {
+        let ep = endpoint.into();
+        OpcDaClient {
+            worker: self.worker,
+            endpoint: Some(ep),
+            timeout: self.timeout,
+            _state: std::marker::PhantomData,
+        }
+    }
+
+    /// Binds the unbound client to a remote OPC DA server by host and identifier.
+    #[must_use]
+    pub fn bind_remote(
+        self,
+        host: impl Into<String>,
+        server: impl Into<ServerIdentifier>,
+    ) -> OpcDaClient<C, Bound> {
+        self.bind(OpcServerEndpoint {
+            host: Some(host.into()),
+            identifier: server.into(),
+        })
+    }
+}
+
+impl<C: ServerConnector + 'static> OpcDaClient<C, Bound> {
+    /// Returns the target OPC server endpoint guaranteed to be present in the [`Bound`] typestate.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the internal endpoint field is absent, which represents an invariant violation of [`Bound`].
+    #[must_use]
+    pub fn endpoint(&self) -> &OpcServerEndpoint {
+        self.endpoint
+            .as_ref()
+            .expect("Bound typestate invariant: endpoint is always Some")
+    }
+
+    /// Returns the server identifier string (ProgID or CLSID) for this bound session.
+    #[must_use]
+    pub fn server_id(&self) -> &str {
+        match &self.endpoint().identifier {
+            ServerIdentifier::ProgId(prog_id) => prog_id.as_str(),
+            ServerIdentifier::Clsid(_) => "{CLSID}",
+        }
+    }
+
+    /// Unbinds the client from its endpoint, returning the unbound gateway and the previous endpoint.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the internal endpoint field is absent, which represents an invariant violation of [`Bound`].
+    #[must_use]
+    pub fn unbind(self) -> (OpcDaClient<C, Unbound>, OpcServerEndpoint) {
+        let ep = self
+            .endpoint
+            .expect("Bound typestate invariant: endpoint is always Some");
+        (
+            OpcDaClient {
+                worker: self.worker,
+                endpoint: None,
+                timeout: self.timeout,
+                _state: std::marker::PhantomData,
+            },
+            ep,
+        )
+    }
+
+    /// Reads a single tag and returns its full [`TagValue`].
+    pub async fn read_tag(&self, tag: &str) -> OpcResult<TagValue> {
+        self.read_tag_value(tag).await
+    }
+
+    /// Reads a batch of tags and returns their [`TagValues`].
+    pub async fn read_tags(&self, tags: impl IntoTags) -> OpcResult<TagValues> {
+        self.read_tag_values(tags).await
+    }
+
+    /// Writes a typed value to a tag on the bound server.
+    pub async fn write_tag(&self, tag: &str, value: impl Into<OpcValue>) -> OpcResult<WriteResult> {
+        self.write(tag, value).await
+    }
+
+    /// Writes a batch of tag-value pairs to the bound server.
+    pub async fn write_tags(&self, writes: Vec<(String, OpcValue)>) -> OpcResult<Vec<WriteResult>> {
+        self.write_batch(writes).await
+    }
+}
+
+impl<C: ServerConnector + 'static, State: Send + Sync + 'static> OpcDaClient<C, State> {
     /// Eagerly verifies active connectivity and reachability to the configured OPC DA server.
     ///
-    /// Unlike [`bind`](Self::bind) which only configures local client state without network I/O,
-    /// `connect_eager` dispatches an initial probe request to the COM worker thread to verify that
+    /// Dispatches an initial probe request to the COM worker thread to verify that
     /// the target server can be reached and instantiated via COM/DCOM.
     ///
     /// # Errors
@@ -449,12 +513,6 @@ impl<C: ServerConnector + 'static> OpcDaClient<C> {
     pub async fn connect_eager(&self) -> OpcResult<()> {
         let _ = self.read_tag_values(TagBatch::default()).await?;
         Ok(())
-    }
-
-    /// Returns the target OPC server endpoint if bound to a specific server.
-    #[must_use]
-    pub fn endpoint(&self) -> Option<&OpcServerEndpoint> {
-        self.endpoint.as_ref()
     }
 
     /// Dispatches a request to the COM worker thread, applying timeout if configured.
@@ -911,7 +969,9 @@ impl<C: ServerConnector + 'static> OpcDaClient<C> {
 }
 
 #[async_trait]
-impl<C: ServerConnector + 'static> ServerDiscovery for OpcDaClient<C> {
+impl<C: ServerConnector + 'static, State: Send + Sync + 'static> ServerDiscovery
+    for OpcDaClient<C, State>
+{
     #[tracing::instrument(level = "info", skip(self), err)]
     async fn list_servers(&self, host: &str) -> OpcResult<Vec<String>> {
         let host_owned = host.to_string();
@@ -934,7 +994,9 @@ impl<C: ServerConnector + 'static> ServerDiscovery for OpcDaClient<C> {
 }
 
 #[async_trait]
-impl<C: ServerConnector + 'static> TagBrowser for OpcDaClient<C> {
+impl<C: ServerConnector + 'static, State: Send + Sync + 'static> TagBrowser
+    for OpcDaClient<C, State>
+{
     #[tracing::instrument(level = "info", skip(self, collector), err)]
     async fn browse_tags(&self, server: &str, collector: TagCollector) -> OpcResult<Vec<String>> {
         let endpoint = crate::types::OpcServerEndpoint::from(server);
@@ -948,7 +1010,9 @@ impl<C: ServerConnector + 'static> TagBrowser for OpcDaClient<C> {
 }
 
 #[async_trait]
-impl<C: ServerConnector + 'static> TagReader for OpcDaClient<C> {
+impl<C: ServerConnector + 'static, State: Send + Sync + 'static> TagReader
+    for OpcDaClient<C, State>
+{
     #[tracing::instrument(level = "info", skip(self, tags), fields(tag_count = tags.len()), err)]
     async fn read_tag_values(&self, server: &str, tags: TagBatch) -> OpcResult<TagValues> {
         let endpoint = crate::types::OpcServerEndpoint::from(server);
@@ -978,7 +1042,9 @@ impl<C: ServerConnector + 'static> TagReader for OpcDaClient<C> {
 }
 
 #[async_trait]
-impl<C: ServerConnector + 'static> TagWriter for OpcDaClient<C> {
+impl<C: ServerConnector + 'static, State: Send + Sync + 'static> TagWriter
+    for OpcDaClient<C, State>
+{
     #[tracing::instrument(level = "info", skip(self, value), err)]
     async fn write_tag_value(
         &self,
