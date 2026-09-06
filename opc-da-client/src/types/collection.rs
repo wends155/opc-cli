@@ -133,28 +133,22 @@ impl TagValue {
         self.quality.is_good() && self.outcome.is_ok()
     }
 
-    /// Returns `true` if quality is bad, value is missing, or an error occurred.
-    ///
-    /// # Returns
-    ///
-    /// `true` if the tag read encountered an error or quality is bad; `false` otherwise.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use opc_da_client::{OpcQuality, TagValue};
-    ///
-    /// let tv = TagValue {
-    ///     tag_id: "Tag1".into(),
-    ///     outcome: Err(opc_da_client::OpcError::Connection("Comm error".into())),
-    ///     quality: OpcQuality::BAD_COMM_FAILURE,
-    ///     timestamp: None,
-    /// };
-    /// assert!(tv.is_error());
-    /// ```
+    /// Returns `true` if quality is uncertain and the read was successful.
+    #[must_use]
+    pub fn is_uncertain(&self) -> bool {
+        self.quality.is_uncertain() && self.outcome.is_ok()
+    }
+
+    /// Returns `true` if quality is bad or the read encountered an error.
+    #[must_use]
+    pub fn is_bad(&self) -> bool {
+        self.quality.is_bad() || self.outcome.is_err()
+    }
+
+    /// Returns `true` if the read operation encountered an error.
     #[must_use]
     pub fn is_error(&self) -> bool {
-        !self.is_good()
+        self.outcome.is_err()
     }
 
     /// Returns a human-readable display string for the value (or `"Error"` if missing).
@@ -359,7 +353,10 @@ pub enum TagExtractError {
 
 impl From<TagExtractError> for OpcError {
     fn from(err: TagExtractError) -> Self {
-        Self::Conversion(err.to_string())
+        match err {
+            TagExtractError::ReadFailed { source, .. } => source,
+            other => Self::Conversion(other.to_string()),
+        }
     }
 }
 
@@ -504,6 +501,34 @@ impl TagValues {
         }
     }
 
+    /// Extracts a value coerced into the requested target type `T` using lossless lenient conversion.
+    ///
+    /// # Arguments
+    ///
+    /// * `tag` - Tag identifier string to look up.
+    ///
+    /// # Returns
+    ///
+    /// The decoded value converted to `T`.
+    ///
+    /// # Errors
+    ///
+    /// * [`TagExtractError::NotRequested`] - Tag was not included in this read batch.
+    /// * [`TagExtractError::ReadFailed`] - Tag read failed on the server.
+    /// * [`TagExtractError::NoValue`] - Tag returned a null or empty value.
+    /// * [`TagExtractError::TypeMismatch`] - Value cannot be losslessly converted to `T`.
+    pub fn get_as<T>(&self, tag: &str) -> Result<T, TagExtractError>
+    where
+        T: TryFrom<OpcValue>,
+    {
+        let val = self.get_value_checked(tag)?;
+        T::try_from(val.clone()).map_err(|_| TagExtractError::TypeMismatch {
+            tag: tag.to_string(),
+            value: val.to_string(),
+            expected: std::any::type_name::<T>(),
+        })
+    }
+
     /// Extracts a 64-bit floating point value for the given tag,
     /// losslessly coercing integer values to float.
     ///
@@ -531,19 +556,28 @@ impl TagValues {
     /// assert_eq!(values.get_f64("sensor.temp").unwrap(), 98.6);
     /// ```
     pub fn get_f64(&self, tag: &str) -> Result<f64, TagExtractError> {
-        let val = self.get_value_checked(tag)?;
-        match val {
-            OpcValue::Float(f) => Ok(*f),
-            #[allow(clippy::cast_precision_loss)]
-            OpcValue::Int(i) => Ok(*i as f64),
-            #[allow(clippy::cast_precision_loss)]
-            OpcValue::UInt(u) => Ok(*u as f64),
-            _ => Err(TagExtractError::TypeMismatch {
-                tag: tag.to_string(),
-                value: val.to_string(),
-                expected: "f64",
-            }),
-        }
+        self.get_as::<f64>(tag)
+    }
+
+    /// Extracts a 32-bit floating point value for the given tag,
+    /// losslessly coercing integer values to float.
+    ///
+    /// # Arguments
+    ///
+    /// * `tag` - Tag identifier string to look up.
+    ///
+    /// # Returns
+    ///
+    /// The decoded `f32` value.
+    ///
+    /// # Errors
+    ///
+    /// * [`TagExtractError::NotRequested`] - Tag was not included in this read batch.
+    /// * [`TagExtractError::ReadFailed`] - Tag read failed on the server.
+    /// * [`TagExtractError::NoValue`] - Tag returned a null or empty value.
+    /// * [`TagExtractError::TypeMismatch`] - Value cannot be losslessly converted to `f32`.
+    pub fn get_f32(&self, tag: &str) -> Result<f32, TagExtractError> {
+        self.get_as::<f32>(tag)
     }
 
     /// Extracts a 32-bit signed integer value for the given tag,
@@ -573,41 +607,70 @@ impl TagValues {
     /// assert_eq!(values.get_i32("counter").unwrap(), 100);
     /// ```
     pub fn get_i32(&self, tag: &str) -> Result<i32, TagExtractError> {
-        let val = self.get_value_checked(tag)?;
-        match val {
-            OpcValue::Int(i) => i32::try_from(*i).map_err(|_| TagExtractError::TypeMismatch {
-                tag: tag.to_string(),
-                value: val.to_string(),
-                expected: "i32",
-            }),
-            OpcValue::UInt(u) => i32::try_from(*u).map_err(|_| TagExtractError::TypeMismatch {
-                tag: tag.to_string(),
-                value: val.to_string(),
-                expected: "i32",
-            }),
-            OpcValue::Float(f) => {
-                if f.is_nan()
-                    || f.is_infinite()
-                    || *f < f64::from(i32::MIN)
-                    || *f > f64::from(i32::MAX)
-                    || f.fract() != 0.0
-                {
-                    Err(TagExtractError::TypeMismatch {
-                        tag: tag.to_string(),
-                        value: val.to_string(),
-                        expected: "i32",
-                    })
-                } else {
-                    #[allow(clippy::cast_possible_truncation)]
-                    Ok(*f as i32)
-                }
-            }
-            _ => Err(TagExtractError::TypeMismatch {
-                tag: tag.to_string(),
-                value: val.to_string(),
-                expected: "i32",
-            }),
-        }
+        self.get_as::<i32>(tag)
+    }
+
+    /// Extracts a 64-bit signed integer value for the given tag,
+    /// losslessly converting exact whole-number floats without fractional parts.
+    ///
+    /// # Arguments
+    ///
+    /// * `tag` - Tag identifier string to look up.
+    ///
+    /// # Returns
+    ///
+    /// The decoded `i64` value.
+    ///
+    /// # Errors
+    ///
+    /// * [`TagExtractError::NotRequested`] - Tag was not included in this read batch.
+    /// * [`TagExtractError::ReadFailed`] - Tag read failed on the server.
+    /// * [`TagExtractError::NoValue`] - Tag returned a null or empty value.
+    /// * [`TagExtractError::TypeMismatch`] - Value has a fractional part, is out of range, or is not numeric.
+    pub fn get_i64(&self, tag: &str) -> Result<i64, TagExtractError> {
+        self.get_as::<i64>(tag)
+    }
+
+    /// Extracts a 32-bit unsigned integer value for the given tag,
+    /// losslessly converting exact positive whole-number floats without fractional parts.
+    ///
+    /// # Arguments
+    ///
+    /// * `tag` - Tag identifier string to look up.
+    ///
+    /// # Returns
+    ///
+    /// The decoded `u32` value.
+    ///
+    /// # Errors
+    ///
+    /// * [`TagExtractError::NotRequested`] - Tag was not included in this read batch.
+    /// * [`TagExtractError::ReadFailed`] - Tag read failed on the server.
+    /// * [`TagExtractError::NoValue`] - Tag returned a null or empty value.
+    /// * [`TagExtractError::TypeMismatch`] - Value has a fractional part, is negative, is out of range, or is not numeric.
+    pub fn get_u32(&self, tag: &str) -> Result<u32, TagExtractError> {
+        self.get_as::<u32>(tag)
+    }
+
+    /// Extracts a 64-bit unsigned integer value for the given tag,
+    /// losslessly converting exact positive whole-number floats without fractional parts.
+    ///
+    /// # Arguments
+    ///
+    /// * `tag` - Tag identifier string to look up.
+    ///
+    /// # Returns
+    ///
+    /// The decoded `u64` value.
+    ///
+    /// # Errors
+    ///
+    /// * [`TagExtractError::NotRequested`] - Tag was not included in this read batch.
+    /// * [`TagExtractError::ReadFailed`] - Tag read failed on the server.
+    /// * [`TagExtractError::NoValue`] - Tag returned a null or empty value.
+    /// * [`TagExtractError::TypeMismatch`] - Value has a fractional part, is negative, is out of range, or is not numeric.
+    pub fn get_u64(&self, tag: &str) -> Result<u64, TagExtractError> {
+        self.get_as::<u64>(tag)
     }
 
     /// Extracts a boolean value for the given tag.
@@ -636,15 +699,7 @@ impl TagValues {
     /// assert_eq!(values.get_bool("pump.status").unwrap(), true);
     /// ```
     pub fn get_bool(&self, tag: &str) -> Result<bool, TagExtractError> {
-        let val = self.get_value_checked(tag)?;
-        match val {
-            OpcValue::Bool(b) => Ok(*b),
-            _ => Err(TagExtractError::TypeMismatch {
-                tag: tag.to_string(),
-                value: val.to_string(),
-                expected: "bool",
-            }),
-        }
+        self.get_as::<bool>(tag)
     }
 
     /// Extracts a borrowed string slice for the given tag.

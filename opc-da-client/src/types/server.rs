@@ -1,6 +1,23 @@
 //! OPC DA server identification, connection endpoints, and catalog metadata.
 
 use std::fmt;
+use std::str::FromStr;
+
+use crate::errors::OpcError;
+
+/// Normalizes a host string slice, returning `None` if it represents the local machine.
+///
+/// Strings that are empty, whitespace-only, `"localhost"`, `"127.0.0.1"`, or `"::1"`
+/// (case-insensitive) are normalized to `None`. All other hosts return `Some(trimmed_host)`.
+#[must_use]
+pub fn normalize_host_str(host: Option<&str>) -> Option<&str> {
+    let h = host?.trim();
+    if h.is_empty() || h.eq_ignore_ascii_case("localhost") || h == "127.0.0.1" || h == "::1" {
+        None
+    } else {
+        Some(h)
+    }
+}
 
 /// Normalizes a host string, returning `None` if it represents the local machine.
 ///
@@ -8,21 +25,16 @@ use std::fmt;
 /// (case-insensitive) are normalized to `None`. All other hosts return `Some(trimmed_host)`.
 #[must_use]
 pub fn normalize_host(host: Option<&str>) -> Option<String> {
-    let h = host?.trim();
-    if h.is_empty() || h.eq_ignore_ascii_case("localhost") || h == "127.0.0.1" || h == "::1" {
-        None
-    } else {
-        Some(h.to_string())
-    }
+    normalize_host_str(host).map(str::to_string)
 }
 
-/// Determines if a host specification represents a remote machine.
+/// Determines if a host specification represents a remote machine without heap allocations.
 ///
 /// Returns `false` if `host` is `None`, empty, whitespace-only, `"localhost"`, `"127.0.0.1"`, or `"::1"`.
 #[inline]
 #[must_use]
 pub fn is_remote_host(host: Option<&str>) -> bool {
-    normalize_host(host).is_some()
+    normalize_host_str(host).is_some()
 }
 
 /// Helper to parse a standard GUID string into a [`windows::core::GUID`].
@@ -259,14 +271,57 @@ impl From<ServerIdentifier> for OpcServerEndpoint {
     }
 }
 
+impl FromStr for OpcServerEndpoint {
+    type Err = OpcError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let trimmed = s.trim();
+        if trimmed.is_empty() {
+            return Err(OpcError::Conversion(
+                "Server identifier cannot be empty".into(),
+            ));
+        }
+
+        if let Some(rest) = trimmed
+            .strip_prefix(r"\\")
+            .or_else(|| trimmed.strip_prefix("//"))
+        {
+            if let Some(sep_idx) = rest.find(['\\', '/']) {
+                let raw_host = &rest[..sep_idx];
+                let raw_server = &rest[sep_idx + 1..];
+                let host = normalize_host_str(Some(raw_host));
+                let server = raw_server.trim();
+                if server.is_empty() {
+                    return Err(OpcError::Conversion(
+                        "Missing server identifier in endpoint UNC path".into(),
+                    ));
+                }
+                Ok(Self {
+                    host: host.map(str::to_string),
+                    identifier: ServerIdentifier::from(server),
+                })
+            } else {
+                Err(OpcError::Conversion(
+                    "Invalid endpoint UNC path: expected host and server separated by '\\'".into(),
+                ))
+            }
+        } else {
+            Ok(Self {
+                host: None,
+                identifier: ServerIdentifier::from(trimmed),
+            })
+        }
+    }
+}
+
 impl From<&str> for OpcServerEndpoint {
     fn from(s: &str) -> Self {
-        Self::from(ServerIdentifier::from(s))
+        s.parse().unwrap_or_else(|_| Self::local(s))
     }
 }
 
 impl From<String> for OpcServerEndpoint {
     fn from(s: String) -> Self {
-        Self::from(ServerIdentifier::from(s))
+        Self::from(s.as_str())
     }
 }

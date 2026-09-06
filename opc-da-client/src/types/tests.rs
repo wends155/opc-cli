@@ -620,3 +620,238 @@ fn test_host_normalization_and_remote_detection() {
     let ep = info.endpoint();
     assert!(!ep.is_remote());
 }
+
+#[test]
+fn test_tag_value_quality_semantic_matrix() {
+    // Quadrant 1: GOOD quality + Ok(val)
+    let q1 = TagValue::new("Q1", Some(OpcValue::Int(42)), OpcQuality::GOOD, None);
+    assert!(q1.is_good());
+    assert!(!q1.is_error());
+    assert!(!q1.is_uncertain());
+    assert!(!q1.is_bad());
+    assert_eq!(q1.error(), None);
+    assert!(q1.into_result().is_ok());
+
+    // Quadrant 2: UNCERTAIN quality + Ok(val) (The Bug Quadrant)
+    let q2 = TagValue::new("Q2", Some(OpcValue::Int(42)), OpcQuality::UNCERTAIN, None);
+    assert!(!q2.is_good());
+    assert!(q2.is_uncertain());
+    assert!(!q2.is_error(), "Outcome is Ok, so is_error() must be false");
+    assert!(!q2.is_bad());
+    assert_eq!(q2.error(), None);
+    assert!(q2.into_result().is_ok());
+
+    // Quadrant 3: BAD quality + Ok(val) (Clamped/Stale cache)
+    let q3 = TagValue::new(
+        "Q3",
+        Some(OpcValue::Int(42)),
+        OpcQuality::BAD_CONFIG_ERROR,
+        None,
+    );
+    assert!(!q3.is_good());
+    assert!(!q3.is_uncertain());
+    assert!(q3.is_bad());
+    assert!(!q3.is_error());
+    assert_eq!(q3.error(), None);
+    assert!(q3.into_result().is_ok());
+
+    // Quadrant 4: BAD quality + Err(OpcError) (Failed Read)
+    let q4 = TagValue::with_error(
+        "Q4",
+        OpcQuality::BAD_COMM_FAILURE,
+        OpcError::Connection("Drop".into()),
+    );
+    assert!(!q4.is_good());
+    assert!(!q4.is_uncertain());
+    assert!(q4.is_bad());
+    assert!(q4.is_error());
+    assert!(q4.error().is_some());
+    assert!(q4.into_result().is_err());
+}
+
+#[test]
+fn test_tag_extract_error_preserves_source() {
+    let err = TagExtractError::ReadFailed {
+        tag: "Faulty.Tag".into(),
+        source: OpcError::Connection("DCOM RPC timeout 0x800706BA".into()),
+    };
+    let opc_err: OpcError = err.into();
+    assert!(
+        opc_err.is_connection_error(),
+        "Converting TagExtractError::ReadFailed to OpcError must preserve connection error provenance"
+    );
+}
+
+#[test]
+fn test_opc_value_f32_and_default() {
+    assert_eq!(OpcValue::default(), OpcValue::Empty);
+    let val: OpcValue = 12.5f32.into();
+    assert_eq!(val, OpcValue::Float(12.5));
+    let f: f32 = val.try_into().unwrap();
+    assert!((f - 12.5).abs() < 1e-6);
+
+    let int_val = OpcValue::Int(42);
+    let f_from_int: f32 = int_val.try_into().unwrap();
+    assert!((f_from_int - 42.0f32).abs() < f32::EPSILON);
+}
+
+#[test]
+fn test_tag_values_typed_getters() {
+    let items = vec![
+        TagValue::new("U32.Tag", Some(OpcValue::UInt(100)), OpcQuality::GOOD, None),
+        TagValue::new(
+            "U64.Tag",
+            Some(OpcValue::UInt(5_000_000_000)),
+            OpcQuality::GOOD,
+            None,
+        ),
+        TagValue::new(
+            "I64.Tag",
+            Some(OpcValue::Int(-1_000_000_000_000)),
+            OpcQuality::GOOD,
+            None,
+        ),
+        TagValue::new(
+            "F32.Tag",
+            Some(OpcValue::Float(12.340_000_152_587_89)),
+            OpcQuality::GOOD,
+            None,
+        ),
+        TagValue::new(
+            "WholeFloat.Tag",
+            Some(OpcValue::Float(42.0)),
+            OpcQuality::GOOD,
+            None,
+        ),
+        TagValue::new(
+            "FracFloat.Tag",
+            Some(OpcValue::Float(42.7)),
+            OpcQuality::GOOD,
+            None,
+        ),
+        TagValue::new(
+            "StrNum.Tag",
+            Some(OpcValue::String("42".into())),
+            OpcQuality::GOOD,
+            None,
+        ),
+        TagValue::with_error(
+            "Err.Tag",
+            OpcQuality::BAD,
+            OpcError::Internal("Hardware fault".into()),
+        ),
+    ];
+    let tvs = TagValues::new(items);
+
+    // Typed getters
+    assert_eq!(tvs.get_u32("u32.tag").unwrap(), 100u32);
+    assert_eq!(tvs.get_u64("u64.tag").unwrap(), 5_000_000_000u64);
+    assert_eq!(tvs.get_i64("i64.tag").unwrap(), -1_000_000_000_000i64);
+    assert!((tvs.get_f32("f32.tag").unwrap() - 12.34f32).abs() < 1e-5);
+
+    // Generic get_as<T>
+    assert_eq!(tvs.get_as::<u32>("u32.tag").unwrap(), 100u32);
+    assert_eq!(tvs.get_as::<u64>("u64.tag").unwrap(), 5_000_000_000u64);
+    assert_eq!(tvs.get_as::<i64>("i64.tag").unwrap(), -1_000_000_000_000i64);
+    assert_eq!(tvs.get_as::<i32>("wholefloat.tag").unwrap(), 42i32);
+    assert_eq!(tvs.get_as::<u32>("wholefloat.tag").unwrap(), 42u32);
+
+    // Whole-number float to integer coercion succeeds
+    assert_eq!(tvs.get_u32("wholefloat.tag").unwrap(), 42u32);
+    assert_eq!(tvs.get_u64("wholefloat.tag").unwrap(), 42u64);
+    assert_eq!(tvs.get_i64("wholefloat.tag").unwrap(), 42i64);
+
+    // Fractional float to integer coercion fails with TypeMismatch
+    assert!(matches!(
+        tvs.get_u32("fracfloat.tag"),
+        Err(TagExtractError::TypeMismatch { .. })
+    ));
+    assert!(matches!(
+        tvs.get_u64("fracfloat.tag"),
+        Err(TagExtractError::TypeMismatch { .. })
+    ));
+    assert!(matches!(
+        tvs.get_i64("fracfloat.tag"),
+        Err(TagExtractError::TypeMismatch { .. })
+    ));
+    assert!(matches!(
+        tvs.get_as::<u32>("fracfloat.tag"),
+        Err(TagExtractError::TypeMismatch { .. })
+    ));
+
+    // String parsing is NOT implicitly performed (no stringly-typed magic)
+    assert!(matches!(
+        tvs.get_u32("strnum.tag"),
+        Err(TagExtractError::TypeMismatch { .. })
+    ));
+    assert!(matches!(
+        tvs.get_i32("strnum.tag"),
+        Err(TagExtractError::TypeMismatch { .. })
+    ));
+    assert!(matches!(
+        tvs.get_f64("strnum.tag"),
+        Err(TagExtractError::TypeMismatch { .. })
+    ));
+    assert!(matches!(
+        tvs.get_as::<u32>("strnum.tag"),
+        Err(TagExtractError::TypeMismatch { .. })
+    ));
+
+    // Missing tag returns NotRequested
+    assert!(matches!(
+        tvs.get_u32("nonexistent.tag"),
+        Err(TagExtractError::NotRequested(_))
+    ));
+
+    // Read error preserves ReadFailed
+    assert!(matches!(
+        tvs.get_u32("err.tag"),
+        Err(TagExtractError::ReadFailed { .. })
+    ));
+}
+
+#[test]
+fn test_endpoint_unc_parsing_roundtrip() {
+    use std::str::FromStr;
+
+    // Windows UNC backslash path
+    let ep1 = OpcServerEndpoint::from_str(r"\\192.168.1.50\Matrikon.OPC.Simulation").unwrap();
+    assert_eq!(ep1.host.as_deref(), Some("192.168.1.50"));
+    assert_eq!(ep1.identifier.to_string(), "Matrikon.OPC.Simulation");
+    assert!(ep1.is_remote());
+    assert_eq!(ep1.to_string(), r"\\192.168.1.50\Matrikon.OPC.Simulation");
+
+    // Unix-style forward slash path
+    let ep2 = OpcServerEndpoint::from_str("//192.168.1.50/Matrikon.OPC.Simulation").unwrap();
+    assert_eq!(ep2.host.as_deref(), Some("192.168.1.50"));
+    assert_eq!(ep2.identifier.to_string(), "Matrikon.OPC.Simulation");
+    assert!(ep2.is_remote());
+
+    // Localhost UNC normalized to local
+    let ep_local = OpcServerEndpoint::from_str(r"\\localhost\Matrikon.OPC.Simulation").unwrap();
+    assert_eq!(ep_local.host, None);
+    assert!(!ep_local.is_remote());
+    assert_eq!(ep_local.to_string(), "Matrikon.OPC.Simulation");
+
+    // Plain server name without host
+    let ep_plain = OpcServerEndpoint::from_str("Matrikon.OPC.Simulation").unwrap();
+    assert_eq!(ep_plain.host, None);
+    assert!(!ep_plain.is_remote());
+    assert_eq!(ep_plain.to_string(), "Matrikon.OPC.Simulation");
+
+    // Roundtrip test via Display and FromStr
+    let ep_remote = OpcServerEndpoint::remote("10.0.0.5", "Kepware.KEPServerEX.V6");
+    let display_str = ep_remote.to_string();
+    let reparsed: OpcServerEndpoint = display_str.parse().unwrap();
+    assert_eq!(ep_remote, reparsed);
+
+    // From<&str> delegates to parsing
+    let ep_from_str: OpcServerEndpoint = r"\\192.168.1.50\Matrikon.OPC.Simulation".into();
+    assert_eq!(ep_from_str, ep1);
+
+    // Rejection cases
+    assert!(OpcServerEndpoint::from_str("").is_err());
+    assert!(OpcServerEndpoint::from_str("   ").is_err());
+    assert!(OpcServerEndpoint::from_str(r"\\").is_err());
+    assert!(OpcServerEndpoint::from_str(r"\\host\").is_err());
+}

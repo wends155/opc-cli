@@ -198,6 +198,20 @@ impl From<i8> for OpcValue {
     }
 }
 
+impl Default for OpcValue {
+    #[inline]
+    fn default() -> Self {
+        Self::Empty
+    }
+}
+
+impl From<f32> for OpcValue {
+    #[inline]
+    fn from(val: f32) -> Self {
+        Self::Float(f64::from(val))
+    }
+}
+
 impl From<f64> for OpcValue {
     #[inline]
     fn from(val: f64) -> Self {
@@ -342,6 +356,33 @@ impl TryFrom<OpcValue> for f64 {
             OpcValue::UInt(u) => Ok(u as Self),
             other => Err(crate::errors::OpcError::Conversion(format!(
                 "Cannot convert {other:?} to f64"
+            ))),
+        }
+    }
+}
+
+impl TryFrom<OpcValue> for f32 {
+    type Error = crate::errors::OpcError;
+
+    #[allow(clippy::cast_precision_loss, clippy::cast_possible_truncation)]
+    fn try_from(value: OpcValue) -> Result<Self, Self::Error> {
+        match value {
+            OpcValue::Float(f) => {
+                if f.is_nan()
+                    || f.is_infinite()
+                    || (f >= f64::from(Self::MIN) && f <= f64::from(Self::MAX))
+                {
+                    Ok(f as Self)
+                } else {
+                    Err(crate::errors::OpcError::Conversion(
+                        "Float exceeds f32 range".into(),
+                    ))
+                }
+            }
+            OpcValue::Int(i) => Ok(i as Self),
+            OpcValue::UInt(u) => Ok(u as Self),
+            other => Err(crate::errors::OpcError::Conversion(format!(
+                "Cannot convert {other:?} to f32"
             ))),
         }
     }
