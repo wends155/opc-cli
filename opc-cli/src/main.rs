@@ -10,17 +10,15 @@
 //! client, manages the terminal lifecycle using `ratatui` and `crossterm`,
 //! and runs the primary input-event and render loops.
 
-mod app;
-mod ui;
-
-use crate::app::{App, CurrentScreen};
 use anyhow::Result;
 use clap::Parser;
 use crossterm::{
-    event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode},
+    event::{self, DisableMouseCapture, EnableMouseCapture, Event},
     execute,
     terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
 };
+use opc_cli::app::{App, AppAction, CurrentScreen};
+use opc_cli::ui;
 use opc_da_client::{ComConnector, OpcDaClient};
 use ratatui::{Terminal, backend::CrosstermBackend};
 use std::{io, sync::Arc, time::Duration};
@@ -146,8 +144,9 @@ fn run_app<B: ratatui::backend::Backend>(
 
         if event::poll(Duration::from_millis(100))?
             && let Event::Key(key) = event::read()?
+            && app.handle_key(key) == AppAction::Quit
         {
-            handle_key_event(app, key);
+            return Ok(());
         }
 
         if app.nav.current_screen == CurrentScreen::Exiting {
@@ -156,107 +155,15 @@ fn run_app<B: ratatui::backend::Backend>(
     }
 }
 
+#[cfg(test)]
 fn handle_key_event(app: &mut App, key: event::KeyEvent) {
-    if key.kind != event::KeyEventKind::Press {
-        return;
-    }
-
-    match app.nav.current_screen {
-        CurrentScreen::Home => match key.code {
-            KeyCode::Enter => {
-                app.start_fetch_servers();
-            }
-            KeyCode::Char(c) => {
-                app.nav.host_input.push(c);
-            }
-            KeyCode::Backspace => {
-                app.nav.host_input.pop();
-            }
-            KeyCode::Esc => {
-                app.log_transition(CurrentScreen::Exiting, "user_quit");
-            }
-            _ => {}
-        },
-        CurrentScreen::ServerList => match key.code {
-            KeyCode::Esc => app.go_back(),
-            KeyCode::PageDown => app.page_down(),
-            KeyCode::PageUp => app.page_up(),
-            KeyCode::Down => app.select_next(),
-            KeyCode::Up => app.select_prev(),
-            KeyCode::Enter => {
-                app.start_browse_tags();
-            }
-            KeyCode::Char('q' | 'Q') => {
-                app.log_transition(CurrentScreen::Exiting, "user_quit");
-            }
-            _ => {}
-        },
-        CurrentScreen::TagList => {
-            if app.search.search_mode {
-                match key.code {
-                    KeyCode::Esc => app.exit_search_mode(),
-                    KeyCode::Backspace => app.search_backspace(),
-                    KeyCode::Tab => app.next_search_match(),
-                    KeyCode::BackTab => app.prev_search_match(),
-                    KeyCode::Char(' ') => app.toggle_tag_selection(),
-                    KeyCode::Enter => {
-                        app.exit_search_mode();
-                        app.start_read_values();
-                    }
-                    KeyCode::Char(c) => app.update_search_query(c),
-                    _ => {}
-                }
-            } else {
-                match key.code {
-                    KeyCode::Esc => app.go_back(),
-                    KeyCode::PageDown => app.page_down(),
-                    KeyCode::PageUp => app.page_up(),
-                    KeyCode::Down => app.select_next(),
-                    KeyCode::Up => app.select_prev(),
-                    KeyCode::Char(' ') => app.toggle_tag_selection(),
-                    KeyCode::Char('s' | 'S') => app.enter_search_mode(),
-                    KeyCode::Enter => app.start_read_values(),
-                    KeyCode::Char('q' | 'Q') => {
-                        app.log_transition(CurrentScreen::Exiting, "user_quit");
-                    }
-                    _ => {}
-                }
-            }
-        }
-        CurrentScreen::TagValues => match key.code {
-            KeyCode::Esc => app.go_back(),
-            KeyCode::PageDown => app.page_down(),
-            KeyCode::PageUp => app.page_up(),
-            KeyCode::Down => app.select_next(),
-            KeyCode::Up => app.select_prev(),
-            KeyCode::Char('w' | 'W') => app.enter_write_mode(),
-            KeyCode::Char('q' | 'Q') => {
-                app.log_transition(CurrentScreen::Exiting, "user_quit");
-            }
-            _ => {}
-        },
-        CurrentScreen::WriteInput => match key.code {
-            KeyCode::Enter => app.start_write_value(),
-            KeyCode::Esc => app.go_back(),
-            KeyCode::Char(c) => app.nav.write_value_input.push(c),
-            KeyCode::Backspace => {
-                app.nav.write_value_input.pop();
-            }
-            _ => {}
-        },
-        CurrentScreen::Loading => {
-            if key.code == KeyCode::Esc {
-                app.go_back();
-            }
-        }
-        CurrentScreen::Exiting => {}
-    }
+    app.handle_key(key);
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crossterm::event::{KeyEvent, KeyEventKind, KeyEventState, KeyModifiers};
+    use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyEventState, KeyModifiers};
     use opc_da_client::MockOpcProvider;
 
     #[test]

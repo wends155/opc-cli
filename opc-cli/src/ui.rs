@@ -125,7 +125,7 @@ fn render_server_list(f: &mut Frame, app: &mut App, area: Rect) {
         .view
         .servers
         .iter()
-        .map(|s| ListItem::new(Line::from(vec![Span::raw(s)])))
+        .map(|s| ListItem::new(Line::from(Span::raw(s))))
         .collect();
 
     let list = List::new(items)
@@ -164,8 +164,7 @@ fn render_tag_list(f: &mut Frame, app: &mut App, area: Rect) {
             .block(
                 Block::default()
                     .borders(Borders::ALL)
-                    .title(" Search Tags (Substring Match) ")
-                    .border_style(Style::default().fg(Color::Yellow)),
+                    .title(" Search Tags (Substring Match) "),
             );
         f.render_widget(search_bar, list_chunks[0]);
     }
@@ -222,7 +221,7 @@ fn render_tag_list(f: &mut Frame, app: &mut App, area: Rect) {
 fn render_tag_values(f: &mut Frame, app: &mut App, area: Rect) {
     use ratatui::widgets::{Cell, Row, Table};
 
-    let header = Row::new(vec!["Tag ID", "Value", "Quality", "Timestamp"]).style(
+    let header = Row::new(["Tag ID", "Value", "Quality", "Timestamp"]).style(
         Style::default()
             .fg(Color::Yellow)
             .add_modifier(Modifier::BOLD),
@@ -233,7 +232,7 @@ fn render_tag_values(f: &mut Frame, app: &mut App, area: Rect) {
         .tag_values
         .iter()
         .map(|tv| {
-            Row::new(vec![
+            Row::new([
                 Cell::from(tv.tag_id.as_str()),
                 Cell::from(tv.value().display().to_string()),
                 Cell::from(tv.quality.to_string()),
@@ -249,13 +248,40 @@ fn render_tag_values(f: &mut Frame, app: &mut App, area: Rect) {
         Constraint::Percentage(30),
     ];
 
+    let title = if app.view.tag_values.is_empty() {
+        " Step 4: Tag Values ".to_string()
+    } else {
+        let total = app.view.tag_values.len();
+        let error_count = app
+            .view
+            .tag_values
+            .iter()
+            .filter(|tv| tv.is_error())
+            .count();
+        let bad_quality_count = app
+            .view
+            .tag_values
+            .iter()
+            .filter(|tv| tv.is_bad() && !tv.is_error())
+            .count();
+
+        match (error_count > 0, bad_quality_count > 0) {
+            (true, true) => format!(
+                " Step 4: Tag Values ({total} items, ⚠ {error_count} errors, {bad_quality_count} bad quality) "
+            ),
+            (true, false) => {
+                format!(" Step 4: Tag Values ({total} items, ⚠ {error_count} errors) ")
+            }
+            (false, true) => {
+                format!(" Step 4: Tag Values ({total} items, ⚠ {bad_quality_count} bad quality) ")
+            }
+            (false, false) => format!(" Step 4: Tag Values ({total} items) "),
+        }
+    };
+
     let table = Table::new(rows, widths)
         .header(header)
-        .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .title(" Step 4: Tag Values "),
-        )
+        .block(Block::default().borders(Borders::ALL).title(title))
         .row_highlight_style(Style::default().bg(Color::Blue).fg(Color::White))
         .highlight_symbol(">> ");
 
@@ -285,10 +311,10 @@ fn render_status_bar(f: &mut Frame, app: &App, area: Rect) {
 }
 
 fn render_write_input(f: &mut Frame, app: &App, area: Rect) {
-    let tag_id = app.nav.write_tag_id.as_deref().unwrap_or("Unknown");
+    let tag_id = app.dialog.write_tag_id.as_deref().unwrap_or("Unknown");
     let display_text = format!(
         "Tag: {tag_id}\nValue: {input}_",
-        input = app.nav.write_value_input
+        input = app.dialog.write_value_input
     );
 
     let popup_block = Block::default()
@@ -424,8 +450,8 @@ mod tests {
     fn test_headless_render_write_input_and_loading() {
         let mut app = create_test_app();
         app.nav.current_screen = CurrentScreen::WriteInput;
-        app.nav.write_tag_id = Some("Sensor.Setpoint".into());
-        app.nav.write_value_input = "100.5".into();
+        app.dialog.write_tag_id = Some("Sensor.Setpoint".into());
+        app.dialog.write_value_input = "100.5".into();
         let backend = TestBackend::new(100, 30);
         let mut terminal = Terminal::new(backend).unwrap();
 

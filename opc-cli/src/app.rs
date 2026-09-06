@@ -8,14 +8,23 @@
 //! ([`CurrentScreen`]) driving the TUI layout, handling user inputs, managing the list selection
 //! states, and communicating asynchronously with the background OPC DA client provider.
 
+use crossterm::event::{KeyCode, KeyEvent, KeyEventKind};
 use opc_da_client::{
     OpcError, OpcProvider, OpcValue, TagBatch, TagCollector, TagValues, WriteResult,
 };
 use ratatui::widgets::{ListState, TableState};
 use std::collections::{HashSet, VecDeque};
-use std::ops::{Deref, DerefMut};
 use std::sync::Arc;
 use tokio::sync::oneshot;
+
+/// Action signal returned by [`App::handle_key`] to the event loop.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AppAction {
+    /// Continue running the application event loop.
+    Continue,
+    /// Terminate the application event loop and exit cleanly.
+    Quit,
+}
 
 /// Default timeout for OPC operations (server listing and tag browsing).
 const OPC_TIMEOUT_SECS: u64 = 300;
@@ -24,8 +33,9 @@ const OPC_TIMEOUT_SECS: u64 = 300;
 const MAX_BROWSE_TAGS: usize = 10000;
 
 /// Screens navigable within the TUI.
-#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+#[derive(Debug, Default, PartialEq, Eq, Clone, Copy)]
 pub enum CurrentScreen {
+    #[default]
     Home,
     Loading,
     ServerList,
@@ -49,18 +59,13 @@ impl std::fmt::Display for CurrentScreen {
     }
 }
 
-/// Manages screen hierarchy, user input text buffers, and active server/tag selection context.
+/// Manages screen hierarchy, host target, and browsed server context.
 #[derive(Debug, Clone)]
 pub struct NavigationState {
     pub current_screen: CurrentScreen,
     pub previous_screen: CurrentScreen,
     pub host_input: String,
     pub browsed_server: Option<String>,
-    pub refresh_server: Option<String>,
-    pub refresh_tag_ids: Vec<String>,
-    pub last_read_time: Option<std::time::Instant>,
-    pub write_tag_id: Option<String>,
-    pub write_value_input: String,
 }
 
 impl Default for NavigationState {
@@ -70,12 +75,39 @@ impl Default for NavigationState {
             previous_screen: CurrentScreen::Home,
             host_input: "localhost".into(),
             browsed_server: None,
-            refresh_server: None,
-            refresh_tag_ids: Vec::new(),
-            last_read_time: None,
-            write_tag_id: None,
-            write_value_input: String::new(),
         }
+    }
+}
+
+/// Manages modal dialog input state (e.g. write value modal).
+#[derive(Debug, Clone, Default)]
+pub struct DialogState {
+    pub write_tag_id: Option<String>,
+    pub write_value_input: String,
+}
+
+impl DialogState {
+    /// Clears the active write tag and input buffer.
+    pub fn clear(&mut self) {
+        self.write_tag_id = None;
+        self.write_value_input.clear();
+    }
+}
+
+/// Manages automatic periodic tag reading state and interval tracking.
+#[derive(Debug, Clone, Default)]
+pub struct AutoRefresher {
+    pub server: Option<String>,
+    pub tag_ids: Vec<String>,
+    pub last_read_time: Option<std::time::Instant>,
+}
+
+impl AutoRefresher {
+    /// Clears the auto-refresh server target, tag list, and timestamp.
+    pub fn clear(&mut self) {
+        self.server = None;
+        self.tag_ids.clear();
+        self.last_read_time = None;
     }
 }
 
@@ -318,27 +350,15 @@ fn poll_channel<T>(rx_slot: &mut Option<oneshot::Receiver<Result<T, OpcError>>>)
 
 /// Main application state for the OPC DA Client TUI.
 ///
-/// Composes [`NavigationState`], [`TaskManager`], [`SearchEngine`], and [`ViewState`],
-/// exposing view fields transparently via [`Deref`] / [`DerefMut`].
+/// Composes [`NavigationState`], [`DialogState`], [`AutoRefresher`], [`TaskManager`], [`SearchEngine`], and [`ViewState`].
 pub struct App {
     pub nav: NavigationState,
+    pub dialog: DialogState,
+    pub refresher: AutoRefresher,
     pub tasks: TaskManager,
     pub search: SearchEngine,
     pub view: ViewState,
     pub opc_provider: Arc<dyn OpcProvider>,
-}
-
-impl Deref for App {
-    type Target = ViewState;
-    fn deref(&self) -> &Self::Target {
-        &self.view
-    }
-}
-
-impl DerefMut for App {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.view
-    }
 }
 
 impl App {
@@ -359,11 +379,144 @@ impl App {
     pub fn new(opc_provider: Arc<dyn OpcProvider>) -> Self {
         Self {
             nav: NavigationState::default(),
+            dialog: DialogState::default(),
+            refresher: AutoRefresher::default(),
             tasks: TaskManager::default(),
             search: SearchEngine::default(),
             view: ViewState::default(),
             opc_provider,
         }
+    }
+
+    /// Appends a message to the status message ring buffer (bounded to 10 entries).
+    pub fn add_message(&mut self, message: String) {
+        self.view.add_message(message);
+    }
+
+    /// Handles a keyboard event, dispatching screen-specific actions and returning an [`AppAction`].
+    pub fn handle_key(&mut self, key: KeyEvent) -> AppAction {
+        if key.kind != KeyEventKind::Press {
+            return AppAction::Continue;
+        }
+
+        let action = match self.nav.current_screen {
+            CurrentScreen::Home => self.handle_key_home(key.code),
+            CurrentScreen::ServerList => self.handle_key_server_list(key.code),
+            CurrentScreen::TagList => self.handle_key_tag_list(key.code),
+            CurrentScreen::TagValues => self.handle_key_tag_values(key.code),
+            CurrentScreen::WriteInput => self.handle_key_write_input(key.code),
+            CurrentScreen::Loading => {
+                if key.code == KeyCode::Esc {
+                    self.go_back();
+                }
+                AppAction::Continue
+            }
+            CurrentScreen::Exiting => AppAction::Quit,
+        };
+
+        if self.nav.current_screen == CurrentScreen::Exiting {
+            AppAction::Quit
+        } else {
+            action
+        }
+    }
+
+    fn handle_key_home(&mut self, code: KeyCode) -> AppAction {
+        match code {
+            KeyCode::Enter => self.start_fetch_servers(),
+            KeyCode::Char(c) => self.nav.host_input.push(c),
+            KeyCode::Backspace => {
+                self.nav.host_input.pop();
+            }
+            KeyCode::Esc => {
+                self.log_transition(CurrentScreen::Exiting, "user_quit");
+                return AppAction::Quit;
+            }
+            _ => {}
+        }
+        AppAction::Continue
+    }
+
+    fn handle_key_server_list(&mut self, code: KeyCode) -> AppAction {
+        match code {
+            KeyCode::Esc => self.go_back(),
+            KeyCode::PageDown => self.page_down(),
+            KeyCode::PageUp => self.page_up(),
+            KeyCode::Down => self.select_next(),
+            KeyCode::Up => self.select_prev(),
+            KeyCode::Enter => self.start_browse_tags(),
+            KeyCode::Char('q' | 'Q') => {
+                self.log_transition(CurrentScreen::Exiting, "user_quit");
+                return AppAction::Quit;
+            }
+            _ => {}
+        }
+        AppAction::Continue
+    }
+
+    fn handle_key_tag_list(&mut self, code: KeyCode) -> AppAction {
+        if self.search.search_mode {
+            match code {
+                KeyCode::Esc => self.exit_search_mode(),
+                KeyCode::Backspace => self.search_backspace(),
+                KeyCode::Tab => self.next_search_match(),
+                KeyCode::BackTab => self.prev_search_match(),
+                KeyCode::Char(' ') => self.toggle_tag_selection(),
+                KeyCode::Enter => {
+                    self.exit_search_mode();
+                    self.start_read_values();
+                }
+                KeyCode::Char(c) => self.update_search_query(c),
+                _ => {}
+            }
+        } else {
+            match code {
+                KeyCode::Esc => self.go_back(),
+                KeyCode::PageDown => self.page_down(),
+                KeyCode::PageUp => self.page_up(),
+                KeyCode::Down => self.select_next(),
+                KeyCode::Up => self.select_prev(),
+                KeyCode::Char(' ') => self.toggle_tag_selection(),
+                KeyCode::Char('s' | 'S') => self.enter_search_mode(),
+                KeyCode::Enter => self.start_read_values(),
+                KeyCode::Char('q' | 'Q') => {
+                    self.log_transition(CurrentScreen::Exiting, "user_quit");
+                    return AppAction::Quit;
+                }
+                _ => {}
+            }
+        }
+        AppAction::Continue
+    }
+
+    fn handle_key_tag_values(&mut self, code: KeyCode) -> AppAction {
+        match code {
+            KeyCode::Esc => self.go_back(),
+            KeyCode::PageDown => self.page_down(),
+            KeyCode::PageUp => self.page_up(),
+            KeyCode::Down => self.select_next(),
+            KeyCode::Up => self.select_prev(),
+            KeyCode::Char('w' | 'W') => self.enter_write_mode(),
+            KeyCode::Char('q' | 'Q') => {
+                self.log_transition(CurrentScreen::Exiting, "user_quit");
+                return AppAction::Quit;
+            }
+            _ => {}
+        }
+        AppAction::Continue
+    }
+
+    fn handle_key_write_input(&mut self, code: KeyCode) -> AppAction {
+        match code {
+            KeyCode::Enter => self.start_write_value(),
+            KeyCode::Esc => self.go_back(),
+            KeyCode::Char(c) => self.dialog.write_value_input.push(c),
+            KeyCode::Backspace => {
+                self.dialog.write_value_input.pop();
+            }
+            _ => {}
+        }
+        AppAction::Continue
     }
 
     /// Returns the progress count of the active browse operation.
@@ -717,8 +870,8 @@ impl App {
         };
 
         // Store context for auto-refresh
-        self.nav.refresh_server = Some(server.clone());
-        self.nav.refresh_tag_ids.clone_from(&selected_tag_ids);
+        self.refresher.server = Some(server.clone());
+        self.refresher.tag_ids.clone_from(&selected_tag_ids);
 
         tracing::info!(
             server = %server,
@@ -757,14 +910,27 @@ impl App {
                     .iter()
                     .filter(|tv| tv.is_error())
                     .count();
+                let bad_quality_count = self
+                    .view
+                    .tag_values
+                    .iter()
+                    .filter(|tv| tv.is_bad() && !tv.is_error())
+                    .count();
 
-                if error_count > 0 {
-                    self.add_message(format!("Read {total} tag values (⚠ {error_count} errors)"));
-                } else {
-                    self.add_message(format!("Read {total} tag values"));
+                match (error_count > 0, bad_quality_count > 0) {
+                    (true, true) => self.add_message(format!(
+                        "Read {total} tag values (⚠ {error_count} errors, {bad_quality_count} bad quality)"
+                    )),
+                    (true, false) => self.add_message(format!(
+                        "Read {total} tag values (⚠ {error_count} errors)"
+                    )),
+                    (false, true) => self.add_message(format!(
+                        "Read {total} tag values (⚠ {bad_quality_count} bad quality)"
+                    )),
+                    (false, false) => self.add_message(format!("Read {total} tag values")),
                 }
 
-                self.nav.last_read_time = Some(std::time::Instant::now());
+                self.refresher.last_read_time = Some(std::time::Instant::now());
             }
             PollOutcome::Ready(Err(e)) => {
                 self.log_transition(CurrentScreen::TagList, "read_result_error");
@@ -808,8 +974,8 @@ impl App {
 
         if let Some(id) = tag_id {
             tracing::debug!(tag_id = %id, "enter_write_mode: entering write mode for tag");
-            self.nav.write_tag_id = Some(id);
-            self.nav.write_value_input.clear();
+            self.dialog.write_tag_id = Some(id);
+            self.dialog.write_value_input.clear();
             self.log_transition(CurrentScreen::WriteInput, "enter_write_mode");
         } else {
             tracing::debug!("enter_write_mode: no tag selected");
@@ -820,11 +986,11 @@ impl App {
     /// Start writing a value to the selected tag.
     #[tracing::instrument(level = "info", skip(self))]
     pub fn start_write_value(&mut self) {
-        let tag_id = match &self.nav.write_tag_id {
+        let tag_id = match &self.dialog.write_tag_id {
             Some(t) => t.clone(),
             None => return,
         };
-        let value_str = self.nav.write_value_input.trim().to_string();
+        let value_str = self.dialog.write_value_input.trim().to_string();
         if value_str.is_empty() {
             self.add_message("Value cannot be empty.".into());
             return;
@@ -839,7 +1005,7 @@ impl App {
             "start_write_value: initiating write"
         );
 
-        let server = match &self.nav.refresh_server {
+        let server = match &self.refresher.server {
             Some(s) => s.clone(),
             None => {
                 self.add_message("No server context for write.".into());
@@ -918,7 +1084,7 @@ impl App {
         if self.tasks.read_result_rx.is_some() {
             return; // Read already in-flight
         }
-        let elapsed = match self.nav.last_read_time {
+        let elapsed = match self.refresher.last_read_time {
             Some(t) => t.elapsed(),
             None => return,
         };
@@ -926,11 +1092,11 @@ impl App {
             return;
         }
 
-        let server_name = match &self.nav.refresh_server {
+        let server_name = match &self.refresher.server {
             Some(s) => s.clone(),
             None => return,
         };
-        let tag_ids = self.nav.refresh_tag_ids.clone();
+        let tag_ids = self.refresher.tag_ids.clone();
         if tag_ids.is_empty() {
             return;
         }
@@ -1018,9 +1184,7 @@ impl App {
             CurrentScreen::TagValues => {
                 self.log_transition(CurrentScreen::TagList, "go_back");
                 self.view.tag_values.clear();
-                self.nav.refresh_server = None;
-                self.nav.refresh_tag_ids.clear();
-                self.nav.last_read_time = None;
+                self.refresher.clear();
                 // Restore selection to tags list
                 if !self.view.tags.is_empty() {
                     self.view.selected_index = Some(0);
@@ -1032,8 +1196,7 @@ impl App {
             }
             CurrentScreen::WriteInput => {
                 self.log_transition(CurrentScreen::TagValues, "go_back");
-                self.nav.write_tag_id = None;
-                self.nav.write_value_input.clear();
+                self.dialog.clear();
             }
             _ => {}
         }
@@ -1081,6 +1244,7 @@ impl App {
 use opc_da_client::MockOpcProvider;
 
 #[cfg(test)]
+#[derive(Default)]
 pub struct TestAppBuilder {
     mock_provider: Option<MockOpcProvider>,
     screen: CurrentScreen,
@@ -1091,29 +1255,28 @@ pub struct TestAppBuilder {
 #[cfg(test)]
 impl TestAppBuilder {
     pub fn new() -> Self {
-        Self {
-            mock_provider: None,
-            screen: CurrentScreen::Home,
-            servers: Vec::new(),
-            tags: Vec::new(),
-        }
+        Self::default()
     }
 
+    #[must_use]
     pub fn with_provider(mut self, mock: MockOpcProvider) -> Self {
         self.mock_provider = Some(mock);
         self
     }
 
+    #[must_use]
     pub fn with_screen(mut self, screen: CurrentScreen) -> Self {
         self.screen = screen;
         self
     }
 
+    #[must_use]
     pub fn with_servers(mut self, servers: Vec<String>) -> Self {
         self.servers = servers;
         self
     }
 
+    #[must_use]
     pub fn with_tags(mut self, tags: Vec<String>) -> Self {
         self.tags = tags;
         self
@@ -1618,7 +1781,7 @@ mod tests {
 
         assert_eq!(app.nav.current_screen, CurrentScreen::Loading);
         assert!(app.tasks.read_result_rx.is_some());
-        assert_eq!(app.nav.refresh_server, Some("TestServer".into()));
+        assert_eq!(app.refresher.server, Some("TestServer".into()));
     }
 
     #[test]
@@ -1959,5 +2122,44 @@ mod tests {
         assert!(tasks.active_abort.is_some());
         tasks.clear_active_task();
         assert!(tasks.active_abort.is_none());
+    }
+
+    #[test]
+    fn test_app_handle_key_action() {
+        use crossterm::event::{KeyEvent, KeyEventKind, KeyEventState, KeyModifiers};
+
+        let mut app = test_app();
+        assert_eq!(app.nav.current_screen, CurrentScreen::Home);
+
+        // Press 'x' on Home -> Continue
+        let key_x = KeyEvent {
+            code: KeyCode::Char('x'),
+            modifiers: KeyModifiers::empty(),
+            kind: KeyEventKind::Press,
+            state: KeyEventState::empty(),
+        };
+        let action = app.handle_key(key_x);
+        assert_eq!(action, AppAction::Continue);
+        assert!(app.nav.host_input.ends_with('x'));
+
+        // Press Esc on Home -> Quit
+        let key_esc = KeyEvent {
+            code: KeyCode::Esc,
+            modifiers: KeyModifiers::empty(),
+            kind: KeyEventKind::Press,
+            state: KeyEventState::empty(),
+        };
+        let action = app.handle_key(key_esc);
+        assert_eq!(action, AppAction::Quit);
+        assert_eq!(app.nav.current_screen, CurrentScreen::Exiting);
+
+        // Release event -> Continue without effect
+        let key_release = KeyEvent {
+            code: KeyCode::Char('y'),
+            modifiers: KeyModifiers::empty(),
+            kind: KeyEventKind::Release,
+            state: KeyEventState::empty(),
+        };
+        assert_eq!(app.handle_key(key_release), AppAction::Continue);
     }
 }

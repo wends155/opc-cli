@@ -21,6 +21,14 @@ cargo-args = ["--bin", "opc-cli"]
 [lints]
 workspace = true
 
+[lib]
+name = "opc_cli"
+path = "src/lib.rs"
+
+[[bin]]
+name = "opc-cli"
+path = "src/main.rs"
+
 [features]
 dev-diagnostics = ["opc-da-client/dev-diagnostics"]
 
