@@ -23,6 +23,35 @@ $ErrorActionPreference = 'Stop'
 $RepoRoot = Split-Path -Parent $PSScriptRoot
 Set-Location $RepoRoot
 
+function New-ReleasePackage {
+    param (
+        [Parameter(Mandatory=$true)]
+        [string]$DistDir,
+        [Parameter(Mandatory=$true)]
+        [string]$ZipPath,
+        [string]$ExePath = "target/release/opc-cli.exe",
+        [string[]]$AdditionalFiles = @()
+    )
+
+    if (Test-Path $DistDir) { Remove-Item -Recurse -Force $DistDir }
+    New-Item -ItemType Directory -Force -Path $DistDir | Out-Null
+    Copy-Item $ExePath "$DistDir/"
+    Copy-Item -ErrorAction SilentlyContinue "target/release/opc-cli.pdb" "$DistDir/"
+    Copy-Item "README.md" "$DistDir/"
+    Copy-Item "LICENSE" "$DistDir/"
+    Copy-Item "THIRD_PARTY_LICENSES.md" "$DistDir/"
+
+    foreach ($file in $AdditionalFiles) {
+        if (Test-Path $file) {
+            Copy-Item $file "$DistDir/"
+        }
+    }
+
+    if (Test-Path $ZipPath) { Remove-Item $ZipPath }
+    Compress-Archive -Path "$DistDir/*" -DestinationPath $ZipPath -Force
+    Write-Host "Package created: $ZipPath" -ForegroundColor Green
+}
+
 switch ($Task) {
     "debug" {
         cargo build
@@ -41,18 +70,7 @@ switch ($Task) {
     }
     "package" {
         cargo build --release --bin opc-cli
-        $distDir = "dist/opc-cli-x64"
-        if (Test-Path $distDir) { Remove-Item -Recurse -Force $distDir }
-        New-Item -ItemType Directory -Force -Path $distDir | Out-Null
-        Copy-Item target/release/opc-cli.exe "$distDir/"
-        Copy-Item -ErrorAction SilentlyContinue target/release/opc-cli.pdb "$distDir/"
-        Copy-Item README.md "$distDir/"
-        Copy-Item LICENSE "$distDir/"
-        Copy-Item THIRD_PARTY_LICENSES.md "$distDir/"
-        $zipPath = "dist/opc-cli-x64.zip"
-        if (Test-Path $zipPath) { Remove-Item $zipPath }
-        Compress-Archive -Path "$distDir/*" -DestinationPath $zipPath -Force
-        Write-Host "Modern package created: $zipPath" -ForegroundColor Green
+        New-ReleasePackage -DistDir "dist/opc-cli-x64" -ZipPath "dist/opc-cli-x64.zip"
     }
     "package-win7" {
         & "$PSScriptRoot/package-win7.ps1"

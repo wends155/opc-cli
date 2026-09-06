@@ -1,0 +1,13 @@
+id: no-raw-unaligned-deref
+message: "Do not dereference cast raw pointers directly; use read_unaligned or validate natural alignment with read_volatile"
+severity: error
+language: rust
+files:
+  - "compat/**/*.rs"
+ignores:
+  - "**/tests/**"
+  - "**/*_test.rs"
+rule:
+  any:
+    - pattern: "*($EXPR as *const $T)"
+    - pattern: "*($EXPR as *mut $T)"

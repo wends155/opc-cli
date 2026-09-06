@@ -1,4 +1,4 @@
-.PHONY: all debug release build test verify package package-win7 logs commit release-merge clean
+.PHONY: all debug release build test verify package package-win7 logs commit release-merge clean search-todos
 
 all: debug
 
@@ -40,3 +40,7 @@ release-merge:
 clean:
 	cargo clean
 	rm -rf dist
+
+# Searches for TODO and FIXME comments across crates
+search-todos:
+	pwsh -NoProfile -Command "rg -n 'TODO|FIXME' opc-cli opc-da-client compat"

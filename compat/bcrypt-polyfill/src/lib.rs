@@ -1,10 +1,10 @@
-#![cfg_attr(not(feature = "std"), no_std)]
+#![cfg_attr(all(not(feature = "std"), not(test)), no_std)]
 #![allow(non_snake_case)]
 
-#[cfg(not(feature = "std"))]
+#[cfg(all(not(feature = "std"), not(test)))]
 use core::panic::PanicInfo;
 
-#[cfg(not(feature = "std"))]
+#[cfg(all(not(feature = "std"), not(test)))]
 #[panic_handler]
 fn panic(_info: &PanicInfo) -> ! {
     loop {}
@@ -21,7 +21,7 @@ extern "system" {
 /// Polyfill for `ProcessPrng` (Windows 8+ / bcryptprimitives.dll).
 ///
 /// Routes random byte generation to `RtlGenRandom` in `advapi32.dll`.
-#[cfg(not(feature = "std"))]
+#[cfg(all(not(feature = "std"), not(test)))]
 #[no_mangle]
 pub unsafe extern "system" fn ProcessPrng(pb_data: *mut u8, cb_data: usize) -> i32 {
     process_prng_impl(pb_data, cb_data)

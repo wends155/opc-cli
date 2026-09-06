@@ -1,0 +1,32 @@
+id: no-deref-on-app
+valid:
+  - |
+    struct App {
+        view: ViewState,
+    }
+  - |
+    impl App {
+        pub fn new() -> Self {
+            Self { view: ViewState::default() }
+        }
+    }
+  - |
+    impl Deref for OtherType {
+        type Target = Foo;
+        fn deref(&self) -> &Foo { &self.foo }
+    }
+invalid:
+  - |
+    impl Deref for App {
+        type Target = ViewState;
+        fn deref(&self) -> &ViewState { &self.view }
+    }
+  - |
+    impl DerefMut for App {
+        fn deref_mut(&mut self) -> &mut ViewState { &mut self.view }
+    }
+  - |
+    impl std::ops::Deref for App {
+        type Target = ViewState;
+        fn deref(&self) -> &ViewState { &self.view }
+    }

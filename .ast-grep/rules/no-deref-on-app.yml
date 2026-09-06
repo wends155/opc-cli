@@ -1,0 +1,14 @@
+id: no-deref-on-app
+message: "Do not implement Deref or DerefMut on App; access child structs explicitly"
+severity: error
+language: rust
+files:
+  - "opc-cli/src/**/*.rs"
+rule:
+  any:
+    - pattern: "impl Deref for App { $$$ }"
+    - pattern: "impl DerefMut for App { $$$ }"
+    - pattern: "impl std::ops::Deref for App { $$$ }"
+    - pattern: "impl std::ops::DerefMut for App { $$$ }"
+    - pattern: "impl core::ops::Deref for App { $$$ }"
+    - pattern: "impl core::ops::DerefMut for App { $$$ }"

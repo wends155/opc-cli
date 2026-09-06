@@ -1,0 +1,42 @@
+id: no-deref-on-app
+snapshots:
+  ? |
+    impl Deref for App {
+        type Target = ViewState;
+        fn deref(&self) -> &ViewState { &self.view }
+    }
+  : labels:
+    - source: |-
+        impl Deref for App {
+            type Target = ViewState;
+            fn deref(&self) -> &ViewState { &self.view }
+        }
+      style: primary
+      start: 0
+      end: 100
+  ? |
+    impl DerefMut for App {
+        fn deref_mut(&mut self) -> &mut ViewState { &mut self.view }
+    }
+  : labels:
+    - source: |-
+        impl DerefMut for App {
+            fn deref_mut(&mut self) -> &mut ViewState { &mut self.view }
+        }
+      style: primary
+      start: 0
+      end: 90
+  ? |
+    impl std::ops::Deref for App {
+        type Target = ViewState;
+        fn deref(&self) -> &ViewState { &self.view }
+    }
+  : labels:
+    - source: |-
+        impl std::ops::Deref for App {
+            type Target = ViewState;
+            fn deref(&self) -> &ViewState { &self.view }
+        }
+      style: primary
+      start: 0
+      end: 110

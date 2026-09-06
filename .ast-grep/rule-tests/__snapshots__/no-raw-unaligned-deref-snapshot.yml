@@ -1,0 +1,20 @@
+id: no-raw-unaligned-deref
+snapshots:
+  ? |
+    unsafe fn bad_mut_read(addr: *mut core::ffi::c_void) -> u32 {
+        *(addr as *mut u32)
+    }
+  : labels:
+    - source: '*(addr as *mut u32)'
+      style: primary
+      start: 66
+      end: 85
+  ? |
+    unsafe fn bad_read(addr: *const core::ffi::c_void) -> u64 {
+        *(addr as *const u64)
+    }
+  : labels:
+    - source: '*(addr as *const u64)'
+      style: primary
+      start: 64
+      end: 85

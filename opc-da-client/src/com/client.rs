@@ -444,9 +444,10 @@ impl<C: ServerConnector + 'static> OpcDaClient<C, Bound> {
     /// Panics if the internal endpoint field is absent, which represents an invariant violation of [`Bound`].
     #[must_use]
     pub fn endpoint(&self) -> &OpcServerEndpoint {
-        self.endpoint
-            .as_ref()
-            .expect("Bound typestate invariant: endpoint is always Some")
+        match &self.endpoint {
+            Some(ep) => ep,
+            None => unreachable!("Bound typestate invariant: endpoint is always Some"),
+        }
     }
 
     /// Returns the server identifier string (ProgID or CLSID) for this bound session.
@@ -465,9 +466,9 @@ impl<C: ServerConnector + 'static> OpcDaClient<C, Bound> {
     /// Panics if the internal endpoint field is absent, which represents an invariant violation of [`Bound`].
     #[must_use]
     pub fn unbind(self) -> (OpcDaClient<C, Unbound>, OpcServerEndpoint) {
-        let ep = self
-            .endpoint
-            .expect("Bound typestate invariant: endpoint is always Some");
+        let Some(ep) = self.endpoint else {
+            unreachable!("Bound typestate invariant: endpoint is always Some");
+        };
         (
             OpcDaClient {
                 worker: self.worker,

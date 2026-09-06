@@ -1,12 +1,12 @@
-#![cfg_attr(not(feature = "std"), no_std)]
+#![cfg_attr(all(not(feature = "std"), not(test)), no_std)]
 #![allow(non_snake_case)]
 
 use core::ffi::c_void;
 
-#[cfg(not(feature = "std"))]
+#[cfg(all(not(feature = "std"), not(test)))]
 use core::panic::PanicInfo;
 
-#[cfg(not(feature = "std"))]
+#[cfg(all(not(feature = "std"), not(test)))]
 #[panic_handler]
 fn panic(_info: &PanicInfo) -> ! {
     loop {}
@@ -23,14 +23,14 @@ const ERROR_INVALID_PARAMETER: u32 = 87;
 const ERROR_TIMEOUT: u32 = 1460;
 
 /// Re-export Sleep so the PE loader can resolve it from this API set DLL.
-#[cfg(not(feature = "std"))]
+#[cfg(all(not(feature = "std"), not(test)))]
 #[no_mangle]
 pub unsafe extern "system" fn Sleep(dw_milliseconds: u32) {
     Kernel32Sleep(dw_milliseconds);
 }
 
 /// Polyfill for `WaitOnAddress` (Windows 8+).
-#[cfg(not(feature = "std"))]
+#[cfg(all(not(feature = "std"), not(test)))]
 #[no_mangle]
 pub unsafe extern "system" fn WaitOnAddress(
     address: *const c_void,
@@ -96,12 +96,12 @@ pub unsafe fn wait_on_address_impl(
 }
 
 /// No-op polyfill — wakes one thread waiting on `WaitOnAddress`.
-#[cfg(not(feature = "std"))]
+#[cfg(all(not(feature = "std"), not(test)))]
 #[no_mangle]
 pub unsafe extern "system" fn WakeByAddressSingle(_address: *const c_void) {}
 
 /// No-op polyfill — wakes all threads waiting on `WaitOnAddress`.
-#[cfg(not(feature = "std"))]
+#[cfg(all(not(feature = "std"), not(test)))]
 #[no_mangle]
 pub unsafe extern "system" fn WakeByAddressAll(_address: *const c_void) {}
 

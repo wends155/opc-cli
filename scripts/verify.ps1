@@ -71,13 +71,18 @@ Invoke-Gate -GateName "Unit & Integration Tests" -Command { cargo test --workspa
 # Gate 4b: Feature Independence Check (--no-default-features)
 Invoke-Gate -GateName "Feature Independence Check (opc-da-client --no-default-features)" -Command { cargo check -p opc-da-client --no-default-features }
 
-# Gate 5: Polyfill Compilation Gate
+# Gate 5: Polyfill Compilation & Unit Test Gate
 $compatDir = Join-Path $PSScriptRoot ".." "compat"
 if (Test-Path $compatDir) {
     $polyfillManifests = @(Get-ChildItem -Path $compatDir -Filter "Cargo.toml" -Recurse -Depth 1)
     foreach ($manifest in $polyfillManifests) {
         $crateName = (Split-Path -Parent $manifest.FullName | Split-Path -Leaf)
         Invoke-Gate -GateName "Polyfill Build: $crateName" -Command ([scriptblock]::Create("cargo build --manifest-path `"$($manifest.FullName)`" --release"))
+
+        $manifestContent = Get-Content $manifest.FullName -Raw
+        if ($manifestContent -match '\[features\][\s\S]*std\s*=') {
+            Invoke-Gate -GateName "Polyfill Test: $crateName" -Command ([scriptblock]::Create("cargo test --manifest-path `"$($manifest.FullName)`" --features std"))
+        }
     }
 }
 

@@ -1,0 +1,23 @@
+id: no-raw-unaligned-deref
+valid:
+  - |
+    unsafe fn read_val(ptr: *const u8) -> u8 {
+        *ptr
+    }
+  - |
+    unsafe fn read_safe(ptr: *const u64) -> u64 {
+        core::ptr::read_unaligned(ptr)
+    }
+  - |
+    unsafe fn read_vol(ptr: *const u64) -> u64 {
+        core::ptr::read_volatile(ptr)
+    }
+invalid:
+  - |
+    unsafe fn bad_read(addr: *const core::ffi::c_void) -> u64 {
+        *(addr as *const u64)
+    }
+  - |
+    unsafe fn bad_mut_read(addr: *mut core::ffi::c_void) -> u32 {
+        *(addr as *mut u32)
+    }
