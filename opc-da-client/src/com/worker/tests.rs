@@ -7,8 +7,9 @@ use crate::com::connector::{
 use crate::com::guard::GroupGuard;
 use crate::errors::{OpcError, OpcResult};
 use crate::types::{
-    BrowseDirection, BrowseType, GroupHandle, ItemHandle, OpcQuality, OpcServerEndpoint,
-    OpcServerInfo, OpcValue, ServerIdentifier, TagBatch, TagCollector,
+    BrowseDirection, BrowseType, ClientItemHandle, GroupHandle, NamespaceType, OpcQuality,
+    OpcServerEndpoint, OpcServerInfo, OpcValue, ServerIdentifier, ServerItemHandle, TagBatch,
+    TagCollector,
 };
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
@@ -25,13 +26,13 @@ impl ConnectedGroup for WorkerMockGroup {
     fn read(
         &self,
         _source: DataSource,
-        _server_handles: &[ItemHandle],
+        _server_handles: &[ServerItemHandle],
     ) -> OpcResult<Vec<Result<GroupItemState, OpcError>>> {
         Err(OpcError::NotImplemented("mock".into()))
     }
     fn write(
         &self,
-        _server_handles: &[ItemHandle],
+        _server_handles: &[ServerItemHandle],
         _values: &[OpcValue],
     ) -> OpcResult<Vec<Result<(), OpcError>>> {
         Err(OpcError::NotImplemented("mock".into()))
@@ -40,7 +41,7 @@ impl ConnectedGroup for WorkerMockGroup {
 
 impl ConnectedServer for WorkerMockServer {
     type Group = WorkerMockGroup;
-    fn query_organization(&self) -> OpcResult<u32> {
+    fn query_organization(&self) -> OpcResult<NamespaceType> {
         Err(OpcError::NotImplemented("mock".into()))
     }
     fn browse_opc_item_ids(
@@ -141,13 +142,13 @@ impl ConnectedGroup for MismatchedGroup {
     fn read(
         &self,
         _source: DataSource,
-        _server_handles: &[ItemHandle],
+        _server_handles: &[ServerItemHandle],
     ) -> OpcResult<Vec<Result<GroupItemState, OpcError>>> {
         Ok(vec![])
     }
     fn write(
         &self,
-        _server_handles: &[ItemHandle],
+        _server_handles: &[ServerItemHandle],
         _values: &[OpcValue],
     ) -> OpcResult<Vec<Result<(), OpcError>>> {
         Ok(vec![])
@@ -156,8 +157,8 @@ impl ConnectedGroup for MismatchedGroup {
 
 impl ConnectedServer for MismatchedServer {
     type Group = MismatchedGroup;
-    fn query_organization(&self) -> OpcResult<u32> {
-        Ok(0)
+    fn query_organization(&self) -> OpcResult<NamespaceType> {
+        Ok(NamespaceType::Hierarchy)
     }
     fn browse_opc_item_ids(
         &self,
@@ -491,7 +492,7 @@ impl ConnectedGroup for QualityTestGroup {
             .map(|(i, _)| {
                 if i == 4 {
                     GroupItemResult {
-                        server_handle: ItemHandle::new(0),
+                        server_handle: ServerItemHandle::new(0),
                         canonical_type: 0,
                         error: Some(OpcError::Com {
                             source: windows::core::Error::from_hresult(
@@ -502,7 +503,7 @@ impl ConnectedGroup for QualityTestGroup {
                 } else {
                     GroupItemResult {
                         #[allow(clippy::cast_possible_truncation)]
-                        server_handle: ItemHandle::new((i + 1) as u32),
+                        server_handle: ServerItemHandle::new((i + 1) as u32),
                         canonical_type: 8,
                         error: None,
                     }
@@ -514,7 +515,7 @@ impl ConnectedGroup for QualityTestGroup {
     fn read(
         &self,
         _source: DataSource,
-        server_handles: &[ItemHandle],
+        server_handles: &[ServerItemHandle],
     ) -> OpcResult<Vec<Result<GroupItemState, OpcError>>> {
         let qualities: [u16; 4] = [0x00C0, 0x00D8, 0x0018, 0x0056];
         Ok(server_handles
@@ -527,7 +528,7 @@ impl ConnectedGroup for QualityTestGroup {
                     OpcValue::String(String::new())
                 };
                 Ok(GroupItemState {
-                    client_handle: h,
+                    client_handle: ClientItemHandle::new(h.as_raw()),
                     value: val,
                     quality: OpcQuality::from(qualities[i % qualities.len()]),
                     timestamp: std::time::SystemTime::UNIX_EPOCH,
@@ -538,7 +539,7 @@ impl ConnectedGroup for QualityTestGroup {
 
     fn write(
         &self,
-        _server_handles: &[ItemHandle],
+        _server_handles: &[ServerItemHandle],
         _values: &[OpcValue],
     ) -> OpcResult<Vec<Result<(), OpcError>>> {
         Ok(vec![])
@@ -547,8 +548,8 @@ impl ConnectedGroup for QualityTestGroup {
 
 impl ConnectedServer for QualityTestServer {
     type Group = QualityTestGroup;
-    fn query_organization(&self) -> OpcResult<u32> {
-        Ok(0)
+    fn query_organization(&self) -> OpcResult<NamespaceType> {
+        Ok(NamespaceType::Hierarchy)
     }
     fn browse_opc_item_ids(
         &self,
@@ -823,12 +824,8 @@ fn test_group_guard_disarm_prevents_cleanup() {
 #[tokio::test]
 async fn test_worker_handle_read_error_cleans_group() {
     let connector = Arc::new(MockServerConnector::default());
-    let group = MockConnectedGroup {
-        add_items_fn: Some(Box::new(|_| {
-            Err(OpcError::Internal("Simulated add_items failure".into()))
-        })),
-        ..Default::default()
-    };
+    let group = MockConnectedGroup::default()
+        .with_add_items_fn(|_| Err(OpcError::Internal("Simulated add_items failure".into())));
     let server = Arc::new(MockConnectedServer {
         group: Arc::new(group),
         state: connector.state.clone(),

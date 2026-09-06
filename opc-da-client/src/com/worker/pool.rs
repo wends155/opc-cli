@@ -3,7 +3,7 @@
 use crate::com::connector::{ConnectedServer, ServerConnector};
 use crate::errors::{OpcError, OpcOperation, OpcResult};
 use crate::log_opc_err;
-use crate::types::{GroupHandle, ItemHandle, OpcServerEndpoint};
+use crate::types::{GroupHandle, NamespaceType, OpcServerEndpoint, ServerItemHandle};
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -21,7 +21,7 @@ pub struct CachedGroup<G> {
     /// Server-assigned handle for the group.
     pub server_handle: GroupHandle,
     /// Server-assigned handles for items corresponding to `tags`.
-    pub server_item_handles: Vec<ItemHandle>,
+    pub server_item_handles: Vec<ServerItemHandle>,
     /// Indices of items that were successfully registered on the server.
     pub valid_indices: Vec<usize>,
     /// Rejected item indices and their errors.
@@ -76,7 +76,7 @@ impl<S: ConnectedServer> std::ops::DerefMut for PooledServer<S> {
 impl<S: ConnectedServer> ConnectedServer for PooledServer<S> {
     type Group = S::Group;
 
-    fn query_organization(&self) -> OpcResult<u32> {
+    fn query_organization(&self) -> OpcResult<NamespaceType> {
         self.server.query_organization()
     }
 
@@ -200,7 +200,7 @@ where
         srv
     } else {
         tracing::debug!(server = %endpoint, "Cache miss, connecting");
-        let srv = match connector.connect_identifier(&endpoint.identifier) {
+        let srv = match connector.connect_endpoint(endpoint) {
             Ok(s) => s,
             Err(e) => {
                 if e.is_connection_error() {
@@ -226,7 +226,7 @@ where
             );
             pool.connections.remove(endpoint);
             tracing::debug!(server = %endpoint, "Reconnecting");
-            let fresh_srv = match connector.connect_identifier(&endpoint.identifier) {
+            let fresh_srv = match connector.connect_endpoint(endpoint) {
                 Ok(s) => s,
                 Err(connect_e) => {
                     log_opc_err!(
@@ -350,7 +350,7 @@ mod tests {
     #[test]
     fn test_worker_active_group_caching_hit_miss_and_invalidation() {
         use crate::com::connector::{ConnectedGroup, ConnectedServer, GroupConfig, GroupItemDef};
-        use crate::types::{ItemHandle, OpcServerEndpoint};
+        use crate::types::{ClientItemHandle, OpcServerEndpoint, ServerItemHandle};
 
         let state = Arc::new(MockState::default());
         let connector = Arc::new(MockServerConnector::with_state(state.clone()));
@@ -373,7 +373,7 @@ mod tests {
                 .iter()
                 .map(|t| GroupItemDef {
                     item_id: t.clone(),
-                    client_handle: ItemHandle::new(1),
+                    client_handle: ClientItemHandle::new(1),
                     active: true,
                 })
                 .collect();
@@ -382,7 +382,7 @@ mod tests {
                 tags: tags_a.clone(),
                 group: created.group,
                 server_handle: created.server_handle,
-                server_item_handles: vec![ItemHandle::new(1), ItemHandle::new(2)],
+                server_item_handles: vec![ServerItemHandle::new(1), ServerItemHandle::new(2)],
                 valid_indices: vec![0, 1],
                 rejected_errors: Vec::new(),
             });
@@ -421,7 +421,7 @@ mod tests {
                 .iter()
                 .map(|t| GroupItemDef {
                     item_id: t.clone(),
-                    client_handle: ItemHandle::new(1),
+                    client_handle: ClientItemHandle::new(1),
                     active: true,
                 })
                 .collect();
@@ -430,7 +430,7 @@ mod tests {
                 tags: tags_b.clone(),
                 group: created.group,
                 server_handle: created.server_handle,
-                server_item_handles: vec![ItemHandle::new(1)],
+                server_item_handles: vec![ServerItemHandle::new(1)],
                 valid_indices: vec![0],
                 rejected_errors: Vec::new(),
             });

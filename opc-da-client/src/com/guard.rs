@@ -34,6 +34,7 @@ use windows::Win32::System::Com::{COINIT_MULTITHREADED, CoInitializeEx, CoUninit
 /// }
 /// ```
 #[derive(Debug)]
+#[must_use = "Dropping ComGuard immediately uninitializes COM on the current thread"]
 pub struct ComGuard {
     /// Prevents `Send + Sync` auto-derivation. COM init is per-thread.
     _not_send: PhantomData<*mut ()>,

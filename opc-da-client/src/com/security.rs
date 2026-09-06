@@ -83,6 +83,85 @@ pub fn apply_proxy_blanket<T: Interface>(proxy: &T, legacy_dcom: bool) {
     }
 }
 
+/// Creates an instance of a COM class on a remote host via DCOM `CoCreateInstanceEx`,
+/// and applies proxy blanketing to satisfy modern Windows security requirements (KB5004442).
+///
+/// # Arguments
+///
+/// * `clsid` - Target CLSID GUID.
+/// * `host` - Remote hostname or IP address.
+/// * `legacy_dcom` - When `true`, uses `RPC_C_AUTHN_LEVEL_CONNECT` instead of `RPC_C_AUTHN_LEVEL_PKT_INTEGRITY`.
+///
+/// # Errors
+///
+/// Returns [`crate::errors::OpcError`] if remote activation or interface query fails.
+pub fn create_remote_instance<T: Interface>(
+    clsid: &windows::core::GUID,
+    host: &str,
+    legacy_dcom: bool,
+) -> crate::errors::OpcResult<T> {
+    use windows::Win32::System::Com::{
+        CLSCTX_REMOTE_SERVER, COAUTHINFO, COSERVERINFO, CoCreateInstanceEx, MULTI_QI,
+    };
+
+    let host_lp = crate::raw::memory::LocalPointer::from(host);
+    let authn_level = authn_level_for(legacy_dcom);
+    let auth_info = COAUTHINFO {
+        dwAuthnSvc: RPC_C_AUTHN_WINNT,
+        dwAuthzSvc: RPC_C_AUTHZ_NONE,
+        pwszServerPrincName: windows::core::PWSTR::null(),
+        dwAuthnLevel: authn_level,
+        dwImpersonationLevel: RPC_C_IMP_LEVEL_IMPERSONATE,
+        pAuthIdentityData: std::ptr::null_mut(),
+        dwCapabilities: 0,
+    };
+    // SAFETY: host_lp outlives server_info and CoCreateInstanceEx invocation.
+    let host_pwstr = unsafe { host_lp.as_pwstr() };
+    let server_info = COSERVERINFO {
+        dwReserved1: 0,
+        pwszName: host_pwstr,
+        pAuthInfo: (&raw const auth_info).cast_mut(),
+        dwReserved2: 0,
+    };
+    let mqi = MULTI_QI {
+        pIID: &T::IID,
+        pItf: std::mem::ManuallyDrop::new(None),
+        hr: windows::core::HRESULT(0),
+    };
+    let mut mqi_slice = [mqi];
+
+    // SAFETY: Calling CoCreateInstanceEx with remote host and valid MULTI_QI for T::IID.
+    unsafe {
+        CoCreateInstanceEx(
+            clsid,
+            None,
+            CLSCTX_REMOTE_SERVER,
+            Some(&raw const server_info),
+            &mut mqi_slice,
+        )
+    }
+    .map_err(crate::errors::OpcError::from)?;
+
+    let [mut result_mqi] = mqi_slice;
+    if result_mqi.hr.is_err() {
+        return Err(crate::errors::OpcError::from(
+            windows::core::Error::from_hresult(result_mqi.hr),
+        ));
+    }
+
+    // SAFETY: CoCreateInstanceEx succeeded with S_OK and populated result_mqi.pItf with a valid COM pointer.
+    let unk = unsafe { std::mem::ManuallyDrop::take(&mut result_mqi.pItf) }.ok_or_else(|| {
+        crate::errors::OpcError::Internal(
+            "CoCreateInstanceEx returned null interface pointer".into(),
+        )
+    })?;
+
+    // Apply proxy blanket to the remote instance
+    apply_proxy_blanket(&unk, legacy_dcom);
+
+    unk.cast().map_err(Into::into)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

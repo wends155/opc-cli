@@ -58,8 +58,18 @@ opc-cli/
 │   └── src/
 │       ├── lib.rs              # Library root & public re-exports (zero unreachables, Default MockOpcDaClient)
 │       ├── provider.rs         # OpcProvider trait (read_tag_value, write_tag_values), TagValue, WriteResult, TagCollector (re-exports OpcValue)
-│       ├── types.rs            # Canonical domain types (OpcValue, OpcQuality with FromStr), handles (GroupHandle, ItemHandle), ServerIdentifier, browse enums
-│       ├── errors.rs           # Canonical OpcError (is_connection_error), OpcResult, OpcOperation, and log_opc_err!
+│       ├── types.rs            # Re-export parent module for domain types
+│       ├── types/              # Decomposed modular domain types subsystem
+│       │   ├── handles.rs      # Type-safe handles (GroupHandle, ClientItemHandle, ServerItemHandle, ItemHandle)
+│       │   ├── value.rs        # OpcValue and zero-allocation display adapters
+│       │   ├── quality.rs      # Strongly-typed OpcQuality, QualityMajor, QualityLimit, QualitySubstatus
+│       │   ├── browse.rs       # BrowseType, BrowseDirection, BrowseFilter, NamespaceType with Win32 discriminants
+│       │   ├── server.rs       # ServerIdentifier, OpcServerEndpoint, OpcServerInfo, ServerStatus, GroupState
+│       │   ├── batch.rs        # TagBatch zero-allocation batching and into_shareable
+│       │   ├── collection.rs   # TagValue, TagSuccess, TagFailure, TagResult, TagValues collection
+│       │   ├── collector.rs    # TagCollector, WriteResult
+│       │   └── tests.rs        # Domain type test suite
+│       ├── errors.rs           # Canonical OpcError (is_connection_error, Timeout, From<HRESULT>), OpcResult, OpcOperation, and log_opc_err!
 │       ├── com/                # COM subsystem (feature: opc-da-backend)
 │       │   ├── mod.rs          # COM module root & re-exports
 │       │   ├── client.rs       # OpcDaClient implementation
@@ -72,10 +82,10 @@ opc-cli/
 │       │   ├── discovery.rs    # Server discovery, OpcServerListCatalog, registry inspection, guid_to_progid
 │       │   ├── guard.rs        # RAII COM initialization/teardown (ComGuard), group cleanup (GroupGuard), and browse cursor protection (BrowsePositionGuard)
 │       │   ├── iterator.rs     # COM enumerators (StringIterator with RAII drop cleanup, GuidIterator)
-│       │   ├── security.rs     # Dynamic DCOM proxy blanketing, RPC authentication level selection, CLSID_OPC_SERVER_LIST
+│       │   ├── security.rs     # Generic DCOM activation (create_remote_instance<T>), dynamic proxy blanketing, RPC authn levels
 │       │   ├── variant.rs      # Win32 VARIANT & SafeArray conversion, ItemStatesGuard (VariantClear iff ok), ScopedVariant
 │       │   ├── worker.rs       # Slim worker facade & ComRequest event loop (ComWorker) with 2-tier catch_unwind & request prioritization
-│       │   └── worker/         # Dedicated single-responsibility worker engines
+│       │   └── worker/         # Dedicated single-responsibility worker engines (pub(crate))
 │       │       ├── pool.rs     # Connection caching, active group reuse, eviction & retry dispatch (dispatch_with_retry)
 │       │       ├── read.rs     # Synchronous tag reading engine with in-place mutation and zip iteration (handle_read)
 │       │       ├── write.rs    # Synchronous tag writing engine with error mapping and ephemeral group config (handle_write)
@@ -85,8 +95,7 @@ opc-cli/
 │           ├── mod.rs          # Raw module root
 │           ├── bindings/       # Frozen COM bindings (windgen output, read-only: da, comn)
 │           ├── hresult.rs      # Strongly-typed Win32 HRESULT constants & classification
-│           ├── memory.rs       # Safe unmanaged COM memory management (RemotePointer, RemoteArray)
-│           └── bridge.rs       # Preserved dormant COM bridge structures
+│           └── memory.rs       # Safe unmanaged COM memory management (RemotePointer, RemoteArray)
 ├── compat/                     # Windows 7 / NT 6.1 Polyfill DLL Crates (#![no_std])
 │   ├── bcrypt-polyfill/       # ProcessPrng -> RtlGenRandom polyfill
 │   ├── synch-polyfill/        # WaitOnAddress 1ms Sleep polling polyfill
@@ -109,13 +118,13 @@ opc-cli/
 - **Mock Availability**: Fully mockable via `MockOpcProvider` (compiled when `feature = "test-support"` is active in `opc-da-client`).
 
 ### `opc-da-client` (Core Client Library)
-- **Owns**: Public API (`OpcProvider` with `read_tag_value` and `write_tag_values` defaults), canonical domain types in `types.rs` (`OpcValue`, `OpcQuality` with `FromStr`, `ServerIdentifier`, encapsulated `GroupHandle` and `ItemHandle`), data structs (`TagValue` with `error: Option<OpcError>`, `WriteResult`, `TagCollector` with $O(1)$ `harvest`, `TagBatch` enum, `IntoTags` trait, `TagValues` collection with lenient typed extractions and numeric coercion, `TagExtractError`), error definitions (`OpcError::is_connection_error`), inherent diagnostic method (`OpcError::friendly_hint`), RAII group and cursor management (`GroupGuard`, `BrowsePositionGuard`), server discovery (`com::discovery`), and modular connector coordinator facade (`com::connector`).
+- **Owns**: Public API (`OpcProvider` with `read_tag_value` and `write_tag_values` defaults), canonical domain types in `types/` (`OpcValue`, `OpcQuality` with `FromStr`, `ServerIdentifier`, type-safe sealed `GroupHandle`, `ClientItemHandle`, `ServerItemHandle` and legacy `ItemHandle` alias), data structs (`TagValue`, `TagSuccess`, `TagFailure`, `TagResult = Result<TagSuccess, TagFailure>`, `WriteResult`, `TagCollector` with $O(1)$ `harvest` and `#[must_use] push`, `TagBatch` enum with zero-alloc `into_shareable`, `IntoTags` trait, `TagValues` collection with lenient typed extractions and numeric coercion, `TagExtractError`), error definitions (`OpcError::is_connection_error`, `OpcError::Timeout`, `From<windows::core::HRESULT>`), inherent diagnostic method (`OpcError::friendly_hint`), RAII guards (`ComGuard`, `GroupGuard`, `BrowsePositionGuard`, `ItemStatesGuard`), server discovery (`com::discovery`), and modular connector coordinator facade (`com::connector`).
 - **Does NOT Own**: Terminal rendering, direct COM worker loop implementation.
 - **Trait Interfaces**: Exports `OpcProvider`.
 - **Mock Availability**: Provides `MockOpcProvider` via `mockall`, and exports `MockOpcDaClient` type alias and `Default` implementation under `all(feature = "test-support", feature = "opc-da-backend")`.
 
 ### `opc-da-client::com::client` (Public Client Implementation)
-- **Owns**: Public concrete `OpcDaClient` struct implementing `OpcProvider`, fluent builder `OpcDaClientBuilder` (`builder()`), server-bound constructors (`connect`, `connect_remote`), inherent async readers and writers (`read_tag_values`, `read_f64`, `read_i32`, `read_bool`, `read_string`, `write`, `write_batch`), remote server discovery (`list_servers_on`), Layer 2 subscription polling stream (`subscribe`), request dispatch channel management (`mpsc::Sender<ComRequest>`), and public constructors (`OpcDaClient::new`).
+- **Owns**: Public concrete `OpcDaClient` struct implementing `OpcProvider`, fluent builder `OpcDaClientBuilder` (`builder()`), server-bound constructors (`connect`, `connect_remote`), inherent async readers and writers (`read_tag_values`, `read_tag_value`, `read_f64`, `read_i32`, `read_bool`, `read_string`, `write`, `write_batch`, `browse`), remote server discovery (`list_servers_on`), Layer 2 subscription polling stream (`subscribe` with zero-allocation shareable batch clones), request dispatch channel management (`mpsc::Sender<ComRequest>`), and public constructors (`OpcDaClient::new`).
 - **Does NOT Own**: In-apartment Win32 COM operations, unmanaged memory pointers, or direct FFI calls (all delegated across channels to `ComWorker`).
 - **Trait Interfaces**: Implements `OpcProvider`.
 - **Mock Availability**: `MockOpcDaClient` alias available under `all(feature = "test-support", feature = "opc-da-backend")`.
@@ -127,7 +136,7 @@ opc-cli/
 - **Mock Availability**: Fully tested via pure in-memory `from_vec` test fixtures.
 
 ### `opc-da-client::com::security` (DCOM Security & Blanketing)
-- **Owns**: Dynamic DCOM proxy security blanketing (`apply_proxy_blanket`), RPC authentication level selection (`authn_level_for`), standard OPCEnum CLSID constant (`CLSID_OPC_SERVER_LIST`), and Win32 RPC security constants (`RPC_C_*`).
+- **Owns**: Generic remote COM activation (`create_remote_instance<T: Interface>`), dynamic DCOM proxy security blanketing (`apply_proxy_blanket`), RPC authentication level selection (`authn_level_for`), standard OPCEnum CLSID constant (`CLSID_OPC_SERVER_LIST`), and Win32 RPC security constants (`RPC_C_*`).
 - **Does NOT Own**: Server connection management (`com::connector::server`), catalog traversal (`com::discovery`), or COM message loop (`com::worker`).
 - **Trait Interfaces**: Pure functional security procedures.
 - **Mock Availability**: N/A (stateless helpers operating on Win32 COM interfaces).

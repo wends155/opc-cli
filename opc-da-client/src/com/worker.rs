@@ -18,14 +18,14 @@ use tokio::sync::{mpsc, oneshot};
 
 /// Calculates elapsed milliseconds from an [`std::time::Instant`].
 #[inline]
-pub(crate) fn elapsed_ms(start: std::time::Instant) -> u64 {
+pub fn elapsed_ms(start: std::time::Instant) -> u64 {
     u64::try_from(start.elapsed().as_millis()).unwrap_or(u64::MAX)
 }
 
 static GROUP_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
 
 /// Generates a collision-proof group name composed of a prefix, process ID, and atomic sequence.
-pub(crate) fn generate_group_name(prefix: &str) -> String {
+pub fn generate_group_name(prefix: &str) -> String {
     let pid = std::process::id();
     let seq = GROUP_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     format!("{prefix}-{pid:x}-{seq:x}")
@@ -60,9 +60,9 @@ pub enum ComRequest {
     WriteTagValue {
         /// Target OPC server endpoint.
         endpoint: OpcServerEndpoint,
-        /// Tag identifier to write.
+        /// Tag identifier to write to.
         tag_id: String,
-        /// Typed value to write.
+        /// Value to write.
         value: OpcValue,
         /// One-shot channel to send back the write operation result.
         reply: oneshot::Sender<OpcResult<WriteResult>>,
@@ -100,16 +100,6 @@ pub struct ComWorker<C: ServerConnector + 'static> {
 }
 
 impl<C: ServerConnector + 'static> ComWorker<C> {
-    /// Creates a dummy/closed `ComWorker` handle used when background worker initialization fails.
-    pub fn closed() -> Self {
-        let (tx, _rx) = mpsc::channel(1);
-        Self {
-            sender: tx,
-            handle: None,
-            _phantom: std::marker::PhantomData,
-        }
-    }
-
     /// Starts the background COM worker thread with default MTA initialization.
     pub fn start(connector: Arc<C>) -> Result<Self, OpcError> {
         Self::start_with_initializer::<crate::com::guard::DefaultComInit>(connector)
@@ -117,7 +107,7 @@ impl<C: ServerConnector + 'static> ComWorker<C> {
 
     /// Starts the background COM worker thread with a specified COM initialization strategy.
     #[tracing::instrument(skip(connector))]
-    pub(crate) fn start_with_initializer<I: crate::com::guard::ComInitializer>(
+    pub fn start_with_initializer<I: crate::com::guard::ComInitializer>(
         connector: Arc<C>,
     ) -> Result<Self, OpcError> {
         let (tx, rx) = mpsc::channel(32);

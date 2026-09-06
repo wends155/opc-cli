@@ -11,8 +11,8 @@ use std::sync::Arc;
 pub struct OpcDaClientBuilder<C = ComConnector> {
     host: Option<String>,
     server: Option<ServerIdentifier>,
-    timeout: Option<std::time::Duration>,
-    legacy_dcom: bool,
+    pub timeout: Option<std::time::Duration>,
+    pub legacy_dcom: bool,
     connector: Option<C>,
 }
 
@@ -43,8 +43,35 @@ impl OpcDaClientBuilder<ComConnector> {
             server: None,
             timeout: None,
             legacy_dcom: false,
-            connector: None,
+            connector: Some(ComConnector::new()),
         }
+    }
+
+    /// Configures legacy DCOM security blanketing.
+    ///
+    /// Sets authentication level to `RPC_C_AUTHN_LEVEL_CONNECT` (2) instead of
+    /// modern post-KB5004442 `RPC_C_AUTHN_LEVEL_PKT_INTEGRITY` (5).
+    ///
+    /// # Arguments
+    ///
+    /// * `legacy` - `true` to enable legacy DCOM packet authentication.
+    ///
+    /// # Returns
+    ///
+    /// The updated builder instance.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use opc_da_client::OpcDaClientBuilder;
+    ///
+    /// let builder = OpcDaClientBuilder::new().with_legacy_dcom(true);
+    /// ```
+    #[must_use]
+    pub fn with_legacy_dcom(mut self, legacy: bool) -> Self {
+        self.legacy_dcom = legacy;
+        self.connector = Some(ComConnector::with_legacy_dcom(legacy));
+        self
     }
 }
 
@@ -119,32 +146,6 @@ impl<C: ServerConnector + 'static> OpcDaClientBuilder<C> {
         self
     }
 
-    /// Configures legacy DCOM security blanketing.
-    ///
-    /// Sets authentication level to `RPC_C_AUTHN_LEVEL_CONNECT` (2) instead of
-    /// modern post-KB5004442 `RPC_C_AUTHN_LEVEL_PKT_INTEGRITY` (5).
-    ///
-    /// # Arguments
-    ///
-    /// * `legacy` - `true` to enable legacy DCOM packet authentication.
-    ///
-    /// # Returns
-    ///
-    /// The updated builder instance.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use opc_da_client::OpcDaClientBuilder;
-    ///
-    /// let builder = OpcDaClientBuilder::new().with_legacy_dcom(true);
-    /// ```
-    #[must_use]
-    pub fn with_legacy_dcom(mut self, legacy: bool) -> Self {
-        self.legacy_dcom = legacy;
-        self
-    }
-
     /// Transitions the builder to use an alternative backend connector (e.g., a test mock).
     ///
     /// # Arguments
@@ -183,6 +184,7 @@ impl<C: ServerConnector + 'static> OpcDaClientBuilder<C> {
     /// Returns [`OpcError::Connection`] if worker thread initialization fails.
     pub fn build_with_connector(self, connector: C) -> OpcResult<OpcDaClient<C>> {
         let mut client = OpcDaClient::new(connector)?;
+        client.timeout = self.timeout;
         if let Some(server) = self.server {
             client.endpoint = Some(OpcServerEndpoint {
                 host: self.host,
@@ -217,6 +219,7 @@ impl<C: ServerConnector + Default + 'static> OpcDaClientBuilder<C> {
     pub fn build(self) -> OpcResult<OpcDaClient<C>> {
         let connector = self.connector.unwrap_or_default();
         let mut client = OpcDaClient::new(connector)?;
+        client.timeout = self.timeout;
         if let Some(server) = self.server {
             client.endpoint = Some(OpcServerEndpoint {
                 host: self.host,
@@ -232,9 +235,11 @@ impl<C: ServerConnector + Default + 'static> OpcDaClientBuilder<C> {
 /// Uses native `windows-rs` COM interop via the internal `com` subsystem.
 pub struct OpcDaClient<C: ServerConnector + 'static = ComConnector> {
     /// Background MTA worker handle managing asynchronous request channels.
-    pub worker: Arc<ComWorker<C>>,
+    pub(crate) worker: Arc<ComWorker<C>>,
     /// Target OPC server endpoint if bound to a specific server.
     pub endpoint: Option<OpcServerEndpoint>,
+    /// Configured operation timeout.
+    pub timeout: Option<std::time::Duration>,
 }
 
 impl<C: ServerConnector + 'static> Clone for OpcDaClient<C> {
@@ -242,29 +247,7 @@ impl<C: ServerConnector + 'static> Clone for OpcDaClient<C> {
         Self {
             worker: Arc::clone(&self.worker),
             endpoint: self.endpoint.clone(),
-        }
-    }
-}
-
-/// Returns the default `OpcDaClient` using native COM settings.
-///
-/// If the background COM worker thread cannot be started or COM
-/// Multi-Threaded Apartment (MTA) initialization fails on the worker thread,
-/// this logs an error and returns a closed client whose operations will fail
-/// cleanly with [`crate::errors::OpcError::Connection`].
-///
-/// Use [`OpcDaClient::new`] for explicit fallible construction.
-impl Default for OpcDaClient<ComConnector> {
-    fn default() -> Self {
-        match Self::new(ComConnector) {
-            Ok(client) => client,
-            Err(err) => {
-                tracing::error!(error = ?err, "Failed to initialize default OpcDaClient");
-                Self {
-                    worker: Arc::new(ComWorker::closed()),
-                    endpoint: None,
-                }
-            }
+            timeout: self.timeout,
         }
     }
 }
@@ -370,6 +353,7 @@ impl<C: ServerConnector + 'static> OpcDaClient<C> {
         Ok(Self {
             worker: Arc::new(worker),
             endpoint: None,
+            timeout: None,
         })
     }
 
@@ -413,6 +397,43 @@ impl<C: ServerConnector + 'static> OpcDaClient<C> {
         self
     }
 
+    /// Configures or overrides operation timeout on this client.
+    ///
+    /// # Arguments
+    ///
+    /// * `timeout` - Duration before operations time out.
+    ///
+    /// # Returns
+    ///
+    /// The updated [`OpcDaClient`].
+    #[must_use]
+    pub fn timeout(mut self, timeout: std::time::Duration) -> Self {
+        self.timeout = Some(timeout);
+        self
+    }
+
+    /// Returns the target OPC server endpoint if bound to a specific server.
+    #[must_use]
+    pub fn endpoint(&self) -> Option<&OpcServerEndpoint> {
+        self.endpoint.as_ref()
+    }
+
+    /// Dispatches a request to the COM worker thread, applying timeout if configured.
+    pub(crate) async fn dispatch_request<F, R>(&self, req_builder: F) -> OpcResult<R>
+    where
+        F: FnOnce(tokio::sync::oneshot::Sender<OpcResult<R>>) -> ComRequest,
+    {
+        let fut = self.worker.send_request(req_builder);
+        if let Some(dur) = self.timeout {
+            match tokio::time::timeout(dur, fut).await {
+                Ok(res) => res,
+                Err(_) => Err(OpcError::Timeout(dur)),
+            }
+        } else {
+            fut.await
+        }
+    }
+
     /// Asynchronously reads current values, quality, and timestamps for a batch of tags.
     ///
     /// Accepts any type implementing [`IntoTags`] (slices, arrays, vectors, single tag strings)
@@ -452,13 +473,12 @@ impl<C: ServerConnector + 'static> OpcDaClient<C> {
             )
         })?.clone();
         let batch = tags.into_tag_batch();
-        self.worker
-            .send_request(|reply| ComRequest::ReadTagValues {
-                endpoint,
-                tags: batch,
-                reply,
-            })
-            .await
+        self.dispatch_request(|reply| ComRequest::ReadTagValues {
+            endpoint,
+            tags: batch,
+            reply,
+        })
+        .await
     }
 
     /// Reads a single tag and unwraps its value as an `f64`.
@@ -588,6 +608,26 @@ impl<C: ServerConnector + 'static> OpcDaClient<C> {
             .map_err(Into::into)
     }
 
+    /// Reads a single tag and returns its full [`TagValue`].
+    ///
+    /// # Arguments
+    ///
+    /// * `tag` - Tag identifier string.
+    ///
+    /// # Returns
+    ///
+    /// Decoded [`TagValue`].
+    ///
+    /// # Errors
+    ///
+    /// Returns [`OpcError`] if the read fails or the client is not bound to a server.
+    pub async fn read_tag_value(&self, tag: &str) -> OpcResult<TagValue> {
+        let values = self.read_tag_values(tag.to_string()).await?;
+        values.into_vec().pop().ok_or_else(|| {
+            OpcError::Internal(format!("Tag '{tag}' returned no response from server"))
+        })
+    }
+
     /// Asynchronously writes a typed value to a tag.
     ///
     /// # Arguments
@@ -623,14 +663,13 @@ impl<C: ServerConnector + 'static> OpcDaClient<C> {
             .as_ref()
             .ok_or_else(|| OpcError::InvalidState("Client is not bound to a server".into()))?
             .clone();
-        self.worker
-            .send_request(|reply| ComRequest::WriteTagValue {
-                endpoint,
-                tag_id: tag.to_string(),
-                value: value.into(),
-                reply,
-            })
-            .await
+        self.dispatch_request(|reply| ComRequest::WriteTagValue {
+            endpoint,
+            tag_id: tag.to_string(),
+            value: value.into(),
+            reply,
+        })
+        .await
     }
 
     /// Asynchronously writes a batch of tag-value pairs in a single operation.
@@ -676,13 +715,12 @@ impl<C: ServerConnector + 'static> OpcDaClient<C> {
             .as_ref()
             .ok_or_else(|| OpcError::InvalidState("Client is not bound to a server".into()))?
             .clone();
-        self.worker
-            .send_request(|reply| ComRequest::WriteTagValues {
-                endpoint,
-                writes,
-                reply,
-            })
-            .await
+        self.dispatch_request(|reply| ComRequest::WriteTagValues {
+            endpoint,
+            writes,
+            reply,
+        })
+        .await
     }
 
     /// Lists available OPC servers on a remote (or local) host.
@@ -706,7 +744,7 @@ impl<C: ServerConnector + 'static> OpcDaClient<C> {
     /// # async fn main() -> opc_da_client::OpcResult<()> {
     /// use opc_da_client::OpcDaClient;
     ///
-    /// let client: OpcDaClient = OpcDaClient::default();
+    /// let client = OpcDaClient::builder().build()?;
     /// let servers = client.list_servers_on("localhost").await?;
     /// # Ok(())
     /// # }
@@ -751,7 +789,7 @@ impl<C: ServerConnector + 'static> OpcDaClient<C> {
         interval: std::time::Duration,
     ) -> tokio::sync::mpsc::Receiver<TagValues> {
         let (tx, rx) = tokio::sync::mpsc::channel(16);
-        let tags_batch = tags.into_tag_batch();
+        let tags_batch = tags.into_tag_batch().into_shareable();
         let client = self.clone();
 
         tokio::spawn(async move {
@@ -778,6 +816,36 @@ impl<C: ServerConnector + 'static> OpcDaClient<C> {
 
         rx
     }
+
+    /// Asynchronously browses tags on the currently bound server.
+    ///
+    /// # Arguments
+    ///
+    /// * `collector` - Bounded [`TagCollector`] to accumulate discovered tags.
+    ///
+    /// # Returns
+    ///
+    /// A vector of discovered tag identifier strings.
+    ///
+    /// # Errors
+    ///
+    /// * [`OpcError::InvalidState`] - Client is not bound to a server.
+    /// * [`OpcError::Connection`] - DCOM connection failure.
+    #[tracing::instrument(level = "info", skip(self, collector), err)]
+    pub async fn browse(&self, collector: TagCollector) -> OpcResult<Vec<String>> {
+        let endpoint = self.endpoint.as_ref().ok_or_else(|| {
+            OpcError::InvalidState(
+                "Client is not bound to a server. Use OpcDaClient::builder().server(...) or OpcProvider::browse_tags"
+                    .into(),
+            )
+        })?.clone();
+        self.dispatch_request(|reply| ComRequest::BrowseTags {
+            endpoint,
+            collector,
+            reply,
+        })
+        .await
+    }
 }
 
 #[allow(clippy::too_many_lines)]
@@ -786,35 +854,32 @@ impl<C: ServerConnector + 'static> OpcProvider for OpcDaClient<C> {
     #[tracing::instrument(level = "info", skip(self), err)]
     async fn list_servers(&self, host: &str) -> OpcResult<Vec<String>> {
         let host_owned = host.to_string();
-        self.worker
-            .send_request(|reply| ComRequest::ListServers {
-                host: host_owned,
-                reply,
-            })
-            .await
+        self.dispatch_request(|reply| ComRequest::ListServers {
+            host: host_owned,
+            reply,
+        })
+        .await
     }
 
     #[tracing::instrument(level = "info", skip(self), err)]
     async fn list_server_details(&self, host: &str) -> OpcResult<Vec<OpcServerInfo>> {
         let host_owned = host.to_string();
-        self.worker
-            .send_request(|reply| ComRequest::ListServerDetails {
-                host: host_owned,
-                reply,
-            })
-            .await
+        self.dispatch_request(|reply| ComRequest::ListServerDetails {
+            host: host_owned,
+            reply,
+        })
+        .await
     }
 
     #[tracing::instrument(level = "info", skip(self, collector), err)]
     async fn browse_tags(&self, server: &str, collector: TagCollector) -> OpcResult<Vec<String>> {
         let endpoint = crate::types::OpcServerEndpoint::from(server);
-        self.worker
-            .send_request(|reply| ComRequest::BrowseTags {
-                endpoint,
-                collector,
-                reply,
-            })
-            .await
+        self.dispatch_request(|reply| ComRequest::BrowseTags {
+            endpoint,
+            collector,
+            reply,
+        })
+        .await
     }
 
     #[tracing::instrument(level = "info", skip(self, tag_ids), fields(tag_count = tag_ids.len()), err)]
@@ -826,8 +891,7 @@ impl<C: ServerConnector + 'static> OpcProvider for OpcDaClient<C> {
         let endpoint = crate::types::OpcServerEndpoint::from(server);
         let tags = crate::types::TagBatch::from(tag_ids);
         let res = self
-            .worker
-            .send_request(|reply| ComRequest::ReadTagValues {
+            .dispatch_request(|reply| ComRequest::ReadTagValues {
                 endpoint,
                 tags,
                 reply,
@@ -845,14 +909,29 @@ impl<C: ServerConnector + 'static> OpcProvider for OpcDaClient<C> {
     ) -> OpcResult<WriteResult> {
         let endpoint = crate::types::OpcServerEndpoint::from(server);
         let tag_id_owned = tag_id.to_string();
-        self.worker
-            .send_request(|reply| ComRequest::WriteTagValue {
-                endpoint,
-                tag_id: tag_id_owned,
-                value,
-                reply,
-            })
-            .await
+        self.dispatch_request(|reply| ComRequest::WriteTagValue {
+            endpoint,
+            tag_id: tag_id_owned,
+            value,
+            reply,
+        })
+        .await
+    }
+
+    #[tracing::instrument(level = "info", skip(self, writes), fields(write_count = writes.len()), err)]
+    async fn write_tag_values(
+        &self,
+        server: &str,
+        writes: &[(String, OpcValue)],
+    ) -> OpcResult<Vec<WriteResult>> {
+        let endpoint = crate::types::OpcServerEndpoint::from(server);
+        let writes_vec = writes.to_vec();
+        self.dispatch_request(|reply| ComRequest::WriteTagValues {
+            endpoint,
+            writes: writes_vec,
+            reply,
+        })
+        .await
     }
 }
 
@@ -860,7 +939,7 @@ impl<C: ServerConnector + 'static> OpcProvider for OpcDaClient<C> {
 mod tests {
     use super::*;
     use crate::com::connector::MockServerConnector;
-    use crate::types::{ItemHandle, OpcQuality};
+    use crate::types::{ClientItemHandle, OpcQuality, ServerItemHandle};
 
     #[tokio::test]
     async fn test_client_list_server_details() {
@@ -915,15 +994,41 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_builder_timeout_and_legacy_dcom() {
+        let builder = OpcDaClientBuilder::new()
+            .timeout(std::time::Duration::from_millis(50))
+            .with_legacy_dcom(true);
+        assert_eq!(builder.timeout, Some(std::time::Duration::from_millis(50)));
+        assert!(builder.legacy_dcom);
+
+        let connector = MockServerConnector::new().with_read_fn(|_, _| {
+            std::thread::sleep(std::time::Duration::from_millis(150));
+            Ok(vec![])
+        });
+
+        let client = OpcDaClient::builder()
+            .server("Mock.Server.1")
+            .timeout(std::time::Duration::from_millis(50))
+            .with_connector(connector)
+            .build()
+            .unwrap();
+
+        assert_eq!(client.timeout, Some(std::time::Duration::from_millis(50)));
+        let err = client.read_tag_values(["Tag1"]).await.unwrap_err();
+        assert!(matches!(err, OpcError::Timeout(_)));
+        assert!(err.is_connection_error());
+    }
+
+    #[tokio::test]
     async fn test_inherent_async_reads_and_writes_on_client() {
         let state = std::sync::Arc::new(crate::com::connector::mock::MockState::default());
-        let mut group = crate::com::connector::mock::MockConnectedGroup {
+        let group = crate::com::connector::mock::MockConnectedGroup {
             state: state.clone(),
             ..Default::default()
         };
         let item_registry =
             std::sync::Arc::new(std::sync::Mutex::new(std::collections::HashMap::<
-                ItemHandle,
+                ServerItemHandle,
                 String,
             >::new()));
         let reg_add = item_registry.clone();
@@ -935,7 +1040,7 @@ mod tests {
                     .enumerate()
                     .map(|(i, it)| {
                         #[allow(clippy::cast_possible_truncation)]
-                        let h = ItemHandle::new((i + 1) as u32);
+                        let h = ServerItemHandle::new((i + 1) as u32);
                         reg.insert(h, it.item_id.clone());
                         crate::com::connector::traits::GroupItemResult {
                             server_handle: h,
@@ -947,7 +1052,7 @@ mod tests {
             },
         );
         let reg_read = item_registry.clone();
-        let read_fn = Box::new(move |_source, handles: &[ItemHandle]| {
+        let read_fn = Box::new(move |_source, handles: &[ServerItemHandle]| {
             let reg = reg_read.lock().unwrap();
             Ok(handles
                 .iter()
@@ -959,7 +1064,7 @@ mod tests {
                         _ => OpcValue::Int(42),
                     };
                     Ok(crate::com::connector::traits::GroupItemState {
-                        client_handle: *h,
+                        client_handle: ClientItemHandle::new(h.as_raw()),
                         value: val,
                         quality: OpcQuality::GOOD,
                         timestamp: std::time::SystemTime::UNIX_EPOCH,
@@ -967,8 +1072,7 @@ mod tests {
                 })
                 .collect())
         });
-        group.add_items_fn = Some(add_fn);
-        group.read_fn = Some(read_fn);
+        let group = group.with_add_items_fn(add_fn).with_read_fn(read_fn);
         let server = std::sync::Arc::new(crate::com::connector::mock::MockConnectedServer {
             group: std::sync::Arc::new(group),
             state: state.clone(),

@@ -11,8 +11,8 @@ use crate::com::iterator::StringIterator;
 use crate::errors::{OpcError, OpcResult};
 use crate::raw::hresult::RPC_S_SERVER_UNAVAILABLE;
 use crate::types::{
-    BrowseDirection, BrowseType, GroupHandle, ItemHandle, OpcQuality, OpcServerInfo, OpcValue,
-    ServerIdentifier,
+    BrowseDirection, BrowseType, ClientItemHandle, GroupHandle, NamespaceType, OpcQuality,
+    OpcServerInfo, OpcValue, ServerIdentifier, ServerItemHandle,
 };
 
 /// Type alias for mock `add_items` closure.
@@ -21,14 +21,15 @@ pub type MockAddItemsFn =
 
 /// Type alias for mock `read` closure.
 pub type MockReadFn = Box<
-    dyn Fn(DataSource, &[ItemHandle]) -> OpcResult<Vec<Result<GroupItemState, OpcError>>>
+    dyn Fn(DataSource, &[ServerItemHandle]) -> OpcResult<Vec<Result<GroupItemState, OpcError>>>
         + Send
         + Sync,
 >;
 
 /// Type alias for mock `write` closure.
-pub type MockWriteFn =
-    Box<dyn Fn(&[ItemHandle], &[OpcValue]) -> OpcResult<Vec<Result<(), OpcError>>> + Send + Sync>;
+pub type MockWriteFn = Box<
+    dyn Fn(&[ServerItemHandle], &[OpcValue]) -> OpcResult<Vec<Result<(), OpcError>>> + Send + Sync,
+>;
 
 /// Shared atomic state for mock failure injection and counters.
 #[derive(Default, Debug)]
@@ -71,11 +72,55 @@ pub struct MockConnectedGroup {
     /// Preconfigured values returned on read when no custom read_fn is set.
     pub tag_values: std::sync::Arc<std::sync::Mutex<Vec<OpcValue>>>,
     /// Optional custom handler for adding items to the mock group.
-    pub add_items_fn: Option<MockAddItemsFn>,
+    pub add_items_fn: std::sync::Arc<std::sync::Mutex<Option<MockAddItemsFn>>>,
     /// Optional custom handler for reading items from the mock group.
-    pub read_fn: Option<MockReadFn>,
+    pub read_fn: std::sync::Arc<std::sync::Mutex<Option<MockReadFn>>>,
     /// Optional custom handler for writing items to the mock group.
-    pub write_fn: Option<MockWriteFn>,
+    pub write_fn: std::sync::Arc<std::sync::Mutex<Option<MockWriteFn>>>,
+}
+
+impl MockConnectedGroup {
+    /// Configures a custom `add_items` handler.
+    #[must_use]
+    pub fn with_add_items_fn<F>(self, f: F) -> Self
+    where
+        F: Fn(&[GroupItemDef]) -> OpcResult<Vec<GroupItemResult>> + Send + Sync + 'static,
+    {
+        if let Ok(mut guard) = self.add_items_fn.lock() {
+            *guard = Some(Box::new(f));
+        }
+        self
+    }
+
+    /// Configures a custom `read` handler.
+    #[must_use]
+    pub fn with_read_fn<F>(self, f: F) -> Self
+    where
+        F: Fn(DataSource, &[ServerItemHandle]) -> OpcResult<Vec<Result<GroupItemState, OpcError>>>
+            + Send
+            + Sync
+            + 'static,
+    {
+        if let Ok(mut guard) = self.read_fn.lock() {
+            *guard = Some(Box::new(f));
+        }
+        self
+    }
+
+    /// Configures a custom `write` handler.
+    #[must_use]
+    pub fn with_write_fn<F>(self, f: F) -> Self
+    where
+        F: Fn(&[ServerItemHandle], &[OpcValue]) -> OpcResult<Vec<Result<(), OpcError>>>
+            + Send
+            + Sync
+            + 'static,
+    {
+        if let Ok(mut guard) = self.write_fn.lock() {
+            *guard = Some(Box::new(f));
+        }
+        self
+    }
 }
 
 impl ConnectedGroup for MockConnectedGroup {
@@ -88,28 +133,30 @@ impl ConnectedGroup for MockConnectedGroup {
             .add_items_count
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 
-        if let Some(f) = &self.add_items_fn {
-            f(items)
-        } else {
-            Ok(items
-                .iter()
-                .enumerate()
-                .map(|(i, _)| {
-                    let handle_val = u32::try_from(i + 1).unwrap_or(u32::MAX);
-                    GroupItemResult {
-                        server_handle: ItemHandle::new(handle_val),
-                        canonical_type: windows::Win32::System::Variant::VT_BSTR.0,
-                        error: None,
-                    }
-                })
-                .collect())
+        if let Ok(guard) = self.add_items_fn.lock()
+            && let Some(f) = guard.as_ref()
+        {
+            return f(items);
         }
+
+        Ok(items
+            .iter()
+            .enumerate()
+            .map(|(i, _)| {
+                let handle_val = u32::try_from(i + 1).unwrap_or(u32::MAX);
+                GroupItemResult {
+                    server_handle: ServerItemHandle::new(handle_val),
+                    canonical_type: windows::Win32::System::Variant::VT_BSTR.0,
+                    error: None,
+                }
+            })
+            .collect())
     }
 
     fn read(
         &self,
         source: DataSource,
-        server_handles: &[ItemHandle],
+        server_handles: &[ServerItemHandle],
     ) -> OpcResult<Vec<Result<GroupItemState, OpcError>>> {
         if server_handles.is_empty() {
             return Err(OpcError::InvalidState(
@@ -121,29 +168,31 @@ impl ConnectedGroup for MockConnectedGroup {
             .read_count
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 
-        if let Some(f) = &self.read_fn {
-            f(source, server_handles)
-        } else {
-            let configured = self.tag_values.lock()?;
-            Ok(server_handles
-                .iter()
-                .enumerate()
-                .map(|(i, &h)| {
-                    let val = configured.get(i).cloned().unwrap_or(OpcValue::Int(42));
-                    Ok(GroupItemState {
-                        client_handle: h,
-                        value: val,
-                        quality: OpcQuality::GOOD,
-                        timestamp: std::time::SystemTime::UNIX_EPOCH,
-                    })
-                })
-                .collect())
+        if let Ok(guard) = self.read_fn.lock()
+            && let Some(f) = guard.as_ref()
+        {
+            return f(source, server_handles);
         }
+
+        let configured = self.tag_values.lock()?;
+        Ok(server_handles
+            .iter()
+            .enumerate()
+            .map(|(i, &h)| {
+                let val = configured.get(i).cloned().unwrap_or(OpcValue::Int(42));
+                Ok(GroupItemState {
+                    client_handle: ClientItemHandle::new(h.as_raw()),
+                    value: val,
+                    quality: OpcQuality::GOOD,
+                    timestamp: std::time::SystemTime::UNIX_EPOCH,
+                })
+            })
+            .collect())
     }
 
     fn write(
         &self,
-        server_handles: &[ItemHandle],
+        server_handles: &[ServerItemHandle],
         values: &[OpcValue],
     ) -> OpcResult<Vec<Result<(), OpcError>>> {
         if server_handles.is_empty() {
@@ -189,11 +238,13 @@ impl ConnectedGroup for MockConnectedGroup {
                 .collect());
         }
 
-        if let Some(f) = &self.write_fn {
-            f(server_handles, values)
-        } else {
-            Ok(server_handles.iter().map(|_| Ok(())).collect())
+        if let Ok(guard) = self.write_fn.lock()
+            && let Some(f) = guard.as_ref()
+        {
+            return f(server_handles, values);
         }
+
+        Ok(server_handles.iter().map(|_| Ok(())).collect())
     }
 }
 
@@ -205,14 +256,14 @@ impl ConnectedGroup for std::sync::Arc<MockConnectedGroup> {
     fn read(
         &self,
         source: DataSource,
-        server_handles: &[ItemHandle],
+        server_handles: &[ServerItemHandle],
     ) -> OpcResult<Vec<Result<GroupItemState, OpcError>>> {
         (**self).read(source, server_handles)
     }
 
     fn write(
         &self,
-        server_handles: &[ItemHandle],
+        server_handles: &[ServerItemHandle],
         values: &[OpcValue],
     ) -> OpcResult<Vec<Result<(), OpcError>>> {
         (**self).write(server_handles, values)
@@ -264,8 +315,13 @@ impl Default for MockConnectedServer {
 impl ConnectedServer for MockConnectedServer {
     type Group = std::sync::Arc<MockConnectedGroup>;
 
-    fn query_organization(&self) -> OpcResult<u32> {
-        Ok(self.organization.load(std::sync::atomic::Ordering::Relaxed))
+    fn query_organization(&self) -> OpcResult<NamespaceType> {
+        let val = self.organization.load(std::sync::atomic::Ordering::Relaxed);
+        if val == 2 {
+            Ok(NamespaceType::Flat)
+        } else {
+            Ok(NamespaceType::Hierarchy)
+        }
     }
 
     fn browse_opc_item_ids(
@@ -499,6 +555,48 @@ impl MockServerConnector {
         }
         self
     }
+
+    /// Overrides handler for adding items to the mock group.
+    #[must_use]
+    pub fn with_add_items_fn<F>(self, f: F) -> Self
+    where
+        F: Fn(&[GroupItemDef]) -> OpcResult<Vec<GroupItemResult>> + Send + Sync + 'static,
+    {
+        if let Ok(mut guard) = self.server.group.add_items_fn.lock() {
+            *guard = Some(Box::new(f));
+        }
+        self
+    }
+
+    /// Overrides handler for reading items from the mock group.
+    #[must_use]
+    pub fn with_read_fn<F>(self, f: F) -> Self
+    where
+        F: Fn(DataSource, &[ServerItemHandle]) -> OpcResult<Vec<Result<GroupItemState, OpcError>>>
+            + Send
+            + Sync
+            + 'static,
+    {
+        if let Ok(mut guard) = self.server.group.read_fn.lock() {
+            *guard = Some(Box::new(f));
+        }
+        self
+    }
+
+    /// Overrides handler for writing items to the mock group.
+    #[must_use]
+    pub fn with_write_fn<F>(self, f: F) -> Self
+    where
+        F: Fn(&[ServerItemHandle], &[OpcValue]) -> OpcResult<Vec<Result<(), OpcError>>>
+            + Send
+            + Sync
+            + 'static,
+    {
+        if let Ok(mut guard) = self.server.group.write_fn.lock() {
+            *guard = Some(Box::new(f));
+        }
+        self
+    }
 }
 
 impl ServerConnector for MockServerConnector {
@@ -538,7 +636,10 @@ impl ServerConnector for MockServerConnector {
         Ok(details.clone())
     }
 
-    fn connect_identifier(&self, identifier: &ServerIdentifier) -> OpcResult<Self::Server> {
+    fn connect_endpoint(
+        &self,
+        endpoint: &crate::types::OpcServerEndpoint,
+    ) -> OpcResult<Self::Server> {
         if self
             .state
             .should_fail_connect
@@ -551,16 +652,20 @@ impl ServerConnector for MockServerConnector {
             .connect_count
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         if let Ok(mut lock) = self.state.last_connected_endpoint.lock() {
-            *lock = Some(crate::types::OpcServerEndpoint::from(identifier.clone()));
+            *lock = Some(endpoint.clone());
         }
         Ok(self.server.clone())
+    }
+
+    fn connect_identifier(&self, identifier: &ServerIdentifier) -> OpcResult<Self::Server> {
+        self.connect_endpoint(&crate::types::OpcServerEndpoint::from(identifier.clone()))
     }
 }
 
 impl ConnectedServer for std::sync::Arc<MockConnectedServer> {
     type Group = std::sync::Arc<MockConnectedGroup>;
 
-    fn query_organization(&self) -> OpcResult<u32> {
+    fn query_organization(&self) -> OpcResult<NamespaceType> {
         (**self).query_organization()
     }
 
@@ -601,39 +706,39 @@ mod tests {
         let defs = vec![
             GroupItemDef {
                 item_id: "Random.Int4".to_string(),
-                client_handle: ItemHandle::new(0),
+                client_handle: ClientItemHandle::new(0),
                 active: true,
             },
             GroupItemDef {
                 item_id: "Random.Real8".to_string(),
-                client_handle: ItemHandle::new(1),
+                client_handle: ClientItemHandle::new(1),
                 active: true,
             },
         ];
 
         let results = group.add_items(&defs).unwrap();
         assert_eq!(results.len(), 2);
-        assert_eq!(results[0].server_handle, ItemHandle::new(1));
+        assert_eq!(results[0].server_handle, ServerItemHandle::new(1));
         assert!(results[0].error.is_none());
-        assert_eq!(results[1].server_handle, ItemHandle::new(2));
+        assert_eq!(results[1].server_handle, ServerItemHandle::new(2));
         assert!(results[1].error.is_none());
 
         let states = group
             .read(
                 DataSource::Device,
-                &[ItemHandle::new(1), ItemHandle::new(2)],
+                &[ServerItemHandle::new(1), ServerItemHandle::new(2)],
             )
             .unwrap();
         assert_eq!(states.len(), 2);
         assert_eq!(
             states[0].as_ref().unwrap().client_handle,
-            ItemHandle::new(1)
+            ClientItemHandle::new(1)
         );
         assert_eq!(states[0].as_ref().unwrap().value, OpcValue::Int(42));
         assert_eq!(states[0].as_ref().unwrap().quality, OpcQuality::GOOD);
 
         let write_res = group
-            .write(&[ItemHandle::new(1)], &[OpcValue::Int(100)])
+            .write(&[ServerItemHandle::new(1)], &[OpcValue::Int(100)])
             .unwrap();
         assert_eq!(write_res.len(), 1);
         assert!(write_res[0].is_ok());
@@ -641,30 +746,27 @@ mod tests {
 
     #[test]
     fn test_mock_group_custom_handlers() {
-        let group = MockConnectedGroup {
-            read_fn: Some(Box::new(|source, handles| {
-                assert_eq!(source, DataSource::Cache);
-                Ok(handles
-                    .iter()
-                    .map(|&h| {
-                        Ok(GroupItemState {
-                            client_handle: h,
-                            value: OpcValue::Float(42.5),
-                            quality: OpcQuality::UNCERTAIN,
-                            timestamp: std::time::SystemTime::UNIX_EPOCH,
-                        })
+        let group = MockConnectedGroup::default().with_read_fn(|source, handles| {
+            assert_eq!(source, DataSource::Cache);
+            Ok(handles
+                .iter()
+                .map(|&h| {
+                    Ok(GroupItemState {
+                        client_handle: ClientItemHandle::new(h.as_raw()),
+                        value: OpcValue::Float(42.5),
+                        quality: OpcQuality::UNCERTAIN,
+                        timestamp: std::time::SystemTime::UNIX_EPOCH,
                     })
-                    .collect())
-            })),
-            ..Default::default()
-        };
+                })
+                .collect())
+        });
 
         let states = group
-            .read(DataSource::Cache, &[ItemHandle::new(99)])
+            .read(DataSource::Cache, &[ServerItemHandle::new(99)])
             .unwrap();
         assert_eq!(states.len(), 1);
         let s = states[0].as_ref().unwrap();
-        assert_eq!(s.client_handle, ItemHandle::new(99));
+        assert_eq!(s.client_handle, ClientItemHandle::new(99));
         assert_eq!(s.value, OpcValue::Float(42.5));
         assert_eq!(s.quality, OpcQuality::UNCERTAIN);
     }
@@ -675,24 +777,21 @@ mod tests {
             Ok(defs
                 .iter()
                 .map(|d| GroupItemResult {
-                    server_handle: d.client_handle,
+                    server_handle: ServerItemHandle::new(d.client_handle.as_raw()),
                     canonical_type: windows::Win32::System::Variant::VT_BSTR.0,
                     error: None,
                 })
                 .collect())
         });
-        let group = MockConnectedGroup {
-            add_items_fn: Some(add_fn),
-            ..Default::default()
-        };
+        let group = MockConnectedGroup::default().with_add_items_fn(add_fn);
         let res = group
             .add_items(&[GroupItemDef {
                 item_id: "test".into(),
-                client_handle: ItemHandle::new(7),
+                client_handle: ClientItemHandle::new(7),
                 active: true,
             }])
             .unwrap();
-        assert_eq!(res[0].server_handle, ItemHandle::new(7));
+        assert_eq!(res[0].server_handle, ServerItemHandle::new(7));
     }
 
     #[test]
@@ -722,14 +821,14 @@ mod tests {
     fn test_group_item_def_and_state_cloning() {
         let def = GroupItemDef {
             item_id: "Tag1".to_string(),
-            client_handle: ItemHandle::new(42),
+            client_handle: ClientItemHandle::new(42),
             active: true,
         };
         let cloned_def = def.clone();
         assert_eq!(def, cloned_def);
 
         let state = GroupItemState {
-            client_handle: ItemHandle::new(42),
+            client_handle: ClientItemHandle::new(42),
             value: OpcValue::Bool(true),
             quality: OpcQuality::GOOD,
             timestamp: std::time::SystemTime::UNIX_EPOCH,
@@ -783,7 +882,7 @@ mod tests {
         ));
 
         assert!(matches!(
-            group.write(&[ItemHandle::new(1)], &[]),
+            group.write(&[ServerItemHandle::new(1)], &[]),
             Err(OpcError::InvalidState(_))
         ));
     }
@@ -826,7 +925,7 @@ mod tests {
         let states = group
             .read(
                 DataSource::Device,
-                &[ItemHandle::new(1), ItemHandle::new(2)],
+                &[ServerItemHandle::new(1), ServerItemHandle::new(2)],
             )
             .unwrap();
         assert_eq!(states.len(), 2);
@@ -877,7 +976,7 @@ mod tests {
         // Add items
         let item_def = GroupItemDef {
             item_id: "Tag1".to_string(),
-            client_handle: ItemHandle::new(1),
+            client_handle: ClientItemHandle::new(1),
             active: true,
         };
         created.group.add_items(&[item_def]).unwrap();
@@ -891,7 +990,7 @@ mod tests {
         // Read
         created
             .group
-            .read(DataSource::Device, &[ItemHandle::new(1)])
+            .read(DataSource::Device, &[ServerItemHandle::new(1)])
             .unwrap();
         assert_eq!(
             state.read_count.load(std::sync::atomic::Ordering::Relaxed),
@@ -905,6 +1004,72 @@ mod tests {
                 .remove_group_count
                 .load(std::sync::atomic::Ordering::Relaxed),
             1
+        );
+    }
+
+    #[test]
+    fn test_connect_endpoint_preserves_host() {
+        let state = std::sync::Arc::new(MockState::default());
+        let connector = MockServerConnector::with_state(state.clone());
+        let endpoint =
+            crate::types::OpcServerEndpoint::remote("192.168.1.100", "Matrikon.OPC.Simulation.1");
+        let _server = connector
+            .connect_endpoint(&endpoint)
+            .expect("connect_endpoint should succeed");
+
+        let recorded = state.last_connected_endpoint.lock().unwrap().clone();
+        assert_eq!(recorded, Some(endpoint));
+        assert_eq!(recorded.unwrap().host.as_deref(), Some("192.168.1.100"));
+    }
+
+    #[test]
+    fn test_mock_server_connector_fluent_add_items_and_read_hooks() {
+        let connector = MockServerConnector::new()
+            .with_add_items_fn(|items| {
+                Ok(items
+                    .iter()
+                    .map(|_item| GroupItemResult {
+                        server_handle: ServerItemHandle::new(999),
+                        canonical_type: 8,
+                        error: None,
+                    })
+                    .collect())
+            })
+            .with_read_fn(|_source, handles| {
+                Ok(handles
+                    .iter()
+                    .map(|_| {
+                        Ok(GroupItemState {
+                            client_handle: ClientItemHandle::new(1),
+                            value: OpcValue::String("mock-hook".into()),
+                            quality: OpcQuality::GOOD,
+                            timestamp: std::time::SystemTime::UNIX_EPOCH,
+                        })
+                    })
+                    .collect())
+            });
+
+        let server = connector.connect("Mock.Server.1").unwrap();
+        let group = server
+            .add_group(&GroupConfig::ephemeral("test"))
+            .unwrap()
+            .group;
+
+        let added = group
+            .add_items(&[GroupItemDef {
+                item_id: "CustomTag".into(),
+                client_handle: ClientItemHandle::new(1),
+                active: true,
+            }])
+            .unwrap();
+        assert_eq!(added[0].server_handle, ServerItemHandle::new(999));
+
+        let read_res = group
+            .read(DataSource::Device, &[ServerItemHandle::new(999)])
+            .unwrap();
+        assert_eq!(
+            read_res[0].as_ref().unwrap().value,
+            OpcValue::String("mock-hook".into())
         );
     }
 }

@@ -23,9 +23,10 @@ const _: () = assert!(
 
 pub use crate::com::iterator::{GuidIterator, StringIterator};
 pub use crate::errors::{OpcError, OpcResult};
+#[allow(deprecated)]
 pub use crate::types::{
-    BrowseDirection, BrowseType, GroupHandle, ItemHandle, OpcQuality, OpcServerEndpoint,
-    OpcServerInfo, OpcValue, ServerIdentifier,
+    BrowseDirection, BrowseType, ClientItemHandle, GroupHandle, ItemHandle, OpcQuality,
+    OpcServerEndpoint, OpcServerInfo, OpcValue, ServerIdentifier, ServerItemHandle,
 };
 
 pub use group::ComGroup;

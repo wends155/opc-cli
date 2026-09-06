@@ -11,7 +11,7 @@ pub mod guard;
 pub mod iterator;
 pub(crate) mod security;
 pub(crate) mod variant;
-pub mod worker;
+pub(crate) mod worker;
 
 pub use client::OpcDaClient;
 pub use connector::{

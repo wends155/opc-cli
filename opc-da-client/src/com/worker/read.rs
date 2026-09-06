@@ -8,7 +8,8 @@ use crate::com::connector::{
 use crate::errors::{OpcError, OpcOperation, OpcResult};
 use crate::log_opc_err;
 use crate::types::{
-    ItemHandle, OpcQuality, OpcServerEndpoint, ServerIdentifier, TagBatch, TagValue, TagValues,
+    ClientItemHandle, OpcQuality, OpcServerEndpoint, ServerIdentifier, ServerItemHandle, TagBatch,
+    TagValue, TagValues,
 };
 
 /// Executes synchronous device tag reading through the pooled server's active OPC group,
@@ -117,7 +118,7 @@ pub fn handle_read<S: ConnectedServer>(
         .map(|(idx, tag_id)| GroupItemDef {
             item_id: tag_id.clone(),
             #[allow(clippy::cast_possible_truncation)]
-            client_handle: ItemHandle::new(idx as u32),
+            client_handle: ClientItemHandle::new(idx as u32),
             active: true,
         })
         .collect();
@@ -210,7 +211,7 @@ fn partition_item_results(
     tag_ids: &[String],
     server_id: &ServerIdentifier,
     tag_values: &mut [TagValue],
-) -> (Vec<ItemHandle>, Vec<usize>, Vec<(usize, OpcError)>) {
+) -> (Vec<ServerItemHandle>, Vec<usize>, Vec<(usize, OpcError)>) {
     let mut server_handles = Vec::with_capacity(results.len());
     let mut valid_indices = Vec::with_capacity(results.len());
     let mut rejected_errors = Vec::new();

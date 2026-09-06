@@ -512,7 +512,7 @@ mod tests {
                 let col = collector.clone();
                 std::thread::spawn(move || {
                     for i in 0..100 {
-                        col.push(format!("T_{thread_id}_{i}"));
+                        assert!(col.push(format!("T_{thread_id}_{i}")));
                     }
                 })
             })

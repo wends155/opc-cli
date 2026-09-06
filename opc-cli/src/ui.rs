@@ -221,7 +221,7 @@ fn render_tag_list(f: &mut Frame, app: &mut App, area: ratatui::layout::Rect) {
 }
 
 fn render_tag_values(f: &mut Frame, app: &mut App, area: ratatui::layout::Rect) {
-    use ratatui::widgets::{Row, Table};
+    use ratatui::widgets::{Cell, Row, Table};
 
     let header = Row::new(vec!["Tag ID", "Value", "Quality", "Timestamp"]).style(
         Style::default()
@@ -234,10 +234,10 @@ fn render_tag_values(f: &mut Frame, app: &mut App, area: ratatui::layout::Rect) 
         .iter()
         .map(|tv| {
             Row::new(vec![
-                tv.tag_id.clone(),
-                tv.value.display().to_string(),
-                tv.quality.to_string(),
-                tv.timestamp.display().to_string(),
+                Cell::from(tv.tag_id.as_str()),
+                Cell::from(tv.value.display().to_string()),
+                Cell::from(tv.quality.to_string()),
+                Cell::from(tv.timestamp.display().to_string()),
             ])
         })
         .collect();
@@ -341,4 +341,99 @@ fn centered_rect(percent_x: u16, percent_y: u16, r: Rect) -> Rect {
             Constraint::Percentage((100 - percent_x) / 2),
         ])
         .split(popup_layout[1])[1]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use opc_da_client::{MockOpcProvider, OpcQuality, OpcValue, TagValue};
+    use ratatui::{Terminal, backend::TestBackend};
+    use std::sync::Arc;
+
+    fn create_test_app() -> App {
+        let mock = MockOpcProvider::new();
+        App::new(Arc::new(mock))
+    }
+
+    #[test]
+    fn test_headless_render_home() {
+        let mut app = create_test_app();
+        app.current_screen = CurrentScreen::Home;
+        let backend = TestBackend::new(100, 30);
+        let mut terminal = Terminal::new(backend).unwrap();
+
+        terminal.draw(|f| render(f, &mut app)).unwrap();
+        let buffer = terminal.backend().buffer();
+        assert!(!buffer.content().is_empty());
+    }
+
+    #[test]
+    fn test_headless_render_server_list() {
+        let mut app = create_test_app();
+        app.current_screen = CurrentScreen::ServerList;
+        app.servers = vec!["Server.A".into(), "Server.B".into()];
+        let backend = TestBackend::new(100, 30);
+        let mut terminal = Terminal::new(backend).unwrap();
+
+        terminal.draw(|f| render(f, &mut app)).unwrap();
+        let buffer = terminal.backend().buffer();
+        assert!(!buffer.content().is_empty());
+    }
+
+    #[test]
+    fn test_headless_render_tag_list() {
+        let mut app = create_test_app();
+        app.current_screen = CurrentScreen::TagList;
+        app.tags = vec!["Tag.1".into(), "Tag.2".into()];
+        app.selected_tags = vec![true, false];
+        let backend = TestBackend::new(100, 30);
+        let mut terminal = Terminal::new(backend).unwrap();
+
+        terminal.draw(|f| render(f, &mut app)).unwrap();
+        let buffer = terminal.backend().buffer();
+        assert!(!buffer.content().is_empty());
+    }
+
+    #[test]
+    fn test_headless_render_tag_values() {
+        let mut app = create_test_app();
+        app.current_screen = CurrentScreen::TagValues;
+        app.tag_values = vec![
+            TagValue::new(
+                "Sensor.Temp",
+                Some(OpcValue::Float(98.6)),
+                OpcQuality::GOOD,
+                None,
+            ),
+            TagValue::with_error(
+                "Sensor.Fail",
+                OpcQuality::BAD_COMM_FAILURE,
+                opc_da_client::OpcError::Connection("Lost".into()),
+            ),
+        ];
+        let backend = TestBackend::new(120, 30);
+        let mut terminal = Terminal::new(backend).unwrap();
+
+        terminal.draw(|f| render(f, &mut app)).unwrap();
+        let buffer = terminal.backend().buffer();
+        assert!(!buffer.content().is_empty());
+    }
+
+    #[test]
+    fn test_headless_render_write_input_and_loading() {
+        let mut app = create_test_app();
+        app.current_screen = CurrentScreen::WriteInput;
+        app.write_tag_id = Some("Sensor.Setpoint".into());
+        app.write_value_input = "100.5".into();
+        let backend = TestBackend::new(100, 30);
+        let mut terminal = Terminal::new(backend).unwrap();
+
+        terminal.draw(|f| render(f, &mut app)).unwrap();
+
+        app.current_screen = CurrentScreen::Loading;
+        terminal.draw(|f| render(f, &mut app)).unwrap();
+
+        app.current_screen = CurrentScreen::Exiting;
+        terminal.draw(|f| render(f, &mut app)).unwrap();
+    }
 }

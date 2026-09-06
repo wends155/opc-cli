@@ -1,5 +1,40 @@
 # Project Context Summary
 
+## 2026-09-06: Comprehensive 37-Finding Systemic Architecture, Memory Safety, Typestate Domains & TUI Remediation (`opc-da-client` & `opc-cli`)
+> 📝 **Context Update:**
+> * **Feature:** Complete end-to-end execution of the 38-step Master Implementation Plan addressing all 37 qualitative review findings across Phase 1, Phase 2, and Phase 3 in `opc-da-client` and `opc-cli` with strict TDD discipline, handle domain typestate sealing, two-tier state machine extraction, zero-allocation TUI borrowing, and 9-gate quality verification.
+> * **Changes:**
+>   - **Correctness, Enum Discriminants & Remote Host Preservation (Phase 1):**
+>     - Fixed OPC Foundation DA 2.05a specification compliance by setting explicit discriminants on `NamespaceType`: `Hierarchy = 1` and `Flat = 2`.
+>     - Fixed flat namespace detection in `com/connector/server.rs` (`QueryOrganization` returning `OPC_NS_FLAT = 2` now correctly flags flat address space without false tree recursion).
+>     - Enhanced `OpcError::Custom` to structured `OpcError::ConnectionRefused { endpoint, source }` and `OpcError::BrowseFailed { path, source }`.
+>     - Preserved remote host in `com/worker/pool.rs` and `com/client.rs` by storing full `OpcServerEndpoint` across reconnects.
+>     - Implemented atomic batch write override on `OpcProvider::write_tag_values` in `com/client.rs`, routing batch writes to a single atomic `ComRequest::WriteTagValues` rather than serial single-tag requests.
+>   - **Memory Safety Hardening & Terminal RAII (Phase 1):**
+>     - Marked raw FFI constructors on `RemoteArray` as `unsafe`, enforcing explicit caller validation of count and pointer alignment.
+>     - Sealed `BorrowedPwstr` lifetime escape hazards with compile-fail tests preventing use-after-free.
+>     - Added RAII `TerminalGuard` in `opc-cli/src/main.rs` with custom panic hook restoring alternate screen and raw terminal mode even on panics.
+>     - Added `#[must_use]` attributes on `ComGuard` and `TagCollector::push`.
+>   - **Encapsulation, Deduplication & Handle Typestates (Phase 2):**
+>     - Decomposed monolithic `types.rs` into cohesive submodules under `types/`: `value.rs`, `quality.rs`, `batch.rs`, `collection.rs`, `handles.rs`, `collector.rs`, `result.rs`, `namespace.rs`, and `traits.rs`.
+>     - Unified remote DCOM activation in `com/security.rs` via generic `create_remote_instance<T>`, eliminating duplicate `CoCreateInstanceEx` logic across connector and discovery.
+>     - Sealed item handle domains with distinct strong newtypes `ClientItemHandle(u32)` and `ServerItemHandle(u32)` in `types/handles.rs` with compile-fail test preventing client/server handle cross-contamination at compile time.
+>     - Removed redundant legacy wrappers `raw/bridge.rs` and `com/iterator.rs`.
+>     - Made `com::worker` module `pub(crate)` to prevent internal worker message leaking.
+>   - **API Ergonomics, Hot Paths & Headless TUI (Phase 3):**
+>     - Added `TagBatch::into_shareable()` ensuring $O(1)$ `Arc` clone on repeated subscription polling ticks.
+>     - Introduced `TagSuccess`, `TagFailure`, and `TagResult = Result<TagSuccess, TagFailure>` in `types/collection.rs` with `TagValue::into_result`, `to_result`, and `TagValues::iter_results()`.
+>     - Added bound inherent `read_tag_value` and `browse` methods on `OpcDaClient`.
+>     - Zero-allocation table rendering in `opc-cli/src/ui.rs` borrowing `Cell::from(tv.tag_id.as_str())` directly without heap allocations.
+>     - Implemented headless TUI unit tests in `opc-cli/src/ui.rs` using `ratatui::backend::TestBackend` covering all screen states.
+>     - All 71 doctests and 2 compile-fail tests passing.
+>   - **Architecture & Specifications Sync:**
+>     - Synchronized `architecture.md` with new `types/` layout, `ClientItemHandle` / `ServerItemHandle` typestate domains, `TagResult`, `create_remote_instance<T>`, and removal of `raw/bridge.rs`.
+>   - **Verification Pipeline:**
+>     - Full 9-gate quality pipeline (`scripts/verify.ps1`) passes exit code 0: 153 client unit tests, 44 CLI unit tests, 71 doc-tests, 2 compile-fail tests, zero clippy warnings (`-D warnings`), zero AST-grep violations, zero forbidden patterns.
+> * **New Constraints:** Client item handles (`ClientItemHandle`) and server item handles (`ServerItemHandle`) are distinct non-interchangeable typestates and cannot be converted without explicit validation. Terminal state in CLI is strictly protected by RAII `TerminalGuard`. `types/` is decomposed into modular submodules.
+> * **Pruned:** `raw/bridge.rs`, `com/iterator.rs`, redundant `CoCreateInstanceEx` duplicates, unchecked `RemoteArray::from_raw` calls, per-row string allocations in TUI table rendering, and flat namespace browsing infinite loops.
+
 ## 2026-09-06: Acyclic Decoupling, Security Extraction, Rustdoc Standardization & Specification Parity (`opc-da-client` & `opc-cli`)
 > 📝 **Context Update:**
 > * **Feature:** Execute approved 14-step L-Tier Master Implementation Plan consolidating subagent findings (`/update-doc` and `/architecture`): acyclic decoupling between `com::discovery` and `com::connector::server`, security extraction to `com::security`, worker layer purity, rustdoc standardization across all public items, behavioral contract parity (`spec.md`), public documentation alignment (`README.md`), architecture specifications synchronization (`architecture.md`), and full 9-gate quality verification.

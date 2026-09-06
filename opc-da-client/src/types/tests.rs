@@ -1,0 +1,506 @@
+//! Unit tests for domain types, quality conversions, and tag collections.
+
+use super::*;
+use crate::errors::OpcError;
+use std::sync::Arc;
+
+#[test]
+fn test_namespace_type_discriminants() {
+    assert_eq!(NamespaceType::Hierarchy as u32, 1);
+    assert_eq!(NamespaceType::Flat as u32, 2);
+}
+
+#[test]
+fn browse_type_from_roundtrip() {
+    for (variant, expected) in [
+        (BrowseType::Branch, 1u32),
+        (BrowseType::Leaf, 2u32),
+        (BrowseType::Flat, 3u32),
+    ] {
+        let raw: u32 = variant.into();
+        assert_eq!(raw, expected);
+        let back = BrowseType::try_from(raw).unwrap();
+        assert_eq!(back, variant);
+    }
+}
+
+#[test]
+fn browse_type_try_from_rejects_invalid() {
+    assert!(BrowseType::try_from(0u32).is_err());
+    assert!(BrowseType::try_from(4u32).is_err());
+    assert!(BrowseType::try_from(u32::MAX).is_err());
+}
+
+#[test]
+fn browse_direction_from_roundtrip() {
+    for (variant, expected) in [
+        (BrowseDirection::Up, 1u32),
+        (BrowseDirection::Down, 2u32),
+        (BrowseDirection::To, 3u32),
+    ] {
+        let raw: u32 = variant.into();
+        assert_eq!(raw, expected);
+        let back = BrowseDirection::try_from(raw).unwrap();
+        assert_eq!(back, variant);
+    }
+}
+
+#[test]
+fn browse_direction_try_from_rejects_invalid() {
+    assert!(BrowseDirection::try_from(0u32).is_err());
+    assert!(BrowseDirection::try_from(4u32).is_err());
+    assert!(BrowseDirection::try_from(u32::MAX).is_err());
+}
+
+#[test]
+fn test_opc_quality_good_standard() {
+    let q = OpcQuality::from(0x00C0);
+    assert_eq!(q.major, QualityMajor::Good);
+    assert_eq!(q.substatus, QualitySubstatus::NonSpecific);
+    assert_eq!(q.limit, QualityLimit::NotLimited);
+    assert_eq!(q.raw, 0x00C0);
+    assert!(q.is_good());
+    assert!(!q.is_bad());
+    assert!(!q.is_uncertain());
+    assert!(!q.is_limited());
+    assert_eq!(q.to_string(), "Good");
+}
+
+#[test]
+fn test_opc_quality_good_local_override() {
+    let q = OpcQuality::from(0x00D8);
+    assert_eq!(q.major, QualityMajor::Good);
+    assert_eq!(q.substatus, QualitySubstatus::LocalOverride);
+    assert_eq!(q.limit, QualityLimit::NotLimited);
+    assert_eq!(q.to_string(), "Good (Local Override)");
+}
+
+#[test]
+fn test_opc_quality_bad_comm_failure() {
+    let q = OpcQuality::from(0x0018);
+    assert_eq!(q.major, QualityMajor::Bad);
+    assert_eq!(q.substatus, QualitySubstatus::CommFailure);
+    assert_eq!(q.limit, QualityLimit::NotLimited);
+    assert!(q.is_bad());
+    assert_eq!(q.to_string(), "Bad (Comm Failure)");
+}
+
+#[test]
+fn test_opc_quality_uncertain_limits() {
+    let q = OpcQuality::from(0x0056);
+    assert_eq!(q.major, QualityMajor::Uncertain);
+    assert_eq!(q.substatus, QualitySubstatus::EguExceeded);
+    assert_eq!(q.limit, QualityLimit::HighLimited);
+    assert!(q.is_uncertain());
+    assert!(q.is_limited());
+    assert_eq!(q.to_string(), "Uncertain (EGU Exceeded) [High Limited]");
+}
+
+#[test]
+fn test_opc_quality_roundtrip_u16() {
+    let words = [
+        0x00C0, 0x0000, 0x0040, 0x0004, 0x0018, 0x0008, 0x00D8, 0x0056,
+    ];
+    for &w in &words {
+        let q = OpcQuality::from(w);
+        let back: u16 = q.into();
+        assert_eq!(back, w);
+    }
+}
+
+#[test]
+fn test_opc_quality_from_str() {
+    assert_eq!("good".parse::<OpcQuality>().unwrap(), OpcQuality::GOOD);
+    assert_eq!("Good".parse::<OpcQuality>().unwrap(), OpcQuality::GOOD);
+    assert_eq!("bad".parse::<OpcQuality>().unwrap(), OpcQuality::BAD);
+    assert_eq!(
+        "uncertain".parse::<OpcQuality>().unwrap(),
+        OpcQuality::UNCERTAIN
+    );
+    assert!("other".parse::<OpcQuality>().is_err());
+}
+
+#[test]
+fn test_server_identifier_conversions_and_display() {
+    let prog_id = ServerIdentifier::from("Matrikon.OPC.Simulation.1");
+    assert_eq!(
+        prog_id,
+        ServerIdentifier::ProgId("Matrikon.OPC.Simulation.1".into())
+    );
+    assert_eq!(prog_id.to_string(), "Matrikon.OPC.Simulation.1");
+    assert!(prog_id.is_prog_id());
+    assert!(!prog_id.is_clsid());
+
+    let clsid_str = "{28E68F9A-8D75-11D1-8DC3-3C302A000000}";
+    let parsed = ServerIdentifier::from(clsid_str);
+    assert!(parsed.is_clsid());
+    assert_eq!(parsed.to_string().to_uppercase(), clsid_str.to_uppercase());
+
+    let direct_guid = windows::core::GUID::from_u128(0x28E6_8F9A_8D75_11D1_8DC3_3C30_2A00_0000);
+    let from_guid = ServerIdentifier::from(direct_guid);
+    assert!(from_guid.is_clsid());
+}
+
+#[test]
+fn test_opc_server_info_display_name_and_endpoint() {
+    let info_with_user_type = OpcServerInfo {
+        prog_id: "Matrikon.OPC.Simulation.1".into(),
+        clsid: windows::core::GUID::zeroed(),
+        user_type: Some("Matrikon Simulation Server".into()),
+        host: None,
+    };
+    assert_eq!(
+        info_with_user_type.display_name(),
+        "Matrikon Simulation Server"
+    );
+    assert_eq!(
+        info_with_user_type.endpoint().identifier,
+        ServerIdentifier::ProgId("Matrikon.OPC.Simulation.1".into())
+    );
+
+    let info_without_user_type = OpcServerInfo {
+        prog_id: "Kepware.KEPServerEX.V6".into(),
+        clsid: windows::core::GUID::zeroed(),
+        user_type: None,
+        host: Some("192.168.1.10".into()),
+    };
+    assert_eq!(
+        info_without_user_type.display_name(),
+        "Kepware.KEPServerEX.V6"
+    );
+    assert_eq!(
+        info_without_user_type.endpoint().host.as_deref(),
+        Some("192.168.1.10")
+    );
+}
+
+#[test]
+fn test_format_guid_bracketed() {
+    let guid = windows::core::GUID::zeroed();
+    assert_eq!(
+        format_guid_bracketed(&guid),
+        "{00000000-0000-0000-0000-000000000000}"
+    );
+    assert_eq!(
+        format_guid_bracketed(&guid),
+        ServerIdentifier::Clsid(guid).to_string()
+    );
+
+    let custom_guid = windows::core::GUID::from_u128(0x01234567_89AB_CDEF_0123_456789ABCDEF);
+    assert_eq!(
+        format_guid_bracketed(&custom_guid),
+        ServerIdentifier::Clsid(custom_guid).to_string()
+    );
+}
+
+#[test]
+fn test_tag_batch_into_tags_conversions() {
+    // 1. Static slice
+    static STATIC_SLICE: &[&str] = &["Tag1", "Tag2"];
+    let batch = STATIC_SLICE.into_tag_batch();
+    assert_eq!(batch.len(), 2);
+    assert!(!batch.is_empty());
+    assert_eq!(batch.iter_str().collect::<Vec<_>>(), vec!["Tag1", "Tag2"]);
+    assert_eq!(
+        batch.into_vec(),
+        vec!["Tag1".to_string(), "Tag2".to_string()]
+    );
+
+    // 2. Fixed-size array of static str
+    let arr = ["TagA", "TagB", "TagC"];
+    let batch = arr.into_tag_batch();
+    assert_eq!(batch.len(), 3);
+    assert_eq!(
+        batch.iter_str().collect::<Vec<_>>(),
+        vec!["TagA", "TagB", "TagC"]
+    );
+    assert_eq!(batch.into_vec(), vec!["TagA", "TagB", "TagC"]);
+
+    // 3. Single static str literal
+    let single_static = "SingleTag";
+    let batch = single_static.into_tag_batch();
+    assert_eq!(batch.len(), 1);
+    assert_eq!(batch.iter_str().collect::<Vec<_>>(), vec!["SingleTag"]);
+    assert_eq!(batch.into_vec(), vec!["SingleTag"]);
+
+    // 4. Vec<String>
+    let vec_strings = vec!["Dyn1".to_string(), "Dyn2".to_string()];
+    let batch = vec_strings.into_tag_batch();
+    assert_eq!(batch.len(), 2);
+    assert_eq!(batch.iter_str().collect::<Vec<_>>(), vec!["Dyn1", "Dyn2"]);
+    assert_eq!(batch.into_vec(), vec!["Dyn1", "Dyn2"]);
+
+    // 5. &[String]
+    let slice_strings: &[String] = &["S1".to_string(), "S2".to_string()];
+    let batch = slice_strings.into_tag_batch();
+    assert_eq!(batch.len(), 2);
+    assert_eq!(batch.iter_str().collect::<Vec<_>>(), vec!["S1", "S2"]);
+    assert_eq!(batch.into_vec(), vec!["S1", "S2"]);
+
+    // 6. &Vec<String>
+    let ref_vec = &vec!["Ref1".to_string(), "Ref2".to_string()];
+    let batch = ref_vec.into_tag_batch();
+    assert_eq!(batch.len(), 2);
+    assert_eq!(batch.iter_str().collect::<Vec<_>>(), vec!["Ref1", "Ref2"]);
+
+    // 7. Arc<[String]>
+    let arc_slice: Arc<[String]> =
+        Arc::from(vec!["Arc1".to_string(), "Arc2".to_string()].into_boxed_slice());
+    let batch = arc_slice.into_tag_batch();
+    assert_eq!(batch.len(), 2);
+    assert_eq!(batch.iter_str().collect::<Vec<_>>(), vec!["Arc1", "Arc2"]);
+    assert_eq!(batch.into_vec(), vec!["Arc1", "Arc2"]);
+
+    // 8. Single owned String
+    let single_string = "OwnedSingle".to_string();
+    let batch = single_string.into_tag_batch();
+    assert_eq!(batch.len(), 1);
+    assert_eq!(batch.iter_str().collect::<Vec<_>>(), vec!["OwnedSingle"]);
+    assert_eq!(batch.into_vec(), vec!["OwnedSingle"]);
+
+    // 9. Empty static slice
+    let empty_batch = (&[] as &[&str]).into_tag_batch();
+    assert_eq!(empty_batch.len(), 0);
+    assert!(empty_batch.is_empty());
+    assert_eq!(empty_batch.iter_str().count(), 0);
+    assert!(empty_batch.into_vec().is_empty());
+}
+
+#[test]
+fn test_tag_batch_into_shareable() {
+    let owned_batch = vec!["TagA".to_string(), "TagB".to_string()].into_tag_batch();
+    let shareable = owned_batch.into_shareable();
+    assert!(matches!(shareable, TagBatch::Shared(_)));
+    assert_eq!(shareable.len(), 2);
+    assert_eq!(
+        shareable.iter_str().collect::<Vec<_>>(),
+        vec!["TagA", "TagB"]
+    );
+
+    let static_batch = ["Static1", "Static2"].into_tag_batch();
+    let shareable_static = static_batch.into_shareable();
+    assert_eq!(shareable_static.len(), 2);
+}
+
+#[test]
+fn test_feature_independence_no_default_features() {
+    let tv = TagValue::new("TagX", Some(OpcValue::Int(10)), OpcQuality::GOOD, None);
+    assert!(tv.is_good());
+    assert_eq!(tv.tag_id, "TagX");
+}
+
+#[test]
+fn test_tag_values_collection_and_lenient_coercion() {
+    let items = vec![
+        TagValue::new(
+            "Simulation.Int",
+            Some(OpcValue::Int(42)),
+            OpcQuality::GOOD,
+            None,
+        ),
+        TagValue::new(
+            "Simulation.Float",
+            Some(OpcValue::Float(12.345)),
+            OpcQuality::GOOD,
+            None,
+        ),
+        TagValue::new(
+            "Simulation.Bool",
+            Some(OpcValue::Bool(true)),
+            OpcQuality::GOOD,
+            None,
+        ),
+        TagValue::new(
+            "Simulation.String",
+            Some(OpcValue::String("Running".into())),
+            OpcQuality::GOOD,
+            None,
+        ),
+        TagValue::new("Simulation.NoVal", None, OpcQuality::BAD_CONFIG_ERROR, None),
+        TagValue::with_error(
+            "Simulation.Failed",
+            OpcQuality::BAD_CONFIG_ERROR,
+            OpcError::Internal("COM error 0x80040154".into()),
+        ),
+    ];
+
+    let tvs = TagValues::new(items);
+    assert_eq!(tvs.len(), 6);
+    assert!(!tvs.is_empty());
+
+    // Case-insensitive lookups
+    assert!(tvs.get("simulation.int").is_some());
+    assert_eq!(tvs.get_value("SIMULATION.INT"), Some(&OpcValue::Int(42)));
+
+    // Direct typed extractions
+    assert_eq!(tvs.get_i32("Simulation.Int").unwrap(), 42);
+    assert!((tvs.get_f64("Simulation.Float").unwrap() - 12.345).abs() < 1e-5);
+    assert!(tvs.get_bool("Simulation.Bool").unwrap());
+    assert_eq!(tvs.get_str("Simulation.String").unwrap(), "Running");
+
+    // Lenient lossless coercion: i32 -> f64
+    assert!((tvs.get_f64("Simulation.Int").unwrap() - 42.0).abs() < 1e-5);
+
+    // Errors:
+    // 1. NotRequested
+    assert_eq!(
+        tvs.get_f64("Unknown.Tag"),
+        Err(TagExtractError::NotRequested("Unknown.Tag".into()))
+    );
+
+    // 2. ReadFailed (preserves underlying error)
+    match tvs.get_f64("Simulation.Failed") {
+        Err(TagExtractError::ReadFailed { tag, source }) => {
+            assert_eq!(tag, "Simulation.Failed");
+            assert!(source.to_string().contains("0x80040154"));
+        }
+        other => panic!("Expected ReadFailed, got {other:?}"),
+    }
+
+    // 3. NoValue
+    assert_eq!(
+        tvs.get_f64("Simulation.NoVal"),
+        Err(TagExtractError::NoValue("Simulation.NoVal".into()))
+    );
+
+    // 4. TypeMismatch
+    match tvs.get_f64("Simulation.String") {
+        Err(TagExtractError::TypeMismatch {
+            tag,
+            value,
+            expected,
+        }) => {
+            assert_eq!(tag, "Simulation.String");
+            assert_eq!(value, "Running");
+            assert_eq!(expected, "f64");
+        }
+        other => panic!("Expected TypeMismatch, got {other:?}"),
+    }
+
+    // Error conversion to OpcError
+    let err: OpcError = TagExtractError::NotRequested("TagA".into()).into();
+    assert!(matches!(err, OpcError::Conversion(_)));
+}
+
+#[test]
+fn test_tag_values_coercion_overflow_and_null_edge_cases() {
+    let items = vec![
+        TagValue::new(
+            "Overflow.Float",
+            Some(OpcValue::Float(1e25)),
+            OpcQuality::GOOD,
+            None,
+        ),
+        TagValue::new(
+            "Nan.Float",
+            Some(OpcValue::Float(f64::NAN)),
+            OpcQuality::GOOD,
+            None,
+        ),
+        TagValue::new(
+            "Inf.Float",
+            Some(OpcValue::Float(f64::INFINITY)),
+            OpcQuality::GOOD,
+            None,
+        ),
+        TagValue::new(
+            "Frac.Float",
+            Some(OpcValue::Float(42.75)),
+            OpcQuality::GOOD,
+            None,
+        ),
+        TagValue::new(
+            "Exact.Float",
+            Some(OpcValue::Float(50.0)),
+            OpcQuality::GOOD,
+            None,
+        ),
+        TagValue::new("Null.Tag", Some(OpcValue::Null), OpcQuality::GOOD, None),
+        TagValue::new("Empty.Tag", Some(OpcValue::Empty), OpcQuality::GOOD, None),
+        TagValue::new("Num.Str", Some(OpcValue::Int(123)), OpcQuality::GOOD, None),
+    ];
+
+    let tvs = TagValues::new(items);
+
+    // Overflow: 1e25 into i32 must fail safely with TypeMismatch, not wrap or panic
+    assert!(matches!(
+        tvs.get_i32("Overflow.Float"),
+        Err(TagExtractError::TypeMismatch { .. })
+    ));
+
+    // NaN into i32 must fail
+    assert!(matches!(
+        tvs.get_i32("Nan.Float"),
+        Err(TagExtractError::TypeMismatch { .. })
+    ));
+
+    // Infinity into i32 must fail
+    assert!(matches!(
+        tvs.get_i32("Inf.Float"),
+        Err(TagExtractError::TypeMismatch { .. })
+    ));
+
+    // Fractional float into i32 must fail (lossy)
+    assert!(matches!(
+        tvs.get_i32("Frac.Float"),
+        Err(TagExtractError::TypeMismatch { .. })
+    ));
+
+    // Exact integer float into i32 succeeds (lossless)
+    assert_eq!(tvs.get_i32("Exact.Float").unwrap(), 50);
+
+    // Null and Empty map to NoValue
+    assert_eq!(
+        tvs.get_f64("Null.Tag"),
+        Err(TagExtractError::NoValue("Null.Tag".into()))
+    );
+    assert_eq!(
+        tvs.get_f64("Empty.Tag"),
+        Err(TagExtractError::NoValue("Empty.Tag".into()))
+    );
+
+    // get_str on non-string returns TypeMismatch
+    assert!(matches!(
+        tvs.get_str("Num.Str"),
+        Err(TagExtractError::TypeMismatch { .. })
+    ));
+}
+
+#[test]
+fn test_tag_result_decomposition_and_conversions() {
+    let success = TagSuccess::new(
+        "Sensor.Temperature",
+        OpcValue::Float(23.5),
+        OpcQuality::GOOD,
+        None,
+    );
+    let tv: TagValue = success.into();
+    assert!(tv.is_good());
+    assert_eq!(tv.tag_id, "Sensor.Temperature");
+
+    let result = tv.to_result();
+    assert!(result.is_ok());
+    let unwrapped = result.unwrap();
+    assert_eq!(unwrapped.tag_id, "Sensor.Temperature");
+    assert_eq!(unwrapped.value, OpcValue::Float(23.5));
+
+    let failure = TagFailure::new(
+        "Sensor.Faulty",
+        OpcQuality::BAD_COMM_FAILURE,
+        OpcError::Connection("Device unplugged".into()),
+    );
+    let tv_fail: TagValue = failure.into();
+    assert!(tv_fail.is_error());
+
+    let res_fail = tv_fail.clone().into_result();
+    assert!(res_fail.is_err());
+    let unwrapped_fail = res_fail.unwrap_err();
+    assert_eq!(unwrapped_fail.tag_id, "Sensor.Faulty");
+    assert_eq!(unwrapped_fail.quality, OpcQuality::BAD_COMM_FAILURE);
+
+    let tvs = TagValues::new(vec![tv, tv_fail]);
+    let results: Vec<TagResult> = tvs.iter_results().collect();
+    assert_eq!(results.len(), 2);
+    assert!(results[0].is_ok());
+    assert!(results[1].is_err());
+}

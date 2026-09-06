@@ -684,7 +684,7 @@ impl App {
                 }
                 Ok(Err(e)) => {
                     tracing::error!(error = %e, "Write tag values failed");
-                    self.add_message(format!("Browse error: {e:#}"));
+                    self.add_message(format!("Write error: {e:#}"));
                     self.log_transition(CurrentScreen::TagValues, "write_result_error");
                     self.write_result_rx = None;
                 }
@@ -1075,8 +1075,8 @@ mod tests {
         assert!(!collector.is_cancelled());
 
         // Push partial tags
-        collector.push("Device.Tag1".into());
-        collector.push("Device.Tag2".into());
+        assert!(collector.push("Device.Tag1".into()));
+        assert!(collector.push("Device.Tag2".into()));
         assert_eq!(collector.len(), 2);
 
         // Cancel on timeout

@@ -8,9 +8,53 @@ use crate::com::connector::traits::{
 };
 use crate::com::variant::{ItemStatesGuard, ScopedVariant};
 use crate::errors::{OpcError, OpcResult};
-use crate::raw::memory::{LocalPointer, RemoteArray};
-use crate::types::{ItemHandle, OpcQuality, OpcValue};
+use crate::raw::memory::RemoteArray;
+use crate::types::{ClientItemHandle, OpcQuality, OpcValue, ServerItemHandle};
 use windows::core::Interface;
+
+/// RAII container ensuring wide-character strings live as long as the `tagOPCITEMDEF` slice.
+///
+/// Prevents dangling pointer dereferences when passing item definitions to COM `AddItems`.
+pub(crate) struct ItemDefBatch<'a> {
+    _wide_names: Vec<Vec<u16>>,
+    defs: Vec<crate::raw::bindings::da::tagOPCITEMDEF>,
+    _marker: std::marker::PhantomData<&'a ()>,
+}
+
+impl<'a> ItemDefBatch<'a> {
+    pub fn new(items: &'a [GroupItemDef]) -> Self {
+        let mut wide_names = Vec::with_capacity(items.len());
+        for item in items {
+            let mut wide: Vec<u16> = item.item_id.encode_utf16().collect();
+            wide.push(0);
+            wide_names.push(wide);
+        }
+
+        let mut defs = Vec::with_capacity(items.len());
+        for (i, item) in items.iter().enumerate() {
+            defs.push(crate::raw::bindings::da::tagOPCITEMDEF {
+                szAccessPath: windows::core::PWSTR::null(),
+                szItemID: windows::core::PWSTR(wide_names[i].as_mut_ptr()),
+                bActive: item.active.into(),
+                hClient: item.client_handle.as_raw(),
+                vtRequestedDataType: 0,
+                dwBlobSize: 0,
+                pBlob: std::ptr::null_mut(),
+                wReserved: 0,
+            });
+        }
+
+        Self {
+            _wide_names: wide_names,
+            defs,
+            _marker: std::marker::PhantomData,
+        }
+    }
+
+    pub fn as_ptr(&self) -> *const crate::raw::bindings::da::tagOPCITEMDEF {
+        self.defs.as_ptr()
+    }
+}
 
 /// RAII guard ensuring each `pBlob` in `tagOPCITEMRESULT` is freed via `CoTaskMemFree`.
 struct ItemResultsBlobGuard<'a>(&'a mut [crate::raw::bindings::da::tagOPCITEMRESULT]);
@@ -62,25 +106,7 @@ impl ConnectedGroup for ComGroup {
             "Adding items to OPC group natively via IOPCItemMgt"
         );
 
-        let wide_names: Vec<LocalPointer<Vec<u16>>> = items
-            .iter()
-            .map(|item| LocalPointer::from(&item.item_id))
-            .collect();
-
-        let mut item_defs: Vec<crate::raw::bindings::da::tagOPCITEMDEF> =
-            Vec::with_capacity(items.len());
-        for (i, item) in items.iter().enumerate() {
-            item_defs.push(crate::raw::bindings::da::tagOPCITEMDEF {
-                szAccessPath: windows::core::PWSTR::null(),
-                szItemID: wide_names[i].as_pwstr(),
-                bActive: item.active.into(),
-                hClient: item.client_handle.as_raw(),
-                vtRequestedDataType: 0,
-                dwBlobSize: 0,
-                pBlob: std::ptr::null_mut(),
-                wReserved: 0,
-            });
-        }
+        let item_batch = ItemDefBatch::new(items);
 
         let mut results = RemoteArray::new(len);
         let mut errors = RemoteArray::new(len);
@@ -89,7 +115,7 @@ impl ConnectedGroup for ComGroup {
         unsafe {
             self.item_mgt.AddItems(
                 len,
-                item_defs.as_ptr(),
+                item_batch.as_ptr(),
                 results.as_mut_ptr(),
                 errors.as_mut_ptr(),
             )?;
@@ -116,7 +142,7 @@ impl ConnectedGroup for ComGroup {
                 })
             };
             group_results.push(GroupItemResult {
-                server_handle: ItemHandle::new(res.hServer),
+                server_handle: ServerItemHandle::new(res.hServer),
                 canonical_type: res.vtCanonicalDataType,
                 error: err,
             });
@@ -129,7 +155,7 @@ impl ConnectedGroup for ComGroup {
     fn read(
         &self,
         source: DataSource,
-        server_handles: &[ItemHandle],
+        server_handles: &[ServerItemHandle],
     ) -> OpcResult<Vec<Result<GroupItemState, OpcError>>> {
         if server_handles.is_empty() {
             return Err(OpcError::InvalidState(
@@ -160,15 +186,17 @@ impl ConnectedGroup for ComGroup {
         let states_slice = item_values.as_mut_slice();
         let errors_slice = errors.as_slice();
 
-        if states_slice.len() < server_handles.len() || errors_slice.len() < server_handles.len() {
+        // RAII guard ensures VariantClear is invoked on all valid item states before RemoteArray frees memory,
+        // even if the function returns early due to validation errors.
+        let guard = ItemStatesGuard::new(states_slice, errors_slice);
+
+        if guard.len() < server_handles.len() || errors_slice.len() < server_handles.len() {
             return Err(OpcError::InvalidState(
                 "COM server returned fewer item states or errors than requested server handles"
                     .to_string(),
             ));
         }
 
-        // RAII guard ensures VariantClear is invoked on all valid item states before RemoteArray frees memory.
-        let guard = ItemStatesGuard::new(states_slice, errors_slice);
         let mut states = Vec::with_capacity(server_handles.len());
 
         for (i, state) in guard[..server_handles.len()].iter().enumerate() {
@@ -181,7 +209,7 @@ impl ConnectedGroup for ComGroup {
                         .unwrap_or(std::time::SystemTime::UNIX_EPOCH);
 
                 states.push(Ok(GroupItemState {
-                    client_handle: ItemHandle::new(state.hClient),
+                    client_handle: ClientItemHandle::new(state.hClient),
                     value,
                     quality,
                     timestamp,
@@ -199,7 +227,7 @@ impl ConnectedGroup for ComGroup {
     #[tracing::instrument(level = "debug", skip(self, server_handles, values), err)]
     fn write(
         &self,
-        server_handles: &[ItemHandle],
+        server_handles: &[ServerItemHandle],
         values: &[OpcValue],
     ) -> OpcResult<Vec<Result<(), OpcError>>> {
         if server_handles.is_empty() {
@@ -322,7 +350,7 @@ mod tests {
 
         // Test mismatched write lengths returns InvalidState
         assert!(matches!(
-            group.write(&[ItemHandle::new(1)], &[]),
+            group.write(&[ServerItemHandle::new(1)], &[]),
             Err(OpcError::InvalidState(_))
         ));
     }

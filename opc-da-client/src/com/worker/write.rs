@@ -4,7 +4,7 @@ use crate::com::connector::{ConnectedGroup, ConnectedServer, GroupConfig, GroupI
 use crate::com::guard::GroupGuard;
 use crate::errors::{OpcError, OpcOperation, OpcResult};
 use crate::log_opc_err;
-use crate::types::{ItemHandle, OpcValue, ServerIdentifier, WriteResult};
+use crate::types::{ClientItemHandle, OpcValue, ServerIdentifier, WriteResult};
 
 /// Executes synchronous batch writing across multiple tags in a single atomic COM group, returning
 /// a list of structured [`WriteResult`]s preserving the original index ordering.
@@ -54,7 +54,7 @@ pub fn handle_write_batch<S: ConnectedServer>(
         .map(|(idx, (tag_id, _))| GroupItemDef {
             item_id: tag_id.clone(),
             #[allow(clippy::cast_possible_truncation)]
-            client_handle: ItemHandle::new(idx as u32),
+            client_handle: ClientItemHandle::new(idx as u32),
             active: true,
         })
         .collect();
@@ -176,6 +176,7 @@ pub fn handle_write<S: ConnectedServer>(
 mod tests {
     use super::*;
     use crate::com::connector::mock::MockConnectedServer;
+    use crate::types::ServerItemHandle;
 
     #[test]
     fn test_handle_write_success() {
@@ -192,19 +193,18 @@ mod tests {
     #[test]
     fn test_worker_native_write_batch_partial_failures_and_ordering() {
         let state = std::sync::Arc::new(crate::com::connector::mock::MockState::default());
-        let mut group = crate::com::connector::mock::MockConnectedGroup {
+        let group = crate::com::connector::mock::MockConnectedGroup {
             state: state.clone(),
             ..Default::default()
-        };
-        // Simulate item 2 (index 1) rejected during add_items
-        group.add_items_fn = Some(Box::new(|items: &[GroupItemDef]| {
+        }
+        .with_add_items_fn(|items: &[GroupItemDef]| {
             Ok(items
                 .iter()
                 .enumerate()
                 .map(|(idx, _)| {
                     if idx == 1 {
                         crate::com::connector::GroupItemResult {
-                            server_handle: ItemHandle::new(0),
+                            server_handle: ServerItemHandle::new(0),
                             canonical_type: 0,
                             error: Some(OpcError::InvalidState(
                                 "Tag2 rejected in add_items".into(),
@@ -213,16 +213,15 @@ mod tests {
                     } else {
                         crate::com::connector::GroupItemResult {
                             #[allow(clippy::cast_possible_truncation)]
-                            server_handle: ItemHandle::new(idx as u32 + 1),
-                            canonical_type: 8,
+                            server_handle: ServerItemHandle::new((idx + 1) as u32),
+                            canonical_type: 0,
                             error: None,
                         }
                     }
                 })
                 .collect())
-        }));
-        // Simulate item 3 (index 2) failing during write
-        group.write_fn = Some(Box::new(|handles, _| {
+        })
+        .with_write_fn(|handles, _| {
             Ok(handles
                 .iter()
                 .map(|h| {
@@ -233,7 +232,7 @@ mod tests {
                     }
                 })
                 .collect())
-        }));
+        });
 
         let server = crate::com::connector::mock::MockConnectedServer {
             group: std::sync::Arc::new(group),

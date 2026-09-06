@@ -43,7 +43,7 @@ pub fn handle_browse<S: ConnectedServer>(
         );
     })?;
 
-    if org == NamespaceType::Flat as u32 {
+    if org == NamespaceType::Flat {
         let string_iter = opc_server
             .browse_opc_item_ids(BrowseType::Leaf, Some(""), 0, 0)
             .inspect_err(|e| {

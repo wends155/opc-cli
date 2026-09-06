@@ -6,8 +6,8 @@
 use crate::com::iterator::StringIterator;
 use crate::errors::{OpcError, OpcResult};
 use crate::types::{
-    BrowseDirection, BrowseType, GroupHandle, ItemHandle, OpcQuality, OpcServerInfo, OpcValue,
-    ServerIdentifier,
+    BrowseDirection, BrowseType, ClientItemHandle, GroupHandle, NamespaceType, OpcQuality,
+    OpcServerEndpoint, OpcServerInfo, OpcValue, ServerIdentifier, ServerItemHandle,
 };
 
 // ── Pure-Rust Data Transfer Objects ────────────────────────────────
@@ -18,7 +18,7 @@ pub struct GroupItemDef {
     /// Fully qualified tag identifier.
     pub item_id: String,
     /// Handle assigned by the client for this item.
-    pub client_handle: ItemHandle,
+    pub client_handle: ClientItemHandle,
     /// Whether the item should be activated immediately.
     pub active: bool,
 }
@@ -27,7 +27,7 @@ pub struct GroupItemDef {
 #[derive(Debug)]
 pub struct GroupItemResult {
     /// Server-assigned handle for this item.
-    pub server_handle: ItemHandle,
+    pub server_handle: ServerItemHandle,
     /// Canonical data type reported by the server.
     pub canonical_type: u16,
     /// Error if adding this specific item failed.
@@ -38,7 +38,7 @@ pub struct GroupItemResult {
 #[derive(Debug, Clone, PartialEq)]
 pub struct GroupItemState {
     /// Client handle associated with this item.
-    pub client_handle: ItemHandle,
+    pub client_handle: ClientItemHandle,
     /// Decoded strongly-typed value.
     pub value: OpcValue,
     /// Decoded 16-bit OPC quality.
@@ -171,6 +171,16 @@ pub trait ServerConnector: Send + Sync {
             .collect())
     }
 
+    /// Connect to an OPC DA server specified by an [`OpcServerEndpoint`].
+    ///
+    /// The default implementation delegates to [`Self::connect_identifier`] with `&endpoint.identifier`.
+    ///
+    /// # Errors
+    /// Returns an [`OpcError`] if connection fails.
+    fn connect_endpoint(&self, endpoint: &OpcServerEndpoint) -> OpcResult<Self::Server> {
+        self.connect_identifier(&endpoint.identifier)
+    }
+
     /// Connect to an OPC DA server specified by a [`ServerIdentifier`].
     ///
     /// # Errors
@@ -197,7 +207,7 @@ pub trait ConnectedServer {
     ///
     /// # Errors
     /// Returns an [`OpcError`] if querying organization fails.
-    fn query_organization(&self) -> OpcResult<u32>;
+    fn query_organization(&self) -> OpcResult<NamespaceType>;
 
     /// Browse the server's address space for item IDs of the given type.
     ///
@@ -251,7 +261,7 @@ pub trait ConnectedGroup {
     fn read(
         &self,
         source: DataSource,
-        server_handles: &[ItemHandle],
+        server_handles: &[ServerItemHandle],
     ) -> OpcResult<Vec<Result<GroupItemState, OpcError>>>;
 
     /// Write values to the given server handles using pure Rust [`OpcValue`].
@@ -260,7 +270,7 @@ pub trait ConnectedGroup {
     /// Returns an [`OpcError`] if write fails.
     fn write(
         &self,
-        server_handles: &[ItemHandle],
+        server_handles: &[ServerItemHandle],
         values: &[OpcValue],
     ) -> OpcResult<Vec<Result<(), OpcError>>>;
 }

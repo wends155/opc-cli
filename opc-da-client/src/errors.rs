@@ -1,5 +1,6 @@
 //! Error types for OPC DA operations.
 
+use std::time::Duration;
 use thiserror::Error;
 
 /// Result type alias for OPC DA operations.
@@ -60,6 +61,10 @@ pub enum OpcError {
     #[error("Not implemented: {0}")]
     NotImplemented(String),
 
+    /// Operation timed out.
+    #[error("Operation timed out after {0:?}")]
+    Timeout(Duration),
+
     /// Catch-all for unexpected internal failures.
     #[error("Internal error: {0}")]
     Internal(String),
@@ -101,6 +106,20 @@ impl<T> From<std::sync::PoisonError<T>> for OpcError {
     }
 }
 
+impl From<tokio::time::error::Elapsed> for OpcError {
+    fn from(_: tokio::time::error::Elapsed) -> Self {
+        Self::Timeout(Duration::ZERO)
+    }
+}
+
+impl From<windows::core::HRESULT> for OpcError {
+    fn from(hr: windows::core::HRESULT) -> Self {
+        Self::Com {
+            source: windows::core::Error::from_hresult(hr),
+        }
+    }
+}
+
 fn format_com_hint(source: &windows::core::Error) -> String {
     #[cfg(feature = "opc-da-backend")]
     {
@@ -135,7 +154,7 @@ impl OpcError {
     #[must_use]
     pub fn is_connection_error(&self) -> bool {
         match self {
-            Self::Connection(_) => true,
+            Self::Connection(_) | Self::Timeout(_) => true,
             #[cfg(feature = "opc-da-backend")]
             Self::Com { source } => crate::raw::hresult::is_connection_hresult(source.code()),
             _ => false,
@@ -513,5 +532,16 @@ mod tests {
             assert!(!formatted_ptr.contains("No hint available"));
             assert!(!formatted_ptr.ends_with(" ()"));
         }
+    }
+
+    #[test]
+    fn test_timeout_error_and_conversions() {
+        let timeout_err = OpcError::Timeout(Duration::from_secs(5));
+        assert!(timeout_err.is_connection_error());
+        assert_eq!(timeout_err.to_string(), "Operation timed out after 5s");
+
+        let hr = windows::core::HRESULT(0x8000_4005_u32.cast_signed()); // E_FAIL
+        let com_err: OpcError = hr.into();
+        assert!(matches!(com_err, OpcError::Com { .. }));
     }
 }

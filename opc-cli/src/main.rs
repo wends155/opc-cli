@@ -35,6 +35,47 @@ struct Args {
     verbose: u8,
 }
 
+/// RAII guard ensuring terminal state (raw mode, alternate screen, mouse capture, cursor)
+/// is always restored upon normal exit or unwinding panics.
+pub struct TerminalGuard {
+    active: bool,
+}
+
+impl TerminalGuard {
+    /// Initializes terminal raw mode, alternate screen, mouse capture, and installs a panic hook
+    /// that restores the terminal before printing panic backtraces.
+    pub fn init() -> io::Result<Self> {
+        enable_raw_mode()?;
+        let mut stdout = io::stdout();
+        execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
+
+        let prev_hook = std::panic::take_hook();
+        std::panic::set_hook(Box::new(move |panic_info| {
+            Self::cleanup_terminal();
+            prev_hook(panic_info);
+        }));
+
+        Ok(Self { active: true })
+    }
+
+    /// Best-effort terminal cleanup suppressing any I/O errors to prevent double-panicking.
+    fn cleanup_terminal() {
+        let _ = disable_raw_mode();
+        let mut stdout = io::stdout();
+        let _ = execute!(stdout, LeaveAlternateScreen, DisableMouseCapture);
+        let _ = execute!(stdout, crossterm::cursor::Show);
+    }
+}
+
+impl Drop for TerminalGuard {
+    fn drop(&mut self) {
+        if self.active {
+            Self::cleanup_terminal();
+            self.active = false;
+        }
+    }
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     let args = Args::parse();
@@ -63,12 +104,11 @@ async fn main() -> Result<()> {
     // COM initialization is handled transparently by the OpcDaClient worker thread.
 
     // Create OPC client BEFORE entering TUI mode so init errors are visible
-    let opc_wrapper = Arc::new(OpcDaClient::new(ComConnector)?);
+    let opc_wrapper = Arc::new(OpcDaClient::new(ComConnector::default())?);
 
-    // Setup terminal
-    enable_raw_mode()?;
-    let mut stdout = io::stdout();
-    execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
+    // Setup terminal with RAII guard and panic hook
+    let terminal_guard = TerminalGuard::init()?;
+    let stdout = io::stdout();
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
@@ -76,14 +116,8 @@ async fn main() -> Result<()> {
     let mut app = App::new(opc_wrapper);
     let res = run_app(&mut terminal, &mut app);
 
-    // Restore terminal
-    disable_raw_mode()?;
-    execute!(
-        terminal.backend_mut(),
-        LeaveAlternateScreen,
-        DisableMouseCapture
-    )?;
-    terminal.show_cursor()?;
+    // Explicit cleanup on normal exit
+    drop(terminal_guard);
 
     if let Err(err) = res {
         tracing::error!(error = ?err, "Application error");
@@ -288,5 +322,16 @@ mod tests {
         app.current_screen = CurrentScreen::TagList;
         handle_key_event(&mut app, quit_q);
         assert_eq!(app.current_screen, CurrentScreen::Exiting);
+    }
+
+    #[test]
+    fn test_terminal_guard_cleanup() {
+        let guard = TerminalGuard { active: true };
+        assert!(guard.active);
+        let result = std::panic::catch_unwind(move || {
+            let _g = guard;
+            panic!("trigger unwind to test guard drop");
+        });
+        assert!(result.is_err());
     }
 }

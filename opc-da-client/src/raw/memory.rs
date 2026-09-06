@@ -10,8 +10,99 @@
 
 use windows::{
     Win32::System::Com::{CoTaskMemAlloc, CoTaskMemFree},
-    core::PWSTR,
+    core::{PCWSTR, PWSTR},
 };
+
+// ── Lifetime-Bounded String Views ──────────────────────────────────
+
+/// A lifetime-bounded, borrowed view of a null-terminated UTF-16 COM string.
+///
+/// This prevents raw pointer lifetime escapes that could lead to use-after-free
+/// when converting managed wide string vectors into Win32 COM `PWSTR` pointers.
+#[derive(Debug)]
+pub struct BorrowedPwstr<'a> {
+    ptr: PWSTR,
+    _marker: std::marker::PhantomData<&'a [u16]>,
+}
+
+impl<'a> BorrowedPwstr<'a> {
+    /// Creates a new `BorrowedPwstr` bound to the lifetime of the underlying buffer.
+    #[inline(always)]
+    pub fn new(slice: &'a [u16]) -> Self {
+        Self {
+            ptr: PWSTR(slice.as_ptr() as *mut u16),
+            _marker: std::marker::PhantomData,
+        }
+    }
+
+    /// Creates a null `BorrowedPwstr`.
+    #[inline(always)]
+    pub fn null() -> Self {
+        Self {
+            ptr: PWSTR::null(),
+            _marker: std::marker::PhantomData,
+        }
+    }
+
+    /// Returns the raw underlying `windows::core::PWSTR`.
+    ///
+    /// # Safety
+    /// The caller must ensure that the returned raw pointer is not used beyond
+    /// the lifetime `'a` of the originating buffer.
+    #[inline(always)]
+    pub unsafe fn as_raw(&self) -> PWSTR {
+        self.ptr
+    }
+
+    /// Returns true if the pointer is null.
+    #[inline(always)]
+    pub fn is_null(&self) -> bool {
+        self.ptr.is_null()
+    }
+}
+
+/// A lifetime-bounded, borrowed view of a null-terminated constant UTF-16 COM string.
+#[derive(Debug)]
+pub struct BorrowedPcwstr<'a> {
+    ptr: PCWSTR,
+    _marker: std::marker::PhantomData<&'a [u16]>,
+}
+
+impl<'a> BorrowedPcwstr<'a> {
+    /// Creates a new `BorrowedPcwstr` bound to the lifetime of the underlying buffer.
+    #[inline(always)]
+    pub fn new(slice: &'a [u16]) -> Self {
+        Self {
+            ptr: PCWSTR::from_raw(slice.as_ptr()),
+            _marker: std::marker::PhantomData,
+        }
+    }
+
+    /// Creates a null `BorrowedPcwstr`.
+    #[inline(always)]
+    pub fn null() -> Self {
+        Self {
+            ptr: PCWSTR::null(),
+            _marker: std::marker::PhantomData,
+        }
+    }
+
+    /// Returns the raw underlying `windows::core::PCWSTR`.
+    ///
+    /// # Safety
+    /// The caller must ensure that the returned raw pointer is not used beyond
+    /// the lifetime `'a` of the originating buffer.
+    #[inline(always)]
+    pub unsafe fn as_raw(&self) -> PCWSTR {
+        self.ptr
+    }
+
+    /// Returns true if the pointer is null.
+    #[inline(always)]
+    pub fn is_null(&self) -> bool {
+        self.ptr.is_null()
+    }
+}
 
 // ── Memory Management ───────────────────────────────────────────────
 
@@ -41,7 +132,7 @@ impl<T: Sized> RemoteArray<T> {
     /// # Safety
     /// The caller must ensure that the pointer is valid and points to a COM-allocated array.
     #[inline(always)]
-    pub(crate) fn from_mut_ptr(pointer: *mut T, len: u32) -> Self {
+    pub(crate) unsafe fn from_mut_ptr(pointer: *mut T, len: u32) -> Self {
         Self {
             pointer: RemotePointer::from_raw(pointer),
             len,
@@ -53,7 +144,7 @@ impl<T: Sized> RemoteArray<T> {
     /// # Safety
     /// The caller must ensure that the pointer is valid and points to a COM-allocated array.
     #[inline(always)]
-    pub(crate) fn from_ptr(pointer: *const T, len: u32) -> Self {
+    pub(crate) unsafe fn from_ptr(pointer: *const T, len: u32) -> Self {
         Self {
             pointer: RemotePointer::from_raw(pointer as *mut T),
             len,
@@ -449,8 +540,11 @@ impl<T> LocalPointer<Vec<T>> {
 
 impl LocalPointer<Vec<Vec<u16>>> {
     /// Converts the inner vector of UTF-16 strings to a vector of `PWSTR`.
+    ///
+    /// # Safety
+    /// The caller must ensure that none of the returned pointers outlive `self`.
     #[inline(always)]
-    pub fn as_pwstr_array(&self) -> Vec<windows::core::PWSTR> {
+    pub unsafe fn as_pwstr_array(&self) -> Vec<windows::core::PWSTR> {
         match &self.inner {
             Some(values) => values
                 .iter()
@@ -461,8 +555,11 @@ impl LocalPointer<Vec<Vec<u16>>> {
     }
 
     /// Converts the inner vector of UTF-16 strings to a vector of `PCWSTR`.
+    ///
+    /// # Safety
+    /// The caller must ensure that none of the returned pointers outlive `self`.
     #[inline(always)]
-    pub fn as_pcwstr_array(&self) -> Vec<windows::core::PCWSTR> {
+    pub unsafe fn as_pcwstr_array(&self) -> Vec<windows::core::PCWSTR> {
         match &self.inner {
             Some(values) => values
                 .iter()
@@ -474,9 +571,41 @@ impl LocalPointer<Vec<Vec<u16>>> {
 }
 
 impl LocalPointer<Vec<u16>> {
-    /// Converts the inner UTF-16 string to a `PWSTR`.
+    /// Returns a lifetime-bounded [`BorrowedPwstr`] referencing the inner UTF-16 buffer.
+    ///
+    /// The returned handle cannot outlive the [`LocalPointer`]:
+    /// ```compile_fail
+    /// use opc_da_client::{BorrowedPwstr, LocalPointer};
+    ///
+    /// let _escaped = {
+    ///     let lp = LocalPointer::from("some_tag");
+    ///     lp.as_borrowed_pwstr()
+    /// };
+    /// ```
     #[inline(always)]
-    pub fn as_pwstr(&self) -> windows::core::PWSTR {
+    pub fn as_borrowed_pwstr(&self) -> BorrowedPwstr<'_> {
+        match &self.inner {
+            Some(value) => BorrowedPwstr::new(value.as_slice()),
+            None => BorrowedPwstr::null(),
+        }
+    }
+
+    /// Returns a lifetime-bounded [`BorrowedPcwstr`] referencing the inner UTF-16 buffer.
+    #[inline(always)]
+    pub fn as_borrowed_pcwstr(&self) -> BorrowedPcwstr<'_> {
+        match &self.inner {
+            Some(value) => BorrowedPcwstr::new(value.as_slice()),
+            None => BorrowedPcwstr::null(),
+        }
+    }
+
+    /// Converts the inner UTF-16 string to a `PWSTR`.
+    ///
+    /// # Safety
+    /// The caller must ensure that the returned `PWSTR` is not used beyond the lifetime of `self`.
+    /// Prefer [`LocalPointer::as_borrowed_pwstr`].
+    #[inline(always)]
+    pub unsafe fn as_pwstr(&self) -> windows::core::PWSTR {
         match &self.inner {
             Some(value) => windows::core::PWSTR(value.as_ptr() as _),
             None => windows::core::PWSTR::null(),
@@ -484,8 +613,12 @@ impl LocalPointer<Vec<u16>> {
     }
 
     /// Converts the inner UTF-16 string to a `PCWSTR`.
+    ///
+    /// # Safety
+    /// The caller must ensure that the returned `PCWSTR` is not used beyond the lifetime of `self`.
+    /// Prefer [`LocalPointer::as_borrowed_pcwstr`].
     #[inline(always)]
-    pub fn as_pcwstr(&self) -> windows::core::PCWSTR {
+    pub unsafe fn as_pcwstr(&self) -> windows::core::PCWSTR {
         match &self.inner {
             Some(value) => windows::core::PCWSTR::from_raw(value.as_ptr() as _),
             None => windows::core::PCWSTR::null(),
@@ -718,5 +851,25 @@ mod tests {
         let boxed = Box::new(100u64);
         let lp_boxed = LocalPointer::from_box(boxed);
         assert_eq!(lp_boxed.inner(), Some(&100));
+    }
+
+    #[test]
+    fn test_borrowed_pwstr_and_pcwstr() {
+        let lp = LocalPointer::from("Matrikon.OPC.Simulation.1");
+        let borrowed = lp.as_borrowed_pwstr();
+        assert!(!borrowed.is_null());
+        let raw = unsafe { borrowed.as_raw() };
+        assert!(!raw.is_null());
+
+        let borrowed_c = lp.as_borrowed_pcwstr();
+        assert!(!borrowed_c.is_null());
+        let raw_c = unsafe { borrowed_c.as_raw() };
+        assert!(!raw_c.is_null());
+
+        let null_lp: LocalPointer<Vec<u16>> = LocalPointer::new(None);
+        let null_borrowed = null_lp.as_borrowed_pwstr();
+        assert!(null_borrowed.is_null());
+        let null_borrowed_c = null_lp.as_borrowed_pcwstr();
+        assert!(null_borrowed_c.is_null());
     }
 }

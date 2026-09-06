@@ -18,10 +18,11 @@ pub use provider::{
     OpcValueOptionExt, QualityLimit, QualityMajor, QualitySubstatus, SystemTimeOptionExt,
     TagCollector, TagValue, WriteResult,
 };
+#[allow(deprecated)]
 pub use types::{
-    BrowseDirection, BrowseType, GroupHandle, IntoTags, ItemHandle, OpcServerEndpoint,
-    OpcServerInfo, ParseQualityError, ServerIdentifier, TagBatch, TagBatchIter, TagExtractError,
-    TagValues,
+    BrowseDirection, BrowseType, ClientItemHandle, GroupHandle, IntoTags, ItemHandle,
+    OpcServerEndpoint, OpcServerInfo, ParseQualityError, ServerIdentifier, ServerItemHandle,
+    TagBatch, TagBatchIter, TagExtractError, TagFailure, TagResult, TagSuccess, TagValues,
 };
 
 // Backend re-exports (conditional)
@@ -31,13 +32,15 @@ pub use com::{
     connector::ComConnector,
     discovery::{OpcServerRegistration, OpcServerType, inspect_local_registration},
 };
+#[cfg(feature = "opc-da-backend")]
+pub use raw::memory::{BorrowedPcwstr, BorrowedPwstr, LocalPointer};
 
 // Test support re-export
 #[cfg(feature = "test-support")]
 pub use provider::MockOpcProvider;
 
 #[cfg(all(feature = "test-support", feature = "opc-da-backend"))]
-pub use com::connector::{MockConnectedGroup, MockConnectedServer, MockServerConnector};
+pub use com::connector::{MockConnectedGroup, MockConnectedServer, MockServerConnector, MockState};
 
 /// Type alias for an [`OpcDaClient`] instantiated with [`MockServerConnector`].
 #[cfg(all(feature = "test-support", feature = "opc-da-backend"))]

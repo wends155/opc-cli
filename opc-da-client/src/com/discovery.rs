@@ -363,60 +363,14 @@ impl OpcServerListCatalog {
 
         let v1: crate::raw::bindings::comn::IOPCServerList = if let Some(host_str) = is_remote_host
         {
-            let host_lp = crate::raw::memory::LocalPointer::from(host_str);
-            let authn_level = crate::com::security::authn_level_for(legacy_dcom);
-            let auth_info = windows::Win32::System::Com::COAUTHINFO {
-                dwAuthnSvc: crate::com::security::RPC_C_AUTHN_WINNT,
-                dwAuthzSvc: crate::com::security::RPC_C_AUTHZ_NONE,
-                pwszServerPrincName: windows::core::PWSTR::null(),
-                dwAuthnLevel: authn_level,
-                dwImpersonationLevel: crate::com::security::RPC_C_IMP_LEVEL_IMPERSONATE,
-                pAuthIdentityData: std::ptr::null_mut(),
-                dwCapabilities: 0,
-            };
-            let server_info = windows::Win32::System::Com::COSERVERINFO {
-                dwReserved1: 0,
-                pwszName: host_lp.as_pwstr(),
-                pAuthInfo: (&raw const auth_info).cast_mut(),
-                dwReserved2: 0,
-            };
-            let mqi = windows::Win32::System::Com::MULTI_QI {
-                pIID: &crate::raw::bindings::comn::IOPCServerList::IID,
-                pItf: std::mem::ManuallyDrop::new(None),
-                hr: windows::core::HRESULT(0),
-            };
-            let mut mqi_slice = [mqi];
-
-            // SAFETY: Calling CoCreateInstanceEx to instantiate IOPCServerList on remote host.
-            unsafe {
-                windows::Win32::System::Com::CoCreateInstanceEx(
-                    &crate::com::security::CLSID_OPC_SERVER_LIST,
-                    None,
-                    windows::Win32::System::Com::CLSCTX_REMOTE_SERVER,
-                    Some(&raw const server_info),
-                    &mut mqi_slice,
-                )
-            }
-            .inspect_err(|e| {
-                let err = OpcError::from(e.clone());
-                crate::log_opc_err!(&err, crate::errors::OpcOperation::Connect, host = %host_str);
-            })?;
-
-            let [mut result_mqi] = mqi_slice;
-            if result_mqi.hr.is_err() {
-                let err = OpcError::from(windows::core::Error::from_hresult(result_mqi.hr));
-                crate::log_opc_err!(&err, crate::errors::OpcOperation::Connect, host = %host_str);
-                return Err(err);
-            }
-
-            // SAFETY: CoCreateInstanceEx succeeded with S_OK and populated result_mqi.pItf with a valid COM pointer.
-            let unk =
-                unsafe { std::mem::ManuallyDrop::take(&mut result_mqi.pItf) }.ok_or_else(|| {
-                    OpcError::Internal("CoCreateInstanceEx returned null interface pointer".into())
-                })?;
-
-            crate::com::security::apply_proxy_blanket(&unk, legacy_dcom);
-            unk.cast()?
+            crate::com::security::create_remote_instance(
+                &crate::com::security::CLSID_OPC_SERVER_LIST,
+                host_str,
+                legacy_dcom,
+            )
+            .inspect_err(|err| {
+                crate::log_opc_err!(err, crate::errors::OpcOperation::Connect, host = %host_str);
+            })?
         } else {
             // SAFETY: Calling Win32 CLSIDFromProgID with static wide string literal or fallback to standard CLSID.
             let id = unsafe {
