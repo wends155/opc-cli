@@ -1,5 +1,41 @@
 # Project Context Summary
 
+## 2026-09-06: 123-Finding Comprehensive Quality & Architectural Remediation, Typestate Client, Polyfill Hardening & TUI Deconstruction (`opc-da-client`, `opc-cli`, `compat`, `scripts`)
+> 📝 **Context Update:**
+> * **Feature:** Complete execution of the 40-step Master Implementation Plan addressing all 123 review findings from `comprehensive_review_report.md` across 5 phases under the TAR-S cycle and strict Builder rules with zero-warning standard across all 9 gates of `scripts/verify.ps1`.
+> * **Changes:**
+>   - **Low-Level FFI, Polyfills & Memory Safety (Phase 1):**
+>     - Natural alignment verification and volatile reads implemented in `WaitOnAddress` in `compat/synch-polyfill/src/lib.rs`.
+>     - Null pointer rejection and 256 MiB chunking implemented in `ProcessPrng` in `compat/bcrypt-polyfill/src/lib.rs`.
+>     - Fixed `FILETIME` multiplication overflow in `opc-da-client/src/raw/memory.rs` via quotient and remainder decomposition.
+>     - Fortified `ScopedVariant` soundness invariants with `unsafe fn from_raw` in `opc-da-client/src/com/variant.rs`.
+>     - Added fail-fast capacity bounds checking to COM enumerators in `opc-da-client/src/com/iterator.rs`.
+>   - **Domain Types, Quality Semantics & Endpoint Parsing (Phase 2):**
+>     - Resolved semantic contradiction in `TagValue` in `opc-da-client/src/types/collection.rs`: `is_error` reflects `outcome.is_err()`, while `is_uncertain` and `is_bad` evaluate quality independently.
+>     - Preserved source connection error provenance in `From<TagExtractError> for OpcError`.
+>     - Implemented `From<f32>`, `TryFrom<OpcValue> for f32`, and `Default` for `OpcValue` in `opc-da-client/src/types/value.rs`.
+>     - Added generic `TagValues::get_as<T>` extractor and strongly-typed numeric getters (`get_u32`, `get_u64`, `get_i64`, `get_f32`) in `opc-da-client/src/types/collection.rs`.
+>     - Added standard `FromStr` UNC parsing for `OpcServerEndpoint` and zero-allocation `normalize_host_str` in `opc-da-client/src/types/server.rs`.
+>   - **COM Worker Deduplication & Typestate Client Architecture (Phase 3):**
+>     - Implemented compile-time typestate `OpcDaClient<C, State>` with distinct `Unbound` (discovery, ad-hoc) and `Bound` (session) typestates in `opc-da-client/src/com/client.rs`.
+>     - Extracted `register_item_group` helper in `opc-da-client/src/com/worker.rs`, deduplicating item group creation between `read.rs` and `write.rs`.
+>     - Consolidated scalar VARIANT decoding in `decode_scalar_variant` in `opc-da-client/src/com/variant.rs`.
+>     - Synchronized connection eviction and group proxy invalidation in `opc-da-client/src/com/worker/pool.rs`.
+>   - **CLI TUI Deconstruction & UI Performance (Phase 4):**
+>     - Completely removed `Deref` and `DerefMut` anti-patterns on `App` in `opc-cli/src/app.rs`, routing all view state mutations explicitly through `self.view.*`.
+>     - Decomposed `NavigationState` into `NavigationState`, `DialogState`, and `AutoRefresher`.
+>     - Encapsulated terminal key event handling inside `App::handle_key`, delegating screen actions through `AppAction`.
+>     - Separated error and bad quality metrics in the UI status bar across `opc-cli/src/app.rs` and `opc-cli/src/ui.rs`.
+>     - Replaced per-frame `Row::new(vec![...])` heap vector allocations in `opc-cli/src/ui.rs` with zero-allocation stack arrays `[Cell; 4]`.
+>   - **Automation, AST-Grep Rules & 9-Gate Verification (Phase 5):**
+>     - Added AST-grep regression rules `no-deref-on-app` and `no-raw-unaligned-deref` with comprehensive test fixtures in `.ast-grep/`.
+>     - Added `search-todos` target in `Makefile`.
+>     - Deduplicated packaging logic in `scripts/package.ps1` via `New-ReleasePackage`.
+>     - Upgraded Gate 5 in `scripts/verify.ps1` to automatically compile and run unit tests for polyfills supporting `std`.
+>     - Passed all 9 verification gates with exit code 0.
+> * **New Constraints:** `App` must never implement `Deref`/`DerefMut`. Bound client operations require the `Bound` typestate. `WaitOnAddress` and `ProcessPrng` polyfills must enforce natural alignment and chunking invariants.
+> * **Pruned:** `App` God object `Deref` indirection, unaligned polyfill pointer reads, `FILETIME` arithmetic overflow, `TagValue` semantic contradiction, and duplicate worker group creation.
+
 ## 2026-09-06: 52-Finding Architectural Remediation, Systemic Hardening, ISP Trait Segregation & TUI Deconstruction (`opc-da-client` & `opc-cli`)
 > 📝 **Context Update:**
 > * **Feature:** Complete execution of the 31-step Master Implementation Plan resolving all 52 qualitative review findings from `review_report.md` across 6 phases and 5 parallel execution lanes with strict TDD discipline, FFI soundness, ISP trait segregation, typestate domains, TUI God object deconstruction, and 9-gate quality verification.
