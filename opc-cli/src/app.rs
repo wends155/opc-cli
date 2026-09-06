@@ -1395,6 +1395,7 @@ mod tests {
             value: Some(OpcValue::Int(123)),
             quality: OpcQuality::GOOD,
             timestamp: Some(std::time::SystemTime::UNIX_EPOCH),
+            ..Default::default()
         }];
 
         tx.send(Ok(values)).unwrap();
@@ -1440,6 +1441,7 @@ mod tests {
             value: Some(OpcValue::Int(100)),
             quality: OpcQuality::GOOD,
             timestamp: None,
+            ..Default::default()
         }];
 
         app.go_back();
@@ -1460,12 +1462,14 @@ mod tests {
                 value: Some(OpcValue::String("V1".into())),
                 quality: OpcQuality::GOOD,
                 timestamp: Some(std::time::SystemTime::UNIX_EPOCH),
+                ..Default::default()
             },
             TagValue {
                 tag_id: "T2".into(),
                 value: Some(OpcValue::String("V2".into())),
                 quality: OpcQuality::GOOD,
                 timestamp: Some(std::time::SystemTime::UNIX_EPOCH),
+                ..Default::default()
             },
         ];
         app.selected_index = Some(0);
@@ -1597,6 +1601,7 @@ mod tests {
             value: Some(OpcValue::Int(100)),
             quality: OpcQuality::GOOD,
             timestamp: None,
+            ..Default::default()
         };
 
         // Validate destructuring ergonomics as reported in review_report.md
@@ -1605,6 +1610,7 @@ mod tests {
             value,
             quality,
             timestamp,
+            ..
         } = tv;
 
         let log_line = format!(
@@ -1631,6 +1637,7 @@ mod tests {
             value: Some(OpcValue::Bool(false)),
             quality: OpcQuality::GOOD,
             timestamp: None,
+            ..Default::default()
         });
 
         app.tag_values.push(TagValue {
@@ -1638,6 +1645,7 @@ mod tests {
             value: Some(OpcValue::Int(1000)),
             quality: OpcQuality::GOOD,
             timestamp: None,
+            ..Default::default()
         });
 
         // Canonical OpcValue::from_str tests

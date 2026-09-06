@@ -47,6 +47,18 @@ pub struct MockState {
     pub should_panic_on_request: std::sync::atomic::AtomicBool,
     /// Number of times remove_group has been invoked.
     pub remove_group_count: std::sync::atomic::AtomicUsize,
+    /// Number of times add_group has been invoked.
+    pub add_group_count: std::sync::atomic::AtomicUsize,
+    /// Number of times add_items has been invoked.
+    pub add_items_count: std::sync::atomic::AtomicUsize,
+    /// Number of times read has been invoked.
+    pub read_count: std::sync::atomic::AtomicUsize,
+    /// Last group name passed to add_group.
+    pub last_group_name: std::sync::Mutex<Option<String>>,
+    /// Last endpoint passed to connect_identifier.
+    pub last_connected_endpoint: std::sync::Mutex<Option<crate::types::OpcServerEndpoint>>,
+    /// Last host passed to enumerate_servers / enumerate_server_details.
+    pub last_enumerated_host: std::sync::Mutex<Option<String>>,
 }
 
 /// Pure-Rust mock implementation of [`ConnectedGroup`] for testing.
@@ -71,6 +83,10 @@ impl ConnectedGroup for MockConnectedGroup {
         if items.is_empty() {
             return Err(OpcError::InvalidState("items cannot be empty".to_string()));
         }
+
+        self.state
+            .add_items_count
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 
         if let Some(f) = &self.add_items_fn {
             f(items)
@@ -100,6 +116,10 @@ impl ConnectedGroup for MockConnectedGroup {
                 "server_handles cannot be empty".to_string(),
             ));
         }
+
+        self.state
+            .read_count
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 
         if let Some(f) = &self.read_fn {
             f(source, server_handles)
@@ -303,6 +323,13 @@ impl ConnectedServer for MockConnectedServer {
             });
         }
 
+        self.state
+            .add_group_count
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        if let Ok(mut lock) = self.state.last_group_name.lock() {
+            *lock = Some(config.name.to_string());
+        }
+
         Ok(CreatedGroup {
             group: self.group.clone(),
             server_handle: GroupHandle::new(1),
@@ -321,6 +348,7 @@ impl ConnectedServer for MockConnectedServer {
 /// Pure-Rust mock implementation of [`ServerConnector`] for testing and test-support.
 ///
 /// Exports configurable server enumeration and mock server connections without Windows COM interfaces.
+#[derive(Clone)]
 pub struct MockServerConnector {
     /// Mock server yielded on connection.
     pub server: std::sync::Arc<MockConnectedServer>,
@@ -476,20 +504,24 @@ impl MockServerConnector {
 impl ServerConnector for MockServerConnector {
     type Server = std::sync::Arc<MockConnectedServer>;
 
-    fn enumerate_servers(&self) -> OpcResult<Vec<String>> {
+    fn enumerate_servers(&self, host: &str) -> OpcResult<Vec<String>> {
         if self
             .state
             .should_fail_connect
             .load(std::sync::atomic::Ordering::Relaxed)
         {
             return Err(OpcError::Internal("Server enumeration failed".into()));
+        }
+
+        if let Ok(mut lock) = self.state.last_enumerated_host.lock() {
+            *lock = Some(host.to_string());
         }
 
         let servers = self.servers.lock()?;
         Ok(servers.clone())
     }
 
-    fn enumerate_server_details(&self, _host: &str) -> OpcResult<Vec<OpcServerInfo>> {
+    fn enumerate_server_details(&self, host: &str) -> OpcResult<Vec<OpcServerInfo>> {
         if self
             .state
             .should_fail_connect
@@ -498,11 +530,15 @@ impl ServerConnector for MockServerConnector {
             return Err(OpcError::Internal("Server enumeration failed".into()));
         }
 
+        if let Ok(mut lock) = self.state.last_enumerated_host.lock() {
+            *lock = Some(host.to_string());
+        }
+
         let details = self.server_details.lock()?;
         Ok(details.clone())
     }
 
-    fn connect_identifier(&self, _identifier: &ServerIdentifier) -> OpcResult<Self::Server> {
+    fn connect_identifier(&self, identifier: &ServerIdentifier) -> OpcResult<Self::Server> {
         if self
             .state
             .should_fail_connect
@@ -514,6 +550,9 @@ impl ServerConnector for MockServerConnector {
         self.state
             .connect_count
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        if let Ok(mut lock) = self.state.last_connected_endpoint.lock() {
+            *lock = Some(crate::types::OpcServerEndpoint::from(identifier.clone()));
+        }
         Ok(self.server.clone())
     }
 }
@@ -793,5 +832,79 @@ mod tests {
         assert_eq!(states.len(), 2);
         assert_eq!(states[0].as_ref().unwrap().value, OpcValue::Int(123));
         assert_eq!(states[1].as_ref().unwrap().value, OpcValue::Float(99.9));
+    }
+
+    #[test]
+    fn test_mock_state_observability_counters() {
+        let state = std::sync::Arc::new(MockState::default());
+        let connector = MockServerConnector::with_state(state.clone());
+
+        // Connect
+        let server = connector
+            .connect_identifier(&ServerIdentifier::ProgId("Mock.Server.1".into()))
+            .unwrap();
+        assert_eq!(
+            state
+                .connect_count
+                .load(std::sync::atomic::Ordering::Relaxed),
+            1
+        );
+        assert_eq!(
+            state
+                .last_connected_endpoint
+                .lock()
+                .unwrap()
+                .as_ref()
+                .map(|e| e.identifier.to_string()),
+            Some("Mock.Server.1".to_string())
+        );
+
+        // Add group
+        let created = server
+            .add_group(&GroupConfig::ephemeral("test-group-42"))
+            .unwrap();
+        assert_eq!(
+            state
+                .add_group_count
+                .load(std::sync::atomic::Ordering::Relaxed),
+            1
+        );
+        assert_eq!(
+            state.last_group_name.lock().unwrap().as_deref(),
+            Some("test-group-42")
+        );
+
+        // Add items
+        let item_def = GroupItemDef {
+            item_id: "Tag1".to_string(),
+            client_handle: ItemHandle::new(1),
+            active: true,
+        };
+        created.group.add_items(&[item_def]).unwrap();
+        assert_eq!(
+            state
+                .add_items_count
+                .load(std::sync::atomic::Ordering::Relaxed),
+            1
+        );
+
+        // Read
+        created
+            .group
+            .read(DataSource::Device, &[ItemHandle::new(1)])
+            .unwrap();
+        assert_eq!(
+            state.read_count.load(std::sync::atomic::Ordering::Relaxed),
+            1
+        );
+
+        // Remove group
+        server.remove_group(GroupHandle::new(1), true).unwrap();
+        assert_eq!(
+            state
+                .remove_group_count
+                .load(std::sync::atomic::Ordering::Relaxed),
+            1
+        );
     }
 }

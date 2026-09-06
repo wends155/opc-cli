@@ -7,16 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Fluent Server-Bound Client & Builder (`OpcDaClientBuilder`)**: Inherent `.builder()`, `.host()`, `.server()`, `.timeout()`, `.with_legacy_dcom()`, `.with_connector()`, `.build()`, and inherent methods (`read_tag_values`, `read_f64`, `read_i32`, `read_bool`, `read_string`, `write`, `write_batch`, `list_servers_on`).
+- **Zero-Allocation `TagBatch` & `IntoTags`**: Zero-allocation batch conversion supporting static string slices (`&[&'static str]`), fixed-size arrays (`[&'static str; N]`), single string literals (`&'static str`), owned string vectors (`Vec<String>`), and shared slices (`Arc<[String]>`).
+- **Rich `TagValues` Collection**: Ergonomic container with case-insensitive indexing, lenient lossless typed extractions (`get_f64`, `get_i32`, `get_bool`, `get_str`), numeric coercion, and `ReadFailed { tag, source }` error preservation.
+- **Diagnostic Capture (`TagValue.error`)**: Added `error: Option<OpcError>` field to `TagValue` capturing per-item HRESULTs from `add_items` and sync `read`.
+- **Remote DCOM Activation & Security Blanketing**: Remote server instantiation via `CoCreateInstanceEx`, `COSERVERINFO`, and `COAUTHINFO` defaulting to Windows KB5004442 `RPC_C_AUTHN_LEVEL_PKT_INTEGRITY` (with legacy DCOM fallback), plus comprehensive proxy blanketing on `IOPCServer`, `IOPCServerList`, `IOPCBrowseServerAddressSpace`, and child groups.
+- **Remote Server Catalog Discovery**: Remote catalog discovery via `OpcServerListCatalog` using standard `CLSID_OPC_SERVER_LIST` (`{13486D51-4821-11D2-A494-3CB306C10000}`) on remote machines.
+- **Active Group Caching in `PooledServer`**: Transparent caching of COM groups and item handles on repeated reads of identical tag sets, eliminating group churn during periodic polling loops.
+- **Native Batch Writes**: Native `handle_write_batch` sending multi-tag writes in a single DCOM RPC roundtrip with per-item `WriteResult` status.
+- **Layer 2 Subscription Stream (`client.subscribe`)**: Non-blocking tag polling stream yielding `tokio::sync::mpsc::Receiver<TagValues>` with automatic background task cancellation on receiver drop.
+- **5-Second Failure Cooldown Circuit Breaker**: Prevents spamming unresponsive or dead remote hosts on reconnection.
+- **Collision-Proof Group Names**: Atomic PID and monotonic sequence nonce generator (`generate_group_name`) with collision protection.
+- **TagValue Helper Methods**: Added `display_value()`, `formatted_timestamp()`, `is_good()`, and `is_error()` to `TagValue` for ergonomic UI presentation and robust error detection.
+- **OpcValue Empty and Null Variants**: Added `OpcValue::Empty` and `OpcValue::Null` variants matching COM `VT_EMPTY` and `VT_NULL` with lossless roundtrip conversions.
+
 ### Changed
+- **Canonical Model Consolidation**: Migrated `TagValue`, `WriteResult`, and `TagCollector` into `types.rs`, unifying all domain models in a single module.
 - **Low-Level COM / FFI Isolation**: Relocated `bindings/` and `com/memory.rs` into a strictly crate-internal module at `opc-da-client/src/raw/` (`raw::bindings`, `raw::memory`, `raw::bridge`).
 - **Canonical Types Cleansing**: Removed all dormant C/FFI bridge structs and `#![allow(warnings)]` from `types.rs`, leaving only strongly-typed pure-Rust domain definitions.
 - **Pure-Rust Connector Facade**: Refactored `ConnectedServer` and `ConnectedGroup` traits in `com::connector` to operate exclusively on pure-Rust types (`GroupItemDef`, `GroupItemResult`, `GroupItemState`, `DataSource`, `GroupConfig`, `CreatedGroup`), completely decoupling `ComWorker` from raw COM pointers and Win32 VARIANTs.
+
 ### Changed (Breaking)
 - **Strongly-Typed Tag Values and Timestamps (`TagValue`)**: `TagValue.value` changed from `String` to `Option<OpcValue>`, and `TagValue.timestamp` changed from `String` to `Option<std::time::SystemTime>`. Eliminates type erasure, prevents false positives from stringly-typed `"Error"` sentinels, enables duration/freshness calculations, and removes premature string allocations on high-speed polling loops.
-
-### Added
-- **TagValue Helper Methods**: Added `display_value()`, `formatted_timestamp()`, `is_good()`, and `is_error()` to `TagValue` for ergonomic UI presentation and robust error detection.
-- **OpcValue Empty and Null Variants**: Added `OpcValue::Empty` and `OpcValue::Null` variants matching COM `VT_EMPTY` and `VT_NULL` with lossless roundtrip conversions.
 
 ## [0.2.0] - 2026-02-23
 

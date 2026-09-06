@@ -4,733 +4,16 @@
 //! tag reading/writing, and address space browsing, along with domain types such as
 //! [`TagValue`], [`WriteResult`], and bounded [`TagCollector`].
 
-use crate::errors::{OpcError, OpcResult};
-pub use crate::types::{OpcQuality, OpcServerInfo, QualityLimit, QualityMajor, QualitySubstatus};
+use crate::errors::OpcResult;
+pub use crate::types::{
+    DisplayOptionOpcValue, DisplayOptionTimestamp, OpcQuality, OpcServerInfo, OpcValue,
+    OpcValueOptionExt, QualityLimit, QualityMajor, QualitySubstatus, SystemTimeOptionExt,
+    TagCollector, TagValue, WriteResult,
+};
 use async_trait::async_trait;
-use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 #[cfg(feature = "test-support")]
 use mockall::automock;
-
-/// A single tag's read result.
-///
-/// Returned by [`OpcProvider::read_tag_values`].
-///
-/// # Examples
-///
-/// ```
-/// use opc_da_client::{OpcQuality, OpcValue, TagValue};
-/// use std::time::SystemTime;
-///
-/// let tv = TagValue {
-///     tag_id: "Simulation.Random.1".to_string(),
-///     value: Some(OpcValue::Float(42.5)),
-///     quality: OpcQuality::GOOD,
-///     timestamp: Some(SystemTime::UNIX_EPOCH),
-/// };
-/// assert_eq!(tv.tag_id, "Simulation.Random.1");
-/// assert!(tv.is_good());
-/// assert_eq!(tv.display_value(), "42.5");
-/// ```
-#[derive(Debug, Clone, PartialEq)]
-pub struct TagValue {
-    /// The fully qualified tag identifier (e.g., `"Channel1.Device1.Tag1"`).
-    pub tag_id: String,
-    /// The decoded value, or `None` if the tag read failed or value is unavailable.
-    pub value: Option<OpcValue>,
-    /// OPC quality status, decomposed into major quality, substatus, and limit bits.
-    pub quality: OpcQuality,
-    /// Timestamp of the last value change (UTC-based), or `None` if unavailable.
-    pub timestamp: Option<std::time::SystemTime>,
-}
-
-impl TagValue {
-    /// Returns `true` if quality is good and a value is present.
-    ///
-    /// # Returns
-    ///
-    /// `true` if [`TagValue::quality`] satisfies [`OpcQuality::is_good`] and [`TagValue::value`] is `Some`.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use opc_da_client::{OpcQuality, OpcValue, TagValue};
-    ///
-    /// let tv = TagValue {
-    ///     tag_id: "Tag1".into(),
-    ///     value: Some(OpcValue::Int(10)),
-    ///     quality: OpcQuality::GOOD,
-    ///     timestamp: None,
-    /// };
-    /// assert!(tv.is_good());
-    /// ```
-    #[must_use]
-    pub fn is_good(&self) -> bool {
-        self.quality.is_good() && self.value.is_some()
-    }
-
-    /// Returns `true` if quality is bad or value is missing.
-    ///
-    /// # Returns
-    ///
-    /// `true` if the tag read encountered an error or quality is bad; `false` otherwise.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use opc_da_client::{OpcQuality, TagValue};
-    ///
-    /// let tv = TagValue {
-    ///     tag_id: "Tag1".into(),
-    ///     value: None,
-    ///     quality: OpcQuality::BAD_COMM_FAILURE,
-    ///     timestamp: None,
-    /// };
-    /// assert!(tv.is_error());
-    /// ```
-    #[must_use]
-    pub fn is_error(&self) -> bool {
-        !self.is_good()
-    }
-
-    /// Returns a human-readable display string for the value (or `"Error"` if missing).
-    ///
-    /// For zero-allocation formatting into a formatter or stream, prefer using
-    /// [`OpcValueOptionExt::display`] or [`OpcValueOptionExt::display_or`] on [`TagValue::value`].
-    ///
-    /// # Returns
-    ///
-    /// A newly allocated [`String`] representation of the value, or `"Error"` if [`TagValue::value`] is `None`.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use opc_da_client::{OpcQuality, OpcValue, TagValue};
-    ///
-    /// let tv = TagValue {
-    ///     tag_id: "Tag1".into(),
-    ///     value: Some(OpcValue::Float(23.4)),
-    ///     quality: OpcQuality::GOOD,
-    ///     timestamp: None,
-    /// };
-    /// assert_eq!(tv.display_value(), "23.4");
-    /// ```
-    #[must_use]
-    pub fn display_value(&self) -> String {
-        match &self.value {
-            Some(v) => v.to_string(),
-            None => "Error".to_string(),
-        }
-    }
-
-    /// Returns a human-readable formatted local timestamp string (or `"N/A"` if missing).
-    ///
-    /// For zero-allocation formatting into a formatter or stream, prefer using
-    /// [`SystemTimeOptionExt::display`] or [`SystemTimeOptionExt::display_or`] on [`TagValue::timestamp`].
-    ///
-    /// # Returns
-    ///
-    /// A [`String`] formatted as `"YYYY-MM-DD HH:MM:SS"` in local time, or `"N/A"` if missing or epoch.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use opc_da_client::{OpcQuality, TagValue};
-    ///
-    /// let tv = TagValue {
-    ///     tag_id: "Tag1".into(),
-    ///     value: None,
-    ///     quality: OpcQuality::BAD_COMM_FAILURE,
-    ///     timestamp: None,
-    /// };
-    /// assert_eq!(tv.formatted_timestamp(), "N/A");
-    /// ```
-    #[must_use]
-    pub fn formatted_timestamp(&self) -> String {
-        self.timestamp.display().to_string()
-    }
-}
-
-impl std::fmt::Display for TagValue {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "{} = {} [{}] @ {}",
-            self.tag_id,
-            self.value.display(),
-            self.quality,
-            self.timestamp.display()
-        )
-    }
-}
-
-/// Zero-allocation display adapter for [`Option<OpcValue>`].
-///
-/// Implements [`std::fmt::Display`] to stream the formatted inner value or
-/// a fallback string directly into the output formatter without heap allocations.
-///
-/// # Examples
-///
-/// ```
-/// use opc_da_client::{OpcValue, OpcValueOptionExt};
-///
-/// let some_val = Some(OpcValue::Int(42));
-/// assert_eq!(format!("{}", some_val.display()), "42");
-/// assert_eq!(format!("{}", some_val.display_or("Missing")), "42");
-///
-/// let none_val: Option<OpcValue> = None;
-/// assert_eq!(format!("{}", none_val.display()), "Error");
-/// assert_eq!(format!("{}", none_val.display_or("Missing")), "Missing");
-/// ```
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct DisplayOptionOpcValue<'a> {
-    opt: Option<&'a OpcValue>,
-    fallback: &'a str,
-}
-
-impl std::fmt::Display for DisplayOptionOpcValue<'_> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self.opt {
-            Some(v) => {
-                if f.width().is_some() {
-                    let s = v.to_string();
-                    f.pad(&s)
-                } else {
-                    write!(f, "{v}")
-                }
-            }
-            None => f.pad(self.fallback),
-        }
-    }
-}
-
-/// Zero-allocation display adapter for [`Option<std::time::SystemTime>`].
-///
-/// Implements [`std::fmt::Display`] to stream a local formatted timestamp or
-/// a fallback string directly into the output formatter without heap allocations.
-///
-/// # Examples
-///
-/// ```
-/// use opc_da_client::SystemTimeOptionExt;
-/// use std::time::SystemTime;
-///
-/// let none_time: Option<SystemTime> = None;
-/// assert_eq!(format!("{}", none_time.display()), "N/A");
-/// assert_eq!(format!("{}", none_time.display_or("None")), "None");
-/// ```
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct DisplayOptionTimestamp<'a> {
-    opt: Option<std::time::SystemTime>,
-    fallback: &'a str,
-}
-
-impl std::fmt::Display for DisplayOptionTimestamp<'_> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self.opt {
-            Some(ts) if ts != std::time::SystemTime::UNIX_EPOCH => {
-                let dt: chrono::DateTime<chrono::Local> = ts.into();
-                let formatted = dt.format("%Y-%m-%d %H:%M:%S");
-                if f.width().is_some() {
-                    let s = formatted.to_string();
-                    f.pad(&s)
-                } else {
-                    write!(f, "{formatted}")
-                }
-            }
-            _ => f.pad(self.fallback),
-        }
-    }
-}
-
-/// Extension trait providing zero-allocation formatting helpers for [`Option<OpcValue>`].
-pub trait OpcValueOptionExt {
-    /// Returns a zero-allocation display adapter with custom fallback text.
-    ///
-    /// # Arguments
-    ///
-    /// * `fallback` - Text to render when the option is `None`.
-    ///
-    /// # Returns
-    ///
-    /// A [`DisplayOptionOpcValue`] adapter that implements [`std::fmt::Display`].
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use opc_da_client::{OpcValue, OpcValueOptionExt};
-    ///
-    /// let val = Some(OpcValue::Int(10));
-    /// assert_eq!(format!("{}", val.display_or("Err")), "10");
-    /// ```
-    fn display_or<'a>(&'a self, fallback: &'a str) -> DisplayOptionOpcValue<'a>;
-
-    /// Returns a zero-allocation display adapter with the canonical default fallback (`"Error"`).
-    ///
-    /// # Returns
-    ///
-    /// A [`DisplayOptionOpcValue`] adapter configured with `"Error"` fallback.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use opc_da_client::{OpcValue, OpcValueOptionExt};
-    ///
-    /// let val: Option<OpcValue> = None;
-    /// assert_eq!(format!("{}", val.display()), "Error");
-    /// ```
-    fn display(&self) -> DisplayOptionOpcValue<'_> {
-        self.display_or("Error")
-    }
-}
-
-impl OpcValueOptionExt for Option<OpcValue> {
-    fn display_or<'a>(&'a self, fallback: &'a str) -> DisplayOptionOpcValue<'a> {
-        DisplayOptionOpcValue {
-            opt: self.as_ref(),
-            fallback,
-        }
-    }
-}
-
-impl OpcValueOptionExt for Option<&OpcValue> {
-    fn display_or<'a>(&'a self, fallback: &'a str) -> DisplayOptionOpcValue<'a> {
-        DisplayOptionOpcValue {
-            opt: *self,
-            fallback,
-        }
-    }
-}
-
-/// Extension trait providing zero-allocation formatting helpers for [`Option<std::time::SystemTime>`].
-pub trait SystemTimeOptionExt {
-    /// Returns a zero-allocation display adapter with custom fallback text.
-    ///
-    /// # Arguments
-    ///
-    /// * `fallback` - Text to render when the timestamp is `None` or [`std::time::SystemTime::UNIX_EPOCH`].
-    ///
-    /// # Returns
-    ///
-    /// A [`DisplayOptionTimestamp`] adapter that implements [`std::fmt::Display`].
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use opc_da_client::SystemTimeOptionExt;
-    /// use std::time::SystemTime;
-    ///
-    /// let ts: Option<SystemTime> = None;
-    /// assert_eq!(format!("{}", ts.display_or("Unavailable")), "Unavailable");
-    /// ```
-    fn display_or<'a>(&'a self, fallback: &'a str) -> DisplayOptionTimestamp<'a>;
-
-    /// Returns a zero-allocation display adapter with the canonical default fallback (`"N/A"`).
-    ///
-    /// # Returns
-    ///
-    /// A [`DisplayOptionTimestamp`] adapter configured with `"N/A"` fallback.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use opc_da_client::SystemTimeOptionExt;
-    /// use std::time::SystemTime;
-    ///
-    /// let ts: Option<SystemTime> = None;
-    /// assert_eq!(format!("{}", ts.display()), "N/A");
-    /// ```
-    fn display(&self) -> DisplayOptionTimestamp<'_> {
-        self.display_or("N/A")
-    }
-}
-
-impl SystemTimeOptionExt for Option<std::time::SystemTime> {
-    fn display_or<'a>(&'a self, fallback: &'a str) -> DisplayOptionTimestamp<'a> {
-        DisplayOptionTimestamp {
-            opt: *self,
-            fallback,
-        }
-    }
-}
-
-pub use crate::types::OpcValue;
-
-/// Result of a single write operation.
-///
-/// # Examples
-///
-/// ```
-/// use opc_da_client::{OpcError, WriteResult};
-///
-/// let ok_res = WriteResult::success("Tag1");
-/// assert!(ok_res.is_success());
-/// assert!(ok_res.status.is_ok());
-/// assert!(ok_res.error().is_none());
-///
-/// let err_res = WriteResult::failure("Tag2", OpcError::Connection("Lost".into()));
-/// assert!(err_res.is_error());
-/// assert!(err_res.status.is_err());
-/// assert_eq!(err_res.error(), Some(&OpcError::Connection("Lost".into())));
-/// ```
-#[derive(Debug, Clone, PartialEq)]
-pub struct WriteResult {
-    /// The tag that was written to.
-    pub tag_id: String,
-    /// Outcome of the write operation: `Ok(())` on success, or `Err(OpcError)` on failure.
-    pub status: Result<(), OpcError>,
-}
-
-impl WriteResult {
-    /// Creates a successful write result.
-    ///
-    /// # Arguments
-    ///
-    /// * `tag_id` - Identifier of the tag that was successfully written.
-    ///
-    /// # Returns
-    ///
-    /// A [`WriteResult`] with [`WriteResult::status`] set to `Ok(())`.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use opc_da_client::WriteResult;
-    ///
-    /// let res = WriteResult::success("Channel1.Device1.Tag1");
-    /// assert!(res.is_success());
-    /// assert_eq!(res.tag_id, "Channel1.Device1.Tag1");
-    /// ```
-    #[must_use]
-    pub fn success(tag_id: impl Into<String>) -> Self {
-        Self {
-            tag_id: tag_id.into(),
-            status: Ok(()),
-        }
-    }
-
-    /// Creates a failed write result with a domain error.
-    ///
-    /// # Arguments
-    ///
-    /// * `tag_id` - Identifier of the tag whose write operation failed.
-    /// * `error` - Concrete [`OpcError`] describing the reason for failure.
-    ///
-    /// # Returns
-    ///
-    /// A [`WriteResult`] with [`WriteResult::status`] set to `Err(error)`.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use opc_da_client::{OpcError, WriteResult};
-    ///
-    /// let res = WriteResult::failure("Channel1.Device1.Tag1", OpcError::Connection("Unreachable".into()));
-    /// assert!(res.is_error());
-    /// assert_eq!(res.error(), Some(&OpcError::Connection("Unreachable".into())));
-    /// ```
-    #[must_use]
-    pub fn failure(tag_id: impl Into<String>, error: OpcError) -> Self {
-        Self {
-            tag_id: tag_id.into(),
-            status: Err(error),
-        }
-    }
-
-    /// Returns `true` if the write succeeded.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use opc_da_client::WriteResult;
-    ///
-    /// let res = WriteResult::success("Tag1");
-    /// assert!(res.is_success());
-    /// ```
-    #[must_use]
-    pub fn is_success(&self) -> bool {
-        self.status.is_ok()
-    }
-
-    /// Returns `true` if the write failed.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use opc_da_client::{OpcError, WriteResult};
-    ///
-    /// let res = WriteResult::failure("Tag1", OpcError::Connection("Failed".into()));
-    /// assert!(res.is_error());
-    /// ```
-    #[must_use]
-    pub fn is_error(&self) -> bool {
-        self.status.is_err()
-    }
-
-    /// Returns the error if the write failed, or `None` if it succeeded.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use opc_da_client::{OpcError, WriteResult};
-    ///
-    /// let res = WriteResult::failure("Tag1", OpcError::Connection("Failed".into()));
-    /// if let Some(err) = res.error() {
-    ///     assert_eq!(err.to_string(), "Connection failed: Failed");
-    /// }
-    /// ```
-    #[must_use]
-    pub fn error(&self) -> Option<&OpcError> {
-        self.status.as_ref().err()
-    }
-}
-
-/// Thread-safe accumulator, capacity limiter, and progress monitor for OPC tag namespace browsing.
-///
-/// `TagCollector` encapsulates incremental tag accumulation, explicit `max_tags` bounding,
-/// lock-free progress tracking, and cooperative cancellation across thread and async boundaries.
-///
-/// # Examples
-///
-/// ```
-/// use opc_da_client::TagCollector;
-///
-/// let collector = TagCollector::new(100);
-/// assert_eq!(collector.len(), 0);
-/// assert!(!collector.is_full());
-/// assert_eq!(collector.max_tags(), 100);
-/// ```
-#[derive(Debug, Clone)]
-pub struct TagCollector {
-    inner: Arc<TagCollectorInner>,
-}
-
-#[derive(Debug)]
-struct TagCollectorInner {
-    tags: std::sync::Mutex<Vec<String>>,
-    count: AtomicUsize,
-    max_tags: usize,
-    cancelled: AtomicBool,
-}
-
-impl TagCollector {
-    /// Standard default capacity cap when unconstrained (10,000 tags).
-    pub const DEFAULT_MAX_TAGS: usize = 10_000;
-
-    /// Creates a new `TagCollector` bounded to at most `max_tags` items.
-    ///
-    /// # Arguments
-    /// * `max_tags` - Maximum number of tags this collector will accept.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use opc_da_client::TagCollector;
-    ///
-    /// let collector = TagCollector::new(50);
-    /// assert_eq!(collector.max_tags(), 50);
-    /// ```
-    #[must_use]
-    pub fn new(max_tags: usize) -> Self {
-        Self {
-            inner: Arc::new(TagCollectorInner {
-                tags: std::sync::Mutex::new(Vec::with_capacity(max_tags.min(1024))),
-                count: AtomicUsize::new(0),
-                max_tags,
-                cancelled: AtomicBool::new(false),
-            }),
-        }
-    }
-
-    /// Creates an unbounded `TagCollector` (`max_tags = usize::MAX`).
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use opc_da_client::TagCollector;
-    ///
-    /// let collector = TagCollector::unbounded();
-    /// assert_eq!(collector.max_tags(), usize::MAX);
-    /// ```
-    #[must_use]
-    pub fn unbounded() -> Self {
-        Self::new(usize::MAX)
-    }
-
-    /// Returns the maximum capacity cap.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use opc_da_client::TagCollector;
-    ///
-    /// let collector = TagCollector::new(100);
-    /// assert_eq!(collector.max_tags(), 100);
-    /// ```
-    #[must_use]
-    pub fn max_tags(&self) -> usize {
-        self.inner.max_tags
-    }
-
-    /// Returns the number of tags collected so far without acquiring a mutex lock.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use opc_da_client::TagCollector;
-    ///
-    /// let collector = TagCollector::new(100);
-    /// assert_eq!(collector.len(), 0);
-    /// ```
-    #[must_use]
-    pub fn len(&self) -> usize {
-        self.inner.count.load(Ordering::Acquire)
-    }
-
-    /// Returns true if no tags have been collected yet.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use opc_da_client::TagCollector;
-    ///
-    /// let collector = TagCollector::new(100);
-    /// assert!(collector.is_empty());
-    /// ```
-    #[must_use]
-    pub fn is_empty(&self) -> bool {
-        self.len() == 0
-    }
-
-    /// Returns true if the collector has reached or exceeded its `max_tags` capacity cap.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use opc_da_client::TagCollector;
-    ///
-    /// let collector = TagCollector::new(100);
-    /// assert!(!collector.is_full());
-    /// ```
-    #[must_use]
-    pub fn is_full(&self) -> bool {
-        self.len() >= self.inner.max_tags
-    }
-
-    /// Signals cancellation to the background browse worker.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use opc_da_client::TagCollector;
-    ///
-    /// let collector = TagCollector::new(100);
-    /// collector.cancel();
-    /// assert!(collector.is_cancelled());
-    /// ```
-    pub fn cancel(&self) {
-        self.inner.cancelled.store(true, Ordering::Release);
-    }
-
-    /// Returns true if cancellation has been requested.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use opc_da_client::TagCollector;
-    ///
-    /// let collector = TagCollector::new(100);
-    /// assert!(!collector.is_cancelled());
-    /// ```
-    #[must_use]
-    pub fn is_cancelled(&self) -> bool {
-        self.inner.cancelled.load(Ordering::Acquire)
-    }
-
-    /// Returns a cloned snapshot of all tags collected so far without draining.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use opc_da_client::TagCollector;
-    ///
-    /// let collector = TagCollector::new(100);
-    /// assert!(collector.snapshot().is_empty());
-    /// ```
-    #[must_use]
-    pub fn snapshot(&self) -> Vec<String> {
-        let guard = match self.inner.tags.lock() {
-            Ok(g) => g,
-            Err(poisoned) => poisoned.into_inner(),
-        };
-        guard.clone()
-    }
-
-    /// Drains and returns all collected tags, resetting the buffer and atomic count.
-    ///
-    /// # Returns
-    ///
-    /// Returns a vector of tag ID strings drained from the collector buffer.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use opc_da_client::TagCollector;
-    ///
-    /// let collector = TagCollector::new(100);
-    /// assert!(collector.harvest().is_empty());
-    /// assert_eq!(collector.len(), 0);
-    /// ```
-    #[must_use]
-    pub fn harvest(&self) -> Vec<String> {
-        let mut guard = match self.inner.tags.lock() {
-            Ok(g) => g,
-            Err(poisoned) => poisoned.into_inner(),
-        };
-        let harvested = std::mem::take(&mut *guard);
-        drop(guard);
-        self.inner.count.store(0, Ordering::Release);
-        harvested
-    }
-
-    /// Pushes a tag into the collector if not full or cancelled.
-    ///
-    /// Returns `true` if added, `false` if rejected due to capacity limit or cancellation.
-    ///
-    /// # Examples
-    ///
-    /// ```rust
-    /// use opc_da_client::TagCollector;
-    ///
-    /// let collector = TagCollector::new(10);
-    /// assert!(collector.push("Device1.Sensor.Temp".into()));
-    /// assert_eq!(collector.len(), 1);
-    /// ```
-    pub fn push(&self, tag: String) -> bool {
-        if self.is_cancelled() || self.is_full() {
-            return false;
-        }
-        let mut guard = match self.inner.tags.lock() {
-            Ok(g) => g,
-            Err(poisoned) => poisoned.into_inner(),
-        };
-        if guard.len() >= self.inner.max_tags {
-            return false;
-        }
-        guard.push(tag);
-        drop(guard);
-        self.inner.count.fetch_add(1, Ordering::Release);
-        true
-    }
-}
-
-impl Default for TagCollector {
-    /// Creates a default `TagCollector` with `DEFAULT_MAX_TAGS` capacity.
-    fn default() -> Self {
-        Self::new(Self::DEFAULT_MAX_TAGS)
-    }
-}
 
 /// Async trait for OPC DA operations.
 ///
@@ -864,6 +147,7 @@ pub trait OpcProvider: Send + Sync {
     /// #         value: Some(opc_da_client::OpcValue::Int(42)),
     /// #         quality: opc_da_client::OpcQuality::GOOD,
     /// #         timestamp: None,
+    /// #         ..Default::default()
     /// #     }).collect())
     /// # });
     /// # let client: &dyn opc_da_client::OpcProvider = &mock;
@@ -946,6 +230,7 @@ pub trait OpcProvider: Send + Sync {
     /// #         value: Some(opc_da_client::OpcValue::Int(42)),
     /// #         quality: opc_da_client::OpcQuality::GOOD,
     /// #         timestamp: None,
+    /// #         ..Default::default()
     /// #     })
     /// # });
     /// # let client: &dyn opc_da_client::OpcProvider = &mock;
@@ -1026,6 +311,7 @@ mod tests {
             value: Some(OpcValue::Int(42)),
             quality: OpcQuality::GOOD,
             timestamp: Some(SystemTime::UNIX_EPOCH),
+            ..Default::default()
         };
         assert!(tv.is_good());
         assert!(!tv.is_error());
@@ -1040,6 +326,7 @@ mod tests {
             value: None,
             quality: OpcQuality::BAD_COMM_FAILURE,
             timestamp: None,
+            ..Default::default()
         };
         assert!(!tv.is_good());
         assert!(tv.is_error());
@@ -1109,6 +396,7 @@ mod tests {
             value: Some(OpcValue::Float(99.5)),
             quality: OpcQuality::GOOD,
             timestamp: Some(SystemTime::UNIX_EPOCH),
+            ..Default::default()
         };
         assert_eq!(format!("{tv}"), "Simulation.Item1 = 99.5 [Good] @ N/A");
     }
@@ -1120,6 +408,7 @@ mod tests {
             value: Some(OpcValue::String("Active".into())),
             quality: OpcQuality::GOOD,
             timestamp: None,
+            ..Default::default()
         };
 
         // Exact pattern destructuring
@@ -1128,6 +417,7 @@ mod tests {
             value,
             quality,
             timestamp,
+            ..
         } = tv;
 
         let formatted = format!(
@@ -1295,6 +585,7 @@ mod tests {
                         value: Some(OpcValue::Int(42)),
                         quality: OpcQuality::GOOD,
                         timestamp: None,
+                        ..Default::default()
                     })
                     .collect())
             }

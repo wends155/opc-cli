@@ -118,15 +118,16 @@ use opc_da_client::{
 
 #[tokio::main]
 async fn main() -> OpcResult<()> {
-    let client: OpcDaClient = OpcDaClient::default();
-    let server = "Matrikon.OPC.Simulation.1";
+    let client = OpcDaClient::builder()
+        .server("Matrikon.OPC.Simulation.1")
+        .build()?;
     let tags = vec![
         "Random.Int4".to_string(),
         "Random.Real8".to_string(),
         "Random.String".to_string(),
     ];
 
-    let values = client.read_tag_values(server, tags).await?;
+    let values = client.read_tag_values(tags).await?;
 
     for v in values {
         // Direct Display rendering: "Tag1 = 42.5 [Good] @ 2026-09-04 10:00:00"
@@ -229,6 +230,7 @@ async fn main() -> OpcResult<()> {
                     value: Some(OpcValue::Float(98.6)),
                     quality: OpcQuality::GOOD,
                     timestamp: Some(std::time::SystemTime::UNIX_EPOCH),
+                    ..Default::default()
                 })
                 .collect())
         });

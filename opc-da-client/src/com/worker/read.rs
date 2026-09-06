@@ -1,55 +1,117 @@
-//! Tag reading engine with in-place value population.
+//! Tag reading engine with in-place value population and active group caching.
 
+use super::pool::{CachedGroup, PooledServer};
 use crate::com::connector::{
     ConnectedGroup, ConnectedServer, DataSource, GroupConfig, GroupItemDef, GroupItemResult,
     GroupItemState,
 };
-use crate::com::guard::GroupGuard;
 use crate::errors::{OpcError, OpcOperation, OpcResult};
 use crate::log_opc_err;
 use crate::provider::TagValue;
-use crate::types::{ItemHandle, OpcQuality, ServerIdentifier};
+use crate::types::{
+    ItemHandle, OpcQuality, OpcServerEndpoint, ServerIdentifier, TagBatch, TagValues,
+};
 
-/// Executes synchronous device tag reading through a temporary OPC group, populating
-/// values, qualities, and timestamps into pre-allocated [`TagValue`] slots.
+/// Executes synchronous device tag reading through the pooled server's active OPC group,
+/// reusing cached group handles when tag batches match and populating values, qualities,
+/// timestamps, and granular errors into a [`TagValues`] collection.
 #[tracing::instrument(
     name = "opc.read_tag_values",
     level = "info",
-    skip(tag_ids, opc_server),
-    fields(tag_count = tag_ids.len()),
+    skip(tags, pooled),
+    fields(tag_count = tags.len()),
     err
 )]
+#[allow(clippy::too_many_lines)]
 pub fn handle_read<S: ConnectedServer>(
-    server_id: &ServerIdentifier,
-    tag_ids: &[String],
-    opc_server: &S,
-) -> OpcResult<Vec<TagValue>> {
-    if tag_ids.is_empty() {
-        return Ok(Vec::new());
+    endpoint: &OpcServerEndpoint,
+    tags: &TagBatch,
+    pooled: &mut PooledServer<S>,
+) -> OpcResult<TagValues> {
+    if tags.is_empty() {
+        return Ok(TagValues::new(Vec::new()));
     }
 
     #[cfg(feature = "dev-diagnostics")]
     tracing::trace!(
-        server = %server_id,
-        tag_count = tag_ids.len(),
-        sample_tags = ?tag_ids.iter().take(5).collect::<Vec<_>>(),
+        server = %endpoint,
+        tag_count = tags.len(),
+        sample_tags = ?tags.iter_str().take(5).collect::<Vec<_>>(),
         "read_tag_values: starting operation"
     );
     let start = std::time::Instant::now();
 
-    let created = opc_server
-        .add_group(&GroupConfig::ephemeral("opc-da-client-read"))
+    // Check active group cache hit
+    if let Some(cached) = pooled.active_group.as_ref()
+        && cached.tags.len() == tags.len()
+        && cached.tags.iter().zip(tags.iter_str()).all(|(a, b)| a == b)
+    {
+        let mut tag_values: Vec<TagValue> = cached
+            .tags
+            .iter()
+            .map(|tag_id| TagValue {
+                tag_id: tag_id.clone(),
+                value: None,
+                quality: OpcQuality::BAD_CONFIG_ERROR,
+                timestamp: None,
+                error: None,
+            })
+            .collect();
+
+        // Populate remembered errors for items that were rejected during add_items
+        for &(idx, ref err) in &cached.rejected_errors {
+            tag_values[idx].quality = OpcQuality::BAD_CONFIG_ERROR;
+            tag_values[idx].error = Some(err.clone());
+        }
+
+        if !cached.server_item_handles.is_empty() {
+            let item_states = cached
+                .group
+                .read(DataSource::Device, &cached.server_item_handles)
+                .inspect_err(|e| {
+                    log_opc_err!(
+                        e,
+                        OpcOperation::ReadSync,
+                        server = %endpoint.identifier,
+                        handle_count = cached.server_item_handles.len()
+                    );
+                })?;
+
+            populate_item_states(
+                item_states,
+                &cached.valid_indices,
+                &cached.tags,
+                &endpoint.identifier,
+                &mut tag_values,
+            );
+        }
+
+        tracing::info!(
+            count = tag_values.len(),
+            elapsed_ms = super::elapsed_ms(start),
+            "read_tag_values (cache hit) completed"
+        );
+        return Ok(TagValues::new(tag_values));
+    }
+
+    // Cache miss: remove previous active group
+    pooled.clear_active_group();
+
+    let group_name = super::generate_group_name("opc-read");
+    let created = pooled
+        .server
+        .add_group(&GroupConfig::ephemeral(&group_name))
         .inspect_err(|e| {
             log_opc_err!(
                 e,
                 OpcOperation::ReadAddGroup,
-                server = %server_id,
-                tag_count = tag_ids.len()
+                server = %endpoint.identifier,
+                tag_count = tags.len()
             );
         })?;
     let group = created.group;
-    let _group_guard = GroupGuard::new(opc_server, created.server_handle);
 
+    let tag_ids: Vec<String> = tags.iter_str().map(ToString::to_string).collect();
     let item_defs: Vec<GroupItemDef> = tag_ids
         .iter()
         .enumerate()
@@ -61,24 +123,30 @@ pub fn handle_read<S: ConnectedServer>(
         })
         .collect();
 
-    let results = group.add_items(&item_defs).inspect_err(|e| {
-        log_opc_err!(
-            e,
-            OpcOperation::ReadAddItems,
-            server = %server_id,
-            tag_count = tag_ids.len()
-        );
-    })?;
+    let results = match group.add_items(&item_defs) {
+        Ok(r) => r,
+        Err(e) => {
+            log_opc_err!(
+                &e,
+                OpcOperation::ReadAddItems,
+                server = %endpoint.identifier,
+                tag_count = tag_ids.len()
+            );
+            let _ = pooled.server.remove_group(created.server_handle, true);
+            return Err(e);
+        }
+    };
 
     if results.len() != tag_ids.len() {
         let err = OpcError::Internal("OPC server returned mismatched result array sizes".into());
         log_opc_err!(
             &err,
             OpcOperation::ReadMismatchedResults,
-            server = %server_id,
+            server = %endpoint.identifier,
             expected = tag_ids.len(),
             actual = results.len()
         );
+        let _ = pooled.server.remove_group(created.server_handle, true);
         return Err(err);
     }
 
@@ -89,41 +157,52 @@ pub fn handle_read<S: ConnectedServer>(
             value: None,
             quality: OpcQuality::BAD_CONFIG_ERROR,
             timestamp: None,
+            error: None,
         })
         .collect();
 
-    let (server_handles, valid_indices) =
-        partition_item_results(&results, tag_ids, server_id, &mut tag_values);
+    let (server_handles, valid_indices, rejected_errors) =
+        partition_item_results(&results, &tag_ids, &endpoint.identifier, &mut tag_values);
 
-    if server_handles.is_empty() {
-        return Ok(tag_values);
+    if !server_handles.is_empty() {
+        let item_states = match group.read(DataSource::Device, &server_handles) {
+            Ok(states) => states,
+            Err(e) => {
+                log_opc_err!(
+                    &e,
+                    OpcOperation::ReadSync,
+                    server = %endpoint.identifier,
+                    handle_count = server_handles.len()
+                );
+                let _ = pooled.server.remove_group(created.server_handle, true);
+                return Err(e);
+            }
+        };
+
+        populate_item_states(
+            item_states,
+            &valid_indices,
+            &tag_ids,
+            &endpoint.identifier,
+            &mut tag_values,
+        );
     }
 
-    let item_states = group
-        .read(DataSource::Device, &server_handles)
-        .inspect_err(|e| {
-            log_opc_err!(
-                e,
-                OpcOperation::ReadSync,
-                server = %server_id,
-                handle_count = server_handles.len()
-            );
-        })?;
-
-    populate_item_states(
-        item_states,
-        &valid_indices,
-        tag_ids,
-        server_id,
-        &mut tag_values,
-    );
+    pooled.active_group = Some(CachedGroup {
+        tags: tag_ids,
+        group,
+        server_handle: created.server_handle,
+        server_item_handles: server_handles,
+        valid_indices,
+        rejected_errors,
+    });
 
     tracing::info!(
         count = tag_values.len(),
         elapsed_ms = super::elapsed_ms(start),
-        "read_tag_values completed"
+        "read_tag_values (cache miss) completed"
     );
-    Ok(tag_values)
+    Ok(TagValues::new(tag_values))
 }
 
 /// Separates valid item handles from rejected tags, recording configuration errors for rejected tags.
@@ -132,20 +211,14 @@ fn partition_item_results(
     tag_ids: &[String],
     server_id: &ServerIdentifier,
     tag_values: &mut [TagValue],
-) -> (Vec<ItemHandle>, Vec<usize>) {
+) -> (Vec<ItemHandle>, Vec<usize>, Vec<(usize, OpcError)>) {
     let mut server_handles = Vec::with_capacity(results.len());
     let mut valid_indices = Vec::with_capacity(results.len());
+    let mut rejected_errors = Vec::new();
 
     for (idx, item_result) in results.iter().enumerate() {
-        if item_result.error.is_none() {
-            server_handles.push(item_result.server_handle);
-            valid_indices.push(idx);
-        } else {
-            let err_msg = item_result
-                .error
-                .as_ref()
-                .map(ToString::to_string)
-                .unwrap_or_default();
+        if let Some(ref err) = item_result.error {
+            let err_msg = err.to_string();
             tracing::warn!(
                 server = %server_id,
                 tag = %tag_ids[idx],
@@ -153,10 +226,15 @@ fn partition_item_results(
                 "read_tag_values: add_items rejected tag"
             );
             tag_values[idx].quality = OpcQuality::BAD_CONFIG_ERROR;
+            tag_values[idx].error = Some(err.clone());
+            rejected_errors.push((idx, err.clone()));
+        } else {
+            server_handles.push(item_result.server_handle);
+            valid_indices.push(idx);
         }
     }
 
-    (server_handles, valid_indices)
+    (server_handles, valid_indices, rejected_errors)
 }
 
 /// Writes device states into pre-allocated [`TagValue`] entries by original index.
@@ -173,6 +251,7 @@ fn populate_item_states(
                 tag_values[idx].value = Some(state.value);
                 tag_values[idx].quality = state.quality;
                 tag_values[idx].timestamp = Some(state.timestamp);
+                tag_values[idx].error = None;
             }
             Err(e) => {
                 log_opc_err!(
@@ -184,6 +263,7 @@ fn populate_item_states(
                 tag_values[idx].value = None;
                 tag_values[idx].quality = OpcQuality::BAD_COMM_FAILURE;
                 tag_values[idx].timestamp = None;
+                tag_values[idx].error = Some(e);
             }
         }
     }
@@ -193,24 +273,30 @@ fn populate_item_states(
 mod tests {
     use super::*;
     use crate::com::connector::mock::MockConnectedServer;
+    use crate::com::worker::pool::PooledServer;
+    use crate::types::{OpcServerEndpoint, TagBatch};
 
     #[test]
     fn test_handle_read_empty_tags_short_circuits() {
         let server = MockConnectedServer::default();
-        let server_id = ServerIdentifier::from("Test.Server");
-        let results = handle_read(&server_id, &[], &server).expect("empty tags must succeed");
+        let mut pooled = PooledServer::new(server);
+        let endpoint = OpcServerEndpoint::from("Test.Server");
+        let tags = TagBatch::Static(&[]);
+        let results = handle_read(&endpoint, &tags, &mut pooled).expect("empty tags must succeed");
         assert!(results.is_empty());
     }
 
     #[test]
     fn test_handle_read_with_mock_server() {
         let server = MockConnectedServer::default();
-        let server_id = ServerIdentifier::from("Test.Server");
-        let tags = vec!["Random.Int4".to_string(), "Random.Real8".to_string()];
-        let results = handle_read(&server_id, &tags, &server).expect("reading tags must succeed");
+        let mut pooled = PooledServer::new(server);
+        let endpoint = OpcServerEndpoint::from("Test.Server");
+        let tags = TagBatch::Static(&["Random.Int4", "Random.Real8"]);
+        let results =
+            handle_read(&endpoint, &tags, &mut pooled).expect("reading tags must succeed");
         assert_eq!(results.len(), 2);
-        assert_eq!(results[0].tag_id, "Random.Int4");
-        assert_eq!(results[1].tag_id, "Random.Real8");
-        assert!(results[0].value.is_some());
+        assert_eq!(results.get("Random.Int4").unwrap().tag_id, "Random.Int4");
+        assert_eq!(results.get("Random.Real8").unwrap().tag_id, "Random.Real8");
+        assert!(results.get("Random.Int4").unwrap().value.is_some());
     }
 }

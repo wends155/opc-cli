@@ -115,7 +115,7 @@ opc-da-client/
 - **Mock Availability**: `MockOpcProvider` (exported under `test-support` feature via `mockall`).
 
 ### `types`
-- **Owns**: Canonical domain types, strongly-typed server identifiers (`ServerIdentifier` ProgID vs direct CLSID), rich catalog metadata (`OpcServerInfo`), connection endpoints (`OpcServerEndpoint`), canonical `OpcValue` (with `FromStr`, primitive `From<T>`, and typed borrowing accessors), opaque encapsulated handle newtypes (`GroupHandle`, `ItemHandle` with private `.0`), quality decomposition (`OpcQuality` with `FromStr`, `QualityMajor`, `QualitySubstatus`, `QualityLimit`), browse enums (`BrowseType`, `BrowseDirection`), and server status structs (`ServerState`, `ServerStatus`).
+- **Owns**: Canonical domain types, strongly-typed server identifiers (`ServerIdentifier` ProgID vs direct CLSID), rich catalog metadata (`OpcServerInfo`), connection endpoints (`OpcServerEndpoint`), canonical `OpcValue` (with `FromStr`, primitive `From<T>`, and typed borrowing accessors), opaque encapsulated handle newtypes (`GroupHandle`, `ItemHandle` with private `.0`), quality decomposition (`OpcQuality` with `FromStr`, `QualityMajor`, `QualitySubstatus`, `QualityLimit`), browse enums (`BrowseType`, `BrowseDirection`), server status structs (`ServerState`, `ServerStatus`), canonical DTOs (`TagValue` with `error: Option<OpcError>`, `new()`, `with_error()`, and `Default`, `WriteResult`, `TagCollector`), zero-allocation `TagBatch` enum and `IntoTags` trait, `TagValues` collection (case-insensitive indexing, lenient typed extractions, numeric coercion, `ReadFailed` preservation), and `TagExtractError`.
 - **Does NOT own**: Raw Win32 COM types, dormant bridge types, raw pointers, or allocator logic.
 - **Trait Interfaces**: Pure domain data structures.
 - **Mock Availability**: N/A (data types).
@@ -127,7 +127,7 @@ opc-da-client/
 - **Mock Availability**: N/A.
 
 ### `com::client`
-- **Owns**: Concrete public `OpcDaClient` implementing `OpcProvider`, client-side channel sender management (`mpsc::Sender<ComRequest>`), and public constructors (`OpcDaClient::new`).
+- **Owns**: Concrete public `OpcDaClient` implementing `OpcProvider`, fluent builder `OpcDaClientBuilder` (`builder()`, `host()`, `server()`, `timeout()`, `with_legacy_dcom()`, `with_connector()`), server-bound constructors (`connect`, `connect_remote`), inherent async readers and writers (`read_tag_values`, `read_f64`, `read_i32`, `read_bool`, `read_string`, `write`, `write_batch`), remote server discovery (`list_servers_on`), Layer 2 non-blocking subscription polling stream (`client.subscribe()`), and client-side channel sender management (`mpsc::Sender<ComRequest>`).
 - **Does NOT own**: Direct COM worker loop execution, unmanaged pointers, or in-apartment state (delegated across channels to `ComWorker`).
 - **Trait Interfaces**: `OpcProvider`.
 - **Mock Availability**: `MockOpcDaClient` (exported under `all(feature = "test-support", feature = "opc-da-backend")`).
@@ -140,10 +140,10 @@ opc-da-client/
 
 ### `com::connector`
 - **Owns**: Slim coordinator facade (`connector.rs`, with zero boundary leaks) and modular single-responsibility submodules:
-  - `com::connector::traits`: Core abstraction traits (`ServerConnector` with unidirectional `connect_identifier`, `ConnectedServer`, `ConnectedGroup`) and pure-Rust DTOs (`GroupItemDef`, `GroupItemResult`, `GroupItemState`, `DataSource`, `GroupConfig::ephemeral`, `CreatedGroup`).
-  - `com::connector::server`: Win32 COM server connection (`ComConnector`), namespace navigation (`ComServer`), and direct CLSID instantiation (`connect_server_identifier`).
+  - `com::connector::traits`: Core abstraction traits (`ServerConnector` with unidirectional `connect_endpoint`, `ConnectedServer`, `ConnectedGroup`) and pure-Rust DTOs (`GroupItemDef`, `GroupItemResult`, `GroupItemState`, `DataSource`, `GroupConfig::ephemeral`, `CreatedGroup`).
+  - `com::connector::server`: Win32 COM server connection (`ComConnector`), namespace navigation (`ComServer`), direct CLSID and remote DCOM instantiation (`connect_server_endpoint` with `CoCreateInstanceEx`, `COSERVERINFO`, `COAUTHINFO`, and proxy blanketing).
   - `com::connector::group`: Win32 COM group item registration and synchronous read/write (`ComGroup`) protected by RAII memory safety guards (`ItemResultsBlobGuard`).
-  - `com::connector::mock`: Pure-Rust mock suite (`MockServerConnector`, `MockConnectedServer`, `MockConnectedGroup`, `MockState`, handler aliases `MockAddItemsFn`, `MockReadFn`, `MockWriteFn`) with fluent test builders.
+  - `com::connector::mock`: Pure-Rust mock suite (`MockServerConnector`, `MockConnectedServer`, `MockConnectedGroup`, `MockState`, handler aliases `MockAddItemsFn`, `MockReadFn`, `MockWriteFn`) with fluent test builders and observability counters.
 - **Does NOT own**: Channel communication, connection caching (owned by `com::worker::pool`), or low-level unmanaged allocations.
 - **Trait Interfaces**: `ServerConnector`, `ConnectedServer`, `ConnectedGroup`.
 - **Mock Availability**: `MockServerConnector`, `MockConnectedServer`, `MockConnectedGroup` (exported under `feature = "test-support"`).
@@ -158,11 +158,11 @@ opc-da-client/
 
 ### `com::worker`
 - **Owns**: Dedicated background COM MTA thread runner (`ComWorker`) structured as a lightweight request-dispatching facade coordinating private single-responsibility submodules:
-  - `com::worker::pool`: Connection cache management (`HashMap<ServerIdentifier, Server>`), transparent stale RPC proxy eviction, and reconnection dispatch (`dispatch_with_retry`).
-  - `com::worker::read`: Synchronous tag reading engine (`handle_read`) performing in-place `TagValue` slot population to eliminate allocation overhead.
-  - `com::worker::write`: Synchronous tag writing engine (`handle_write`) with structured `WriteResult` error mapping.
+  - `com::worker::pool`: Connection cache management (`HashMap<ServerIdentifier, PooledServer<Server>>`), embedded active group caching on identical tag sets, transparent stale RPC proxy eviction, 5-second `failure_cooldowns` circuit breaker map, and reconnection dispatch (`dispatch_with_retry`).
+  - `com::worker::read`: Synchronous tag reading engine (`handle_read`) performing in-place `TagValue` slot population, flat UTF-16 arena encoding, and per-item error preservation.
+  - `com::worker::write`: Synchronous native batch tag writing engine (`handle_write_batch`, with `handle_write` delegating to it) with structured `WriteResult` error mapping.
   - `com::worker::browse`: Namespace exploration engine (`handle_browse`) supporting fast flat enumeration and recursive branch traversal protected by `BrowsePositionGuard`.
-  - `com::worker::tests`: Dedicated 842-line test suite containing 22 unit tests and zero-FFI mock fixtures (`WorkerMockConnector`, `WorkerMockServer`, `WorkerMockGroup`, `QualityTestConnector`).
+  - `com::worker::tests`: Dedicated worker test suite containing mock fixtures and comprehensive panic recovery tests.
 - **Does NOT own**: Win32 COM FFI marshalling (delegated to `connector/server.rs` and `connector/group.rs`) or public client traits (delegated to `client.rs`).
 - **Mock Availability**: Exhaustive unit test coverage with pure-Rust connector mocks.
 
@@ -335,7 +335,7 @@ Strongly-typed `OpcOperation` enum and `log_opc_err!` macro emit unified machine
 - **Artifact**: `MockOpcProvider` via `mockall`, allowing downstream consumers (`opc-cli`) to mock the entire OPC DA backend on any OS without COM dependencies.
 
 ### 5. Documentation Tests
-- Verified with `cargo test --doc -p opc-da-client --all-features` (59 active doc-tests). Total unit test suite: 132 unit tests in `opc-da-client` (171 workspace unit tests).
+- Verified with `cargo test --doc -p opc-da-client --all-features` (33 active doc-tests). Total unit test suite: 150 unit tests in `opc-da-client` (189 workspace unit tests).
 
 ---
 

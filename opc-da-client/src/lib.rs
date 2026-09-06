@@ -19,8 +19,9 @@ pub use provider::{
     TagCollector, TagValue, WriteResult,
 };
 pub use types::{
-    BrowseDirection, BrowseType, GroupHandle, ItemHandle, OpcServerEndpoint, OpcServerInfo,
-    ParseQualityError, ServerIdentifier,
+    BrowseDirection, BrowseType, GroupHandle, IntoTags, ItemHandle, OpcServerEndpoint,
+    OpcServerInfo, ParseQualityError, ServerIdentifier, TagBatch, TagBatchIter, TagExtractError,
+    TagValues,
 };
 
 // Backend re-exports (conditional)

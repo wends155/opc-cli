@@ -5,31 +5,84 @@
 
 use crate::com::connector::group::ComGroup;
 use crate::com::connector::traits::{ConnectedServer, CreatedGroup, GroupConfig, ServerConnector};
-use crate::com::discovery::guid_to_progid;
-use crate::com::iterator::{GuidIterator, StringIterator};
+use crate::com::iterator::StringIterator;
 use crate::errors::{OpcError, OpcResult};
 use crate::raw::bindings::da::{
     OPC_BRANCH, OPC_BROWSE_DOWN, OPC_BROWSE_TO, OPC_BROWSE_UP, OPC_FLAT, OPC_LEAF,
 };
 use crate::raw::memory::{LocalPointer, RemotePointer};
 use crate::types::{BrowseDirection, BrowseType, GroupHandle, OpcServerInfo, ServerIdentifier};
-use windows::Win32::System::Com::{CLSCTX_ALL, CLSIDFromProgID, CoCreateInstance};
+use windows::Win32::System::Com::{
+    CLSCTX_ALL, CLSCTX_REMOTE_SERVER, CLSIDFromProgID, COAUTHINFO, COSERVERINFO, CoCreateInstance,
+    CoCreateInstanceEx, CoSetProxyBlanket, EOAC_NONE, MULTI_QI, RPC_C_AUTHN_LEVEL, RPC_C_IMP_LEVEL,
+};
 use windows::core::Interface;
 
-/// Resolve an OPC DA server [`ServerIdentifier`] to a connected COM [`crate::raw::bindings::da::IOPCServer`] instance.
+/// Standard OPC Foundation OPCEnum CLSID for remote server discovery.
+pub const CLSID_OPC_SERVER_LIST: windows::core::GUID =
+    windows::core::GUID::from_u128(0x1348_6d51_4821_11d2_a494_3cb3_06c1_0000);
+
+pub const RPC_C_AUTHN_LEVEL_CONNECT: u32 = 2;
+pub const RPC_C_AUTHN_LEVEL_PKT_INTEGRITY: u32 = 5;
+pub const RPC_C_AUTHN_WINNT: u32 = 10;
+pub const RPC_C_AUTHZ_NONE: u32 = 0;
+pub const RPC_C_IMP_LEVEL_IMPERSONATE: u32 = 3;
+
+/// Returns the RPC authentication level depending on whether legacy DCOM is requested.
+#[inline]
+#[must_use]
+pub const fn authn_level_for(legacy_dcom: bool) -> u32 {
+    if legacy_dcom {
+        RPC_C_AUTHN_LEVEL_CONNECT
+    } else {
+        RPC_C_AUTHN_LEVEL_PKT_INTEGRITY
+    }
+}
+
+/// Applies DCOM security blanketing to a COM interface proxy.
 ///
-/// If connecting via [`ServerIdentifier::Clsid`], instantiates directly via `CoCreateInstance`.
-/// If connecting via [`ServerIdentifier::ProgId`], resolves the ProgID via the Windows registry.
-///
-/// # Errors
-///
-/// Returns `Err` if the `ProgID` cannot be resolved or the server
-/// cannot be instantiated.
+/// In modern Windows environments (post-KB5004442), DCOM RPC requires `RPC_C_AUTHN_LEVEL_PKT_INTEGRITY` (5)
+/// by default, or `RPC_C_AUTHN_LEVEL_CONNECT` (2) if `legacy_dcom` is enabled.
+pub fn apply_proxy_blanket<T: Interface>(proxy: &T, legacy_dcom: bool) -> OpcResult<()> {
+    let authn_level = authn_level_for(legacy_dcom);
+    let unk: windows::core::IUnknown = match proxy.cast() {
+        Ok(u) => u,
+        Err(e) => {
+            tracing::debug!(error = ?e, "Interface does not cast to IUnknown for proxy blanketing");
+            return Ok(());
+        }
+    };
+    // SAFETY: Calling CoSetProxyBlanket on valid COM interface pointer with standard NT security.
+    let hr = unsafe {
+        CoSetProxyBlanket(
+            &unk,
+            RPC_C_AUTHN_WINNT,
+            RPC_C_AUTHZ_NONE,
+            None,
+            RPC_C_AUTHN_LEVEL(authn_level),
+            RPC_C_IMP_LEVEL(RPC_C_IMP_LEVEL_IMPERSONATE),
+            None,
+            EOAC_NONE,
+        )
+    };
+    if let Err(e) = hr {
+        tracing::warn!(
+            error = ?e,
+            authn_level,
+            "Failed to set COM proxy blanket (continuing without security blanket)"
+        );
+    }
+    Ok(())
+}
+
+/// Resolve an [`OpcServerEndpoint`](crate::types::OpcServerEndpoint) to a connected COM [`crate::raw::bindings::da::IOPCServer`] instance,
+/// supporting both local COM activation and remote DCOM activation via `CoCreateInstanceEx`.
 #[tracing::instrument(level = "info", err)]
-pub(crate) fn connect_server_identifier(
-    identifier: &ServerIdentifier,
+pub(crate) fn connect_endpoint(
+    endpoint: &crate::types::OpcServerEndpoint,
+    legacy_dcom: bool,
 ) -> OpcResult<crate::raw::bindings::da::IOPCServer> {
-    let clsid_raw = match identifier {
+    let clsid_raw = match &endpoint.identifier {
         ServerIdentifier::Clsid(guid) => *guid,
         ServerIdentifier::ProgId(server_name) => {
             let server_lp = LocalPointer::from(server_name.as_str());
@@ -48,56 +101,147 @@ pub(crate) fn connect_server_identifier(
         }
     };
 
-    let server_desc = identifier.to_string();
-    // SAFETY: Calling COM function CoCreateInstance with valid CLSID to instantiate IOPCServer.
-    let server: crate::raw::bindings::da::IOPCServer =
-        unsafe { CoCreateInstance(&raw const clsid_raw, None, CLSCTX_ALL) }.inspect_err(|e| {
+    let server_desc = endpoint.to_string();
+    let is_remote_host = endpoint
+        .host
+        .as_deref()
+        .filter(|h| !h.is_empty() && !h.eq_ignore_ascii_case("localhost") && *h != "127.0.0.1");
+
+    let server: crate::raw::bindings::da::IOPCServer = if let Some(host) = is_remote_host {
+        let host_lp = LocalPointer::from(host);
+        let authn_level = authn_level_for(legacy_dcom);
+        let auth_info = COAUTHINFO {
+            dwAuthnSvc: RPC_C_AUTHN_WINNT,
+            dwAuthzSvc: RPC_C_AUTHZ_NONE,
+            pwszServerPrincName: windows::core::PWSTR::null(),
+            dwAuthnLevel: authn_level,
+            dwImpersonationLevel: RPC_C_IMP_LEVEL_IMPERSONATE,
+            pAuthIdentityData: std::ptr::null_mut(),
+            dwCapabilities: 0,
+        };
+        let server_info = COSERVERINFO {
+            dwReserved1: 0,
+            pwszName: host_lp.as_pwstr(),
+            pAuthInfo: (&raw const auth_info).cast_mut(),
+            dwReserved2: 0,
+        };
+        let mqi = MULTI_QI {
+            pIID: &crate::raw::bindings::da::IOPCServer::IID,
+            pItf: std::mem::ManuallyDrop::new(None),
+            hr: windows::core::HRESULT(0),
+        };
+        let mut mqi_slice = [mqi];
+
+        // SAFETY: Calling CoCreateInstanceEx with remote host and valid MULTI_QI.
+        unsafe {
+            CoCreateInstanceEx(
+                &raw const clsid_raw,
+                None,
+                CLSCTX_REMOTE_SERVER,
+                Some(&raw const server_info),
+                &mut mqi_slice,
+            )
+        }
+        .inspect_err(|e| {
             let err = OpcError::from(e.clone());
             crate::log_opc_err!(&err, crate::errors::OpcOperation::Connect, server = %server_desc);
         })?;
+
+        let [mut result_mqi] = mqi_slice;
+        if result_mqi.hr.is_err() {
+            let err = OpcError::from(windows::core::Error::from_hresult(result_mqi.hr));
+            crate::log_opc_err!(&err, crate::errors::OpcOperation::Connect, server = %server_desc);
+            return Err(err);
+        }
+
+        // SAFETY: CoCreateInstanceEx succeeded with S_OK and populated result_mqi.pItf with a valid COM pointer.
+        let unk =
+            unsafe { std::mem::ManuallyDrop::take(&mut result_mqi.pItf) }.ok_or_else(|| {
+                OpcError::Internal("CoCreateInstanceEx returned null interface pointer".into())
+            })?;
+
+        // Apply proxy blanket to IOPCServer
+        apply_proxy_blanket(&unk, legacy_dcom)?;
+
+        unk.cast()?
+    } else {
+        // SAFETY: Calling COM function CoCreateInstance with valid CLSID to instantiate IOPCServer locally.
+        let s: crate::raw::bindings::da::IOPCServer = unsafe {
+            CoCreateInstance(&raw const clsid_raw, None, CLSCTX_ALL)
+        }
+        .inspect_err(|e| {
+            let err = OpcError::from(e.clone());
+            crate::log_opc_err!(&err, crate::errors::OpcOperation::Connect, server = %server_desc);
+        })?;
+        s
+    };
+
     tracing::debug!(server = %server_desc, "Connected to OPC DA server");
     Ok(server)
 }
 
+/// Resolve an OPC DA server [`ServerIdentifier`] to a connected COM [`crate::raw::bindings::da::IOPCServer`] instance.
+#[allow(dead_code)]
+#[tracing::instrument(level = "info", err)]
+pub(crate) fn connect_server_identifier(
+    identifier: &ServerIdentifier,
+) -> OpcResult<crate::raw::bindings::da::IOPCServer> {
+    connect_endpoint(
+        &crate::types::OpcServerEndpoint::from(identifier.clone()),
+        false,
+    )
+}
+
 /// Real COM-backed server connector implementation.
+#[derive(Default, Clone)]
 pub struct ComConnector;
+
+impl ComConnector {
+    /// Connects to an [`OpcServerEndpoint`](crate::types::OpcServerEndpoint) with optional `legacy_dcom` authentication override.
+    pub fn connect_endpoint(
+        &self,
+        endpoint: &crate::types::OpcServerEndpoint,
+        legacy_dcom: bool,
+    ) -> OpcResult<ComServer> {
+        let server = connect_endpoint(endpoint, legacy_dcom)?;
+
+        let common: crate::raw::bindings::comn::IOPCCommon = server.cast()?;
+        let _ = apply_proxy_blanket(&common, legacy_dcom);
+
+        let item_properties: crate::raw::bindings::da::IOPCItemProperties = server.cast()?;
+        let _ = apply_proxy_blanket(&item_properties, legacy_dcom);
+
+        let server_public_groups: Option<crate::raw::bindings::da::IOPCServerPublicGroups> =
+            server.cast().ok();
+        if let Some(ref spg) = server_public_groups {
+            let _ = apply_proxy_blanket(spg, legacy_dcom);
+        }
+
+        let browse_server_address_space: Option<
+            crate::raw::bindings::da::IOPCBrowseServerAddressSpace,
+        > = server.cast().ok();
+        if let Some(ref bsas) = browse_server_address_space {
+            let _ = apply_proxy_blanket(bsas, legacy_dcom);
+        }
+
+        Ok(ComServer {
+            server,
+            common,
+            item_properties,
+            server_public_groups,
+            browse_server_address_space,
+            legacy_dcom,
+        })
+    }
+}
 
 impl ServerConnector for ComConnector {
     type Server = ComServer;
 
     #[tracing::instrument(level = "info", skip(self), err)]
-    fn enumerate_servers(&self) -> OpcResult<Vec<String>> {
-        tracing::debug!("Enumerating OPC DA Server classes via COM Component Categories Manager");
-        // SAFETY: Calling COM function CLSIDFromProgID with static wide string literal.
-        let id = unsafe { CLSIDFromProgID(windows::core::w!("OPC.ServerList.1"))? };
-
-        // SAFETY: Calling COM function CoCreateInstance to instantiate IOPCServerList interface.
-        let servers: crate::raw::bindings::comn::IOPCServerList =
-            unsafe { CoCreateInstance(&raw const id, None, CLSCTX_ALL)? };
-
-        let versions = [crate::raw::bindings::da::CATID_OPCDAServer20::IID];
-
-        // SAFETY: Calling COM method EnumClassesOfCategories with valid version GUID slice.
-        let iter = unsafe {
-            servers
-                .EnumClassesOfCategories(&versions, &[])
-                .inspect_err(|e| tracing::warn!(error = ?e, "Failed to enumerate server classes"))?
-        };
-
-        let guid_iter = GuidIterator::new(iter);
-
-        let mut servers = Vec::new();
-        for guid in guid_iter.flatten() {
-            if guid == windows::core::GUID::zeroed() {
-                continue;
-            }
-
-            if let Ok(progid) = guid_to_progid(&guid)
-                && !progid.is_empty()
-            {
-                servers.push(progid);
-            }
-        }
+    fn enumerate_servers(&self, host: &str) -> OpcResult<Vec<String>> {
+        let details = self.enumerate_server_details(host)?;
+        let mut servers: Vec<String> = details.into_iter().map(|d| d.prog_id).collect();
         servers.sort();
         servers.dedup();
         Ok(servers)
@@ -106,29 +250,16 @@ impl ServerConnector for ComConnector {
     #[tracing::instrument(level = "info", skip(self), err)]
     fn enumerate_server_details(&self, host: &str) -> OpcResult<Vec<OpcServerInfo>> {
         tracing::debug!("Enumerating OPC DA Server catalog details via OpcServerListCatalog");
-        let catalog = crate::com::discovery::OpcServerListCatalog::new()?;
+        let catalog = crate::com::discovery::OpcServerListCatalog::new(Some(host), false)?;
         catalog.enumerate_details(host)
     }
 
     #[tracing::instrument(level = "info", skip(self), err)]
     fn connect_identifier(&self, identifier: &ServerIdentifier) -> OpcResult<Self::Server> {
-        let server = connect_server_identifier(identifier)?;
-
-        let common: crate::raw::bindings::comn::IOPCCommon = server.cast()?;
-        let item_properties: crate::raw::bindings::da::IOPCItemProperties = server.cast()?;
-        let server_public_groups: Option<crate::raw::bindings::da::IOPCServerPublicGroups> =
-            server.cast().ok();
-        let browse_server_address_space: Option<
-            crate::raw::bindings::da::IOPCBrowseServerAddressSpace,
-        > = server.cast().ok();
-
-        Ok(ComServer {
-            server,
-            common,
-            item_properties,
-            server_public_groups,
-            browse_server_address_space,
-        })
+        self.connect_endpoint(
+            &crate::types::OpcServerEndpoint::from(identifier.clone()),
+            false,
+        )
     }
 
     #[tracing::instrument(level = "info", skip(self), err)]
@@ -146,6 +277,7 @@ pub struct ComServer {
     pub(crate) server_public_groups: Option<crate::raw::bindings::da::IOPCServerPublicGroups>,
     pub(crate) browse_server_address_space:
         Option<crate::raw::bindings::da::IOPCBrowseServerAddressSpace>,
+    pub(crate) legacy_dcom: bool,
 }
 
 impl ConnectedServer for ComServer {
@@ -266,5 +398,30 @@ impl ConnectedServer for ComServer {
             self.server.RemoveGroup(server_group.as_raw(), force)?;
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_clsid_opc_server_list_constant() {
+        assert_eq!(
+            CLSID_OPC_SERVER_LIST,
+            windows::core::GUID::from_u128(0x1348_6d51_4821_11d2_a494_3cb3_06c1_0000)
+        );
+        let formatted = format!("{CLSID_OPC_SERVER_LIST:?}");
+        assert!(
+            formatted
+                .to_lowercase()
+                .contains("13486d51-4821-11d2-a494-3cb306c10000")
+        );
+    }
+
+    #[test]
+    fn test_authn_level_selection() {
+        assert_eq!(authn_level_for(false), RPC_C_AUTHN_LEVEL_PKT_INTEGRITY);
+        assert_eq!(authn_level_for(true), RPC_C_AUTHN_LEVEL_CONNECT);
     }
 }

@@ -15,6 +15,7 @@ pub const OPC_E_BADRIGHTS: HRESULT = HRESULT(0xC004_0004_u32.cast_signed());
 pub const OPC_E_BADTYPE: HRESULT = HRESULT(0xC004_0006_u32.cast_signed());
 pub const OPC_E_UNKNOWNITEMID: HRESULT = HRESULT(0xC004_0007_u32.cast_signed());
 pub const OPC_E_INVALIDITEMID: HRESULT = HRESULT(0xC004_0008_u32.cast_signed());
+pub const OPC_E_DUPLICATENAME: HRESULT = HRESULT(0xC004_000C_u32.cast_signed());
 
 /// Maps known COM/DCOM and OPC error codes to actionable user hints.
 #[must_use]
@@ -47,6 +48,9 @@ pub fn friendly_hresult_hint(hr: HRESULT) -> Option<&'static str> {
         OPC_E_INVALIDITEMID => {
             Some("Item ID syntax is invalid for this server (OPC_E_INVALIDITEMID)")
         }
+        OPC_E_DUPLICATENAME => Some(
+            "Duplicate group name — a group with this name already exists (OPC_E_DUPLICATENAME)",
+        ),
         _ => None,
     }
 }
@@ -95,6 +99,12 @@ mod tests {
         assert_eq!(
             friendly_hresult_hint(OPC_E_BADRIGHTS),
             Some("Server rejected write — the item may be read-only (OPC_E_BADRIGHTS)")
+        );
+        assert_eq!(
+            friendly_hresult_hint(OPC_E_DUPLICATENAME),
+            Some(
+                "Duplicate group name — a group with this name already exists (OPC_E_DUPLICATENAME)"
+            )
         );
     }
 

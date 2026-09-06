@@ -8,8 +8,8 @@ use crate::com::guard::GroupGuard;
 use crate::errors::{OpcError, OpcResult};
 use crate::provider::TagCollector;
 use crate::types::{
-    BrowseDirection, BrowseType, GroupHandle, ItemHandle, OpcQuality, OpcServerInfo, OpcValue,
-    ServerIdentifier,
+    BrowseDirection, BrowseType, GroupHandle, ItemHandle, OpcQuality, OpcServerEndpoint,
+    OpcServerInfo, OpcValue, ServerIdentifier, TagBatch,
 };
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
@@ -69,7 +69,7 @@ impl ConnectedServer for WorkerMockServer {
 
 impl ServerConnector for WorkerMockConnector {
     type Server = WorkerMockServer;
-    fn enumerate_servers(&self) -> OpcResult<Vec<String>> {
+    fn enumerate_servers(&self, _host: &str) -> OpcResult<Vec<String>> {
         Ok(vec!["Mock.Server.1".into()])
     }
     fn enumerate_server_details(&self, _host: &str) -> OpcResult<Vec<OpcServerInfo>> {
@@ -189,7 +189,7 @@ impl ConnectedServer for MismatchedServer {
 
 impl ServerConnector for MismatchedConnector {
     type Server = MismatchedServer;
-    fn enumerate_servers(&self) -> OpcResult<Vec<String>> {
+    fn enumerate_servers(&self, _host: &str) -> OpcResult<Vec<String>> {
         Ok(vec![])
     }
     fn enumerate_server_details(&self, _host: &str) -> OpcResult<Vec<OpcServerInfo>> {
@@ -209,8 +209,8 @@ async fn test_worker_read_tag_values_mismatched_lengths() {
 
     let result = worker
         .send_request(|reply| ComRequest::ReadTagValues {
-            server: ServerIdentifier::from("MockServer"),
-            tag_ids: vec!["Tag1".to_string(), "Tag2".to_string()],
+            endpoint: OpcServerEndpoint::from("MockServer"),
+            tags: TagBatch::from(vec!["Tag1".to_string(), "Tag2".to_string()]),
             reply,
         })
         .await;
@@ -236,7 +236,7 @@ async fn test_worker_write_tag_value() {
 
     let result = worker
         .send_request(|reply| ComRequest::WriteTagValue {
-            server: ServerIdentifier::from("Mock.Server.1"),
+            endpoint: OpcServerEndpoint::from("Mock.Server.1"),
             tag_id: "Random.Int4".to_string(),
             value: OpcValue::Int(42),
             reply,
@@ -260,7 +260,7 @@ async fn test_worker_write_tag_value_failure() {
 
     let result = worker
         .send_request(|reply| ComRequest::WriteTagValue {
-            server: ServerIdentifier::from("Mock.Server.1"),
+            endpoint: OpcServerEndpoint::from("Mock.Server.1"),
             tag_id: "Random.Int4".to_string(),
             value: OpcValue::Int(42),
             reply,
@@ -288,7 +288,7 @@ async fn test_connection_cache_reuse() {
 
     let _ = worker
         .send_request(|reply| ComRequest::WriteTagValue {
-            server: ServerIdentifier::from("Mock.Server.1"),
+            endpoint: OpcServerEndpoint::from("Mock.Server.1"),
             tag_id: "Tag1".to_string(),
             value: OpcValue::Int(1),
             reply,
@@ -298,7 +298,7 @@ async fn test_connection_cache_reuse() {
 
     let _ = worker
         .send_request(|reply| ComRequest::WriteTagValue {
-            server: ServerIdentifier::from("Mock.Server.1"),
+            endpoint: OpcServerEndpoint::from("Mock.Server.1"),
             tag_id: "Tag2".to_string(),
             value: OpcValue::Int(2),
             reply,
@@ -324,7 +324,7 @@ async fn test_stale_connection_eviction() {
     // Initial connect
     let _ = worker
         .send_request(|reply| ComRequest::WriteTagValue {
-            server: ServerIdentifier::from("Mock.Server.1"),
+            endpoint: OpcServerEndpoint::from("Mock.Server.1"),
             tag_id: "Tag1".to_string(),
             value: OpcValue::Int(1),
             reply,
@@ -342,7 +342,7 @@ async fn test_stale_connection_eviction() {
     // Next request triggers eviction and reconnect attempt
     let _ = worker
         .send_request(|reply| ComRequest::WriteTagValue {
-            server: ServerIdentifier::from("Mock.Server.1"),
+            endpoint: OpcServerEndpoint::from("Mock.Server.1"),
             tag_id: "Tag2".to_string(),
             value: OpcValue::Int(2),
             reply,
@@ -367,7 +367,7 @@ async fn test_worker_panic_propagation() {
 
     let result = worker
         .send_request(|reply| ComRequest::WriteTagValue {
-            server: ServerIdentifier::from("Mock.Server.1"),
+            endpoint: OpcServerEndpoint::from("Mock.Server.1"),
             tag_id: "Tag1".to_string(),
             value: OpcValue::Int(1),
             reply,
@@ -398,7 +398,7 @@ async fn test_worker_thread_recovery_after_panic() {
     // First request triggers simulated panic
     let result = worker
         .send_request(|reply| ComRequest::WriteTagValue {
-            server: ServerIdentifier::from("Mock.Server.1"),
+            endpoint: OpcServerEndpoint::from("Mock.Server.1"),
             tag_id: "Tag1".to_string(),
             value: OpcValue::Int(1),
             reply,
@@ -422,7 +422,7 @@ async fn test_worker_thread_recovery_after_panic() {
 
     let recovery_result = worker
         .send_request(|reply| ComRequest::WriteTagValue {
-            server: ServerIdentifier::from("Mock.Server.1"),
+            endpoint: OpcServerEndpoint::from("Mock.Server.1"),
             tag_id: "Tag1".to_string(),
             value: OpcValue::Int(42),
             reply,
@@ -451,7 +451,7 @@ async fn test_worker_init_failure() {
     struct FailingInitConnector;
     impl ServerConnector for FailingInitConnector {
         type Server = std::sync::Arc<MockConnectedServer>;
-        fn enumerate_servers(&self) -> OpcResult<Vec<String>> {
+        fn enumerate_servers(&self, _host: &str) -> OpcResult<Vec<String>> {
             Err(OpcError::Internal("COM subsystem failed".into()))
         }
         fn enumerate_server_details(&self, _host: &str) -> OpcResult<Vec<OpcServerInfo>> {
@@ -580,7 +580,7 @@ impl ConnectedServer for QualityTestServer {
 
 impl ServerConnector for QualityTestConnector {
     type Server = QualityTestServer;
-    fn enumerate_servers(&self) -> OpcResult<Vec<String>> {
+    fn enumerate_servers(&self, _host: &str) -> OpcResult<Vec<String>> {
         Ok(vec!["Quality.Mock.Server".into()])
     }
     fn enumerate_server_details(&self, _host: &str) -> OpcResult<Vec<OpcServerInfo>> {
@@ -615,13 +615,14 @@ async fn test_worker_read_tag_values_quality_decoding() {
 
     let results = worker
         .send_request(|reply| ComRequest::ReadTagValues {
-            server: ServerIdentifier::from("Quality.Mock.Server"),
-            tag_ids,
+            endpoint: OpcServerEndpoint::from("Quality.Mock.Server"),
+            tags: TagBatch::from(tag_ids),
             reply,
         })
         .await
         .unwrap();
 
+    let results = results.into_vec();
     assert_eq!(results.len(), 5);
 
     // Tag 0: Good standard (0x00C0)
@@ -705,7 +706,7 @@ async fn test_worker_browse_tags_success() {
     let collector = TagCollector::new(100);
     let result = worker
         .send_request(|reply| ComRequest::BrowseTags {
-            server: ServerIdentifier::from("Mock.Server.1"),
+            endpoint: OpcServerEndpoint::from("Mock.Server.1"),
             collector: collector.clone(),
             reply,
         })
@@ -728,7 +729,7 @@ async fn test_worker_browse_tags_cancelled() {
     collector.cancel();
     let result = worker
         .send_request(|reply| ComRequest::BrowseTags {
-            server: ServerIdentifier::from("Mock.Server.1"),
+            endpoint: OpcServerEndpoint::from("Mock.Server.1"),
             collector: collector.clone(),
             reply,
         })
@@ -749,7 +750,7 @@ async fn test_worker_browse_tags_capacity_cap() {
     let collector = TagCollector::new(2);
     let result = worker
         .send_request(|reply| ComRequest::BrowseTags {
-            server: ServerIdentifier::from("Mock.Server.1"),
+            endpoint: OpcServerEndpoint::from("Mock.Server.1"),
             collector: collector.clone(),
             reply,
         })
@@ -772,7 +773,7 @@ async fn test_worker_browse_tags_flat_organization() {
     let collector = TagCollector::new(100);
     let result = worker
         .send_request(|reply| ComRequest::BrowseTags {
-            server: ServerIdentifier::from("Mock.Server.1"),
+            endpoint: OpcServerEndpoint::from("Mock.Server.1"),
             collector: collector.clone(),
             reply,
         })
@@ -847,8 +848,8 @@ async fn test_worker_handle_read_error_cleans_group() {
 
     let result = worker
         .send_request(|reply| ComRequest::ReadTagValues {
-            server: ServerIdentifier::from("Mock.Server.1"),
-            tag_ids: vec!["Test.Tag".to_string()],
+            endpoint: OpcServerEndpoint::from("Mock.Server.1"),
+            tags: TagBatch::from(vec!["Test.Tag".to_string()]),
             reply,
         })
         .await;
@@ -874,4 +875,33 @@ async fn test_worker_channel_drop_error_propagation() {
         .await
         .unwrap_err();
     assert!(matches!(err, OpcError::Internal(msg) if msg.contains("channel closed")));
+}
+
+#[tokio::test]
+async fn test_worker_native_write_batch_via_com_request() {
+    let state = Arc::new(MockState::default());
+    let connector = Arc::new(MockServerConnector::with_state(state.clone()));
+    let worker = tokio::task::spawn_blocking(move || ComWorker::start(connector).unwrap())
+        .await
+        .unwrap();
+
+    let writes = vec![
+        ("Random.Int4".to_string(), OpcValue::Int(42)),
+        ("Random.Real8".to_string(), OpcValue::Float(12.345)),
+    ];
+
+    let results = worker
+        .send_request(|reply| ComRequest::WriteTagValues {
+            endpoint: OpcServerEndpoint::from("Mock.Server.1"),
+            writes,
+            reply,
+        })
+        .await
+        .expect("batch write should succeed");
+
+    assert_eq!(results.len(), 2);
+    assert_eq!(results[0].tag_id, "Random.Int4");
+    assert!(results[0].is_success());
+    assert_eq!(results[1].tag_id, "Random.Real8");
+    assert!(results[1].is_success());
 }

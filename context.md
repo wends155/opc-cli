@@ -1,5 +1,34 @@
 # Project Context Summary
 
+## 2026-09-06: Fluent Server-Bound Client, Zero-Allocation TagBatch, Remote DCOM Activation & Subscription Stream (`opc-da-client` & `opc-cli`)
+> 📝 **Context Update:**
+> * **Feature:** Execute approved 26-step Master Implementation Plan implementing fluent server-bound client builder, zero-allocation tag batches, rich lenient tag values collection, remote DCOM activation with Windows KB5004442 packet integrity, remote catalog discovery, connection pool active group caching, collision-proof group names, native batch writes, and non-blocking Layer 2 subscription stream.
+> * **Changes:**
+>   - **Foundation & Zero-Allocation Tag Models (`types.rs`):**
+>     - Consolidated canonical DTOs (`TagValue`, `WriteResult`, `TagCollector`) into `types.rs`.
+>     - Added `TagValue.error: Option<OpcError>`, `TagValue::new()`, `TagValue::with_error()`, and `Default`.
+>     - Implemented zero-allocation `TagBatch` enum and `IntoTags` trait supporting `&[&'static str]`, `[&'static str; N]`, `&'static str`, `Vec<String>`, `&[String]`, and `Arc<[String]>`.
+>     - Implemented `TagValues` collection with case-insensitive indexing, lenient typed extraction (`get_f64`, `get_i32`, `get_bool`, `get_str`), numeric coercion, and `ReadFailed { tag, source }` error preservation.
+>   - **Remote DCOM Activation, Security Blanketing & Catalog Discovery (`com/connector/` & `com/discovery.rs`):**
+>     - Standard `CLSID_OPC_SERVER_LIST` (`{13486D51-4821-11D2-A494-3CB306C10000}`) and `OPC_E_DUPLICATENAME` (`0xC004000C`) defined in `raw/hresult.rs`.
+>     - Upgraded `ServerConnector::enumerate_servers(&self, host: &str)` and `connect_endpoint(&self, endpoint: &OpcServerEndpoint)`.
+>     - Implemented `CoCreateInstanceEx` with `COSERVERINFO`, `COAUTHINFO` (defaulting to KB5004442 `RPC_C_AUTHN_LEVEL_PKT_INTEGRITY`), and `apply_proxy_blanket` on `IOPCServer`, `IOPCServerList`, `IOPCBrowseServerAddressSpace`, and child groups.
+>   - **Worker Engine, Active Group Caching & Batch Writes (`com/worker/`):**
+>     - Upgraded `ComRequest` variants (`ReadTagValues`, `WriteTagValue`, `WriteTagValues`, `BrowseTags`) to use `OpcServerEndpoint` and `TagBatch`.
+>     - Implemented `PooledServer<S>` with active group caching in `pool.rs`, reusing COM groups and item handles on repeated reads of identical tag sets to eliminate ephemeral group churn.
+>     - Implemented 5-second `failure_cooldowns` circuit breaker map preventing reconnect storms to unresponsive hosts.
+>     - Implemented collision-proof `generate_group_name` with PID and atomic nonce.
+>     - Implemented native `handle_write_batch` and updated `handle_write` to delegate to it.
+>   - **Fluent Builder, Inherent API & Layer 2 Subscription Stream (`com/client.rs`):**
+>     - Implemented `OpcDaClientBuilder` with `.host()`, `.server()`, `.timeout()`, `.with_legacy_dcom()`, and `.with_connector()`.
+>     - Implemented inherent async readers (`read_tag_values`, `read_f64`, `read_i32`, `read_bool`, `read_string`), writers (`write`, `write_batch`), and remote discovery (`list_servers_on`).
+>     - Implemented non-blocking `client.subscribe(tags, interval)` yielding `tokio::sync::mpsc::Receiver<TagValues>` with RAII cancellation on receiver drop.
+>   - **Downstream Verification & Quality Pipeline:**
+>     - All 39 `opc-cli` mock tests pass without regressions.
+>     - Full 9-gate quality pipeline (`scripts/verify.ps1`) passes exit 0: 150 `opc-da-client` unit tests, 39 `opc-cli` unit tests, 33 doc-tests, zero clippy warnings (`-D warnings`), zero AST-Grep violations, zero forbidden patterns, clean polyfill builds.
+> * **New Constraints:** Inherent `OpcDaClient` methods take `impl IntoTags` and require server binding; unbound usage must use `OpcProvider` trait methods or configure `.server(...)`. All COM activations defaulting to remote hosts must apply KB5004442 packet integrity blanketing unless legacy DCOM is explicitly enabled.
+> * **Pruned:** Ephemeral COM group churn on identical polling reads, stringly-typed simulated write loops, phantom host parameters in server connection, and `.unwrap()` calls in non-test library code.
+
 ## 2026-09-06: Architectural Hardening, Rustdoc Coverage, and Specification Alignment (`opc-da-client` & `opc-cli`)
 > 📝 **Context Update:**
 > * **Feature:** Execute approved 14-step Master Implementation Plan resolving all 9 architectural recommendations and 11 documentation drift items from parallel Auditor subagent reports.

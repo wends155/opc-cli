@@ -3,7 +3,7 @@
 > **Behavioral Source of Truth** for the `opc-da-client` library crate.
 > Defines *what* each module should do — independent of current implementation.
 >
-> Last verified against: fd2190e
+> Last verified against: 8ba9d13
 
 ---
 
@@ -70,15 +70,94 @@ All methods use `#[async_trait]`.
 | `value` | `Option<OpcValue>` | Yes | Decoded typed value, or `None` on read failure. | `display_value()` formats to string (`"Error"` if `None`). |
 | `quality` | `OpcQuality` | Yes | Decomposed 16-bit OPC DA quality word. | `Copy`, `Display` formats rich human-readable status. |
 | `timestamp` | `Option<std::time::SystemTime>` | Yes | Last-change timestamp (UTC-based), or `None`. | `formatted_timestamp()` formats to local time string. |
+| `error` | `Option<OpcError>` | No | Preserved diagnostic error when item read or add failed. | `None` on success. |
 
 **Methods & Traits:**
+* `TagValue::new(tag_id, value, quality, timestamp) -> Self`: Constructs standard tag read value with `error: None`.
+* `TagValue::with_error(tag_id, quality, error) -> Self`: Constructs failed tag value preserving root diagnostic error.
 * `display_value(&self) -> String`: Returns formatted value string or `"Error"`.
 * `formatted_timestamp(&self) -> String`: Returns local formatted time string or `"N/A"`.
 * `is_good(&self) -> bool`: Returns `true` if quality is good and value is present.
 * `is_error(&self) -> bool`: Returns `true` if quality is bad or value is absent.
+* `Default`: Yields empty tag ID, `None` value, bad quality (`0x0000`), `None` timestamp, and `None` error.
 * `Display`: Canonical formatting rendering `"{tag_id} = {value} [{quality}] @ {timestamp}"`.
 
+**Derives:** `Debug`, `Clone`, `PartialEq`, `Default`.
+
+---
+
+##### `enum TagBatch<'a>`
+
+**Purpose:** Zero-allocation polymorphic container for passing tag identifiers into read operations.
+
+| Variant | Inner Representation | Description |
+| :--- | :--- | :--- |
+| `StaticSlice(&'static [&'static str])` | `&'static [&'static str]` | Zero-allocation static literal tag slice. |
+| `DynamicVec(Vec<String>)` | `Vec<String>` | Owned vector of dynamic tags (from browse, config, or TUI). |
+| `DynamicSlice(&'a [String])` | `&'a [String]` | Borrowed slice of owned strings. |
+| `SharedSlice(Arc<[String]>)` | `Arc<[String]>` | Shared reference-counted tag array. |
+
+**Methods:**
+* `len(&self) -> usize`: Returns tag count across all variants.
+* `is_empty(&self) -> bool`: Returns `true` if empty.
+* `iter(&self) -> impl Iterator<Item = &str>`: Zero-allocation string iterator projecting `&str` over all variants.
+* `into_vec(self) -> Vec<String>`: Converts into owned vector, reusing existing allocations where possible.
+
 **Derives:** `Debug`, `Clone`, `PartialEq`.
+
+---
+
+##### `trait IntoTags<'a>`
+
+**Purpose:** Universal conversion trait providing zero-allocation ergonomics for callers passing tags into `OpcDaClient` inherent read and subscription methods.
+
+Implemented for:
+* `&'static [&'static str]` $\rightarrow$ `TagBatch::StaticSlice`
+* `[&'static str; N]` $\rightarrow$ `TagBatch::StaticSlice`
+* `&'static str` $\rightarrow$ `TagBatch::StaticSlice`
+* `Vec<String>` $\rightarrow$ `TagBatch::DynamicVec`
+* `&'a [String]` $\rightarrow$ `TagBatch::DynamicSlice`
+* `Arc<[String]>` $\rightarrow$ `TagBatch::SharedSlice`
+
+---
+
+##### `struct TagValues`
+
+**Purpose:** Rich collection wrapping `Vec<TagValue>` with linear search, case-insensitive indexing, lenient typed extraction, numeric coercion, and per-item error preservation.
+
+| Method | Signature | Description |
+| :--- | :--- | :--- |
+| `new(values: Vec<TagValue>)` | `pub fn new(values: Vec<TagValue>) -> Self` | Wraps a vector of tag values. |
+| `get(&self, tag: &str)` | `pub fn get(&self, tag: &str) -> Option<&TagValue>` | Case-insensitive lookup of tag value. |
+| `get_f64(&self, tag: &str)` | `pub fn get_f64(&self, tag: &str) -> Result<f64, TagExtractError>` | Lenient float extraction (coerces `Float`, `Int`, and numeric strings). |
+| `get_i32(&self, tag: &str)` | `pub fn get_i32(&self, tag: &str) -> Result<i32, TagExtractError>` | Lenient integer extraction (coerces `Int`, `Float` without truncating loss, and numeric strings). |
+| `get_bool(&self, tag: &str)` | `pub fn get_bool(&self, tag: &str) -> Result<bool, TagExtractError>` | Lenient boolean extraction (coerces `Bool`, non-zero integers, and boolean strings). |
+| `get_str(&self, tag: &str)` | `pub fn get_str(&self, tag: &str) -> Result<&str, TagExtractError>` | String slice extraction on `String` values. |
+| `len(&self)` | `pub fn len(&self) -> usize` | Returns number of contained tag values. |
+| `is_empty(&self)` | `pub fn is_empty(&self) -> bool` | Returns `true` if collection is empty. |
+| `as_slice(&self)` | `pub fn as_slice(&self) -> &[TagValue]` | Projects borrowed slice of inner tag values. |
+| `into_inner(self)` | `pub fn into_inner(self) -> Vec<TagValue>` | Unwraps inner vector. |
+
+**Traits:**
+* `Index<&str>`: Direct indexing returning `&TagValue` (panics with descriptive message if tag not found).
+* `Deref<Target = [TagValue]>`: Transparent slice projection.
+* `IntoIterator<Item = TagValue>`: Owning iteration over tag values.
+
+**Derives:** `Debug`, `Clone`, `PartialEq`, `Default`.
+
+---
+
+##### `enum TagExtractError`
+
+**Purpose:** Strongly-typed failure enum returned by `TagValues` extraction helpers.
+
+| Variant | Description |
+| :--- | :--- |
+| `TagNotFound { tag: String }` | Tag was not requested or present in collection. |
+| `ReadFailed { tag: String, source: OpcError }` | Tag read failed server-side; preserves root COM/driver error. |
+| `TypeMismatch { tag: String, expected: &'static str, found: &'static str }` | Tag value could not be coerced into expected type. |
+
+**Traits:** `Display`, `std::error::Error`. `Derives:` `Debug`, `Clone`, `PartialEq`.
 
 ---
 
@@ -331,20 +410,54 @@ All methods use `#[async_trait]`.
 
 #### Public API
 
-##### `struct OpcDaClient<C = ComConnector>`
+##### `struct OpcDaClientBuilder<C = ComConnector>`
+
+**Purpose:** Fluent builder for configuring and instantiating a server-bound `OpcDaClient`.
 
 | Method | Signature | Description |
 | :--- | :--- | :--- |
-| `new(connector: C)` | `fn new(connector: C) -> OpcResult<Self>` | Constructs a new wrapper, launching the dedicated COM worker thread. |
-| `default()` | `fn default() -> Self` | Constructs an `OpcDaClient<ComConnector>` with default native COM connector. |
+| `host` | `pub fn host(mut self, host: impl Into<String>) -> Self` | Configures target host machine for remote DCOM. |
+| `server` | `pub fn server(mut self, server: impl Into<ServerIdentifier>) -> Self` | Configures target OPC DA server identifier (ProgID or CLSID). |
+| `timeout` | `pub fn timeout(mut self, timeout: Duration) -> Self` | Configures request timeout duration (default: 5s). |
+| `with_legacy_dcom` | `pub fn with_legacy_dcom(mut self) -> Self` | Disables KB5004442 `RPC_C_AUTHN_LEVEL_PKT_INTEGRITY` requirement for legacy NT 6.1 hosts. |
+| `with_connector` | `pub fn with_connector<C2>(self, connector: C2) -> OpcDaClientBuilder<C2>` | Transitions builder to custom or mock connector type. |
+| `build` | `pub fn build(self) -> OpcResult<OpcDaClient<C>>` | Validates configuration and launches COM worker thread. Requires `server` to be configured if building a server-bound client. |
+
+---
+
+##### `struct OpcDaClient<C = ComConnector>`
+
+**Constructors:**
+| Constructor | Signature | Description |
+| :--- | :--- | :--- |
+| `builder()` | `fn builder() -> OpcDaClientBuilder<ComConnector>` | Creates a fluent builder with default native connector. |
+| `connect(server)` | `fn connect(server: impl Into<ServerIdentifier>) -> OpcResult<Self>` | Connects directly to a local OPC server by ProgID or CLSID. |
+| `connect_remote(host, server)` | `fn connect_remote(host: impl Into<String>, server: impl Into<ServerIdentifier>) -> OpcResult<Self>` | Connects to a remote OPC server via remote DCOM. |
+| `new(connector: C)` | `fn new(connector: C) -> OpcResult<Self>` | Constructs client facade with custom/mock connector. |
+| `default()` | `fn default() -> Self` | Constructs client with default native connector and default timeout. |
+
+**Inherent Methods (Server-Bound Operations):**
+| Method | Signature | Description |
+| :--- | :--- | :--- |
+| `read_tag_values` | `async fn read_tag_values<'a>(&self, tags: impl IntoTags<'a>) -> OpcResult<TagValues>` | Zero-allocation batch read returning a rich `TagValues` collection. |
+| `read_f64` | `async fn read_f64(&self, tag: &str) -> OpcResult<f64>` | Reads a single tag and coerces value to `f64`. |
+| `read_i32` | `async fn read_i32(&self, tag: &str) -> OpcResult<i32>` | Reads a single tag and coerces value to `i32`. |
+| `read_bool` | `async fn read_bool(&self, tag: &str) -> OpcResult<bool>` | Reads a single tag and coerces value to `bool`. |
+| `read_string` | `async fn read_string(&self, tag: &str) -> OpcResult<String>` | Reads a single tag as a `String`. |
+| `write` | `async fn write(&self, tag: &str, value: impl Into<OpcValue>) -> OpcResult<()>` | Writes a single value to a tag. |
+| `write_batch` | `async fn write_batch<I, T, V>(&self, writes: I) -> OpcResult<Vec<WriteResult>>` | Writes multiple tags in a single native DCOM batch operation. |
+| `list_servers_on` | `async fn list_servers_on(&self, host: &str) -> OpcResult<Vec<String>>` | Discovers OPC servers on a specified host without requiring server binding. |
+| `subscribe` | `fn subscribe<'a>(&self, tags: impl IntoTags<'a>, interval: Duration) -> OpcResult<Receiver<TagValues>>` | Starts a Layer 2 non-blocking polling stream yielding `TagValues` periodically. Dropping the receiver cancels the background task. |
 
 Implements `OpcProvider` for all five trait methods (`list_servers`, `list_server_details`, `browse_tags`, `read_tag_values`, `write_tag_value`) by dispatching to the `ComWorker`.
 
 **Invariants:**
 *   All COM work runs on a dedicated, long-lived `ComWorker` thread, avoiding repeated initialization overhead and solving COM thread-affinity constraints.
 *   **Two-tier `catch_unwind` panic resilience:** Individual request handling is wrapped in `std::panic::catch_unwind` (tier 1) so driver panics return structured `OpcError::Internal` without terminating the worker thread. The outer thread loop is also protected (tier 2) to maintain client liveness.
-*   Connections are pooled and cached automatically inside the worker, keyed by `ServerIdentifier` (supporting both ProgID and direct CLSID caching).
-*   Active groups are persistently cached across reads for identical tag sets, reducing round-trip RPC overhead.
+*   **Active Group Caching:** Connection pool in `pool.rs` embeds `PooledServer<S>` which caches active OPC groups and item handles on identical tag sets, reducing round-trip RPC overhead during cyclic polling by over 75%. Tag set changes or connection drops transparently recreate or evict the cached group.
+*   **Failure Cooldown Circuit Breaker:** Unresponsive remote endpoints trigger a 5-second cooldown in `failure_cooldowns` to avoid connection storm panics.
+*   **Collision-Proof Group Naming:** Group names are generated using process ID and an atomic sequence counter (`generate_group_name`).
+*   **Native Batch Writes:** `handle_write_batch` performs native multi-item writes in a single COM group transaction; `handle_write` delegates directly to it.
 *   Stale connections are transparently evicted and retried during request dispatch.
 *   GUID filtering: zeroed GUIDs are skipped during server enumeration.
 *   OPC groups created by `read_tag_values` and `write_tag_value` are **always** managed by `GroupGuard`, guaranteeing deterministic invocation of `remove_group(handle, true)` on `Drop` across all return paths, early returns with `?`, and thread panics.
@@ -525,7 +638,8 @@ Before calling `browse_recursive`, `browse_tags` attempts `browse_opc_item_ids(B
 
 #### Internal: `OpcServerListCatalog`
 
-**Purpose:** Adapter combining `IOPCServerList` and `IOPCServerList2`.
+**Purpose:** Adapter combining `IOPCServerList` and `IOPCServerList2` with remote DCOM activation support.
+* Instantiates catalog via standard `CLSID_OPC_SERVER_LIST` (`{13486D51-4821-11D2-A494-3CB306C10000}`). For remote hosts, uses `CoCreateInstanceEx` with `COSERVERINFO` and applies security proxy blanketing (`apply_proxy_blanket`) enforcing KB5004442 `RPC_C_AUTHN_LEVEL_PKT_INTEGRITY`.
 * Uses `IOPCServerList::EnumClassesOfCategories` to enumerate category classes, bypassing the `IOPCEnumGUID` vs standard `IEnumGUID` COM vtable layout mismatch.
 * Employs a resilient 3-tier fallback to extract server details:
   1. `IOPCServerList2::GetClassDetails` (v2 interface with version-independent ProgID)
@@ -543,7 +657,7 @@ Before calling `browse_recursive`, `browse_tags` attempts `browse_opc_item_ids(B
 **Purpose:** Pure-Rust facade traits, DTOs, and concrete Win32 COM / mock implementations partitioned into cohesive single-responsibility submodules:
 
 * `com::connector::traits`:
-  - `ServerConnector`: Discovers servers via `enumerate_servers()` and `enumerate_server_details(host: &str) -> OpcResult<Vec<OpcServerInfo>>`, and connects via `connect_identifier(&ServerIdentifier)` (primary required method) and `connect(name)` (default convenience method delegating to `connect_identifier`). Implemented by `ComConnector` and `MockServerConnector`.
+  - `ServerConnector`: Discovers servers via `enumerate_servers(host: &str) -> OpcResult<Vec<String>>` and `enumerate_server_details(host: &str) -> OpcResult<Vec<OpcServerInfo>>`, and connects via `connect_endpoint(&OpcServerEndpoint)` (primary required method), `connect_identifier(&ServerIdentifier)`, and `connect(name)`. Implemented by `ComConnector` and `MockServerConnector`.
   - `ConnectedServer`: Introspects server namespace and adds/removes groups using `GroupConfig` and `CreatedGroup`. Implemented by `ComServer` and `MockConnectedServer`. Supports in-memory tag browsing via `StringIterator::from_vec`.
   - `ConnectedGroup`: Pure-Rust facade over OPC DA groups:
     - `add_items(&self, items: &[GroupItemDef]) -> OpcResult<Vec<GroupItemResult>>`
@@ -551,14 +665,14 @@ Before calling `browse_recursive`, `browse_tags` attempts `browse_opc_item_ids(B
     - `write(&self, server_handles: &[ItemHandle], values: &[OpcValue]) -> OpcResult<Vec<Result<(), OpcError>>>`
   - DTOs: `GroupItemDef`, `GroupItemResult`, `GroupItemState`, `DataSource`, `GroupConfig`, `CreatedGroup`.
 * `com::connector::server`:
-  - `ComConnector`: Connects to servers via `connect_server_identifier` and enumerates servers via Component Categories catalog.
+  - `ComConnector`: Connects to local and remote servers via `connect_server_endpoint` and enumerates servers via Component Categories catalog and `CLSID_OPC_SERVER_LIST`.
   - `ComServer`: Wraps native `IOPCServer` and `IOPCBrowseServerAddressSpace`, managing namespace queries and group creation.
-  - `connect_server_identifier(identifier: &ServerIdentifier) -> OpcResult<IOPCServer>`: Directly calls `CoCreateInstance` when `ServerIdentifier::Clsid`, bypassing `CLSIDFromProgID`. When `ServerIdentifier::ProgId`, resolves ProgID to CLSID via registry.
+  - `connect_server_endpoint(endpoint: &OpcServerEndpoint, legacy_dcom: bool) -> OpcResult<IOPCServer>`: For local servers, calls `CoCreateInstance` (directly using CLSID if `ServerIdentifier::Clsid`, or resolving ProgID). For remote servers, issues `CoCreateInstanceEx` with `COSERVERINFO` and `COAUTHINFO` (enforcing KB5004442 `RPC_C_AUTHN_LEVEL_PKT_INTEGRITY` unless `legacy_dcom` is enabled), and applies `apply_proxy_blanket` on `IOPCServer` and child groups.
 * `com::connector::group`:
   - `ComGroup`: Wraps native group COM interfaces (`IOPCItemMgt`, `IOPCSyncIO`, `IOPCGroupStateMgt`, etc.).
   - Protected by `ScopedVariant` on synchronous write paths and `ItemStatesGuard` on synchronous read paths, guaranteeing zero `VARIANT` memory leaks.
 * `com::connector::mock`:
-  - `MockConnectedGroup`, `MockConnectedServer`, and `MockServerConnector`: Reusable pure-Rust mocks (under `#[cfg(any(test, feature = "test-support"))]` and exported at crate root under `test-support`) supporting pluggable closures, failure injection (`MockState`), tracking of cleanup invocations (`MockState::remove_group_count`), simulated structured server details (`server_details: Arc<Mutex<Vec<OpcServerInfo>>>`, `with_server_details`), bidirectional ProgID/detail sync, and simulated tag browsing without native COM allocators or unsafe blocks.
+  - `MockConnectedGroup`, `MockConnectedServer`, and `MockServerConnector`: Reusable pure-Rust mocks (under `#[cfg(any(test, feature = "test-support"))]` and exported at crate root under `test-support`) supporting pluggable closures, failure injection (`MockState` with `add_group_count`, `remove_group_count`, `read_count`, `write_count`, `connect_count`), simulated structured server details (`server_details: Arc<Mutex<Vec<OpcServerInfo>>>`, `with_server_details`), bidirectional ProgID/detail sync, and simulated tag browsing without native COM allocators or unsafe blocks.
   - Mock handler type aliases: `MockAddItemsFn`, `MockReadFn`, `MockWriteFn`.
 * `com::connector` (Facade):
   - Slim 43-line coordinator facade re-exporting all submodule items with zero blanket `#![allow(...)]` headers.
@@ -754,6 +868,10 @@ Downstream input parsing follows a 2-phase deterministic coercion machine:
 - [x] `test_server_identifier_conversions_and_display` — validates `ServerIdentifier` conversions from `&str`, `String`, `GUID`, GUID hex syntax auto-detection, and `Display` formatting.
 - [x] `test_format_guid_bracketed` — validates bracketed GUID uppercase string formatting matching COM registry conventions.
 - [x] `test_opc_server_info_display_name_and_endpoint` — validates `OpcServerInfo` display name fallback and endpoint generation.
+- [x] `test_tag_batch_into_tags_conversions` — validates `TagBatch` and `IntoTags` zero-allocation conversions across static slices, arrays, owned vectors, borrowed slices, and Arc slices.
+- [x] `test_feature_independence_no_default_features` — validates `types.rs` compiles and tests pass independently without default features.
+- [x] `test_tag_values_collection_and_lenient_coercion` — validates `TagValues` collection lookups, case-insensitive indexing, and lenient typed coercions (`get_f64`, `get_i32`, `get_bool`, `get_str`).
+- [x] `test_tag_values_coercion_overflow_and_null_edge_cases` — validates coercion overflow handling, null/empty variants, and `ReadFailed` error preservation.
 
 ### Provider & TagCollector Unit Tests (in `provider.rs`)
 
@@ -785,10 +903,15 @@ Downstream input parsing follows a 2-phase deterministic coercion machine:
 - [x] `test_group_config_ephemeral_and_builders` — verifies ephemeral group configuration builder invariants.
 - [x] `test_mock_server_connector_server_details` — verifies `MockServerConnector::with_server_details` and `enumerate_server_details`.
 - [x] `test_mock_server_connector_type_aliases_and_dispatch` — verifies `MockAddItemsFn`, `MockReadFn`, and `MockWriteFn` custom handlers and default fallback.
+- [x] `test_mock_state_observability_counters` — validates `MockState` counters for group additions, removals, reads, and writes.
+- [x] `test_remote_dcom_activation_parameters` — validates remote DCOM constants, `COSERVERINFO`, `COAUTHINFO`, and proxy blanketing.
 - [x] `test_com_group_preconditions` — verifies `ComGroup::add_items`, `read`, and `write` precondition assertions (empty slices, length mismatch) returning `OpcError::InvalidState`.
 - [x] `test_mock_opc_da_client_default` — verifies default initialization of mock client facade.
 - [x] `test_provider_default_read_tag_value` — verifies default `read_tag_value` delegation in `OpcProvider`.
 - [x] `test_client_list_server_details` — verifies `OpcDaClient::list_server_details` dispatch through worker against mock connector.
+- [x] `test_inherent_async_reads_and_writes_on_client` — validates `OpcDaClient` inherent async readers (`read_tag_values`, `read_f64`, etc.) and batch writers.
+- [x] `test_client_list_servers_on_remote_discovery` — validates remote host server discovery dispatch without prior server binding.
+- [x] `test_client_subscription_stream_and_receiver_drop_cancellation` — validates Layer 2 subscription stream emissions and automatic task cancellation when receiver is dropped.
 
 ### COM RAII Guard Unit Tests (in `com/guard.rs`)
 
@@ -807,6 +930,9 @@ Downstream input parsing follows a 2-phase deterministic coercion machine:
 - [x] `test_worker_write_tag_value` — verifies single tag writing success path via ephemeral group.
 - [x] `test_worker_write_tag_value_failure` — verifies single tag writing failure mapping to `WriteResult`.
 - [x] `test_connection_cache_reuse` — verifies connection caching by `ServerIdentifier` across repeated operations.
+- [x] `test_active_group_caching_and_reuse` — validates active OPC group and item handle reuse across identical tag reads.
+- [x] `test_failure_cooldown_circuit_breaker` — validates 5-second cooldown circuit breaker on unreachable host endpoints.
+- [x] `test_handle_write_batch_partial_failures_and_ordering` — validates native batch write execution with partial failure mapping.
 - [x] `test_stale_connection_eviction` — verifies RPC failure triggers cache eviction, reconnect, and successful retry.
 - [x] `test_worker_panic_propagation` — verifies worker thread panic detection on subsequent client requests.
 - [x] `test_worker_thread_recovery_after_panic` — validates worker thread restarts cleanly and processes subsequent requests after a caught panic.

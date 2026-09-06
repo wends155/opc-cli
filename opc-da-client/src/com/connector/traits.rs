@@ -137,11 +137,13 @@ pub trait ServerConnector: Send + Sync {
     /// The server facade type returned by [`Self::connect`].
     type Server: ConnectedServer;
 
-    /// Enumerate all OPC DA server ProgIDs on the local machine.
+    /// Enumerate all OPC DA server ProgIDs on the specified host.
+    ///
+    /// Pass `"localhost"` or `""` for local server discovery.
     ///
     /// # Errors
     /// Returns an [`OpcError`] if server enumeration fails.
-    fn enumerate_servers(&self) -> OpcResult<Vec<String>>;
+    fn enumerate_servers(&self, host: &str) -> OpcResult<Vec<String>>;
 
     /// Enumerate all OPC DA servers on the target host with rich catalog details.
     ///
@@ -151,7 +153,7 @@ pub trait ServerConnector: Send + Sync {
     /// # Errors
     /// Returns an [`OpcError`] if server enumeration fails.
     fn enumerate_server_details(&self, host: &str) -> OpcResult<Vec<OpcServerInfo>> {
-        let servers = self.enumerate_servers()?;
+        let servers = self.enumerate_servers(host)?;
         let host_opt =
             if host.is_empty() || host.eq_ignore_ascii_case("localhost") || host == "127.0.0.1" {
                 None

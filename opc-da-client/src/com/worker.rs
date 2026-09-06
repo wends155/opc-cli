@@ -11,9 +11,8 @@ mod tests;
 use crate::com::connector::ServerConnector;
 use crate::errors::{OpcError, OpcOperation, OpcResult};
 use crate::log_opc_err;
-use crate::provider::{TagCollector, TagValue, WriteResult};
-use crate::types::{OpcServerInfo, OpcValue, ServerIdentifier};
-use std::collections::HashMap;
+use crate::provider::{TagCollector, WriteResult};
+use crate::types::{OpcServerEndpoint, OpcServerInfo, OpcValue};
 use std::sync::Arc;
 use tokio::sync::{mpsc, oneshot};
 
@@ -21,6 +20,15 @@ use tokio::sync::{mpsc, oneshot};
 #[inline]
 pub(crate) fn elapsed_ms(start: std::time::Instant) -> u64 {
     u64::try_from(start.elapsed().as_millis()).unwrap_or(u64::MAX)
+}
+
+static GROUP_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+
+/// Generates a collision-proof group name composed of a prefix, process ID, and atomic sequence.
+pub(crate) fn generate_group_name(prefix: &str) -> String {
+    let pid = std::process::id();
+    let seq = GROUP_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    format!("{prefix}-{pid:x}-{seq:x}")
 }
 
 /// Represents an asynchronous request dispatched to the COM worker thread.
@@ -41,17 +49,17 @@ pub enum ComRequest {
     },
     /// Request to read current values, quality, and timestamps for tag IDs.
     ReadTagValues {
-        /// OPC server identifier.
-        server: ServerIdentifier,
-        /// List of fully qualified tag identifiers to read.
-        tag_ids: Vec<String>,
+        /// Target OPC server endpoint.
+        endpoint: OpcServerEndpoint,
+        /// Batch of tag identifiers to read.
+        tags: crate::types::TagBatch,
         /// One-shot channel to send back the tag values result.
-        reply: oneshot::Sender<OpcResult<Vec<TagValue>>>,
+        reply: oneshot::Sender<OpcResult<crate::types::TagValues>>,
     },
     /// Request to write a typed value to a single tag.
     WriteTagValue {
-        /// OPC server identifier.
-        server: ServerIdentifier,
+        /// Target OPC server endpoint.
+        endpoint: OpcServerEndpoint,
         /// Tag identifier to write.
         tag_id: String,
         /// Typed value to write.
@@ -59,10 +67,19 @@ pub enum ComRequest {
         /// One-shot channel to send back the write operation result.
         reply: oneshot::Sender<OpcResult<WriteResult>>,
     },
+    /// Request to write a batch of typed values.
+    WriteTagValues {
+        /// Target OPC server endpoint.
+        endpoint: OpcServerEndpoint,
+        /// List of tag ID and typed value pairs to write.
+        writes: Vec<(String, OpcValue)>,
+        /// One-shot channel to send back write operation results.
+        reply: oneshot::Sender<OpcResult<Vec<WriteResult>>>,
+    },
     /// Request to recursively browse available tags on a server.
     BrowseTags {
-        /// OPC server identifier.
-        server: ServerIdentifier,
+        /// Target OPC server endpoint.
+        endpoint: OpcServerEndpoint,
         /// Configured tag collector managing capacity, progress, and cancellation.
         collector: TagCollector,
         /// One-shot channel to send back the complete tag discovery list.
@@ -160,7 +177,9 @@ impl<C: ServerConnector + 'static> Drop for ComWorker<C> {
 fn is_high_priority(req: &ComRequest) -> bool {
     matches!(
         req,
-        ComRequest::ReadTagValues { .. } | ComRequest::WriteTagValue { .. }
+        ComRequest::ReadTagValues { .. }
+            | ComRequest::WriteTagValue { .. }
+            | ComRequest::WriteTagValues { .. }
     )
 }
 
@@ -198,7 +217,7 @@ fn run_worker_thread<C, I>(
         }
     };
 
-    let mut cache: HashMap<ServerIdentifier, C::Server> = HashMap::new();
+    let mut pool: pool::ConnectionPool<C::Server> = pool::ConnectionPool::new();
     let mut low_priority_queue: std::collections::VecDeque<ComRequest> =
         std::collections::VecDeque::new();
 
@@ -231,12 +250,12 @@ fn run_worker_thread<C, I>(
                     }
                     if let Some(hp) = high_prio {
                         low_priority_queue.push_back(req);
-                        handle_request(hp, connector, &mut cache);
+                        handle_request(hp, connector, &mut pool);
                         continue;
                     }
                 }
 
-                handle_request(req, connector, &mut cache);
+                handle_request(req, connector, &mut pool);
             }
         }));
 
@@ -246,9 +265,9 @@ fn run_worker_thread<C, I>(
                 let msg = extract_panic_message(&*payload);
                 tracing::error!(
                     panic = %msg,
-                    "Unhandled panic in COM worker loop; resetting cache and continuing"
+                    "Unhandled panic in COM worker loop; resetting pool and continuing"
                 );
-                cache.clear();
+                pool.clear();
             }
         }
     }
@@ -261,7 +280,7 @@ fn run_worker_thread<C, I>(
 fn handle_request<C: ServerConnector + 'static>(
     req: ComRequest,
     connector: &Arc<C>,
-    cache: &mut HashMap<ServerIdentifier, C::Server>,
+    pool: &mut pool::ConnectionPool<C::Server>,
 ) {
     match req {
         ComRequest::ListServers { host, reply } => {
@@ -272,7 +291,7 @@ fn handle_request<C: ServerConnector + 'static>(
                 #[cfg(feature = "dev-diagnostics")]
                 tracing::trace!(host = %host, "list_servers: starting operation");
                 let start = std::time::Instant::now();
-                let servers = connector.enumerate_servers();
+                let servers = connector.enumerate_servers(&host);
                 if let Ok(s) = &servers {
                     tracing::info!(
                         count = s.len(),
@@ -351,14 +370,14 @@ fn handle_request<C: ServerConnector + 'static>(
         }
 
         ComRequest::ReadTagValues {
-            server,
-            tag_ids,
+            endpoint,
+            tags,
             reply,
         } => {
-            let server_clone = server.clone();
+            let endpoint_clone = endpoint.clone();
             let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                pool::dispatch_with_retry(cache, connector, &server, |opc_server| {
-                    read::handle_read(&server, &tag_ids, opc_server)
+                pool::dispatch_with_retry(pool, connector, &endpoint, |opc_server| {
+                    read::handle_read(&endpoint, &tags, opc_server)
                 })
             }));
             match result {
@@ -366,12 +385,12 @@ fn handle_request<C: ServerConnector + 'static>(
                     let _ = reply.send(res);
                 }
                 Err(payload) => {
-                    cache.remove(&server_clone);
+                    pool.remove(&endpoint_clone);
                     let msg = extract_panic_message(&*payload);
                     log_opc_err!(
                         &OpcError::Internal(format!("COM worker panicked: {msg}")),
                         OpcOperation::ReadSync,
-                        server = %server_clone,
+                        server = %endpoint_clone,
                     );
                     let _ = reply.send(Err(OpcError::Internal(format!(
                         "COM worker panicked: {msg}"
@@ -381,15 +400,15 @@ fn handle_request<C: ServerConnector + 'static>(
         }
 
         ComRequest::WriteTagValue {
-            server,
+            endpoint,
             tag_id,
             value,
             reply,
         } => {
-            let server_clone = server.clone();
+            let endpoint_clone = endpoint.clone();
             let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                pool::dispatch_with_retry(cache, connector, &server, |opc_server| {
-                    write::handle_write(&server, &tag_id, &value, opc_server)
+                pool::dispatch_with_retry(pool, connector, &endpoint, |opc_server| {
+                    write::handle_write(&endpoint.identifier, &tag_id, &value, opc_server)
                 })
             }));
             match result {
@@ -397,12 +416,42 @@ fn handle_request<C: ServerConnector + 'static>(
                     let _ = reply.send(res);
                 }
                 Err(payload) => {
-                    cache.remove(&server_clone);
+                    pool.remove(&endpoint_clone);
                     let msg = extract_panic_message(&*payload);
                     log_opc_err!(
                         &OpcError::Internal(format!("COM worker panicked: {msg}")),
                         OpcOperation::WriteSync,
-                        server = %server_clone,
+                        server = %endpoint_clone,
+                    );
+                    let _ = reply.send(Err(OpcError::Internal(format!(
+                        "COM worker panicked: {msg}"
+                    ))));
+                }
+            }
+        }
+
+        ComRequest::WriteTagValues {
+            endpoint,
+            writes,
+            reply,
+        } => {
+            let endpoint_clone = endpoint.clone();
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                pool::dispatch_with_retry(pool, connector, &endpoint, |opc_server| {
+                    write::handle_write_batch(&endpoint.identifier, &writes, opc_server)
+                })
+            }));
+            match result {
+                Ok(res) => {
+                    let _ = reply.send(res);
+                }
+                Err(payload) => {
+                    pool.remove(&endpoint_clone);
+                    let msg = extract_panic_message(&*payload);
+                    log_opc_err!(
+                        &OpcError::Internal(format!("COM worker panicked: {msg}")),
+                        OpcOperation::WriteSync,
+                        server = %endpoint_clone,
                     );
                     let _ = reply.send(Err(OpcError::Internal(format!(
                         "COM worker panicked: {msg}"
@@ -412,14 +461,14 @@ fn handle_request<C: ServerConnector + 'static>(
         }
 
         ComRequest::BrowseTags {
-            server,
+            endpoint,
             collector,
             reply,
         } => {
-            let server_clone = server.clone();
+            let endpoint_clone = endpoint.clone();
             let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                pool::dispatch_with_retry(cache, connector, &server, |opc_server| {
-                    browse::handle_browse(&server, &collector, opc_server)
+                pool::dispatch_with_retry(pool, connector, &endpoint, |opc_server| {
+                    browse::handle_browse(&endpoint.identifier, &collector, opc_server)
                 })
             }));
             match result {
@@ -427,12 +476,12 @@ fn handle_request<C: ServerConnector + 'static>(
                     let _ = reply.send(res);
                 }
                 Err(payload) => {
-                    cache.remove(&server_clone);
+                    pool.remove(&endpoint_clone);
                     let msg = extract_panic_message(&*payload);
                     log_opc_err!(
                         &OpcError::Internal(format!("COM worker panicked: {msg}")),
                         OpcOperation::BrowseTags,
-                        server = %server_clone,
+                        server = %endpoint_clone,
                     );
                     let _ = reply.send(Err(OpcError::Internal(format!(
                         "COM worker panicked: {msg}"
@@ -440,5 +489,42 @@ fn handle_request<C: ServerConnector + 'static>(
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod group_name_tests {
+    use super::*;
+    use std::collections::HashSet;
+    use std::sync::{Arc, Mutex};
+    use std::thread;
+
+    #[test]
+    fn test_collision_proof_group_name_concurrency() {
+        let names = Arc::new(Mutex::new(HashSet::new()));
+        let mut handles = Vec::new();
+
+        for _ in 0..8 {
+            let names_clone = Arc::clone(&names);
+            handles.push(thread::spawn(move || {
+                let mut local = Vec::with_capacity(1000);
+                for _ in 0..1000 {
+                    let name = generate_group_name("opc-test");
+                    assert!(name.starts_with("opc-test-"));
+                    local.push(name);
+                }
+                let mut guard = names_clone.lock().unwrap();
+                for n in local {
+                    assert!(guard.insert(n), "Collision detected in group name");
+                }
+                drop(guard);
+            }));
+        }
+
+        for h in handles {
+            h.join().unwrap();
+        }
+
+        assert_eq!(names.lock().unwrap().len(), 8000);
     }
 }
