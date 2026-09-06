@@ -4,8 +4,7 @@ use crate::com::connector::{ConnectedGroup, ConnectedServer, GroupConfig, GroupI
 use crate::com::guard::GroupGuard;
 use crate::errors::{OpcError, OpcOperation, OpcResult};
 use crate::log_opc_err;
-use crate::provider::WriteResult;
-use crate::types::{ItemHandle, OpcValue, ServerIdentifier};
+use crate::types::{ItemHandle, OpcValue, ServerIdentifier, WriteResult};
 
 /// Executes synchronous batch writing across multiple tags in a single atomic COM group, returning
 /// a list of structured [`WriteResult`]s preserving the original index ordering.

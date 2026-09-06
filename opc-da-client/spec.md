@@ -3,7 +3,7 @@
 > **Behavioral Source of Truth** for the `opc-da-client` library crate.
 > Defines *what* each module should do — independent of current implementation.
 >
-> Last verified against: 8ba9d13
+> Last verified against: a09468e
 
 ---
 
@@ -33,18 +33,14 @@ All methods use `#[async_trait]`.
 
 | Method | Error Condition | Meaning |
 | :--- | :--- | :--- |
-| `list_servers` | COM init failure | Windows COM subsystem unavailable. |
-| `list_servers` | Registry enumeration failure | OPC Core Components not installed or registry corrupt. |
-| `list_server_details` | COM init / catalog failure | Same as `list_servers`. |
-| `browse_tags` | ProgID resolution failure | `server` string does not map to a registered CLSID. |
-| `browse_tags` | Server connection failure | DCOM permissions, server offline, or licensing error. |
-| `browse_tags` | Namespace walk failure | Browse position corrupted (failed `UP` navigation). |
-| `read_tag_values` | ProgID resolution failure | Same as `browse_tags`. |
-| `read_tag_values` | No valid items | None of the requested `tag_ids` could be added to the OPC group. |
-| `read_tag_values` | Sync read failure | Server-side read error on all items. |
-| `write_tag_value` | ProgID resolution failure | Same as `browse_tags`. |
-| `write_tag_value` | Item add failure | The `tag_id` could not be added to the OPC group. |
-| `write_tag_value` | Sync write failure | Server-side write error (e.g., read-only tag). |
+| `list_servers` | Target host unreachable / RPC server unavailable | Return `OpcError::Connection` with hint |
+| `list_servers` | Access denied / DCOM security failure | Return `OpcError::Com` (E_ACCESSDENIED) |
+| `browse_tags` | Server ProgID not found | Return `OpcError::Server` with hint |
+| `browse_tags` | Max depth exceeded | Stop recursion, return tags collected so far |
+| `browse_tags` | Cancelled | Return tags collected so far (not an error) |
+| `read_tag_values` | Server connection lost | Return `OpcError::Connection` with reconnect hint |
+| `write_tag_value` | Tag read-only | Return `WriteResult` with `Err(OpcError::Com)` |
+| `write_tag_value` | Tag not found | Return `WriteResult` with `Err(OpcError::Com)` |
 
 **Invariants:**
 
@@ -62,23 +58,21 @@ All methods use `#[async_trait]`.
 
 ##### `struct TagValue`
 
-**Purpose:** Canonical representation of a single OPC DA tag read result.
+**Purpose:** Canonical representation of an OPC DA tag value with quality, timestamp, and optional per-item error.
 
-| Field | Type | Required | Description | Constraints |
-| :--- | :--- | :--- | :--- | :--- |
-| `tag_id` | `String` | Yes | Fully qualified tag identifier. | Non-empty. |
-| `value` | `Option<OpcValue>` | Yes | Decoded typed value, or `None` on read failure. | `display_value()` formats to string (`"Error"` if `None`). |
-| `quality` | `OpcQuality` | Yes | Decomposed 16-bit OPC DA quality word. | `Copy`, `Display` formats rich human-readable status. |
-| `timestamp` | `Option<std::time::SystemTime>` | Yes | Last-change timestamp (UTC-based), or `None`. | `formatted_timestamp()` formats to local time string. |
-| `error` | `Option<OpcError>` | No | Preserved diagnostic error when item read or add failed. | `None` on success. |
+| Field | Type | Required | Description |
+| :--- | :--- | :--- | :--- |
+| `tag_id` | `String` | Yes | The fully-qualified tag identifier. |
+| `value` | `Option<OpcValue>` | Yes | The decoded value, or `None` if read failed. |
+| `quality` | `OpcQuality` | Yes | Decomposed quality status. |
+| `timestamp` | `Option<SystemTime>` | Yes | Timestamp of last change, or `None` if unavailable. |
+| `error` | `Option<OpcError>` | No | Granular per-item server failure error, or `None` if read succeeded. |
 
-**Methods & Traits:**
-* `TagValue::new(tag_id, value, quality, timestamp) -> Self`: Constructs standard tag read value with `error: None`.
-* `TagValue::with_error(tag_id, quality, error) -> Self`: Constructs failed tag value preserving root diagnostic error.
-* `display_value(&self) -> String`: Returns formatted value string or `"Error"`.
-* `formatted_timestamp(&self) -> String`: Returns local formatted time string or `"N/A"`.
-* `is_good(&self) -> bool`: Returns `true` if quality is good and value is present.
-* `is_error(&self) -> bool`: Returns `true` if quality is bad or value is absent.
+**Methods:**
+* `new(tag_id, value, quality, timestamp) -> Self`: Constructs a successful tag value without error.
+* `with_error(tag_id, quality, error) -> Self`: Constructs an error tag value with `None` value and `None` timestamp.
+* `is_good(&self) -> bool`: Returns `true` if quality is good, value is present, and error is `None`.
+* `is_error(&self) -> bool`: Returns `true` if quality is bad, value is absent, or error is present.
 * `Default`: Yields empty tag ID, `None` value, bad quality (`0x0000`), `None` timestamp, and `None` error.
 * `Display`: Canonical formatting rendering `"{tag_id} = {value} [{quality}] @ {timestamp}"`.
 
@@ -86,38 +80,41 @@ All methods use `#[async_trait]`.
 
 ---
 
-##### `enum TagBatch<'a>`
+##### `enum TagBatch`
 
 **Purpose:** Zero-allocation polymorphic container for passing tag identifiers into read operations.
 
 | Variant | Inner Representation | Description |
 | :--- | :--- | :--- |
-| `StaticSlice(&'static [&'static str])` | `&'static [&'static str]` | Zero-allocation static literal tag slice. |
-| `DynamicVec(Vec<String>)` | `Vec<String>` | Owned vector of dynamic tags (from browse, config, or TUI). |
-| `DynamicSlice(&'a [String])` | `&'a [String]` | Borrowed slice of owned strings. |
-| `SharedSlice(Arc<[String]>)` | `Arc<[String]>` | Shared reference-counted tag array. |
+| `Static(&'static [&'static str])` | `&'static [&'static str]` | Zero-allocation static literal tag slice. |
+| `StaticSingle(&'static str)` | `&'static str` | Single static literal string slice. |
+| `Shared(Arc<[String]>)` | `Arc<[String]>` | Shared reference-counted tag array. |
+| `Owned(Vec<String>)` | `Vec<String>` | Owned vector of dynamic tags (from browse, config, or TUI). |
+| `OwnedSingle(String)` | `String` | Single owned heap string. |
 
 **Methods:**
 * `len(&self) -> usize`: Returns tag count across all variants.
 * `is_empty(&self) -> bool`: Returns `true` if empty.
-* `iter(&self) -> impl Iterator<Item = &str>`: Zero-allocation string iterator projecting `&str` over all variants.
+* `iter_str(&self) -> TagBatchIter<'_>`: Zero-allocation string iterator projecting `&str` over all variants.
 * `into_vec(self) -> Vec<String>`: Converts into owned vector, reusing existing allocations where possible.
 
-**Derives:** `Debug`, `Clone`, `PartialEq`.
+**Derives:** `Debug`, `Clone`, `PartialEq`, `Eq`.
 
 ---
 
-##### `trait IntoTags<'a>`
+##### `trait IntoTags: Send`
 
 **Purpose:** Universal conversion trait providing zero-allocation ergonomics for callers passing tags into `OpcDaClient` inherent read and subscription methods.
 
 Implemented for:
-* `&'static [&'static str]` $\rightarrow$ `TagBatch::StaticSlice`
-* `[&'static str; N]` $\rightarrow$ `TagBatch::StaticSlice`
-* `&'static str` $\rightarrow$ `TagBatch::StaticSlice`
-* `Vec<String>` $\rightarrow$ `TagBatch::DynamicVec`
-* `&'a [String]` $\rightarrow$ `TagBatch::DynamicSlice`
-* `Arc<[String]>` $\rightarrow$ `TagBatch::SharedSlice`
+* `TagBatch` $\rightarrow$ `TagBatch`
+* `&'static [&'static str]` $\rightarrow$ `TagBatch::Static`
+* `&'static [&'static str; N]` $\rightarrow$ `TagBatch::Static`
+* `[&'static str; N]` $\rightarrow$ `TagBatch::Owned`
+* `&'static str` $\rightarrow$ `TagBatch::StaticSingle`
+* `Vec<String>` $\rightarrow$ `TagBatch::Owned`
+* `String` $\rightarrow$ `TagBatch::OwnedSingle`
+* `Arc<[String]>` $\rightarrow$ `TagBatch::Shared`
 
 ---
 
@@ -129,19 +126,22 @@ Implemented for:
 | :--- | :--- | :--- |
 | `new(values: Vec<TagValue>)` | `pub fn new(values: Vec<TagValue>) -> Self` | Wraps a vector of tag values. |
 | `get(&self, tag: &str)` | `pub fn get(&self, tag: &str) -> Option<&TagValue>` | Case-insensitive lookup of tag value. |
-| `get_f64(&self, tag: &str)` | `pub fn get_f64(&self, tag: &str) -> Result<f64, TagExtractError>` | Lenient float extraction (coerces `Float`, `Int`, and numeric strings). |
-| `get_i32(&self, tag: &str)` | `pub fn get_i32(&self, tag: &str) -> Result<i32, TagExtractError>` | Lenient integer extraction (coerces `Int`, `Float` without truncating loss, and numeric strings). |
-| `get_bool(&self, tag: &str)` | `pub fn get_bool(&self, tag: &str) -> Result<bool, TagExtractError>` | Lenient boolean extraction (coerces `Bool`, non-zero integers, and boolean strings). |
+| `get_value(&self, tag: &str)` | `pub fn get_value(&self, tag: &str) -> Option<&OpcValue>` | Case-insensitive lookup of unwrapped OPC value. |
+| `get_f64(&self, tag: &str)` | `pub fn get_f64(&self, tag: &str) -> Result<f64, TagExtractError>` | Lenient float extraction (coerces `Float`, `Int`). |
+| `get_i32(&self, tag: &str)` | `pub fn get_i32(&self, tag: &str) -> Result<i32, TagExtractError>` | Lenient integer extraction (coerces `Int`, whole-number `Float` without loss). |
+| `get_bool(&self, tag: &str)` | `pub fn get_bool(&self, tag: &str) -> Result<bool, TagExtractError>` | Boolean extraction on `Bool` values. |
 | `get_str(&self, tag: &str)` | `pub fn get_str(&self, tag: &str) -> Result<&str, TagExtractError>` | String slice extraction on `String` values. |
 | `len(&self)` | `pub fn len(&self) -> usize` | Returns number of contained tag values. |
 | `is_empty(&self)` | `pub fn is_empty(&self) -> bool` | Returns `true` if collection is empty. |
 | `as_slice(&self)` | `pub fn as_slice(&self) -> &[TagValue]` | Projects borrowed slice of inner tag values. |
-| `into_inner(self)` | `pub fn into_inner(self) -> Vec<TagValue>` | Unwraps inner vector. |
+| `into_vec(self)` | `pub fn into_vec(self) -> Vec<TagValue>` | Unwraps inner vector. |
+| `iter(&self)` | `pub fn iter(&self) -> std::slice::Iter<'_, TagValue>` | Yields iterator over borrowed `&TagValue` items. |
 
 **Traits:**
-* `Index<&str>`: Direct indexing returning `&TagValue` (panics with descriptive message if tag not found).
-* `Deref<Target = [TagValue]>`: Transparent slice projection.
+* `From<Vec<TagValue>>`: Infallible conversion from `Vec<TagValue>`.
+* `From<TagValues> for Vec<TagValue>`: Infallible conversion into inner `Vec<TagValue>`.
 * `IntoIterator<Item = TagValue>`: Owning iteration over tag values.
+* `IntoIterator for &TagValues`: Borrowed iteration over tag values.
 
 **Derives:** `Debug`, `Clone`, `PartialEq`, `Default`.
 
@@ -153,11 +153,12 @@ Implemented for:
 
 | Variant | Description |
 | :--- | :--- |
-| `TagNotFound { tag: String }` | Tag was not requested or present in collection. |
+| `NotRequested(String)` | Tag was not included in this read batch. |
 | `ReadFailed { tag: String, source: OpcError }` | Tag read failed server-side; preserves root COM/driver error. |
-| `TypeMismatch { tag: String, expected: &'static str, found: &'static str }` | Tag value could not be coerced into expected type. |
+| `NoValue(String)` | Tag exists in batch but returned null, empty, or missing value. |
+| `TypeMismatch { tag: String, value: String, expected: &'static str }` | Tag value could not be coerced into expected type without loss. |
 
-**Traits:** `Display`, `std::error::Error`. `Derives:` `Debug`, `Clone`, `PartialEq`.
+**Traits:** `Display`, `std::error::Error`, `From<TagExtractError> for OpcError`. `Derives:` `Debug`, `Clone`, `PartialEq`.
 
 ---
 
@@ -419,9 +420,10 @@ Implemented for:
 | `host` | `pub fn host(mut self, host: impl Into<String>) -> Self` | Configures target host machine for remote DCOM. |
 | `server` | `pub fn server(mut self, server: impl Into<ServerIdentifier>) -> Self` | Configures target OPC DA server identifier (ProgID or CLSID). |
 | `timeout` | `pub fn timeout(mut self, timeout: Duration) -> Self` | Configures request timeout duration (default: 5s). |
-| `with_legacy_dcom` | `pub fn with_legacy_dcom(mut self) -> Self` | Disables KB5004442 `RPC_C_AUTHN_LEVEL_PKT_INTEGRITY` requirement for legacy NT 6.1 hosts. |
+| `with_legacy_dcom` | `pub fn with_legacy_dcom(mut self, legacy: bool) -> Self` | Configures DCOM packet authentication (`true` for `CONNECT` level on legacy NT 6.1 hosts; `false` for post-KB5004442 `PKT_INTEGRITY`). |
 | `with_connector` | `pub fn with_connector<C2>(self, connector: C2) -> OpcDaClientBuilder<C2>` | Transitions builder to custom or mock connector type. |
-| `build` | `pub fn build(self) -> OpcResult<OpcDaClient<C>>` | Validates configuration and launches COM worker thread. Requires `server` to be configured if building a server-bound client. |
+| `build_with_connector` | `pub fn build_with_connector(self, connector: C) -> OpcResult<OpcDaClient<C>>` | Builds the client using an explicit connector instance. |
+| `build` | `pub fn build(self) -> OpcResult<OpcDaClient<C>>` | Validates configuration and launches COM worker thread with default connector. |
 
 ---
 
@@ -439,15 +441,17 @@ Implemented for:
 **Inherent Methods (Server-Bound Operations):**
 | Method | Signature | Description |
 | :--- | :--- | :--- |
-| `read_tag_values` | `async fn read_tag_values<'a>(&self, tags: impl IntoTags<'a>) -> OpcResult<TagValues>` | Zero-allocation batch read returning a rich `TagValues` collection. |
+| `host` | `pub fn host(mut self, host: impl Into<String>) -> Self` | Binds or overrides target remote host on this client. |
+| `server` | `pub fn server(mut self, server: impl Into<ServerIdentifier>) -> Self` | Binds or overrides target server identifier on this client. |
+| `read_tag_values` | `async fn read_tag_values(&self, tags: impl IntoTags) -> OpcResult<TagValues>` | Zero-allocation batch read returning a rich `TagValues` collection. |
 | `read_f64` | `async fn read_f64(&self, tag: &str) -> OpcResult<f64>` | Reads a single tag and coerces value to `f64`. |
 | `read_i32` | `async fn read_i32(&self, tag: &str) -> OpcResult<i32>` | Reads a single tag and coerces value to `i32`. |
 | `read_bool` | `async fn read_bool(&self, tag: &str) -> OpcResult<bool>` | Reads a single tag and coerces value to `bool`. |
 | `read_string` | `async fn read_string(&self, tag: &str) -> OpcResult<String>` | Reads a single tag as a `String`. |
-| `write` | `async fn write(&self, tag: &str, value: impl Into<OpcValue>) -> OpcResult<()>` | Writes a single value to a tag. |
-| `write_batch` | `async fn write_batch<I, T, V>(&self, writes: I) -> OpcResult<Vec<WriteResult>>` | Writes multiple tags in a single native DCOM batch operation. |
+| `write` | `async fn write(&self, tag: &str, value: impl Into<OpcValue>) -> OpcResult<WriteResult>` | Writes a single value to a tag, returning a `WriteResult`. |
+| `write_batch` | `async fn write_batch(&self, writes: Vec<(String, OpcValue)>) -> OpcResult<Vec<WriteResult>>` | Writes multiple tags in a single native DCOM batch operation. |
 | `list_servers_on` | `async fn list_servers_on(&self, host: &str) -> OpcResult<Vec<String>>` | Discovers OPC servers on a specified host without requiring server binding. |
-| `subscribe` | `fn subscribe<'a>(&self, tags: impl IntoTags<'a>, interval: Duration) -> OpcResult<Receiver<TagValues>>` | Starts a Layer 2 non-blocking polling stream yielding `TagValues` periodically. Dropping the receiver cancels the background task. |
+| `subscribe` | `fn subscribe(&self, tags: impl IntoTags, interval: Duration) -> tokio::sync::mpsc::Receiver<TagValues>` | Starts a Layer 2 non-blocking polling stream yielding `TagValues` periodically. Dropping the receiver cancels the background task. |
 
 Implements `OpcProvider` for all five trait methods (`list_servers`, `list_server_details`, `browse_tags`, `read_tag_values`, `write_tag_value`) by dispatching to the `ComWorker`.
 
@@ -904,14 +908,20 @@ Downstream input parsing follows a 2-phase deterministic coercion machine:
 - [x] `test_mock_server_connector_server_details` — verifies `MockServerConnector::with_server_details` and `enumerate_server_details`.
 - [x] `test_mock_server_connector_type_aliases_and_dispatch` — verifies `MockAddItemsFn`, `MockReadFn`, and `MockWriteFn` custom handlers and default fallback.
 - [x] `test_mock_state_observability_counters` — validates `MockState` counters for group additions, removals, reads, and writes.
-- [x] `test_remote_dcom_activation_parameters` — validates remote DCOM constants, `COSERVERINFO`, `COAUTHINFO`, and proxy blanketing.
 - [x] `test_com_group_preconditions` — verifies `ComGroup::add_items`, `read`, and `write` precondition assertions (empty slices, length mismatch) returning `OpcError::InvalidState`.
 - [x] `test_mock_opc_da_client_default` — verifies default initialization of mock client facade.
 - [x] `test_provider_default_read_tag_value` — verifies default `read_tag_value` delegation in `OpcProvider`.
 - [x] `test_client_list_server_details` — verifies `OpcDaClient::list_server_details` dispatch through worker against mock connector.
+- [x] `test_client_builder_configuration_and_unbound_discovery` — verifies `OpcDaClientBuilder` parameter configuration and unbound server discovery.
 - [x] `test_inherent_async_reads_and_writes_on_client` — validates `OpcDaClient` inherent async readers (`read_tag_values`, `read_f64`, etc.) and batch writers.
-- [x] `test_client_list_servers_on_remote_discovery` — validates remote host server discovery dispatch without prior server binding.
-- [x] `test_client_subscription_stream_and_receiver_drop_cancellation` — validates Layer 2 subscription stream emissions and automatic task cancellation when receiver is dropped.
+- [x] `test_remote_host_propagation_and_discovery` — validates remote host server discovery dispatch without prior server binding.
+- [x] `test_client_subscribe_mpsc_polling_stream` — validates Layer 2 subscription stream emissions.
+- [x] `test_subscribe_receiver_drop_cancellation` — validates automatic background task cancellation when receiver is dropped.
+
+### COM Security Unit Tests (in `com/security.rs`)
+
+- [x] `test_clsid_opc_server_list_constant` — verifies standard OPCEnum CLSID constant definition.
+- [x] `test_authn_level_selection` — verifies dynamic authentication level selection (`PKT_INTEGRITY` vs `CONNECT`).
 
 ### COM RAII Guard Unit Tests (in `com/guard.rs`)
 
@@ -921,7 +931,7 @@ Downstream input parsing follows a 2-phase deterministic coercion machine:
 - [x] `test_browse_position_guard_enter_and_drop` — verifies `BrowsePositionGuard::enter` navigates down and drop restores position by navigating up.
 - [x] `test_browse_position_guard_disarm` — verifies `BrowsePositionGuard::disarm` prevents `BrowseDirection::Up` navigation on drop.
 
-### COM Worker Subsystem Unit Tests (in `com/worker/tests.rs`)
+### COM Worker Subsystem Unit Tests (in `com/worker/`)
 
 - [x] `test_worker_starts_and_stops` — verifies worker thread spawn, MTA initialization, and clean channel shutdown.
 - [x] `test_worker_list_servers` — verifies `ComRequest::ListServers` dispatch and server list reply.
@@ -930,9 +940,19 @@ Downstream input parsing follows a 2-phase deterministic coercion machine:
 - [x] `test_worker_write_tag_value` — verifies single tag writing success path via ephemeral group.
 - [x] `test_worker_write_tag_value_failure` — verifies single tag writing failure mapping to `WriteResult`.
 - [x] `test_connection_cache_reuse` — verifies connection caching by `ServerIdentifier` across repeated operations.
-- [x] `test_active_group_caching_and_reuse` — validates active OPC group and item handle reuse across identical tag reads.
-- [x] `test_failure_cooldown_circuit_breaker` — validates 5-second cooldown circuit breaker on unreachable host endpoints.
-- [x] `test_handle_write_batch_partial_failures_and_ordering` — validates native batch write execution with partial failure mapping.
+- [x] `test_dispatch_cache_hit_avoids_reconnect` — verifies connection cache hits bypass connector reconnection.
+- [x] `test_dispatch_connection_error_evicts_and_reconnects` — verifies RPC failure triggers cache eviction, reconnect, and retry.
+- [x] `test_dispatch_non_connection_error_does_not_evict` — verifies non-connection errors preserve cached connection.
+- [x] `test_worker_active_group_caching_hit_miss_and_invalidation` — validates active OPC group caching hit/miss semantics and invalidation on tag set changes or connection drops.
+- [x] `test_circuit_breaker_dual_phase_and_endpoint_isolation` — validates 5-second failure cooldown circuit breaker on unreachable host endpoints.
+- [x] `test_handle_write_batch_partial_failures_and_ordering` (in `write.rs`) — validates native batch write execution with partial failure mapping.
+- [x] `test_worker_native_write_batch_via_com_request` (in `tests.rs`) — verifies batch write request routing through COM worker channel.
+- [x] `test_handle_write_success` (in `write.rs`) — verifies single tag write handler execution.
+- [x] `test_handle_read_empty_tags_short_circuits` (in `read.rs`) — verifies empty tag batch read immediately short-circuits.
+- [x] `test_handle_read_with_mock_server` (in `read.rs`) — verifies read request execution against mock server connector.
+- [x] `test_handle_browse_harvests_tags` (in `browse.rs`) — verifies browse operation incrementally populates tag collector.
+- [x] `test_handle_browse_cancelled_returns_harvest` (in `browse.rs`) — verifies browse cancellation returns harvested partial tags.
+- [x] `test_collision_proof_group_name_concurrency` (in `worker.rs`) — verifies PID and atomic nonce concurrency in group naming.
 - [x] `test_stale_connection_eviction` — verifies RPC failure triggers cache eviction, reconnect, and successful retry.
 - [x] `test_worker_panic_propagation` — verifies worker thread panic detection on subsequent client requests.
 - [x] `test_worker_thread_recovery_after_panic` — validates worker thread restarts cleanly and processes subsequent requests after a caught panic.
@@ -1000,8 +1020,9 @@ Downstream input parsing follows a 2-phase deterministic coercion machine:
 ### Library & Re-Export Unit Tests (in `lib.rs`)
 
 - [x] `test_parse_quality_error_reexport` — verifies `ParseQualityError` is exposed at crate root and implements `std::error::Error`.
+- [x] `test_opc_da_client_builder_reexport` — verifies `OpcDaClientBuilder` is exposed at crate root.
 
-### Mock-Based Tests (in `opc-cli`)
+### Mock-Based Tests (in `opc-cli` — 39 Unit Tests)
 
 - [x] `MockOpcProvider` returns expected server list.
 - [x] `MockOpcProvider` returns expected browse results.
@@ -1010,21 +1031,26 @@ Downstream input parsing follows a 2-phase deterministic coercion machine:
 - [x] `test_destructure_tag_value_ergonomics` — verifies destructuring of `TagValue` with `v.value.display()` and `v.timestamp.display()`.
 - [x] `test_browse_tags_collector_timeout_and_cancellation` — verifies cooperative cancellation and partial harvesting on timeout in TUI task.
 - [x] `test_write_value_parsing_and_boolean_coercion` — validates context-aware boolean coercion and fallback string parsing in `App::resolve_write_value`.
+- [x] **Screen State Transitions (12 tests)** — verifies state machine transitions across `Home`, `Loading`, `ServerList`, `TagList`, `TagValues`, `WriteInput`, and `Exiting`.
+- [x] **TUI Keyboard Navigation & Selection (10 tests)** — verifies `Up`, `Down`, `PageUp`, `PageDown`, `Home`, `End`, and wrap-around cursor tracking in list and table widgets.
+- [x] **Interactive Search & Filtering (5 tests)** — verifies substring search filter, live matches count, and `Tab`/`Shift+Tab` cycling.
+- [x] **Async Polling Loops & Background Task Resiliency (5 tests)** — verifies background server enumeration, tag browsing timeout cancel, and 1-second auto-refresh polling loop.
 
-### Doc Tests
+### Doc Tests (33 Passed, 1 Ignored)
 
 - [x] `OpcError::friendly_hint` — runnable doctest in `errors.rs`.
 - [x] `OpcError::connection_failed` — runnable doctest in `errors.rs`.
 - [x] `OpcResult`, `OpcError` — runnable doctests in `errors.rs`.
-- [x] `TagValue`, `OpcValue`, `WriteResult`, `DisplayOption*`, `OpcValueOptionExt`, `SystemTimeOptionExt` — runnable doctests in `provider.rs`.
-- [x] `TagCollector` methods (`new`, `unbounded`, `max_tags`, `len`, `is_empty`, `is_full`, `cancel`, `is_cancelled`, `snapshot`, `harvest`, `push`) — runnable doctests in `provider.rs`.
+- [x] `TagValue`, `OpcValue`, `WriteResult`, `DisplayOption*`, `OpcValueOptionExt`, `SystemTimeOptionExt` — runnable doctests in `types.rs` / `provider.rs`.
+- [x] `TagBatch` methods (`len`, `is_empty`, `iter_str`, `into_vec`) — runnable doctests in `types.rs`.
+- [x] `TagValues` methods (`new`, `len`, `is_empty`, `get`, `get_value`, `get_f64`, `get_i32`, `get_bool`, `get_str`, `into_vec`, `as_slice`, `iter`) — runnable doctests in `types.rs`.
+- [x] `OpcDaClientBuilder` methods (`new`, `host`, `server`, `timeout`, `with_legacy_dcom`, `build`) — runnable doctests in `com/client.rs`.
+- [x] `OpcDaClient` constructors & inherent methods (`builder`, `connect`, `connect_remote`, `read_tag_values`, `read_f64`, `read_i32`, `read_bool`, `read_string`, `write`, `write_batch`, `list_servers_on`, `subscribe`) — runnable doctests in `com/client.rs`.
 - [x] `OpcProvider` trait methods (`list_servers`, `browse_tags`, `read_tag_value`, `read_tag_values`, `write_tag_value`, `write_tag_values`) — runnable doctests in `provider.rs` backed by `MockOpcProvider` assertions.
 - [x] `GroupHandle`, `ItemHandle`, `OpcQuality`, `BrowseType`, `BrowseDirection` — runnable doctests in `types.rs`.
-- [x] `OpcDaClient::new` — doctest in `com/client.rs`.
 - [x] `ComGuard` — internal-only ignored doctest in `com/guard.rs`.
 - [x] Quick Start — runnable doctest in `lib.rs`.
 - [x] Usage Examples (Listing, Reading, Writing, Browsing) — compiled doctests in `README.md`.
-- [x] Mocking in Unit Tests — runnable doctest in `lib.rs` / `README.md` under `--all-features`.
 
 ### Integration / Manual Tests
 

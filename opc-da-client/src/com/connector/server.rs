@@ -6,6 +6,10 @@
 use crate::com::connector::group::ComGroup;
 use crate::com::connector::traits::{ConnectedServer, CreatedGroup, GroupConfig, ServerConnector};
 use crate::com::iterator::StringIterator;
+use crate::com::security::{
+    RPC_C_AUTHN_WINNT, RPC_C_AUTHZ_NONE, RPC_C_IMP_LEVEL_IMPERSONATE, apply_proxy_blanket,
+    authn_level_for,
+};
 use crate::errors::{OpcError, OpcResult};
 use crate::raw::bindings::da::{
     OPC_BRANCH, OPC_BROWSE_DOWN, OPC_BROWSE_TO, OPC_BROWSE_UP, OPC_FLAT, OPC_LEAF,
@@ -14,66 +18,9 @@ use crate::raw::memory::{LocalPointer, RemotePointer};
 use crate::types::{BrowseDirection, BrowseType, GroupHandle, OpcServerInfo, ServerIdentifier};
 use windows::Win32::System::Com::{
     CLSCTX_ALL, CLSCTX_REMOTE_SERVER, CLSIDFromProgID, COAUTHINFO, COSERVERINFO, CoCreateInstance,
-    CoCreateInstanceEx, CoSetProxyBlanket, EOAC_NONE, MULTI_QI, RPC_C_AUTHN_LEVEL, RPC_C_IMP_LEVEL,
+    CoCreateInstanceEx, MULTI_QI,
 };
 use windows::core::Interface;
-
-/// Standard OPC Foundation OPCEnum CLSID for remote server discovery.
-pub const CLSID_OPC_SERVER_LIST: windows::core::GUID =
-    windows::core::GUID::from_u128(0x1348_6d51_4821_11d2_a494_3cb3_06c1_0000);
-
-pub const RPC_C_AUTHN_LEVEL_CONNECT: u32 = 2;
-pub const RPC_C_AUTHN_LEVEL_PKT_INTEGRITY: u32 = 5;
-pub const RPC_C_AUTHN_WINNT: u32 = 10;
-pub const RPC_C_AUTHZ_NONE: u32 = 0;
-pub const RPC_C_IMP_LEVEL_IMPERSONATE: u32 = 3;
-
-/// Returns the RPC authentication level depending on whether legacy DCOM is requested.
-#[inline]
-#[must_use]
-pub const fn authn_level_for(legacy_dcom: bool) -> u32 {
-    if legacy_dcom {
-        RPC_C_AUTHN_LEVEL_CONNECT
-    } else {
-        RPC_C_AUTHN_LEVEL_PKT_INTEGRITY
-    }
-}
-
-/// Applies DCOM security blanketing to a COM interface proxy.
-///
-/// In modern Windows environments (post-KB5004442), DCOM RPC requires `RPC_C_AUTHN_LEVEL_PKT_INTEGRITY` (5)
-/// by default, or `RPC_C_AUTHN_LEVEL_CONNECT` (2) if `legacy_dcom` is enabled.
-pub fn apply_proxy_blanket<T: Interface>(proxy: &T, legacy_dcom: bool) -> OpcResult<()> {
-    let authn_level = authn_level_for(legacy_dcom);
-    let unk: windows::core::IUnknown = match proxy.cast() {
-        Ok(u) => u,
-        Err(e) => {
-            tracing::debug!(error = ?e, "Interface does not cast to IUnknown for proxy blanketing");
-            return Ok(());
-        }
-    };
-    // SAFETY: Calling CoSetProxyBlanket on valid COM interface pointer with standard NT security.
-    let hr = unsafe {
-        CoSetProxyBlanket(
-            &unk,
-            RPC_C_AUTHN_WINNT,
-            RPC_C_AUTHZ_NONE,
-            None,
-            RPC_C_AUTHN_LEVEL(authn_level),
-            RPC_C_IMP_LEVEL(RPC_C_IMP_LEVEL_IMPERSONATE),
-            None,
-            EOAC_NONE,
-        )
-    };
-    if let Err(e) = hr {
-        tracing::warn!(
-            error = ?e,
-            authn_level,
-            "Failed to set COM proxy blanket (continuing without security blanket)"
-        );
-    }
-    Ok(())
-}
 
 /// Resolve an [`OpcServerEndpoint`](crate::types::OpcServerEndpoint) to a connected COM [`crate::raw::bindings::da::IOPCServer`] instance,
 /// supporting both local COM activation and remote DCOM activation via `CoCreateInstanceEx`.
@@ -161,7 +108,7 @@ pub(crate) fn connect_endpoint(
             })?;
 
         // Apply proxy blanket to IOPCServer
-        apply_proxy_blanket(&unk, legacy_dcom)?;
+        apply_proxy_blanket(&unk, legacy_dcom);
 
         unk.cast()?
     } else {
@@ -193,7 +140,7 @@ pub(crate) fn connect_server_identifier(
 }
 
 /// Real COM-backed server connector implementation.
-#[derive(Default, Clone)]
+#[derive(Debug, Default, Clone)]
 pub struct ComConnector;
 
 impl ComConnector {
@@ -206,22 +153,22 @@ impl ComConnector {
         let server = connect_endpoint(endpoint, legacy_dcom)?;
 
         let common: crate::raw::bindings::comn::IOPCCommon = server.cast()?;
-        let _ = apply_proxy_blanket(&common, legacy_dcom);
+        apply_proxy_blanket(&common, legacy_dcom);
 
         let item_properties: crate::raw::bindings::da::IOPCItemProperties = server.cast()?;
-        let _ = apply_proxy_blanket(&item_properties, legacy_dcom);
+        apply_proxy_blanket(&item_properties, legacy_dcom);
 
         let server_public_groups: Option<crate::raw::bindings::da::IOPCServerPublicGroups> =
             server.cast().ok();
         if let Some(ref spg) = server_public_groups {
-            let _ = apply_proxy_blanket(spg, legacy_dcom);
+            apply_proxy_blanket(spg, legacy_dcom);
         }
 
         let browse_server_address_space: Option<
             crate::raw::bindings::da::IOPCBrowseServerAddressSpace,
         > = server.cast().ok();
         if let Some(ref bsas) = browse_server_address_space {
-            let _ = apply_proxy_blanket(bsas, legacy_dcom);
+            apply_proxy_blanket(bsas, legacy_dcom);
         }
 
         Ok(ComServer {
@@ -404,6 +351,9 @@ impl ConnectedServer for ComServer {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::com::security::{
+        CLSID_OPC_SERVER_LIST, RPC_C_AUTHN_LEVEL_CONNECT, RPC_C_AUTHN_LEVEL_PKT_INTEGRITY,
+    };
 
     #[test]
     fn test_clsid_opc_server_list_constant() {

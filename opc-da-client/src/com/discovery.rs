@@ -364,13 +364,13 @@ impl OpcServerListCatalog {
         let v1: crate::raw::bindings::comn::IOPCServerList = if let Some(host_str) = is_remote_host
         {
             let host_lp = crate::raw::memory::LocalPointer::from(host_str);
-            let authn_level = crate::com::connector::server::authn_level_for(legacy_dcom);
+            let authn_level = crate::com::security::authn_level_for(legacy_dcom);
             let auth_info = windows::Win32::System::Com::COAUTHINFO {
-                dwAuthnSvc: crate::com::connector::server::RPC_C_AUTHN_WINNT,
-                dwAuthzSvc: crate::com::connector::server::RPC_C_AUTHZ_NONE,
+                dwAuthnSvc: crate::com::security::RPC_C_AUTHN_WINNT,
+                dwAuthzSvc: crate::com::security::RPC_C_AUTHZ_NONE,
                 pwszServerPrincName: windows::core::PWSTR::null(),
                 dwAuthnLevel: authn_level,
-                dwImpersonationLevel: crate::com::connector::server::RPC_C_IMP_LEVEL_IMPERSONATE,
+                dwImpersonationLevel: crate::com::security::RPC_C_IMP_LEVEL_IMPERSONATE,
                 pAuthIdentityData: std::ptr::null_mut(),
                 dwCapabilities: 0,
             };
@@ -390,7 +390,7 @@ impl OpcServerListCatalog {
             // SAFETY: Calling CoCreateInstanceEx to instantiate IOPCServerList on remote host.
             unsafe {
                 windows::Win32::System::Com::CoCreateInstanceEx(
-                    &crate::com::connector::server::CLSID_OPC_SERVER_LIST,
+                    &crate::com::security::CLSID_OPC_SERVER_LIST,
                     None,
                     windows::Win32::System::Com::CLSCTX_REMOTE_SERVER,
                     Some(&raw const server_info),
@@ -415,14 +415,14 @@ impl OpcServerListCatalog {
                     OpcError::Internal("CoCreateInstanceEx returned null interface pointer".into())
                 })?;
 
-            crate::com::connector::server::apply_proxy_blanket(&unk, legacy_dcom)?;
+            crate::com::security::apply_proxy_blanket(&unk, legacy_dcom);
             unk.cast()?
         } else {
             // SAFETY: Calling Win32 CLSIDFromProgID with static wide string literal or fallback to standard CLSID.
             let id = unsafe {
                 windows::Win32::System::Com::CLSIDFromProgID(windows::core::w!("OPC.ServerList.1"))
             }
-            .unwrap_or(crate::com::connector::server::CLSID_OPC_SERVER_LIST);
+            .unwrap_or(crate::com::security::CLSID_OPC_SERVER_LIST);
 
             // SAFETY: Instantiating IOPCServerList COM interface locally.
             unsafe {
@@ -434,14 +434,14 @@ impl OpcServerListCatalog {
             }
         };
 
-        crate::com::connector::server::apply_proxy_blanket(&v1, legacy_dcom)?;
+        crate::com::security::apply_proxy_blanket(&v1, legacy_dcom);
 
         let v2: Option<crate::raw::bindings::comn::IOPCServerList2> = v1
             .cast::<crate::raw::bindings::comn::IOPCServerList2>()
             .ok();
 
         if let Some(ref list2) = v2 {
-            let _ = crate::com::connector::server::apply_proxy_blanket(list2, legacy_dcom);
+            crate::com::security::apply_proxy_blanket(list2, legacy_dcom);
         }
 
         Ok(Self { v1, v2 })

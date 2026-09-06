@@ -27,7 +27,7 @@ pub use types::{
 // Backend re-exports (conditional)
 #[cfg(feature = "opc-da-backend")]
 pub use com::{
-    client::OpcDaClient,
+    client::{OpcDaClient, OpcDaClientBuilder},
     connector::ComConnector,
     discovery::{OpcServerRegistration, OpcServerType, inspect_local_registration},
 };
@@ -60,6 +60,16 @@ mod tests {
     fn test_mock_opc_da_client_default() {
         use super::MockOpcDaClient;
         let _client = MockOpcDaClient::default();
+    }
+
+    #[cfg(feature = "opc-da-backend")]
+    #[test]
+    fn test_opc_da_client_builder_reexport() {
+        use super::OpcDaClientBuilder;
+        let builder = OpcDaClientBuilder::new()
+            .host("localhost")
+            .server("Matrikon.OPC.Simulation.1");
+        let _ = format!("{builder:?}");
     }
 
     #[test]

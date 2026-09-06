@@ -1,3 +1,8 @@
+//! Safe RAII wrappers for native Windows COM `IEnumString` and `IEnumGUID` enumerators.
+//!
+//! Provides batch caching and memory-safe traversal of COM collections,
+//! as well as an in-memory test surrogate for offline testing.
+
 use crate::errors::OpcResult;
 use crate::raw::memory::{RemoteArray, RemotePointer, TryToLocal as _};
 
@@ -6,10 +11,10 @@ const MAX_CACHE_SIZE_U32: u32 = 16;
 const STRING_CACHE_SIZE: usize = 256;
 const STRING_CACHE_SIZE_U32: u32 = 256;
 
-/// Iterator over COM GUIDs from IEnumGUID.  
+/// Iterator over COM GUIDs from `IEnumGUID`.
 ///
-/// # Safety  
-/// This struct wraps a COM interface and must be used according to COM rules.  
+/// # Safety
+/// This struct wraps a COM interface and must be used according to COM rules.
 pub struct GuidIterator {
     inner: windows::Win32::System::Com::IEnumGUID,
     cache: Box<[windows::core::GUID; MAX_CACHE_SIZE]>,
@@ -19,7 +24,16 @@ pub struct GuidIterator {
 }
 
 impl GuidIterator {
-    /// Creates a new iterator from a COM interface.  
+    /// Creates a new iterator from a COM interface.
+    ///
+    /// # Arguments
+    ///
+    /// * `inner` - Windows COM `IEnumGUID` interface instance.
+    ///
+    /// # Returns
+    ///
+    /// Returns a new [`GuidIterator`] initialized with an empty internal cache.
+    #[must_use]
     pub fn new(inner: windows::Win32::System::Com::IEnumGUID) -> Self {
         Self {
             inner,
@@ -94,7 +108,12 @@ impl StringIterator {
     /// Creates a new `StringIterator` wrapping a native COM `IEnumString` interface.
     ///
     /// # Arguments
+    ///
     /// * `inner` - Windows COM `IEnumString` interface instance.
+    ///
+    /// # Returns
+    ///
+    /// Returns a new [`StringIterator`] yielding strings from the COM enumerator.
     #[must_use]
     pub fn new(inner: windows::Win32::System::Com::IEnumString) -> Self {
         Self {
@@ -113,7 +132,12 @@ impl StringIterator {
     /// Enables pure-Rust testing and mocking without physical Windows COM interfaces.
     ///
     /// # Arguments
+    ///
     /// * `items` - Vector of tag or item identifier strings to yield.
+    ///
+    /// # Returns
+    ///
+    /// Returns a new [`StringIterator`] yielding items from the provided in-memory collection.
     #[must_use]
     pub fn from_vec(items: Vec<String>) -> Self {
         Self {

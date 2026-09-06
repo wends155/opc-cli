@@ -1019,6 +1019,19 @@ pub enum TagBatch {
 
 impl TagBatch {
     /// Returns the number of tags in this batch.
+    ///
+    /// # Returns
+    ///
+    /// The number of tag identifiers contained in this batch.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use opc_da_client::IntoTags;
+    ///
+    /// let batch = ["Tag1", "Tag2"].into_tag_batch();
+    /// assert_eq!(batch.len(), 2);
+    /// ```
     #[inline]
     #[must_use]
     pub fn len(&self) -> usize {
@@ -1031,6 +1044,19 @@ impl TagBatch {
     }
 
     /// Returns `true` if this tag batch contains no tags.
+    ///
+    /// # Returns
+    ///
+    /// `true` if the batch has a length of 0; `false` otherwise.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use opc_da_client::IntoTags;
+    ///
+    /// let batch = ["Tag1"].into_tag_batch();
+    /// assert!(!batch.is_empty());
+    /// ```
     #[inline]
     #[must_use]
     pub fn is_empty(&self) -> bool {
@@ -1038,6 +1064,20 @@ impl TagBatch {
     }
 
     /// Returns an iterator yielding string slices (`&str`) for each tag in this batch.
+    ///
+    /// # Returns
+    ///
+    /// A zero-allocation [`TagBatchIter`] yielding borrowed `&str` references for each tag.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use opc_da_client::IntoTags;
+    ///
+    /// let batch = ["Tag1", "Tag2"].into_tag_batch();
+    /// let collected: Vec<&str> = batch.iter_str().collect();
+    /// assert_eq!(collected, vec!["Tag1", "Tag2"]);
+    /// ```
     #[inline]
     pub fn iter_str(&self) -> TagBatchIter<'_> {
         match self {
@@ -1050,7 +1090,21 @@ impl TagBatch {
     }
 
     /// Consumes the batch and converts it into a `Vec<String>`.
-    /// Reuses existing allocation for `TagBatch::Owned`.
+    ///
+    /// Reuses existing allocation when the batch variant is `TagBatch::Owned`.
+    ///
+    /// # Returns
+    ///
+    /// An owned [`Vec<String>`] containing all tag names.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use opc_da_client::IntoTags;
+    ///
+    /// let batch = ["Tag1"].into_tag_batch();
+    /// assert_eq!(batch.into_vec(), vec!["Tag1".to_string()]);
+    /// ```
     #[must_use]
     pub fn into_vec(self) -> Vec<String> {
         match self {
@@ -1423,6 +1477,24 @@ pub struct TagValues {
 
 impl TagValues {
     /// Creates a new `TagValues` collection wrapping the given vector of items.
+    ///
+    /// # Arguments
+    ///
+    /// * `items` - Vector of [`TagValue`] items.
+    ///
+    /// # Returns
+    ///
+    /// A new [`TagValues`] instance containing the provided items.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use opc_da_client::{OpcQuality, OpcValue, TagValue, TagValues};
+    ///
+    /// let items = vec![TagValue::new("Tag1", Some(OpcValue::Int(10)), OpcQuality::GOOD, None)];
+    /// let values = TagValues::new(items);
+    /// assert_eq!(values.len(), 1);
+    /// ```
     #[inline]
     #[must_use]
     pub fn new(items: Vec<TagValue>) -> Self {
@@ -1430,6 +1502,19 @@ impl TagValues {
     }
 
     /// Returns the number of tag values in this collection.
+    ///
+    /// # Returns
+    ///
+    /// The number of [`TagValue`] items in this collection.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use opc_da_client::TagValues;
+    ///
+    /// let values = TagValues::default();
+    /// assert_eq!(values.len(), 0);
+    /// ```
     #[inline]
     #[must_use]
     pub fn len(&self) -> usize {
@@ -1437,6 +1522,19 @@ impl TagValues {
     }
 
     /// Returns `true` if this collection contains no items.
+    ///
+    /// # Returns
+    ///
+    /// `true` if the collection contains 0 items; `false` otherwise.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use opc_da_client::TagValues;
+    ///
+    /// let values = TagValues::default();
+    /// assert!(values.is_empty());
+    /// ```
     #[inline]
     #[must_use]
     pub fn is_empty(&self) -> bool {
@@ -1444,6 +1542,26 @@ impl TagValues {
     }
 
     /// Looks up a tag by identifier using case-insensitive comparison.
+    ///
+    /// Performs a zero-allocation linear scan over the internal items slice.
+    ///
+    /// # Arguments
+    ///
+    /// * `tag` - Tag identifier string to look up.
+    ///
+    /// # Returns
+    ///
+    /// An [`Option`] containing a reference to the matching [`TagValue`], or `None` if not found.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use opc_da_client::{OpcQuality, OpcValue, TagValue, TagValues};
+    ///
+    /// let values = TagValues::new(vec![TagValue::new("Channel1.Device1.Tag1", Some(OpcValue::Int(42)), OpcQuality::GOOD, None)]);
+    /// assert!(values.get("channel1.device1.tag1").is_some());
+    /// assert!(values.get("NonExistent").is_none());
+    /// ```
     #[must_use]
     pub fn get(&self, tag: &str) -> Option<&TagValue> {
         self.items
@@ -1452,6 +1570,23 @@ impl TagValues {
     }
 
     /// Looks up an OPC value by tag identifier using case-insensitive comparison.
+    ///
+    /// # Arguments
+    ///
+    /// * `tag` - Tag identifier string to look up.
+    ///
+    /// # Returns
+    ///
+    /// An [`Option`] containing a reference to the [`OpcValue`] if the tag exists and its value is `Some`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use opc_da_client::{OpcQuality, OpcValue, TagValue, TagValues};
+    ///
+    /// let values = TagValues::new(vec![TagValue::new("Tag1", Some(OpcValue::Int(42)), OpcQuality::GOOD, None)]);
+    /// assert_eq!(values.get_value("tag1"), Some(&OpcValue::Int(42)));
+    /// ```
     #[must_use]
     pub fn get_value(&self, tag: &str) -> Option<&OpcValue> {
         self.get(tag).and_then(|tv| tv.value.as_ref())
@@ -1459,6 +1594,30 @@ impl TagValues {
 
     /// Extracts a 64-bit floating point value for the given tag,
     /// losslessly coercing integer values to float.
+    ///
+    /// # Arguments
+    ///
+    /// * `tag` - Tag identifier string to look up.
+    ///
+    /// # Returns
+    ///
+    /// The decoded `f64` value.
+    ///
+    /// # Errors
+    ///
+    /// * [`TagExtractError::NotRequested`] - Tag was not included in this read batch.
+    /// * [`TagExtractError::ReadFailed`] - Tag read failed on the server.
+    /// * [`TagExtractError::NoValue`] - Tag returned a null or empty value.
+    /// * [`TagExtractError::TypeMismatch`] - Value cannot be losslessly converted to `f64`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use opc_da_client::{OpcQuality, OpcValue, TagValue, TagValues};
+    ///
+    /// let values = TagValues::new(vec![TagValue::new("Sensor.Temp", Some(OpcValue::Float(98.6)), OpcQuality::GOOD, None)]);
+    /// assert_eq!(values.get_f64("sensor.temp").unwrap(), 98.6);
+    /// ```
     pub fn get_f64(&self, tag: &str) -> Result<f64, TagExtractError> {
         let item = self
             .get(tag)
@@ -1487,6 +1646,30 @@ impl TagValues {
 
     /// Extracts a 32-bit signed integer value for the given tag,
     /// losslessly converting exact whole-number floats without fractional parts.
+    ///
+    /// # Arguments
+    ///
+    /// * `tag` - Tag identifier string to look up.
+    ///
+    /// # Returns
+    ///
+    /// The decoded `i32` value.
+    ///
+    /// # Errors
+    ///
+    /// * [`TagExtractError::NotRequested`] - Tag was not included in this read batch.
+    /// * [`TagExtractError::ReadFailed`] - Tag read failed on the server.
+    /// * [`TagExtractError::NoValue`] - Tag returned a null or empty value.
+    /// * [`TagExtractError::TypeMismatch`] - Value has a fractional part, is out of range, or is not numeric.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use opc_da_client::{OpcQuality, OpcValue, TagValue, TagValues};
+    ///
+    /// let values = TagValues::new(vec![TagValue::new("Counter", Some(OpcValue::Int(100)), OpcQuality::GOOD, None)]);
+    /// assert_eq!(values.get_i32("counter").unwrap(), 100);
+    /// ```
     pub fn get_i32(&self, tag: &str) -> Result<i32, TagExtractError> {
         let item = self
             .get(tag)
@@ -1530,6 +1713,30 @@ impl TagValues {
     }
 
     /// Extracts a boolean value for the given tag.
+    ///
+    /// # Arguments
+    ///
+    /// * `tag` - Tag identifier string to look up.
+    ///
+    /// # Returns
+    ///
+    /// The decoded `bool` value.
+    ///
+    /// # Errors
+    ///
+    /// * [`TagExtractError::NotRequested`] - Tag was not included in this read batch.
+    /// * [`TagExtractError::ReadFailed`] - Tag read failed on the server.
+    /// * [`TagExtractError::NoValue`] - Tag returned a null or empty value.
+    /// * [`TagExtractError::TypeMismatch`] - Value is not a boolean.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use opc_da_client::{OpcQuality, OpcValue, TagValue, TagValues};
+    ///
+    /// let values = TagValues::new(vec![TagValue::new("Pump.Status", Some(OpcValue::Bool(true)), OpcQuality::GOOD, None)]);
+    /// assert_eq!(values.get_bool("pump.status").unwrap(), true);
+    /// ```
     pub fn get_bool(&self, tag: &str) -> Result<bool, TagExtractError> {
         let item = self
             .get(tag)
@@ -1556,6 +1763,30 @@ impl TagValues {
     }
 
     /// Extracts a borrowed string slice for the given tag.
+    ///
+    /// # Arguments
+    ///
+    /// * `tag` - Tag identifier string to look up.
+    ///
+    /// # Returns
+    ///
+    /// A borrowed `&str` reference to the string value.
+    ///
+    /// # Errors
+    ///
+    /// * [`TagExtractError::NotRequested`] - Tag was not included in this read batch.
+    /// * [`TagExtractError::ReadFailed`] - Tag read failed on the server.
+    /// * [`TagExtractError::NoValue`] - Tag returned a null or empty value.
+    /// * [`TagExtractError::TypeMismatch`] - Value is not a string.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use opc_da_client::{OpcQuality, OpcValue, TagValue, TagValues};
+    ///
+    /// let values = TagValues::new(vec![TagValue::new("System.Mode", Some(OpcValue::String("RUN".into())), OpcQuality::GOOD, None)]);
+    /// assert_eq!(values.get_str("system.mode").unwrap(), "RUN");
+    /// ```
     pub fn get_str(&self, tag: &str) -> Result<&str, TagExtractError> {
         let item = self
             .get(tag)
@@ -1582,18 +1813,58 @@ impl TagValues {
     }
 
     /// Consumes this collection and returns the inner vector of [`TagValue`] items.
+    ///
+    /// # Returns
+    ///
+    /// The underlying [`Vec<TagValue>`].
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use opc_da_client::TagValues;
+    ///
+    /// let values = TagValues::default();
+    /// let vec = values.into_vec();
+    /// assert!(vec.is_empty());
+    /// ```
     #[must_use]
     pub fn into_vec(self) -> Vec<TagValue> {
         self.items
     }
 
     /// Borrows the items as a slice of [`TagValue`].
+    ///
+    /// # Returns
+    ///
+    /// A borrowed slice `&[TagValue]`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use opc_da_client::TagValues;
+    ///
+    /// let values = TagValues::default();
+    /// assert!(values.as_slice().is_empty());
+    /// ```
     #[must_use]
     pub fn as_slice(&self) -> &[TagValue] {
         &self.items
     }
 
     /// Returns an iterator over references to [`TagValue`] in this collection.
+    ///
+    /// # Returns
+    ///
+    /// An iterator yielding `&TagValue` references.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use opc_da_client::TagValues;
+    ///
+    /// let values = TagValues::default();
+    /// assert_eq!(values.iter().count(), 0);
+    /// ```
     pub fn iter(&self) -> std::slice::Iter<'_, TagValue> {
         self.items.iter()
     }

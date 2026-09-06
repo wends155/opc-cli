@@ -7,9 +7,8 @@ use crate::com::connector::{
 };
 use crate::errors::{OpcError, OpcOperation, OpcResult};
 use crate::log_opc_err;
-use crate::provider::TagValue;
 use crate::types::{
-    ItemHandle, OpcQuality, OpcServerEndpoint, ServerIdentifier, TagBatch, TagValues,
+    ItemHandle, OpcQuality, OpcServerEndpoint, ServerIdentifier, TagBatch, TagValue, TagValues,
 };
 
 /// Executes synchronous device tag reading through the pooled server's active OPC group,

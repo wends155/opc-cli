@@ -88,6 +88,7 @@ opc-da-client/
     │   ├── discovery.rs    # 3-tier catalog adapter, dual-view registry inspection (OpcServerRegistration), guid_to_progid
     │   ├── guard.rs        # RAII COM initialization/teardown (ComGuard), group cleanup (GroupGuard), and browse cursor protection (BrowsePositionGuard)
     │   ├── iterator.rs     # Safe wrappers for IEnumString (with RAII drop memory cleanup) and IEnumGUID
+    │   ├── security.rs     # Dynamic DCOM proxy blanketing, RPC authentication level selection, CLSID_OPC_SERVER_LIST
     │   ├── variant.rs      # Win32 VARIANT & SafeArray conversion, ItemStatesGuard (VariantClear iff ok), ScopedVariant
     │   ├── worker.rs       # Slim worker facade & ComRequest event loop (ComWorker) with 2-tier catch_unwind & request prioritization
     │   └── worker/         # Dedicated single-responsibility worker engines
@@ -154,7 +155,14 @@ opc-da-client/
   - `GroupGuard<'_, S: ConnectedServer>`: Temporary OPC group lifecycle guard guaranteeing deterministic `remove_group` on `Drop` across all return/panic paths.
   - `BrowsePositionGuard<'_, S: ConnectedServer>`: Hierarchical namespace cursor position guard guaranteeing `BrowseDirection::Up` navigation on `Drop` to restore server browse state upon traversal completion or early exit.
 - **Does NOT own**: Long-lived connection pooling or channel communication.
+- **Trait Interfaces**: Pure RAII drop guard wrappers.
 - **Mock Availability**: Tested against `MockConnectedServer` and `MockConnectedGroup`.
+
+### `com::security`
+- **Owns**: Dynamic DCOM proxy security blanketing (`apply_proxy_blanket`), RPC authentication level selection (`authn_level_for`), standard OPCEnum CLSID constant (`CLSID_OPC_SERVER_LIST`), and Win32 RPC security constants (`RPC_C_*`).
+- **Does NOT own**: Server connection management (`com::connector::server`), catalog traversal (`com::discovery`), or COM message loop (`com::worker`).
+- **Trait Interfaces**: Pure functional security procedures.
+- **Mock Availability**: N/A (stateless helpers operating on Win32 COM interfaces).
 
 ### `com::worker`
 - **Owns**: Dedicated background COM MTA thread runner (`ComWorker`) structured as a lightweight request-dispatching facade coordinating private single-responsibility submodules:
@@ -164,6 +172,7 @@ opc-da-client/
   - `com::worker::browse`: Namespace exploration engine (`handle_browse`) supporting fast flat enumeration and recursive branch traversal protected by `BrowsePositionGuard`.
   - `com::worker::tests`: Dedicated worker test suite containing mock fixtures and comprehensive panic recovery tests.
 - **Does NOT own**: Win32 COM FFI marshalling (delegated to `connector/server.rs` and `connector/group.rs`) or public client traits (delegated to `client.rs`).
+- **Trait Interfaces**: Pure-Rust worker request-handling facade.
 - **Mock Availability**: Exhaustive unit test coverage with pure-Rust connector mocks.
 
 ### `com::discovery`
@@ -201,6 +210,7 @@ opc-da-client/
 ### `raw::hresult`
 - **Owns**: Strongly-typed Win32 HRESULT constants (`E_POINTER`, `RPC_S_*`, `OPC_E_*`), HRESULT classification (`is_connection_hresult`), diagnostic hint lookup (`friendly_hresult_hint`), and hex string formatting (`format_hresult`).
 - **Does NOT own**: Public domain errors (`errors::OpcError`) or high-level error logging.
+- **Trait Interfaces**: Pure functional classification & formatting helpers.
 - **Mock Availability**: N/A (tested via co-located unit tests).
 
 ---
@@ -213,7 +223,7 @@ The codebase strictly enforces unidirectional dependency flow:
 [provider] ───► [types] ◄─── [errors]
     ▲             ▲             ▲
     │             │             │
-[com::client] ──► [com::worker] ──► [com::connector] ──► [raw]
+[com::client] ──► [com::worker] ──► [com::connector] ──► [com::security]
                         │               │    │             ▲
                         │               ▼    └──► [com::discovery]
                         ▼         [com::variant] ──────────┤
@@ -223,13 +233,14 @@ The codebase strictly enforces unidirectional dependency flow:
 
 | Module | May Import | Must NOT Import | Rationale |
 | :--- | :--- | :--- | :--- |
-| `provider` | `types`, `errors`, `chrono`, `thiserror`, `async-trait` | `com`, `raw`, `serde` | Public domain interface must be backend-agnostic |
-| `types` | `errors` | `provider`, `com`, `raw`, `windows` | Canonical domain models must never depend on implementation details |
+| `provider` | `types`, `errors`, `chrono`, `thiserror`, `async-trait`, `windows-core` (`GUID`) | `com`, `raw`, `serde` | Public domain interface must be backend-agnostic |
+| `types` | `errors`, `windows-core` (`GUID`) | `provider`, `com`, `raw`, `windows` | Canonical domain models must never depend on implementation details |
 | `errors` | `windows-core` (for HRESULT), `raw::hresult` (internal) | `provider`, `types`, `com` | Domain errors are foundational and self-contained |
 | `com::client` | `provider`, `types`, `errors`, `com::worker` | `raw` | Consumer facade dispatches requests to the worker |
-| `com::worker` | `types`, `errors`, `com::connector`, `com::variant`, `tokio::sync` | `raw` | Worker communicates exclusively via pure-Rust connector facade |
-| `com::connector` | `types`, `errors`, `com::variant`, `com::discovery` (`guid_to_progid`), `raw` | `provider` | Encapsulates all raw Win32 COM FFI marshalling |
-| `com::discovery` | `types`, `errors`, `raw`, `windows` | `com::client`, `com::worker`, `com::connector` | Crate-internal server catalog and registry discovery |
+| `com::worker` | `types`, `errors`, `com::connector`, `com::variant`, `com::guard`, `tokio::sync` | `raw` | Worker communicates exclusively via pure-Rust connector facade |
+| `com::connector` | `types`, `errors`, `com::variant`, `com::discovery` (`guid_to_progid`), `com::security`, `raw`, `windows` | `provider` | Encapsulates all raw Win32 COM FFI marshalling |
+| `com::security` | `errors`, `windows` | `com::connector`, `com::discovery`, `com::worker`, `com::client` | Shared DCOM security blanketing and authentication level selection |
+| `com::discovery` | `types`, `errors`, `com::security`, `com::iterator`, `raw`, `windows` | `com::client`, `com::worker`, `com::connector` | Crate-internal server catalog and registry discovery |
 | `com::guard` | `com::connector`, `types`, `errors`, `windows` | `provider`, `raw` | RAII drop guards for COM runtime, group cleanup, and browse cursor |
 | `com::iterator` | `raw::memory`, `raw::hresult`, `types`, `errors`, `windows` | `provider`, `com::worker` | Safe COM enumeration wrapper with RAII cleanup |
 | `com::variant` | `types` (`OpcValue`), `raw::hresult`, `windows` | `com::client`, `com::worker`, `com::connector` | Pure Win32 VARIANT marshaling helper for COM connector |
@@ -263,7 +274,7 @@ The verification script ([verify.ps1](file:///c:/Users/WSALIGAN/code/opc-cli/scr
 | Pattern | Details |
 | :--- | :--- |
 | Primary Return Type | `OpcResult<T>` (`Result<T, OpcError>`) across all fallible boundaries |
-| Domain Error Enum | `thiserror` based `OpcError` with structured variants (`Com`, `ConnectionFailed`, `ServerNotFound`, `TagNotFound`, `InvalidState`, `Conversion`, `Internal`, `NotImplemented`), `OpcError::connection_failed` factory, and `OpcError::is_connection_error` predicate |
+| Domain Error Enum | `thiserror` based `OpcError` with structured variants (`Com`, `Connection`, `Server`, `Conversion`, `InvalidState`, `NotImplemented`, `Internal`), `OpcError::connection_failed` factory, and `OpcError::is_connection_error` predicate |
 | HRESULT Hints | Inherent method `OpcError::friendly_hint(&self)` translates raw Windows error codes into human-readable hints; `raw::hresult::format_hresult()` yields standard `0xHHHHHHHH: <hint>` strings |
 | RAII Resource Management (`GroupGuard`, `BrowsePositionGuard`) | Temporary COM groups created during `read_tag_values` and `write_tag_value` are guarded by `GroupGuard<'_, S: ConnectedServer>`, guaranteeing deterministic `remove_group(handle, true)` invocation on `Drop` across all return paths, `?` operator exits, and thread panics; `BrowsePositionGuard` guarantees parent position restoration on Drop |
 | RAII Memory Safety Guards (`ScopedVariant`, `ItemStatesGuard`, `ItemResultsBlobGuard`) | `ScopedVariant` encapsulates Win32 `VARIANT` lifecycle across tag write paths, guaranteeing deterministic `VariantClear` on `Drop`; `ItemStatesGuard` encapsulates `tagOPCITEMSTATE` slices across read paths, guaranteeing deterministic `VariantClear` on all element variants before memory deallocation on `Drop`; `ItemResultsBlobGuard` safely cleans up unmanaged `tagOPCITEMRESULT` blob memory on Drop |
@@ -382,6 +393,9 @@ graph TD
     subgraph PublicDomain ["Tier 1: Public Domain Layer"]
         ProviderTrait["trait OpcProvider"]
         TagValue["struct TagValue"]
+        TagBatch["enum TagBatch"]
+        TagValues["struct TagValues"]
+        Builder["struct OpcDaClientBuilder"]
         OpcQuality["struct OpcQuality (16-bit)"]
         OpcValue["enum OpcValue"]
         OpcError["enum OpcError"]
@@ -405,6 +419,7 @@ graph TD
         ComConnector["struct ComConnector"]
         ComServer["struct ComServer"]
         ComGroup["struct ComGroup"]
+        Security["mod security (apply_proxy_blanket)"]
         Discovery["mod discovery (OpcServerListCatalog)"]
         RawMemory["RemoteArray / LocalPointer"]
         RawBindings["tagOPCITEMDEF / tagOPCITEMSTATE / VARIANT / IOPCServerList"]
@@ -412,13 +427,16 @@ graph TD
     end
 
     ProviderTrait -.-> Client
+    Builder -.-> Client
     Client --> ReqChan
     ReqChan --> Worker
     Worker --> ServerConnectorTrait
     ServerConnectorTrait -.-> ComConnector
     ServerConnectorTrait -.-> Mocks
+    ComConnector --> Security
     ComConnector --> Discovery
     ComConnector --> ComServer
+    Discovery --> Security
     Worker --> ConnServerTrait
     Worker --> ConnGroupTrait
     ConnServerTrait -.-> ComServer
@@ -445,24 +463,32 @@ sequenceDiagram
     participant Channel as mpsc::channel
     participant Worker as ComWorker (Dedicated MTA Thread)
     participant ServerCache as Connection Cache (HashMap)
+    participant PooledServer as PooledServer (Active Group Cache)
     participant ComGroup as ComGroup (Pure-Rust Facade)
     participant Win32 as Windows OPC Server (IOPCSyncIO)
 
-    AsyncCaller->>Client: read_tag_values(server, tags)
+    AsyncCaller->>Client: read_tag_values(tags)
     Client->>Channel: send(ComRequest::ReadTagValues)
     Channel-->>Worker: recv(request)
-    Worker->>ServerCache: lookup_or_connect(server)
-    ServerCache-->>Worker: ConnectedServer proxy
-    Worker->>ComGroup: add_items(&[GroupItemDef])
-    ComGroup->>Win32: IOPCItemMgt::AddItems(tagOPCITEMDEF)
-    Win32-->>ComGroup: tagOPCITEMRESULT
-    ComGroup-->>Worker: Vec<GroupItemResult>
+    Worker->>ServerCache: lookup_or_connect(endpoint)
+    ServerCache-->>Worker: PooledServer proxy
+    
+    alt Active Group Cache Hit (Identical Tag Batch)
+        Worker->>PooledServer: active_group item handle reuse
+    else Active Group Cache Miss / Tag Set Change
+        Worker->>ComGroup: add_items(&[GroupItemDef])
+        ComGroup->>Win32: IOPCItemMgt::AddItems(tagOPCITEMDEF)
+        Win32-->>ComGroup: tagOPCITEMRESULT
+        ComGroup-->>Worker: Vec<GroupItemResult>
+        Worker->>PooledServer: cache_active_group(handles, batch)
+    end
+
     Worker->>ComGroup: read(DataSource::Device, &[ItemHandle])
     ComGroup->>Win32: IOPCSyncIO::Read()
     Win32-->>ComGroup: tagOPCITEMSTATE (VARIANT + wQuality)
     ComGroup-->>Worker: Vec<Result<GroupItemState, OpcError>>
-    Worker->>Client: oneshot::send(Vec<TagValue>)
-    Client-->>AsyncCaller: Ok(Vec<TagValue>)
+    Worker->>Client: oneshot::send(TagValues)
+    Client-->>AsyncCaller: Ok(TagValues)
 ```
 
 ### Browse Strategy
@@ -514,6 +540,15 @@ The upstream `opc_da` `StringIterator` had a defect where null `PWSTR` entries i
 
 ### DCOM Filter Omission (Intentional)
 Server enumeration intentionally does not filter exclusively for `CATID_OPCDAServer10` or `CATID_OPCDAServer20` categories to avoid dropping legitimate servers configured with incomplete registry category entries. Non-OPC GUIDs are discarded during the subsequent `guid_to_progid` lookup phase.
+
+### DCOM Packet Integrity Hardening (Windows KB5004442)
+Modern Windows releases enforce RPC packet integrity authentication (`RPC_C_AUTHN_LEVEL_PKT_INTEGRITY`) for DCOM activations. `opc-da-client` automatically applies security proxy blankets (`apply_proxy_blanket`) using packet integrity. For legacy environments (e.g. Windows 7 SP1 / Server 2008 R2), call `.with_legacy_dcom(true)` to fall back to `RPC_C_AUTHN_LEVEL_CONNECT`.
+
+### Dual-Phase Failure Cooldown Circuit Breaker
+Unresponsive remote host endpoints trigger a 5-second failure cooldown recorded in `ConnectionPool::failure_cooldowns`. Subsequent connection or reconnect attempts within the 5-second window immediately short-circuit with a cached connection error, preventing RPC thread freezes and reconnection storms.
+
+### Collision-Proof Group Naming
+Active and ephemeral OPC group names are generated using the process ID combined with an atomic sequence counter (`format!("opc-{:x}-{:x}", pid, seq)`). This eliminates COM group name collisions across multiple client instances or rapid reconnection cycles.
 
 ---
 

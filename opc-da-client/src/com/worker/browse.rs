@@ -4,8 +4,7 @@ use crate::com::connector::ConnectedServer;
 use crate::com::guard::BrowsePositionGuard;
 use crate::errors::{OpcOperation, OpcResult};
 use crate::log_opc_err;
-use crate::provider::TagCollector;
-use crate::types::{BrowseType, NamespaceType, ServerIdentifier};
+use crate::types::{BrowseType, NamespaceType, ServerIdentifier, TagCollector};
 
 /// Maximum recursion depth allowed during depth-first namespace traversal.
 pub const DEFAULT_MAX_BROWSE_DEPTH: usize = 50;

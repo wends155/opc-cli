@@ -1,5 +1,31 @@
 # Project Context Summary
 
+## 2026-09-06: Acyclic Decoupling, Security Extraction, Rustdoc Standardization & Specification Parity (`opc-da-client` & `opc-cli`)
+> 📝 **Context Update:**
+> * **Feature:** Execute approved 14-step L-Tier Master Implementation Plan consolidating subagent findings (`/update-doc` and `/architecture`): acyclic decoupling between `com::discovery` and `com::connector::server`, security extraction to `com::security`, worker layer purity, rustdoc standardization across all public items, behavioral contract parity (`spec.md`), public documentation alignment (`README.md`), architecture specifications synchronization (`architecture.md`), and full 9-gate quality verification.
+> * **Changes:**
+>   - **Acyclic Decoupling, Security Extraction & Layer Purity:**
+>     - Created `opc-da-client/src/com/security.rs` encapsulating dynamic DCOM proxy security blanketing (`apply_proxy_blanket`), RPC authentication level selection (`authn_level_for`), standard OPCEnum CLSID constant (`CLSID_OPC_SERVER_LIST`), and Win32 RPC constants.
+>     - Declared `pub(crate) mod security;` in `com/mod.rs`.
+>     - Retargeted `com/connector/server.rs` and `com/discovery.rs` to import from `crate::com::security`, completely eradicating the cyclic dependency between discovery and connector (0 cross-imports). Derived `Debug` on `ComConnector`.
+>     - Retargeted `com/worker/{browse, read, write, tests}.rs` to import canonical domain models (`TagValue`, `WriteResult`, `TagCollector`) directly from foundation `crate::types` rather than `crate::provider`, enforcing architectural layer purity.
+>     - Re-exported `OpcDaClientBuilder` at `opc-da-client/src/lib.rs` and validated via `test_opc_da_client_builder_reexport`.
+>   - **Rustdoc Standardization & Module Documentation:**
+>     - Added module header `//!` to `com/iterator.rs` with constructor `# Returns` documentation.
+>     - Fully documented `TagBatch` and `TagValues` methods in `types.rs` with `# Arguments`, `# Returns`, `# Errors`, and runnable doctests.
+>     - Fully documented `OpcDaClientBuilder` and `OpcDaClient` inherent methods in `com/client.rs`. Added explicit type annotation `let client: OpcDaClient = ...` in doctests to avoid ambiguous `Default` inference under `--all-features`.
+>     - Sanitized doc example in `client.subscribe` to replace forbidden `println!` with clean variable binding.
+>   - **Behavioral Contract Parity (`spec.md`):**
+>     - Reconciled `opc-da-client/spec.md`: updated verification commit hash to `a09468e`; aligned `TagBatch` variants (removed unnecessary `'a`), `IntoTags: Send`, `TagValues` methods (`into_vec`, removed false `Index`/`Deref`), `TagExtractError` variants (`NotRequested`, `ReadFailed`, `NoValue`, `TypeMismatch`), `OpcDaClientBuilder` configuration, `OpcDaClient` inherent methods; synchronized Section 5 test checklists to map all 153 client unit tests, 39 CLI unit tests, and 70 doc-tests.
+>   - **Public Documentation Alignment (`README.md`):**
+>     - Updated `opc-da-client/README.md` and root `README.md` with modern v0.2.0 API features (`OpcDaClient::builder()`, `connect`, `connect_remote`, zero-alloc `TagBatch`, typed `TagValues` getters, Layer 2 subscription stream, KB5004442 packet integrity, active group caching, native `write_batch`, and updated API surface table). All doctests pass cleanly.
+>   - **Architecture Specifications Synchronization:**
+>     - Synchronized all 16 sections in `opc-da-client/architecture.md` and root `architecture.md`: registered `com::security` in §4 and §5; updated §6 Dependency Direction rules and ASCII diagrams; updated §7 to 9-gate quality pipeline; reconciled §8 error handling to actual 7 variants; updated §10 test metrics (153 client unit tests, 39 CLI unit tests, 70 doc-tests); updated §13 Mermaid diagrams with Tier 1 models and `com::security`; documented KB5004442 packet integrity hardening, dual-phase circuit breaker, and collision-proof group naming in §14.
+>   - **Quality Verification Pipeline:**
+>     - Full 9-gate quality verification pipeline (`pwsh -File scripts/verify.ps1`) passes with exit code 0: 153 client unit tests, 39 CLI unit tests, 70 doc-tests, zero clippy warnings (`-D warnings`), zero AST-grep violations, zero forbidden patterns, clean polyfill builds, clean PowerShell AST syntax.
+> * **New Constraints:** `com::discovery` and `com::connector::server` must never import from each other; shared DCOM security primitives must reside in `com::security`. `com::worker` submodules must import domain types directly from `types.rs`. All public items must maintain 100% rustdoc coverage with zero warnings under `cargo doc --no-deps --workspace --all-features`.
+> * **Pruned:** Cyclic import between `com::discovery` and `com::connector::server`, worker layer inversion, missing rustdoc sections, and documentation drift across `spec.md`, `README.md`, and `architecture.md`.
+
 ## 2026-09-06: Fluent Server-Bound Client, Zero-Allocation TagBatch, Remote DCOM Activation & Subscription Stream (`opc-da-client` & `opc-cli`)
 > 📝 **Context Update:**
 > * **Feature:** Execute approved 26-step Master Implementation Plan implementing fluent server-bound client builder, zero-allocation tag batches, rich lenient tag values collection, remote DCOM activation with Windows KB5004442 packet integrity, remote catalog discovery, connection pool active group caching, collision-proof group names, native batch writes, and non-blocking Layer 2 subscription stream.

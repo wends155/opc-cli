@@ -24,6 +24,18 @@ impl Default for OpcDaClientBuilder<ComConnector> {
 
 impl OpcDaClientBuilder<ComConnector> {
     /// Creates a new default client builder targeting the standard Windows [`ComConnector`].
+    ///
+    /// # Returns
+    ///
+    /// A new [`OpcDaClientBuilder`] initialized with default options.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use opc_da_client::OpcDaClientBuilder;
+    ///
+    /// let builder = OpcDaClientBuilder::new();
+    /// ```
     #[must_use]
     pub fn new() -> Self {
         Self {
@@ -38,6 +50,22 @@ impl OpcDaClientBuilder<ComConnector> {
 
 impl<C: ServerConnector + 'static> OpcDaClientBuilder<C> {
     /// Sets the target remote host (or `"localhost"`).
+    ///
+    /// # Arguments
+    ///
+    /// * `host` - Target host IP address or hostname.
+    ///
+    /// # Returns
+    ///
+    /// The updated builder instance.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use opc_da_client::OpcDaClientBuilder;
+    ///
+    /// let builder = OpcDaClientBuilder::new().host("192.168.1.10");
+    /// ```
     #[must_use]
     pub fn host(mut self, host: impl Into<String>) -> Self {
         self.host = Some(host.into());
@@ -45,6 +73,22 @@ impl<C: ServerConnector + 'static> OpcDaClientBuilder<C> {
     }
 
     /// Sets the target server identifier (ProgID or CLSID).
+    ///
+    /// # Arguments
+    ///
+    /// * `server` - OPC server ProgID string or GUID CLSID.
+    ///
+    /// # Returns
+    ///
+    /// The updated builder instance.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use opc_da_client::OpcDaClientBuilder;
+    ///
+    /// let builder = OpcDaClientBuilder::new().server("Matrikon.OPC.Simulation.1");
+    /// ```
     #[must_use]
     pub fn server(mut self, server: impl Into<ServerIdentifier>) -> Self {
         self.server = Some(server.into());
@@ -52,6 +96,23 @@ impl<C: ServerConnector + 'static> OpcDaClientBuilder<C> {
     }
 
     /// Sets operation timeout.
+    ///
+    /// # Arguments
+    ///
+    /// * `timeout` - Duration before operations time out.
+    ///
+    /// # Returns
+    ///
+    /// The updated builder instance.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use std::time::Duration;
+    /// use opc_da_client::OpcDaClientBuilder;
+    ///
+    /// let builder = OpcDaClientBuilder::new().timeout(Duration::from_secs(5));
+    /// ```
     #[must_use]
     pub fn timeout(mut self, timeout: std::time::Duration) -> Self {
         self.timeout = Some(timeout);
@@ -59,6 +120,25 @@ impl<C: ServerConnector + 'static> OpcDaClientBuilder<C> {
     }
 
     /// Configures legacy DCOM security blanketing.
+    ///
+    /// Sets authentication level to `RPC_C_AUTHN_LEVEL_CONNECT` (2) instead of
+    /// modern post-KB5004442 `RPC_C_AUTHN_LEVEL_PKT_INTEGRITY` (5).
+    ///
+    /// # Arguments
+    ///
+    /// * `legacy` - `true` to enable legacy DCOM packet authentication.
+    ///
+    /// # Returns
+    ///
+    /// The updated builder instance.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use opc_da_client::OpcDaClientBuilder;
+    ///
+    /// let builder = OpcDaClientBuilder::new().with_legacy_dcom(true);
+    /// ```
     #[must_use]
     pub fn with_legacy_dcom(mut self, legacy: bool) -> Self {
         self.legacy_dcom = legacy;
@@ -66,6 +146,14 @@ impl<C: ServerConnector + 'static> OpcDaClientBuilder<C> {
     }
 
     /// Transitions the builder to use an alternative backend connector (e.g., a test mock).
+    ///
+    /// # Arguments
+    ///
+    /// * `connector` - Backend connector implementing [`ServerConnector`].
+    ///
+    /// # Returns
+    ///
+    /// A new builder parameterized by the connector type `C2`.
     #[must_use]
     pub fn with_connector<C2: ServerConnector + 'static>(
         self,
@@ -81,6 +169,18 @@ impl<C: ServerConnector + 'static> OpcDaClientBuilder<C> {
     }
 
     /// Builds the `OpcDaClient` using an explicit connector instance.
+    ///
+    /// # Arguments
+    ///
+    /// * `connector` - Connector instance to use.
+    ///
+    /// # Returns
+    ///
+    /// A new [`OpcDaClient`] configured with the builder options.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`OpcError::Connection`] if worker thread initialization fails.
     pub fn build_with_connector(self, connector: C) -> OpcResult<OpcDaClient<C>> {
         let mut client = OpcDaClient::new(connector)?;
         if let Some(server) = self.server {
@@ -95,6 +195,25 @@ impl<C: ServerConnector + 'static> OpcDaClientBuilder<C> {
 
 impl<C: ServerConnector + Default + 'static> OpcDaClientBuilder<C> {
     /// Builds the `OpcDaClient` using the configured options and default connector.
+    ///
+    /// # Returns
+    ///
+    /// A configured [`OpcDaClient`].
+    ///
+    /// # Errors
+    ///
+    /// Returns [`OpcError::Connection`] if worker thread initialization fails.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,no_run
+    /// use opc_da_client::OpcDaClientBuilder;
+    ///
+    /// let client = OpcDaClientBuilder::new()
+    ///     .server("Matrikon.OPC.Simulation.1")
+    ///     .build()?;
+    /// # Ok::<(), opc_da_client::OpcError>(())
+    /// ```
     pub fn build(self) -> OpcResult<OpcDaClient<C>> {
         let connector = self.connector.unwrap_or_default();
         let mut client = OpcDaClient::new(connector)?;
@@ -152,17 +271,74 @@ impl Default for OpcDaClient<ComConnector> {
 
 impl OpcDaClient<ComConnector> {
     /// Returns a new fluent builder for configuring and connecting an `OpcDaClient`.
+    ///
+    /// # Returns
+    ///
+    /// A new [`OpcDaClientBuilder`] targeting the standard [`ComConnector`].
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use opc_da_client::OpcDaClient;
+    ///
+    /// let builder = OpcDaClient::builder()
+    ///     .host("localhost")
+    ///     .server("Matrikon.OPC.Simulation.1");
+    /// ```
     #[must_use]
     pub fn builder() -> OpcDaClientBuilder<ComConnector> {
         OpcDaClientBuilder::new()
     }
 
     /// Quickly connects to a local OPC DA server by ProgID or CLSID.
+    ///
+    /// # Arguments
+    ///
+    /// * `server` - Target OPC server ProgID or GUID CLSID.
+    ///
+    /// # Returns
+    ///
+    /// A connected [`OpcDaClient`] bound to the target server.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`OpcError::Connection`] if worker thread initialization fails.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,no_run
+    /// use opc_da_client::OpcDaClient;
+    ///
+    /// let client = OpcDaClient::connect("Matrikon.OPC.Simulation.1")?;
+    /// # Ok::<(), opc_da_client::OpcError>(())
+    /// ```
     pub fn connect(server: impl Into<ServerIdentifier>) -> OpcResult<Self> {
         Self::builder().server(server).build()
     }
 
     /// Quickly connects to a remote OPC DA server by host and ProgID or CLSID.
+    ///
+    /// # Arguments
+    ///
+    /// * `host` - Target remote host IP address or hostname.
+    /// * `server` - Target OPC server ProgID or GUID CLSID.
+    ///
+    /// # Returns
+    ///
+    /// A connected [`OpcDaClient`] bound to the target host and server.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`OpcError::Connection`] if worker thread initialization fails.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,no_run
+    /// use opc_da_client::OpcDaClient;
+    ///
+    /// let client = OpcDaClient::connect_remote("192.168.1.10", "Matrikon.OPC.Simulation.1")?;
+    /// # Ok::<(), opc_da_client::OpcError>(())
+    /// ```
     pub fn connect_remote(
         host: impl Into<String>,
         server: impl Into<ServerIdentifier>,
@@ -175,9 +351,15 @@ impl<C: ServerConnector + 'static> OpcDaClient<C> {
     /// Creates a new `OpcDaClient` with the given connector.
     ///
     /// # Arguments
+    ///
     /// * `connector` - Backend connector implementing [`ServerConnector`].
     ///
+    /// # Returns
+    ///
+    /// A new [`OpcDaClient`] instance ready for communication.
+    ///
     /// # Errors
+    ///
     /// Returns [`crate::errors::OpcError::Connection`] if the background COM worker thread
     /// fails to spawn or MTA apartment initialization fails.
     #[tracing::instrument(level = "info", skip(connector), err)]
@@ -192,6 +374,14 @@ impl<C: ServerConnector + 'static> OpcDaClient<C> {
     }
 
     /// Binds or overrides the target remote host on this client.
+    ///
+    /// # Arguments
+    ///
+    /// * `host` - Target host IP address or hostname string.
+    ///
+    /// # Returns
+    ///
+    /// The updated [`OpcDaClient`].
     #[must_use]
     pub fn host(mut self, host: impl Into<String>) -> Self {
         let h = host.into();
@@ -204,6 +394,14 @@ impl<C: ServerConnector + 'static> OpcDaClient<C> {
     }
 
     /// Binds or overrides the target server identifier on this client.
+    ///
+    /// # Arguments
+    ///
+    /// * `server` - Target OPC server ProgID or GUID CLSID.
+    ///
+    /// # Returns
+    ///
+    /// The updated [`OpcDaClient`].
     #[must_use]
     pub fn server(mut self, server: impl Into<ServerIdentifier>) -> Self {
         let s = server.into();
@@ -216,6 +414,35 @@ impl<C: ServerConnector + 'static> OpcDaClient<C> {
     }
 
     /// Asynchronously reads current values, quality, and timestamps for a batch of tags.
+    ///
+    /// Accepts any type implementing [`IntoTags`] (slices, arrays, vectors, single tag strings)
+    /// without requiring intermediate heap allocations.
+    ///
+    /// # Arguments
+    ///
+    /// * `tags` - Tag batch implementing [`IntoTags`].
+    ///
+    /// # Returns
+    ///
+    /// A [`TagValues`] collection containing the read results.
+    ///
+    /// # Errors
+    ///
+    /// * [`OpcError::InvalidState`] - Client is not bound to a server.
+    /// * [`OpcError::Connection`] - DCOM connection failure or server disconnect.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,no_run
+    /// # #[tokio::main]
+    /// # async fn main() -> opc_da_client::OpcResult<()> {
+    /// use opc_da_client::OpcDaClient;
+    ///
+    /// let client = OpcDaClient::connect("Matrikon.OPC.Simulation.1")?;
+    /// let values = client.read_tag_values(["Random.Int4", "Random.Real8"]).await?;
+    /// # Ok(())
+    /// # }
+    /// ```
     #[tracing::instrument(level = "info", skip(self, tags), err)]
     pub async fn read_tag_values(&self, tags: impl IntoTags) -> OpcResult<TagValues> {
         let endpoint = self.endpoint.as_ref().ok_or_else(|| {
@@ -235,24 +462,124 @@ impl<C: ServerConnector + 'static> OpcDaClient<C> {
     }
 
     /// Reads a single tag and unwraps its value as an `f64`.
+    ///
+    /// # Arguments
+    ///
+    /// * `tag` - Tag identifier string.
+    ///
+    /// # Returns
+    ///
+    /// Decoded `f64` value.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`OpcError`] if the read fails, the tag was not found, or the value cannot be converted to `f64`.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,no_run
+    /// # #[tokio::main]
+    /// # async fn main() -> opc_da_client::OpcResult<()> {
+    /// use opc_da_client::OpcDaClient;
+    ///
+    /// let client = OpcDaClient::connect("Matrikon.OPC.Simulation.1")?;
+    /// let temp = client.read_f64("Random.Real8").await?;
+    /// # Ok(())
+    /// # }
+    /// ```
     pub async fn read_f64(&self, tag: &str) -> OpcResult<f64> {
         let values = self.read_tag_values(tag.to_string()).await?;
         values.get_f64(tag).map_err(Into::into)
     }
 
     /// Reads a single tag and unwraps its value as an `i32`.
+    ///
+    /// # Arguments
+    ///
+    /// * `tag` - Tag identifier string.
+    ///
+    /// # Returns
+    ///
+    /// Decoded `i32` value.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`OpcError`] if the read fails, the tag was not found, or the value cannot be converted to `i32`.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,no_run
+    /// # #[tokio::main]
+    /// # async fn main() -> opc_da_client::OpcResult<()> {
+    /// use opc_da_client::OpcDaClient;
+    ///
+    /// let client = OpcDaClient::connect("Matrikon.OPC.Simulation.1")?;
+    /// let count = client.read_i32("Random.Int4").await?;
+    /// # Ok(())
+    /// # }
+    /// ```
     pub async fn read_i32(&self, tag: &str) -> OpcResult<i32> {
         let values = self.read_tag_values(tag.to_string()).await?;
         values.get_i32(tag).map_err(Into::into)
     }
 
     /// Reads a single tag and unwraps its value as a `bool`.
+    ///
+    /// # Arguments
+    ///
+    /// * `tag` - Tag identifier string.
+    ///
+    /// # Returns
+    ///
+    /// Decoded `bool` value.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`OpcError`] if the read fails, the tag was not found, or the value cannot be converted to `bool`.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,no_run
+    /// # #[tokio::main]
+    /// # async fn main() -> opc_da_client::OpcResult<()> {
+    /// use opc_da_client::OpcDaClient;
+    ///
+    /// let client = OpcDaClient::connect("Matrikon.OPC.Simulation.1")?;
+    /// let flag = client.read_bool("Random.Bool").await?;
+    /// # Ok(())
+    /// # }
+    /// ```
     pub async fn read_bool(&self, tag: &str) -> OpcResult<bool> {
         let values = self.read_tag_values(tag.to_string()).await?;
         values.get_bool(tag).map_err(Into::into)
     }
 
     /// Reads a single tag and unwraps its value as a `String`.
+    ///
+    /// # Arguments
+    ///
+    /// * `tag` - Tag identifier string.
+    ///
+    /// # Returns
+    ///
+    /// Decoded `String` value.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`OpcError`] if the read fails, the tag was not found, or the value cannot be converted to `String`.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,no_run
+    /// # #[tokio::main]
+    /// # async fn main() -> opc_da_client::OpcResult<()> {
+    /// use opc_da_client::OpcDaClient;
+    ///
+    /// let client = OpcDaClient::connect("Matrikon.OPC.Simulation.1")?;
+    /// let text = client.read_string("Random.String").await?;
+    /// # Ok(())
+    /// # }
+    /// ```
     pub async fn read_string(&self, tag: &str) -> OpcResult<String> {
         let values = self.read_tag_values(tag.to_string()).await?;
         values
@@ -262,6 +589,33 @@ impl<C: ServerConnector + 'static> OpcDaClient<C> {
     }
 
     /// Asynchronously writes a typed value to a tag.
+    ///
+    /// # Arguments
+    ///
+    /// * `tag` - Target tag identifier.
+    /// * `value` - Value to write, convertible into [`OpcValue`].
+    ///
+    /// # Returns
+    ///
+    /// A [`WriteResult`] summarizing the write status.
+    ///
+    /// # Errors
+    ///
+    /// * [`OpcError::InvalidState`] - Client is not bound to a server.
+    /// * [`OpcError::Connection`] - DCOM connection failure.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,no_run
+    /// # #[tokio::main]
+    /// # async fn main() -> opc_da_client::OpcResult<()> {
+    /// use opc_da_client::OpcDaClient;
+    ///
+    /// let client = OpcDaClient::connect("Matrikon.OPC.Simulation.1")?;
+    /// let res = client.write("Bucket Brigade.Int4", 100).await?;
+    /// # Ok(())
+    /// # }
+    /// ```
     #[tracing::instrument(level = "info", skip(self, value), err)]
     pub async fn write(&self, tag: &str, value: impl Into<OpcValue>) -> OpcResult<WriteResult> {
         let endpoint = self
@@ -280,6 +634,38 @@ impl<C: ServerConnector + 'static> OpcDaClient<C> {
     }
 
     /// Asynchronously writes a batch of tag-value pairs in a single operation.
+    ///
+    /// Uses a single COM group and single atomic `SyncIO::Write` RPC roundtrip.
+    ///
+    /// # Arguments
+    ///
+    /// * `writes` - Vector of `(tag_id, value)` pairs to write.
+    ///
+    /// # Returns
+    ///
+    /// A vector of [`WriteResult`] items corresponding to the input writes in order.
+    ///
+    /// # Errors
+    ///
+    /// * [`OpcError::InvalidState`] - Client is not bound to a server.
+    /// * [`OpcError::Connection`] - DCOM connection failure.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,no_run
+    /// # #[tokio::main]
+    /// # async fn main() -> opc_da_client::OpcResult<()> {
+    /// use opc_da_client::{OpcDaClient, OpcValue};
+    ///
+    /// let client = OpcDaClient::connect("Matrikon.OPC.Simulation.1")?;
+    /// let writes = vec![
+    ///     ("Bucket Brigade.Int4".to_string(), OpcValue::Int(100)),
+    ///     ("Bucket Brigade.Real8".to_string(), OpcValue::Float(99.5)),
+    /// ];
+    /// let results = client.write_batch(writes).await?;
+    /// # Ok(())
+    /// # }
+    /// ```
     #[tracing::instrument(level = "info", skip(self, writes), err)]
     pub async fn write_batch(
         &self,
@@ -300,13 +686,65 @@ impl<C: ServerConnector + 'static> OpcDaClient<C> {
     }
 
     /// Lists available OPC servers on a remote (or local) host.
+    ///
+    /// # Arguments
+    ///
+    /// * `host` - Target host IP address or hostname.
+    ///
+    /// # Returns
+    ///
+    /// A vector of server ProgID strings.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`OpcError`] if catalog enumeration fails.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,no_run
+    /// # #[tokio::main]
+    /// # async fn main() -> opc_da_client::OpcResult<()> {
+    /// use opc_da_client::OpcDaClient;
+    ///
+    /// let client: OpcDaClient = OpcDaClient::default();
+    /// let servers = client.list_servers_on("localhost").await?;
+    /// # Ok(())
+    /// # }
+    /// ```
     pub async fn list_servers_on(&self, host: &str) -> OpcResult<Vec<String>> {
         self.list_servers(host).await
     }
 
     /// Subscribes to a stream of periodic tag value reads, returning an asynchronous [`tokio::sync::mpsc::Receiver`].
     ///
-    /// Dropping the returned receiver automatically cancels the background polling task.
+    /// Spawns a non-blocking background polling task. Dropping the returned receiver
+    /// automatically cancels the background polling task.
+    ///
+    /// # Arguments
+    ///
+    /// * `tags` - Tag batch implementing [`IntoTags`].
+    /// * `interval` - Polling interval duration.
+    ///
+    /// # Returns
+    ///
+    /// An asynchronous [`tokio::sync::mpsc::Receiver`] yielding [`TagValues`] updates.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,no_run
+    /// # #[tokio::main]
+    /// # async fn main() -> opc_da_client::OpcResult<()> {
+    /// use opc_da_client::OpcDaClient;
+    /// use std::time::Duration;
+    ///
+    /// let client = OpcDaClient::connect("Matrikon.OPC.Simulation.1")?;
+    /// let mut rx = client.subscribe(["Random.Int4"], Duration::from_millis(500));
+    /// if let Some(values) = rx.recv().await {
+    ///     let _count = values.len();
+    /// }
+    /// # Ok(())
+    /// # }
+    /// ```
     pub fn subscribe(
         &self,
         tags: impl IntoTags,
