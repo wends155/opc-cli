@@ -242,10 +242,25 @@ impl<C: ServerConnector + Default + 'static> OpcDaClientBuilder<C> {
 
     /// Builds the `OpcDaClient` directly in the [`Bound`] typestate.
     ///
+    /// # Returns
+    ///
+    /// An [`OpcDaClient`] bound to the configured server endpoint in the [`Bound`] typestate.
+    ///
     /// # Errors
     ///
     /// Returns [`OpcError::InvalidState`] if the builder does not have a server identifier configured.
     /// Returns [`OpcError::Connection`] if worker thread initialization fails.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,no_run
+    /// use opc_da_client::OpcDaClientBuilder;
+    ///
+    /// let client = OpcDaClientBuilder::new()
+    ///     .server("Matrikon.OPC.Simulation.1")
+    ///     .build_bound()?;
+    /// # Ok::<(), opc_da_client::OpcError>(())
+    /// ```
     pub fn build_bound(self) -> OpcResult<OpcDaClient<C, Bound>> {
         let unbound = self.build()?;
         let ep = unbound.endpoint.clone().ok_or_else(|| {
@@ -411,6 +426,24 @@ impl<C: ServerConnector + 'static> OpcDaClient<C, Unbound> {
     }
 
     /// Binds the unbound client to a target endpoint, transitioning it to the [`Bound`] typestate.
+    ///
+    /// # Arguments
+    ///
+    /// * `endpoint` - The target [`OpcServerEndpoint`] (or identifier convertible to one).
+    ///
+    /// # Returns
+    ///
+    /// An [`OpcDaClient`] bound to the target server in the [`Bound`] typestate.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,no_run
+    /// use opc_da_client::OpcDaClient;
+    ///
+    /// let unbound = OpcDaClient::builder().build()?;
+    /// let bound = unbound.bind("Matrikon.OPC.Simulation.1");
+    /// # Ok::<(), opc_da_client::OpcError>(())
+    /// ```
     #[must_use]
     pub fn bind<E: Into<OpcServerEndpoint>>(self, endpoint: E) -> OpcDaClient<C, Bound> {
         let ep = endpoint.into();
@@ -423,6 +456,25 @@ impl<C: ServerConnector + 'static> OpcDaClient<C, Unbound> {
     }
 
     /// Binds the unbound client to a remote OPC DA server by host and identifier.
+    ///
+    /// # Arguments
+    ///
+    /// * `host` - Target remote host address.
+    /// * `server` - Target OPC server ProgID or CLSID.
+    ///
+    /// # Returns
+    ///
+    /// An [`OpcDaClient`] bound to the remote server in the [`Bound`] typestate.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,no_run
+    /// use opc_da_client::OpcDaClient;
+    ///
+    /// let unbound = OpcDaClient::builder().build()?;
+    /// let bound = unbound.bind_remote("192.168.1.10", "Matrikon.OPC.Simulation.1");
+    /// # Ok::<(), opc_da_client::OpcError>(())
+    /// ```
     #[must_use]
     pub fn bind_remote(
         self,
@@ -439,6 +491,10 @@ impl<C: ServerConnector + 'static> OpcDaClient<C, Unbound> {
 impl<C: ServerConnector + 'static> OpcDaClient<C, Bound> {
     /// Returns the target OPC server endpoint guaranteed to be present in the [`Bound`] typestate.
     ///
+    /// # Returns
+    ///
+    /// A borrowed reference to the bound [`OpcServerEndpoint`].
+    ///
     /// # Panics
     ///
     /// Panics if the internal endpoint field is absent, which represents an invariant violation of [`Bound`].
@@ -451,6 +507,10 @@ impl<C: ServerConnector + 'static> OpcDaClient<C, Bound> {
     }
 
     /// Returns the server identifier string (ProgID or CLSID) for this bound session.
+    ///
+    /// # Returns
+    ///
+    /// The string representation of the bound server identifier.
     #[must_use]
     pub fn server_id(&self) -> &str {
         match &self.endpoint().identifier {
@@ -460,6 +520,10 @@ impl<C: ServerConnector + 'static> OpcDaClient<C, Bound> {
     }
 
     /// Unbinds the client from its endpoint, returning the unbound gateway and the previous endpoint.
+    ///
+    /// # Returns
+    ///
+    /// A tuple containing the unbound [`OpcDaClient<C, Unbound>`] and the previous [`OpcServerEndpoint`].
     ///
     /// # Panics
     ///
@@ -481,21 +545,70 @@ impl<C: ServerConnector + 'static> OpcDaClient<C, Bound> {
     }
 
     /// Reads a single tag and returns its full [`TagValue`].
+    ///
+    /// # Arguments
+    ///
+    /// * `tag` - Tag identifier string to read.
+    ///
+    /// # Returns
+    ///
+    /// A [`TagValue`] containing the read outcome, quality, and timestamp.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`OpcError`] on transport, timeout, or COM failure.
     pub async fn read_tag(&self, tag: &str) -> OpcResult<TagValue> {
         self.read_tag_value(tag).await
     }
 
     /// Reads a batch of tags and returns their [`TagValues`].
+    ///
+    /// # Arguments
+    ///
+    /// * `tags` - A collection of tags convertible via [`IntoTags`].
+    ///
+    /// # Returns
+    ///
+    /// A [`TagValues`] collection holding results for all requested tags.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`OpcError`] on transport, timeout, or COM failure.
     pub async fn read_tags(&self, tags: impl IntoTags) -> OpcResult<TagValues> {
         self.read_tag_values(tags).await
     }
 
     /// Writes a typed value to a tag on the bound server.
+    ///
+    /// # Arguments
+    ///
+    /// * `tag` - Tag identifier string to write to.
+    /// * `value` - The value to write, convertible into [`OpcValue`].
+    ///
+    /// # Returns
+    ///
+    /// A [`WriteResult`] indicating success or write failure.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`OpcError`] on transport, timeout, or COM failure.
     pub async fn write_tag(&self, tag: &str, value: impl Into<OpcValue>) -> OpcResult<WriteResult> {
         self.write(tag, value).await
     }
 
     /// Writes a batch of tag-value pairs to the bound server.
+    ///
+    /// # Arguments
+    ///
+    /// * `writes` - A vector of `(tag_name, opc_value)` pairs.
+    ///
+    /// # Returns
+    ///
+    /// A vector of [`WriteResult`] outcomes matching the input order.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`OpcError`] on transport, timeout, or COM failure.
     pub async fn write_tags(&self, writes: Vec<(String, OpcValue)>) -> OpcResult<Vec<WriteResult>> {
         self.write_batch(writes).await
     }
@@ -506,6 +619,10 @@ impl<C: ServerConnector + 'static, State: Send + Sync + 'static> OpcDaClient<C, 
     ///
     /// Dispatches an initial probe request to the COM worker thread to verify that
     /// the target server can be reached and instantiated via COM/DCOM.
+    ///
+    /// # Returns
+    ///
+    /// `Ok(())` if the server responds, or an error if unreachable.
     ///
     /// # Errors
     ///

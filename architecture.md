@@ -48,8 +48,8 @@ opc-cli/
 │   ├── Cargo.toml              # App dependencies (ratatui, crossterm, clap)
 │   └── src/
 │       ├── main.rs             # Application entrypoint & CLI argument parsing
-│       ├── app.rs              # App state machine, event loop & background task polling
-│       └── ui.rs               # Ratatui view render functions
+│       ├── app.rs              # App state machine (6 sub-states: Navigation, Dialog, AutoRefresh, Tasks, Search, View), AppAction & background task polling
+│       └── ui.rs               # Ratatui view render functions (zero-allocation [Cell; 4] stack rows)
 ├── opc-da-client/              # Native OPC DA Client Library Crate
 │   ├── Cargo.toml              # Library dependencies (windows, thiserror)
 │   ├── README.md               # Crate documentation for crates.io
@@ -96,9 +96,9 @@ opc-cli/
 │           ├── bindings/       # Frozen COM bindings (windgen output, read-only: da, comn)
 │           ├── hresult.rs      # Strongly-typed Win32 HRESULT constants & classification
 │           └── memory.rs       # Safe unmanaged COM memory management (RemotePointer, RemoteArray)
-├── compat/                     # Windows 7 / NT 6.1 Polyfill DLL Crates (#![no_std])
-│   ├── bcrypt-polyfill/       # ProcessPrng -> RtlGenRandom polyfill
-│   ├── synch-polyfill/        # WaitOnAddress 1ms Sleep polling polyfill
+├── compat/                     # Windows 7 / NT 6.1 Polyfill DLL Crates (#![no_std], std unit-tested)
+│   ├── bcrypt-polyfill/       # ProcessPrng -> RtlGenRandom polyfill (256 MiB chunking, null-safe)
+│   ├── synch-polyfill/        # WaitOnAddress polling polyfill (naturally aligned, volatile reads)
 │   └── winrt-error-polyfill/  # RoOriginateError S_OK stub polyfill
 └── scripts/                    # Automation & Quality Gate Pipelines
     ├── package.ps1             # Universal task dispatcher (single source of truth)
@@ -113,10 +113,17 @@ opc-cli/
 
 ### `opc-cli` (TUI Application)
 - **Owns**: Terminal UI rendering (`ui.rs`), keyboard input handling (`main.rs`), and decomposed application state machine (`app.rs`):
-  - `NavigationState`: Screen navigation (`CurrentScreen`), history tracking (`previous_screen`), cursor indexes for server and tag lists, and contextual input buffers (`host_input`, `write_input`).
+  - `NavigationState`: Screen navigation (`CurrentScreen`), history tracking (`previous_screen`), and cursor indexes for server and tag lists.
+  - `DialogState`: Contextual input buffers (`host_input`, `write_input`) for prompt dialogs.
+  - `AutoRefresher`: Auto-refresh timer, interval configuration, and active monitored tag set tracking.
   - `TaskManager`: Asynchronous background task tracking (`ActiveTask`), cooperative cancellation on `Esc` key during loading, centralized channel draining (`poll_channel`), and task deduplication (`spawn_read_task`).
   - `SearchEngine`: $O(1)$ search matching mask, case-insensitive substring searching without per-keystroke allocations, and tag filter navigation.
-  - `ViewState`: Server list, tag list, monitored values (`TagValues`), selection set (`HashSet<String>`), and status message ring buffer.
+  - `ViewState`: Server list, tag list, monitored values (`TagValues`), selection set (`HashSet<String>`), status message ring buffer, and cursor pagination math.
+- **Architectural Invariants & Encapsulation**:
+  - **No Deref Anti-Pattern**: Strict ban on `Deref` and `DerefMut` implementations targeting `ViewState` on `App` (enforced via AST-grep rule `no-deref-on-app`). All view state fields are explicitly accessed via `self.view.*`.
+  - **Encapsulated Event Handling**: Key handling is cleanly encapsulated in `App::handle_key(&mut self, key: KeyEvent) -> AppAction`, returning an `AppAction` enum (`None`, `Quit`, `Spawn(ActiveTask)`) to decouple raw terminal events from the event loop.
+  - **Zero-Allocation Table Rows**: Table row rendering in `ui.rs` uses stack-allocated `[Cell; 4]` arrays with ANSI highlight styling, eliminating heap allocations in hot render frames.
+  - **Status Bar Telemetry**: Separate counters track fatal read/write transport or COM errors (`error_count`) versus data quality anomalies (`bad_quality_count`), ensuring transparent visibility into communication versus signal health.
 - **Does NOT Own**: Raw COM initialization, registry enumeration, OPC group creation, HRESULT interpretation logic.
 - **Trait Interfaces**: Consumes composite `OpcProvider` (or sub-traits `ServerDiscovery`, `TagBrowser`, `TagReader`, `TagWriter`) asynchronously.
 - **Mock Availability**: Fully mockable via `MockOpcProvider` (compiled when `feature = "test-support"` is active in `opc-da-client`) and unit test fixtures (`test_app()`, `TestAppBuilder`).
@@ -212,16 +219,30 @@ The project uses a unified dual-interface build system:
    - `make package`: Builds modern (Win10+) release bundle into `dist/opc-cli-x64.zip`.
    - `make package-win7`: Builds legacy (Win7/Server 2008 R2) release bundle into `dist/opc-cli-win7-x64.zip`.
    - `make logs`: Runs log inspector (`pwsh scripts/check-logs.ps1`).
+   - `make search-todos`: Scans workspace for active `TODO`, `FIXME`, and `HACK` markers.
    - `make commit MSG="..."`: Runs quality gate, commits, and pushes to remote (`pwsh scripts/commit.ps1`).
    - `make release-merge`: Clean release merge from `dev` to `main` (`pwsh scripts/Merge-ToMain.ps1`).
    - `make clean`: Cleans build artifacts and `dist/` directory.
 
 2. **scripts/package.ps1**: Single PowerShell task dispatcher for all workspace operations.
    - Usage: `pwsh -File ./scripts/package.ps1 -Task <task>`
-   - Supported tasks: `debug`, `release`, `build`, `test`, `verify`, `package`, `package-win7`, `logs`, `commit`, `release-merge`.
+   - Supported tasks: `debug`, `release`, `build`, `test`, `verify`, `package`, `package-win7`, `logs`, `search-todos`, `commit`, `release-merge`.
 
 3. **scripts/package-win7.ps1**: Dedicated legacy packaging pipeline that compiles polyfills, PE-patches the binary, and bundles redistributables.
-4. **scripts/verify.ps1**: Universal 9-gate quality pipeline (formatter, linter, doc-tests, workspace tests, feature independence check, polyfill compilation, AST-grep scan, forbidden pattern scanner, PowerShell script syntax & strict mode check).
+4. **scripts/verify.ps1**: Universal 9-gate quality pipeline:
+   - **Gate 1**: Code formatting (`cargo fmt --all -- --check`).
+   - **Gate 2**: Linter & clippy checks (`cargo clippy --workspace --all-targets --all-features -- -D warnings`).
+   - **Gate 3**: Doc test verification (`cargo test --doc --workspace --all-features`).
+   - **Gate 4**: Full workspace test suite execution (`cargo test --workspace --all-targets --all-features`).
+   - **Gate 5**: NT 6.1 polyfill compilation & unit testing (`cargo test --features std` in `compat/synch-polyfill` and `compat/bcrypt-polyfill`).
+   - **Gate 6**: AST-grep structural architectural safety scans:
+     - `no-unwrap-in-lib`: Zero unwrap/expect in production library code.
+     - `unsafe-needs-safety-comment`: Mandatory `// SAFETY:` rationale on all unsafe blocks.
+     - `no-deref-on-app`: Bans `Deref` and `DerefMut` implementations targeting `ViewState` on `App`.
+     - `no-raw-unaligned-deref`: Bans unaligned raw pointer dereferencing in polyfill crates.
+   - **Gate 7**: Feature independence & minimal dependency checks.
+   - **Gate 8**: Forbidden pattern scanner (zero `println!`, `dbg!`, or `todo!` in library code).
+   - **Gate 9**: PowerShell script syntax validation and strict mode compliance.
 5. **scripts/check-logs.ps1**: Log inspector and deep analysis utility.
 6. **scripts/commit.ps1**: Quality-gated commit & push pipeline.
 7. **scripts/Merge-ToMain.ps1**: Automated clean release merge tool.
@@ -258,11 +279,13 @@ The project uses a unified dual-interface build system:
 
 ## 10. Testing Strategy
 
-- **Unit Testing**: Mock-based testing using `MockOpcProvider` (`mockall`). TUI navigation flow, state transitions (`CurrentScreen`), loading cancellation on `Esc`, search cycling, context-aware write parsing with boolean coercion (`App::resolve_write_value`), and ring-buffer logic are verified without Windows COM dependencies (49 unit tests in `opc-cli`).
-- **COM Worker & Memory Safety Testing**: `ComWorker`, `com/discovery.rs`, `com/variant.rs` (`ScopedVariant`, `ItemStatesGuard`), `com/connector/` submodules (`traits.rs`, `server.rs`, `group.rs`, `mock.rs`), `com/security.rs`, `raw/memory.rs`, and `raw/bridge.rs` unit tests use `MockServerConnector` and synthetic allocations to test write paths, tag browsing (flat, hierarchical, cancellation, capacity limits), server connection pooling, active group caching, stale connection eviction, 2-tier panic isolation and recovery (`test_worker_thread_recovery_after_panic`), worker drop behaviors, tracing instrumentation execution, `GroupGuard` automatic drop cleanup on `add_items` failure, registry inspection validation, non-cloneable remote pointer safe drop, safe slice copying, blob guard double-free prevention, and zero-leak COM memory guards (173 unit tests + 4 integration tests in `opc-da-client`, 226 total workspace tests).
-- **Doc Testing**: Public API items include runnable and compile-fail doc tests verified via `cargo test --doc -p opc-da-client --all-features` (67 doc-tests, including type safety enforcement and pure-Rust mocking examples in `README.md`, `types.rs`, and `com/client.rs`).
+- **Unit Testing**: Mock-based testing using `MockOpcProvider` (`mockall`). TUI navigation flow, state transitions (`CurrentScreen`), loading cancellation on `Esc`, search cycling, `App::handle_key` returning `AppAction`, `DialogState` buffering, `AutoRefresher` tick mechanics, zero-allocation `[Cell; 4]` table row rendering, and telemetry counters (`error_count` vs `bad_quality_count`) are verified without Windows COM dependencies (49 unit tests in `opc-cli`).
+- **COM Worker & Memory Safety Testing**: `ComWorker`, `com/discovery.rs`, `com/variant.rs` (`ScopedVariant`, `ItemStatesGuard`), `com/connector/` submodules (`traits.rs`, `server.rs`, `group.rs`, `mock.rs`), `com/security.rs`, `raw/memory.rs`, and `raw/bridge.rs` unit tests use `MockServerConnector` and synthetic allocations to test write paths, tag browsing (flat, hierarchical, cancellation, capacity limits), server connection pooling, active group caching, stale connection eviction, 2-tier panic isolation and recovery (`test_worker_thread_recovery_after_panic`), worker drop behaviors, tracing instrumentation execution, `GroupGuard` automatic drop cleanup on `add_items` failure, registry inspection validation, non-cloneable remote pointer safe drop, safe slice copying, blob guard double-free prevention, and zero-leak COM memory guards (173 unit tests in `opc-da-client`).
+- **Integration Test Suites**: 4 dedicated integration test suites in `opc-da-client/tests/` (`batch_write_test`, `handle_type_safety_test`, `mock_contract_stability_test`, `typestate_client_test`) validating multi-item atomic writes, opaque newtype handle non-interchangeability, mock fidelity, and compile-time typestate transitions (`Unbound` to `Bound`).
+- **Polyfill Unit Testing**: 2 standalone unit tests verifying unaligned address reads in `compat/synch-polyfill` and chunking in `compat/bcrypt-polyfill` (total workspace test suite: 228 tests: 49 CLI unit + 173 client unit + 4 integration + 2 polyfill).
+- **Doc Testing**: Public API items include runnable and compile-fail doc tests verified via `cargo test --doc --workspace --all-features` (78 doc-tests in `opc-da-client`: 77 passed, 1 ignored, 2 compile-fail, covering typestate client methods, numeric getters, and UNC endpoint parsing).
 - **Polyfill Build Gates**: Independent compilation of `compat/*` polyfill crates inside `scripts/verify.ps1`.
-- **AST-Grep Structural Safety Gates**: `sg scan` enforcement of zero unwrap/expect in production library code and mandatory `// SAFETY:` rationale on all unsafe blocks. Rules are validated via ast-grep unit tests before static scans.
+- **AST-Grep Structural Safety Gates**: `sg scan` enforcement of zero unwrap/expect in production library code, mandatory `// SAFETY:` rationale on all unsafe blocks, strict ban on `Deref`/`DerefMut` to `ViewState` on `App` (`no-deref-on-app`), and unaligned pointer dereferencing ban (`no-raw-unaligned-deref`). Rules are validated via ast-grep unit tests before static scans.
 - **Forbidden Macro Scanner**: Automated `rg` scan ensuring zero `println!`, `dbg!`, or `todo!` macros in `opc-da-client/src/`.
 
 ## 11. Documentation Conventions
@@ -339,6 +362,8 @@ graph TD
     
     subgraph "App Decomposed State Model (opc-cli)"
         App --> Nav[NavigationState]
+        App --> Dialog[DialogState: Contextual Text Buffers]
+        App --> Auto[AutoRefresher: Polling Timer & Monitored Tags]
         App --> Tasks[TaskManager: Cooperative Esc Cancellation]
         App --> Search[SearchEngine: O(1) Match Mask]
         App --> View[ViewState: Monitored TagValues & Selected Tags]

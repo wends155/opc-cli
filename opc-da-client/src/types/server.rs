@@ -9,6 +9,25 @@ use crate::errors::OpcError;
 ///
 /// Strings that are empty, whitespace-only, `"localhost"`, `"127.0.0.1"`, or `"::1"`
 /// (case-insensitive) are normalized to `None`. All other hosts return `Some(trimmed_host)`.
+///
+/// # Arguments
+///
+/// * `host` - Optional host name or IP address slice to normalize.
+///
+/// # Returns
+///
+/// Returns `Some(&str)` containing the trimmed remote host, or `None` if the host represents localhost.
+///
+/// # Examples
+///
+/// ```
+/// use opc_da_client::types::normalize_host_str;
+///
+/// assert_eq!(normalize_host_str(Some("localhost")), None);
+/// assert_eq!(normalize_host_str(Some("127.0.0.1")), None);
+/// assert_eq!(normalize_host_str(Some("  ")), None);
+/// assert_eq!(normalize_host_str(Some("192.168.1.50")), Some("192.168.1.50"));
+/// ```
 #[must_use]
 pub fn normalize_host_str(host: Option<&str>) -> Option<&str> {
     let h = host?.trim();
@@ -23,6 +42,23 @@ pub fn normalize_host_str(host: Option<&str>) -> Option<&str> {
 ///
 /// Strings that are empty, whitespace-only, `"localhost"`, `"127.0.0.1"`, or `"::1"`
 /// (case-insensitive) are normalized to `None`. All other hosts return `Some(trimmed_host)`.
+///
+/// # Arguments
+///
+/// * `host` - Optional host name or IP address to normalize.
+///
+/// # Returns
+///
+/// Returns `Some(String)` containing the trimmed remote host, or `None` if the host represents localhost.
+///
+/// # Examples
+///
+/// ```
+/// use opc_da_client::types::normalize_host;
+///
+/// assert_eq!(normalize_host(Some("localhost")), None);
+/// assert_eq!(normalize_host(Some("scada-node-01")), Some("scada-node-01".to_string()));
+/// ```
 #[must_use]
 pub fn normalize_host(host: Option<&str>) -> Option<String> {
     normalize_host_str(host).map(str::to_string)
@@ -31,6 +67,24 @@ pub fn normalize_host(host: Option<&str>) -> Option<String> {
 /// Determines if a host specification represents a remote machine without heap allocations.
 ///
 /// Returns `false` if `host` is `None`, empty, whitespace-only, `"localhost"`, `"127.0.0.1"`, or `"::1"`.
+///
+/// # Arguments
+///
+/// * `host` - Optional host name or IP address slice to test.
+///
+/// # Returns
+///
+/// Returns `true` if `host` represents a remote address, `false` otherwise.
+///
+/// # Examples
+///
+/// ```
+/// use opc_da_client::types::is_remote_host;
+///
+/// assert!(!is_remote_host(None));
+/// assert!(!is_remote_host(Some("localhost")));
+/// assert!(is_remote_host(Some("192.168.1.10")));
+/// ```
 #[inline]
 #[must_use]
 pub fn is_remote_host(host: Option<&str>) -> bool {
@@ -227,6 +281,19 @@ pub struct OpcServerEndpoint {
 
 impl OpcServerEndpoint {
     /// Creates a new endpoint targeting the local machine.
+    ///
+    /// # Arguments
+    ///
+    /// * `identifier` - The ProgID or CLSID identifying the target server.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use opc_da_client::types::OpcServerEndpoint;
+    ///
+    /// let ep = OpcServerEndpoint::local("Matrikon.OPC.Simulation.1");
+    /// assert!(!ep.is_remote());
+    /// ```
     #[must_use]
     pub fn local(identifier: impl Into<ServerIdentifier>) -> Self {
         Self {
@@ -236,6 +303,24 @@ impl OpcServerEndpoint {
     }
 
     /// Creates a new endpoint targeting a remote machine.
+    ///
+    /// Automatically normalizes `host` so local references (`"localhost"`, `"127.0.0.1"`)
+    /// map to `None`.
+    ///
+    /// # Arguments
+    ///
+    /// * `host` - Target hostname or IP address.
+    /// * `identifier` - The ProgID or CLSID identifying the target server.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use opc_da_client::types::OpcServerEndpoint;
+    ///
+    /// let ep = OpcServerEndpoint::remote("192.168.1.10", "Matrikon.OPC.Simulation.1");
+    /// assert!(ep.is_remote());
+    /// assert_eq!(ep.host.as_deref(), Some("192.168.1.10"));
+    /// ```
     #[must_use]
     pub fn remote(host: impl Into<String>, identifier: impl Into<ServerIdentifier>) -> Self {
         let host_str = host.into();
@@ -246,6 +331,15 @@ impl OpcServerEndpoint {
     }
 
     /// Returns `true` if this endpoint targets a remote machine.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use opc_da_client::types::OpcServerEndpoint;
+    ///
+    /// assert!(!OpcServerEndpoint::local("Server").is_remote());
+    /// assert!(OpcServerEndpoint::remote("10.0.0.1", "Server").is_remote());
+    /// ```
     #[must_use]
     pub fn is_remote(&self) -> bool {
         is_remote_host(self.host.as_deref())
@@ -271,6 +365,23 @@ impl From<ServerIdentifier> for OpcServerEndpoint {
     }
 }
 
+/// Parses an endpoint from a string slice.
+///
+/// Supports UNC syntax (`r"\\<host>\<server>"` or `"//<host>/<server>"`) as well as
+/// standalone server identifiers (local connection).
+///
+/// # Examples
+///
+/// ```
+/// use opc_da_client::types::OpcServerEndpoint;
+///
+/// let ep: OpcServerEndpoint = r"\\192.168.1.50\Matrikon.OPC.Simulation.1".parse().unwrap();
+/// assert!(ep.is_remote());
+/// assert_eq!(ep.host.as_deref(), Some("192.168.1.50"));
+///
+/// let local_ep: OpcServerEndpoint = "Matrikon.OPC.Simulation.1".parse().unwrap();
+/// assert!(!local_ep.is_remote());
+/// ```
 impl FromStr for OpcServerEndpoint {
     type Err = OpcError;
 

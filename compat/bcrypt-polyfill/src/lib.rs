@@ -1,3 +1,9 @@
+//! # BCrypt Primitives Polyfill (`bcryptprimitives.dll`)
+//!
+//! Provides Windows 7 and Windows Server 2008 R2 (NT 6.1) backward compatibility
+//! for the `ProcessPrng` random byte generator introduced in Windows 8, routing
+//! requests safely to `RtlGenRandom` (`advapi32.dll`).
+
 #![cfg_attr(all(not(feature = "std"), not(test)), no_std)]
 #![allow(non_snake_case)]
 
@@ -21,6 +27,19 @@ extern "system" {
 /// Polyfill for `ProcessPrng` (Windows 8+ / bcryptprimitives.dll).
 ///
 /// Routes random byte generation to `RtlGenRandom` in `advapi32.dll`.
+///
+/// # Safety
+///
+/// Caller must ensure `pb_data` points to a writable buffer of at least `cb_data` bytes.
+///
+/// # Arguments
+///
+/// * `pb_data` - Pointer to the destination buffer to fill with random bytes.
+/// * `cb_data` - The number of bytes to generate.
+///
+/// # Returns
+///
+/// Returns `1` on success, or `0` on failure (null pointer or system RNG failure).
 #[cfg(all(not(feature = "std"), not(test)))]
 #[no_mangle]
 pub unsafe extern "system" fn ProcessPrng(pb_data: *mut u8, cb_data: usize) -> i32 {
@@ -29,8 +48,20 @@ pub unsafe extern "system" fn ProcessPrng(pb_data: *mut u8, cb_data: usize) -> i
 
 /// Core implementation of `ProcessPrng`.
 ///
+/// Chunks large requests into 256 MiB slices to avoid Win32 `u32` buffer length truncation.
+///
 /// # Safety
+///
 /// Caller must ensure `pb_data` points to a writable buffer of at least `cb_data` bytes.
+///
+/// # Arguments
+///
+/// * `pb_data` - Pointer to the destination buffer to fill with random bytes.
+/// * `cb_data` - The number of bytes to generate.
+///
+/// # Returns
+///
+/// Returns `1` on success, or `0` on failure (null pointer or system RNG failure).
 pub unsafe fn process_prng_impl(pb_data: *mut u8, cb_data: usize) -> i32 {
     if cb_data == 0 {
         return 1;

@@ -1,3 +1,9 @@
+//! # Synch Polyfill (`api-ms-win-core-synch-l1-2-0.dll`)
+//!
+//! Provides Windows 7 and Windows Server 2008 R2 (NT 6.1) backward compatibility
+//! for the synchronization API set introduced in Windows 8, specifically `WaitOnAddress`,
+//! `WakeByAddressSingle`, and `WakeByAddressAll`.
+
 #![cfg_attr(all(not(feature = "std"), not(test)), no_std)]
 #![allow(non_snake_case)]
 
@@ -23,6 +29,14 @@ const ERROR_INVALID_PARAMETER: u32 = 87;
 const ERROR_TIMEOUT: u32 = 1460;
 
 /// Re-export Sleep so the PE loader can resolve it from this API set DLL.
+///
+/// # Safety
+///
+/// Direct FFI call to Win32 `Kernel32Sleep`. Safe for arbitrary millisecond values.
+///
+/// # Arguments
+///
+/// * `dw_milliseconds` - The time interval for which execution is to be suspended, in milliseconds.
 #[cfg(all(not(feature = "std"), not(test)))]
 #[no_mangle]
 pub unsafe extern "system" fn Sleep(dw_milliseconds: u32) {
@@ -30,6 +44,23 @@ pub unsafe extern "system" fn Sleep(dw_milliseconds: u32) {
 }
 
 /// Polyfill for `WaitOnAddress` (Windows 8+).
+///
+/// Waits for the value at the specified address to change from the comparison value.
+///
+/// # Safety
+///
+/// Caller must ensure `address` and `compare_address` point to readable memory of at least `address_size` bytes.
+///
+/// # Arguments
+///
+/// * `address` - The address of the variable to wait on.
+/// * `compare_address` - A pointer to the value to compare against.
+/// * `address_size` - The size of the value, in bytes (must be 1, 2, 4, or 8).
+/// * `milliseconds` - The time-out interval, in milliseconds (or `0xFFFF_FFFF` for infinite).
+///
+/// # Returns
+///
+/// Returns `1` if the value changed, or `0` on timeout or invalid parameter (sets Win32 last error).
 #[cfg(all(not(feature = "std"), not(test)))]
 #[no_mangle]
 pub unsafe extern "system" fn WaitOnAddress(
@@ -44,7 +75,19 @@ pub unsafe extern "system" fn WaitOnAddress(
 /// Core implementation of `WaitOnAddress`.
 ///
 /// # Safety
+///
 /// Caller must ensure `address` and `compare_address` point to readable memory of at least `address_size` bytes.
+///
+/// # Arguments
+///
+/// * `address` - The address of the variable to wait on.
+/// * `compare_address` - A pointer to the value to compare against.
+/// * `address_size` - The size of the value, in bytes (must be 1, 2, 4, or 8).
+/// * `milliseconds` - The time-out interval, in milliseconds (or `0xFFFF_FFFF` for infinite).
+///
+/// # Returns
+///
+/// Returns `1` if the value changed, or `0` on timeout or invalid parameter (sets Win32 last error).
 pub unsafe fn wait_on_address_impl(
     address: *const c_void,
     compare_address: *const c_void,
@@ -96,11 +139,27 @@ pub unsafe fn wait_on_address_impl(
 }
 
 /// No-op polyfill — wakes one thread waiting on `WaitOnAddress`.
+///
+/// # Safety
+///
+/// Safe to call with any pointer or null; this polyfill is a no-op as `WaitOnAddress` spins/sleeps cooperatively.
+///
+/// # Arguments
+///
+/// * `_address` - Pointer to the variable being waited on.
 #[cfg(all(not(feature = "std"), not(test)))]
 #[no_mangle]
 pub unsafe extern "system" fn WakeByAddressSingle(_address: *const c_void) {}
 
 /// No-op polyfill — wakes all threads waiting on `WaitOnAddress`.
+///
+/// # Safety
+///
+/// Safe to call with any pointer or null; this polyfill is a no-op as `WaitOnAddress` spins/sleeps cooperatively.
+///
+/// # Arguments
+///
+/// * `_address` - Pointer to the variable being waited on.
 #[cfg(all(not(feature = "std"), not(test)))]
 #[no_mangle]
 pub unsafe extern "system" fn WakeByAddressAll(_address: *const c_void) {}

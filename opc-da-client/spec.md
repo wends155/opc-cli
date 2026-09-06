@@ -3,7 +3,7 @@
 > **Behavioral Source of Truth** for the `opc-da-client` library crate.
 > Defines *what* each module should do — independent of current implementation.
 >
-> Last verified against: a09468e
+> Last verified against: a1ea491
 
 ---
 
@@ -78,22 +78,36 @@ Composite marker trait representing the full OPC DA client capability set. A bla
 | Field | Type | Required | Description |
 | :--- | :--- | :--- | :--- |
 | `tag_id` | `String` | Yes | The fully-qualified tag identifier. |
-| `outcome` | `Result<OpcValue, OpcError>` | Yes (Private) | Encapsulated read outcome (prevents incoherent states). |
-| `quality` | `OpcQuality` | Yes | Decomposed quality status. |
+| `outcome` | `Result<OpcValue, OpcError>` | Yes (Public) | Encapsulated read outcome (prevents incoherent states). |
+| `quality` | `OpcQuality` | Yes | Decomposed 16-bit quality status. |
 | `timestamp` | `Option<SystemTime>` | Yes | Timestamp of last change, or `None` if unavailable. |
 
 **Methods:**
-* `new(tag_id, value, quality, timestamp) -> Self`: Constructs a successful tag value (`Ok(value)`).
+* `new(tag_id, value, quality, timestamp) -> Self`: Constructs a tag value with an `Ok(value.unwrap_or(Empty))` outcome.
+* `success(tag_id, value, quality, timestamp) -> Self`: Constructs a successful tag value with an `Ok(value)` outcome.
 * `with_error(tag_id, quality, error) -> Self`: Constructs an error tag value (`Err(error)`) with `None` timestamp.
 * `outcome(&self) -> Result<&OpcValue, &OpcError>`: Accesses borrowed reference to inner outcome.
 * `value(&self) -> Option<&OpcValue>`: Returns `Some(&OpcValue)` if successful.
 * `error(&self) -> Option<&OpcError>`: Returns `Some(&OpcError)` if failed.
 * `is_good(&self) -> bool`: Returns `true` if quality is good and outcome is `Ok`.
-* `is_error(&self) -> bool`: Returns `true` if quality is bad or outcome is `Err`.
-* `Default`: Yields empty tag ID, `Err(OpcError::InvalidState)`, bad quality (`0x0000`), and `None` timestamp.
+* `is_uncertain(&self) -> bool`: Returns `true` if quality is uncertain and outcome is `Ok`.
+* `is_bad(&self) -> bool`: Returns `true` if quality is bad or outcome is `Err`.
+* `is_error(&self) -> bool`: Returns `true` if outcome is `Err` (independent of quality).
+* `into_result(self) -> TagResult`: Converts into strongly-typed `Result<TagSuccess, TagFailure>`.
+* `to_result(&self) -> TagResult`: Converts borrowed reference into `TagResult`.
+* `Default`: Yields empty tag ID, `Ok(OpcValue::Empty)`, default quality (`0x0000`), and `None` timestamp.
 * `Display`: Canonical formatting rendering `"{tag_id} = {value} [{quality}] @ {timestamp}"`.
 
 **Derives:** `Debug`, `Clone`, `PartialEq`, `Default`.
+
+###### `struct TagSuccess`
+Represents a successfully decoded tag read holding `tag_id: String`, `value: OpcValue`, `quality: OpcQuality`, and `timestamp: Option<SystemTime>`.
+
+###### `struct TagFailure`
+Represents a failed tag read holding `tag_id: String`, `quality: OpcQuality`, and `error: OpcError`.
+
+###### `type TagResult = Result<TagSuccess, TagFailure>`
+Strongly-typed result alias returned by `TagValue::into_result` and `TagValue::to_result`.
 
 ---
 
@@ -146,9 +160,15 @@ Implemented for:
 | :--- | :--- | :--- |
 | `new(values: Vec<TagValue>)` | `pub fn new(values: Vec<TagValue>) -> Self` | Wraps a vector of tag values. |
 | `get(&self, tag: &str)` | `pub fn get(&self, tag: &str) -> Option<&TagValue>` | Case-insensitive lookup of tag value. |
+| `get_index(&self, index: usize)` | `pub fn get_index(&self, index: usize) -> Option<&TagValue>` | Zero-based index lookup of tag value. |
 | `get_value(&self, tag: &str)` | `pub fn get_value(&self, tag: &str) -> Option<&OpcValue>` | Case-insensitive lookup of unwrapped OPC value. |
+| `get_as<T>(&self, tag: &str)` | `pub fn get_as<T>(&self, tag: &str) -> Result<T, TagExtractError> where T: TryFrom<OpcValue, Error = &'static str> + Copy` | Generic typed extraction with lossless conversion. |
 | `get_f64(&self, tag: &str)` | `pub fn get_f64(&self, tag: &str) -> Result<f64, TagExtractError>` | Lenient float extraction (coerces `Float`, `Int`). |
-| `get_i32(&self, tag: &str)` | `pub fn get_i32(&self, tag: &str) -> Result<i32, TagExtractError>` | Lenient integer extraction (coerces `Int`, whole-number `Float` without loss). |
+| `get_f32(&self, tag: &str)` | `pub fn get_f32(&self, tag: &str) -> Result<f32, TagExtractError>` | Single-precision float extraction via `get_as<f32>`. |
+| `get_i32(&self, tag: &str)` | `pub fn get_i32(&self, tag: &str) -> Result<i32, TagExtractError>` | Lenient 32-bit integer extraction (coerces `Int`, whole-number `Float` without loss). |
+| `get_i64(&self, tag: &str)` | `pub fn get_i64(&self, tag: &str) -> Result<i64, TagExtractError>` | 64-bit integer extraction via `get_as<i64>`. |
+| `get_u32(&self, tag: &str)` | `pub fn get_u32(&self, tag: &str) -> Result<u32, TagExtractError>` | 32-bit unsigned integer extraction via `get_as<u32>`. |
+| `get_u64(&self, tag: &str)` | `pub fn get_u64(&self, tag: &str) -> Result<u64, TagExtractError>` | 64-bit unsigned integer extraction via `get_as<u64>`. |
 | `get_bool(&self, tag: &str)` | `pub fn get_bool(&self, tag: &str) -> Result<bool, TagExtractError>` | Boolean extraction on `Bool` values. |
 | `get_str(&self, tag: &str)` | `pub fn get_str(&self, tag: &str) -> Result<&str, TagExtractError>` | String slice extraction on `String` values. |
 | `len(&self)` | `pub fn len(&self) -> usize` | Returns number of contained tag values. |
@@ -156,10 +176,16 @@ Implemented for:
 | `as_slice(&self)` | `pub fn as_slice(&self) -> &[TagValue]` | Projects borrowed slice of inner tag values. |
 | `into_vec(self)` | `pub fn into_vec(self) -> Vec<TagValue>` | Unwraps inner vector. |
 | `iter(&self)` | `pub fn iter(&self) -> std::slice::Iter<'_, TagValue>` | Yields iterator over borrowed `&TagValue` items. |
+| `iter_results(&self)` | `pub fn iter_results(&self) -> impl Iterator<Item = TagResult> + '_` | Yields iterator projecting each tag into strongly-typed `TagResult`. |
+| `clear(&mut self)` | `pub fn clear(&mut self)` | Empties the collection. |
+| `push(&mut self, value: TagValue)` | `pub fn push(&mut self, value: TagValue)` | Appends a `TagValue` to the end of the collection. |
 
 **Traits:**
 * `From<Vec<TagValue>>`: Infallible conversion from `Vec<TagValue>`.
 * `From<TagValues> for Vec<TagValue>`: Infallible conversion into inner `Vec<TagValue>`.
+* `FromIterator<TagValue>`: Collects iterator of `TagValue` into `TagValues`.
+* `Deref<Target = [TagValue]>`: Dereferences to borrowed slice `[TagValue]`.
+* `AsRef<[TagValue]>`: Infallible slice projection.
 * `IntoIterator<Item = TagValue>`: Owning iteration over tag values.
 * `IntoIterator for &TagValues`: Borrowed iteration over tag values.
 
@@ -178,7 +204,11 @@ Implemented for:
 | `NoValue(String)` | Tag exists in batch but returned null, empty, or missing value. |
 | `TypeMismatch { tag: String, value: String, expected: &'static str }` | Tag value could not be coerced into expected type without loss. |
 
-**Traits:** `Display`, `std::error::Error`, `From<TagExtractError> for OpcError`. `Derives:` `Debug`, `Clone`, `PartialEq`.
+**Traits:**
+* `Display`, `std::error::Error`.
+* `From<TagExtractError> for OpcError`: When converted to `OpcError`, `TagExtractError::ReadFailed { source, .. }` unwraps and preserves the root COM or transport `source: OpcError` directly, preventing loss of underlying HRESULT codes and diagnostic hints. Other variants convert to `OpcError::Conversion`.
+
+**Derives:** `Debug`, `Clone`, `PartialEq`.
 
 ---
 
@@ -326,13 +356,27 @@ Implemented for:
 
 | Field | Type | Description |
 | :--- | :--- | :--- |
-| `host` | `Option<String>` | Target machine hostname or IP address (`None` for localhost). |
+| `host` | `Option<String>` | Target machine hostname or IP address (`None` for localhost). Normalized upon construction. |
 | `identifier` | `ServerIdentifier` | Strongly-typed server identifier (ProgID or direct CLSID). |
 
 **Methods:**
-* `local(identifier: impl Into<ServerIdentifier>) -> Self`: Creates local endpoint.
-* `remote(host: impl Into<String>, identifier: impl Into<ServerIdentifier>) -> Self`: Creates remote endpoint.
-* `Display`: Formats as `"{host}/{identifier}"` or `"{identifier}"`.
+* `local(identifier: impl Into<ServerIdentifier>) -> Self`: Creates a local endpoint (`host = None`).
+* `remote(host: impl Into<String>, identifier: impl Into<ServerIdentifier>) -> Self`: Creates a remote endpoint, automatically normalizing localhost aliases to `None`.
+* `host(&self) -> Option<&str>`: Borrows optional target host.
+* `identifier(&self) -> &ServerIdentifier`: Borrows server identifier.
+* `is_remote(&self) -> bool`: Returns `true` if target host is a non-empty remote host (not localhost).
+* `into_parts(self) -> (Option<String>, ServerIdentifier)`: Deconstructs into `(host, identifier)` tuple.
+
+**Traits:**
+* `Display`: Formats remote endpoints as UNC path `r"\\{}\{}"` (e.g. `r"\\192.168.1.10\Matrikon.OPC.Simulation.1"`), and local endpoints as `"{}"`.
+* `std::str::FromStr`: Parses endpoints formatted as UNC (`\\host\server` or `//host/server`) or local server identifiers (`server`). Normalizes localhost aliases to `None`.
+* `From<&str>`: Parses endpoint string slice via `FromStr`.
+* `From<String>`: Parses endpoint string via `FromStr`.
+
+**Host Normalization Functions (`types/server.rs`):**
+* `normalize_host_str(host: &str) -> Option<&str>`: Strips leading backslashes/slashes, trims whitespace, and maps localhost aliases (`"localhost"`, `"127.0.0.1"`, `"::1"`, `"."`, `""`) to `None`.
+* `normalize_host(host: Option<String>) -> Option<String>`: Normalizes owned host string, returning `None` if local or empty.
+* `is_remote_host(host: Option<&str>) -> bool`: Checks if an optional host string resolves to a remote host.
 
 **Derives:** `Debug`, `Clone`, `PartialEq`, `Eq`, `Hash`.
 
@@ -435,7 +479,7 @@ Implemented for:
 
 ##### `struct OpcDaClientBuilder<C = ComConnector>`
 
-**Purpose:** Fluent builder for configuring and instantiating a server-bound `OpcDaClient`.
+**Purpose:** Fluent builder for configuring and instantiating an `OpcDaClient` in either `Unbound` (gateway) or `Bound` (session) state.
 
 | Method | Signature | Description |
 | :--- | :--- | :--- |
@@ -443,37 +487,61 @@ Implemented for:
 | `server` | `pub fn server(mut self, server: impl Into<ServerIdentifier>) -> Self` | Configures target OPC DA server identifier (ProgID or CLSID). |
 | `timeout` | `pub fn timeout(mut self, timeout: Duration) -> Self` | Configures request timeout duration (default: 5s). |
 | `with_legacy_dcom` | `pub fn with_legacy_dcom(mut self, legacy: bool) -> Self` | Configures DCOM packet authentication (`true` for `CONNECT` level on legacy NT 6.1 hosts; `false` for post-KB5004442 `PKT_INTEGRITY`). |
-| `with_connector` | `pub fn with_connector<C2>(self, connector: C2) -> OpcDaClientBuilder<C2>` | Transitions builder to custom or mock connector type. |
-| `build_with_connector` | `pub fn build_with_connector(self, connector: C) -> OpcResult<OpcDaClient<C>>` | Builds the client using an explicit connector instance. |
-| `build` | `pub fn build(self) -> OpcResult<OpcDaClient<C>>` | Validates configuration and launches COM worker thread with default connector. |
+| `with_connector` | `pub fn with_connector<C2: ServerConnector + 'static>(self, connector: C2) -> OpcDaClientBuilder<C2>` | Transitions builder to custom or mock connector type. |
+| `build_with_connector` | `pub fn build_with_connector(self, connector: C) -> OpcResult<OpcDaClient<C, Unbound>>` | Builds unbound client using an explicit connector instance. |
+| `build` | `pub fn build(self) -> OpcResult<OpcDaClient<C, Unbound>>` | Builds unbound client gateway with default connector. |
+| `build_bound` | `pub fn build_bound(self) -> OpcResult<OpcDaClient<C, Bound>>` | Builds server-bound client session. Returns `OpcError::InvalidConfiguration` if server identifier is unset. |
 
 ---
 
-##### `struct OpcDaClient<C = ComConnector>`
+##### `struct OpcDaClient<C = ComConnector, State = Unbound>`
 
-**Constructors:**
+**Typestates:**
+* `Unbound`: Compile-time typestate representing an unbound multi-server gateway. Suitable for catalog discovery, listing servers, and dynamic ad-hoc operations.
+* `Bound`: Compile-time typestate representing a server-bound active session targeting a specific `OpcServerEndpoint`. Grants infallible access to `endpoint(&self)` and ergonomic session read/write methods.
+
+**Constructors on `OpcDaClient<ComConnector, Unbound>`:**
 | Constructor | Signature | Description |
 | :--- | :--- | :--- |
 | `builder()` | `fn builder() -> OpcDaClientBuilder<ComConnector>` | Creates a fluent builder with default native connector. |
-| `connect(server)` | `fn connect(server: impl Into<ServerIdentifier>) -> OpcResult<Self>` | Connects directly to a local OPC server by ProgID or CLSID. |
-| `connect_remote(host, server)` | `fn connect_remote(host: impl Into<String>, server: impl Into<ServerIdentifier>) -> OpcResult<Self>` | Connects to a remote OPC server via remote DCOM. |
-| `new(connector: C)` | `fn new(connector: C) -> OpcResult<Self>` | Constructs client facade with custom/mock connector. |
-| `default()` | `fn default() -> Self` | Constructs client with default native connector and default timeout. |
+| `connect(server)` | `fn connect(server: impl Into<ServerIdentifier>) -> OpcResult<OpcDaClient<ComConnector, Bound>>` | Connects directly to a local OPC server, returning a `Bound` client session. |
+| `connect_remote(host, server)` | `fn connect_remote(host: impl Into<String>, server: impl Into<ServerIdentifier>) -> OpcResult<OpcDaClient<ComConnector, Bound>>` | Connects to a remote OPC server via remote DCOM, returning a `Bound` client session. |
+| `connect_eager(server)` | `fn connect_eager(server: impl Into<ServerIdentifier>) -> OpcResult<OpcDaClient<ComConnector, Bound>>` | Connects and eagerly verifies server liveness by performing an immediate root browse ping before returning `Bound` client. |
 
-**Inherent Methods (Server-Bound Operations):**
+**Constructors & Transitions on `OpcDaClient<C, Unbound>`:**
 | Method | Signature | Description |
 | :--- | :--- | :--- |
-| `host` | `pub fn host(mut self, host: impl Into<String>) -> Self` | Binds or overrides target remote host on this client. |
-| `server` | `pub fn server(mut self, server: impl Into<ServerIdentifier>) -> Self` | Binds or overrides target server identifier on this client. |
-| `read_tag_values` | `async fn read_tag_values(&self, tags: impl IntoTags) -> OpcResult<TagValues>` | Zero-allocation batch read returning a rich `TagValues` collection. |
-| `read_f64` | `async fn read_f64(&self, tag: &str) -> OpcResult<f64>` | Reads a single tag and coerces value to `f64`. |
-| `read_i32` | `async fn read_i32(&self, tag: &str) -> OpcResult<i32>` | Reads a single tag and coerces value to `i32`. |
-| `read_bool` | `async fn read_bool(&self, tag: &str) -> OpcResult<bool>` | Reads a single tag and coerces value to `bool`. |
-| `read_string` | `async fn read_string(&self, tag: &str) -> OpcResult<String>` | Reads a single tag as a `String`. |
-| `write` | `async fn write(&self, tag: &str, value: impl Into<OpcValue>) -> OpcResult<WriteResult>` | Writes a single value to a tag, returning a `WriteResult`. |
-| `write_batch` | `async fn write_batch(&self, writes: Vec<(String, OpcValue)>) -> OpcResult<Vec<WriteResult>>` | Writes multiple tags in a single native DCOM batch operation. |
-| `list_servers_on` | `async fn list_servers_on(&self, host: &str) -> OpcResult<Vec<String>>` | Discovers OPC servers on a specified host without requiring server binding. |
-| `subscribe` | `fn subscribe(&self, tags: impl IntoTags, interval: Duration) -> tokio::sync::mpsc::Receiver<TagValues>` | Starts a Layer 2 non-blocking polling stream yielding `TagValues` periodically. Dropping the receiver cancels the background task. |
+| `new(connector: C)` | `fn new(connector: C) -> OpcResult<Self>` | Constructs unbound client facade with custom/mock connector. |
+| `default()` | `fn default() -> Self` | Constructs unbound client with default native connector. |
+| `bind(self, endpoint)` | `pub fn bind<E: Into<OpcServerEndpoint>>(self, endpoint: E) -> OpcDaClient<C, Bound>` | Transitions unbound gateway into a bound session targeting `endpoint`. |
+| `bind_remote(self, host, server)` | `pub fn bind_remote(self, host: impl Into<String>, server: impl Into<ServerIdentifier>) -> OpcDaClient<C, Bound>` | Convenience helper to bind to a remote host and server identifier. |
+
+**Typestate Methods on `OpcDaClient<C, Bound>`:**
+| Method | Signature | Description |
+| :--- | :--- | :--- |
+| `endpoint(&self)` | `pub fn endpoint(&self) -> &OpcServerEndpoint` | Infallibly borrows the bound server endpoint (guaranteed by `Bound` typestate invariant). |
+| `server_id(&self)` | `pub fn server_id(&self) -> &str` | Convenience getter returning the server ProgID or CLSID string. |
+| `unbind(self)` | `pub fn unbind(self) -> (OpcDaClient<C, Unbound>, OpcServerEndpoint)` | Consumes bound session and returns an unbound gateway and the previous endpoint. |
+| `read_tag(&self, tag: &str)` | `pub async fn read_tag(&self, tag: &str) -> OpcResult<TagValue>` | Reads a single tag and returns full `TagValue` with outcome, quality, and timestamp. |
+| `read_tags(&self, tags: impl IntoTags)` | `pub async fn read_tags(&self, tags: impl IntoTags) -> OpcResult<TagValues>` | Reads a batch of tags and returns rich `TagValues` collection. |
+| `write_tag(&self, tag: &str, value: impl Into<OpcValue>) -> OpcResult<WriteResult>` | `pub async fn write_tag(&self, tag: &str, value: impl Into<OpcValue>) -> OpcResult<WriteResult>` | Writes a single typed value to a tag. |
+| `write_tags(&self, writes: Vec<(String, OpcValue)>) -> OpcResult<Vec<WriteResult>>` | `pub async fn write_tags(&self, writes: Vec<(String, OpcValue)>) -> OpcResult<Vec<WriteResult>>` | Writes multiple tags in a single native DCOM batch operation. |
+
+**General & Compatibility Methods on `OpcDaClient<C, State>`:**
+| Method | Signature | Description |
+| :--- | :--- | :--- |
+| `endpoint(&self)` | `pub fn endpoint(&self) -> Option<&OpcServerEndpoint>` | Returns `Some(&OpcServerEndpoint)` if bound, `None` if unbound. |
+| `is_bound(&self)` | `pub fn is_bound(&self) -> bool` | Checks whether this client instance is bound to a server. |
+| `read_tag_values(&self, tags: impl IntoTags)` | `async fn read_tag_values(&self, tags: impl IntoTags) -> OpcResult<TagValues>` | Zero-allocation batch read returning a rich `TagValues` collection. |
+| `read_tag_value(&self, tag: &str)` | `async fn read_tag_value(&self, tag: &str) -> OpcResult<TagValue>` | Reads a single tag returning `TagValue`. |
+| `read_f64(&self, tag: &str)` | `async fn read_f64(&self, tag: &str) -> OpcResult<f64>` | Reads a single tag and coerces value to `f64`. |
+| `read_i32(&self, tag: &str)` | `async fn read_i32(&self, tag: &str) -> OpcResult<i32>` | Reads a single tag and coerces value to `i32`. |
+| `read_bool(&self, tag: &str)` | `async fn read_bool(&self, tag: &str) -> OpcResult<bool>` | Reads a single tag and coerces value to `bool`. |
+| `read_string(&self, tag: &str)` | `async fn read_string(&self, tag: &str) -> OpcResult<String>` | Reads a single tag as a `String`. |
+| `write(&self, tag: &str, value: impl Into<OpcValue>) -> OpcResult<WriteResult>` | `async fn write(&self, tag: &str, value: impl Into<OpcValue>) -> OpcResult<WriteResult>` | Writes a single value to a tag, returning a `WriteResult`. |
+| `write_batch(&self, writes: Vec<(String, OpcValue)>) -> OpcResult<Vec<WriteResult>>` | `async fn write_batch(&self, writes: Vec<(String, OpcValue)>) -> OpcResult<Vec<WriteResult>>` | Writes multiple tags in a single native DCOM batch operation. |
+| `list_servers_on(&self, host: &str)` | `async fn list_servers_on(&self, host: &str) -> OpcResult<Vec<String>>` | *(Deprecated since 0.2.1)* Discovers OPC servers on a host. Prefer `ServerDiscovery::list_servers`. |
+| `subscribe(&self, tags: impl IntoTags, interval: Duration)` | `fn subscribe(&self, tags: impl IntoTags, interval: Duration) -> tokio::sync::mpsc::Receiver<TagValues>` | Starts a Layer 2 non-blocking polling stream yielding `TagValues` periodically. Dropping the receiver cancels the background task. |
 
 Implements `OpcProvider` for all five trait methods (`list_servers`, `list_server_details`, `browse_tags`, `read_tag_values`, `write_tag_value`) by dispatching to the `ComWorker`.
 
@@ -1048,7 +1116,7 @@ Downstream input parsing follows a 2-phase deterministic coercion machine:
 - [x] `test_parse_quality_error_reexport` — verifies `ParseQualityError` is exposed at crate root and implements `std::error::Error`.
 - [x] `test_opc_da_client_builder_reexport` — verifies `OpcDaClientBuilder` is exposed at crate root.
 
-### Mock-Based Tests (in `opc-cli` — 39 Unit Tests)
+### Mock-Based Tests (in `opc-cli` — 49 Unit Tests)
 
 - [x] `MockOpcProvider` returns expected server list.
 - [x] `MockOpcProvider` returns expected browse results.
@@ -1061,22 +1129,31 @@ Downstream input parsing follows a 2-phase deterministic coercion machine:
 - [x] **TUI Keyboard Navigation & Selection (10 tests)** — verifies `Up`, `Down`, `PageUp`, `PageDown`, `Home`, `End`, and wrap-around cursor tracking in list and table widgets.
 - [x] **Interactive Search & Filtering (5 tests)** — verifies substring search filter, live matches count, and `Tab`/`Shift+Tab` cycling.
 - [x] **Async Polling Loops & Background Task Resiliency (5 tests)** — verifies background server enumeration, tag browsing timeout cancel, and 1-second auto-refresh polling loop.
+- [x] **Deconstructed App Sub-States & Actions (10 tests)** — verifies `App::handle_key` returning `AppAction`, `DialogState` input buffering, `AutoRefresher` tick and toggle mechanics, and status bar telemetry counters (`error_count` vs `bad_quality_count`).
+- [x] **Zero-Allocation Rendering (7 tests)** — validates `[Cell; 4]` stack array row generation and ANSI highlight styling in `ui.rs`.
 
-### Doc Tests (33 Passed, 1 Ignored)
+### Doc Tests (78 Tests in `opc-da-client`: 77 Passed, 1 Ignored, 2 Compile-Fail)
 
-- [x] `OpcError::friendly_hint` — runnable doctest in `errors.rs`.
-- [x] `OpcError::connection_failed` — runnable doctest in `errors.rs`.
+- [x] `OpcError::friendly_hint`, `OpcError::connection_failed`, `OpcError::is_connection_error` — runnable doctests in `errors.rs`.
 - [x] `OpcResult`, `OpcError` — runnable doctests in `errors.rs`.
-- [x] `TagValue`, `OpcValue`, `WriteResult`, `DisplayOption*`, `OpcValueOptionExt`, `SystemTimeOptionExt` — runnable doctests in `types.rs` / `provider.rs`.
-- [x] `TagBatch` methods (`len`, `is_empty`, `iter_str`, `into_vec`) — runnable doctests in `types.rs`.
-- [x] `TagValues` methods (`new`, `len`, `is_empty`, `get`, `get_value`, `get_f64`, `get_i32`, `get_bool`, `get_str`, `into_vec`, `as_slice`, `iter`) — runnable doctests in `types.rs`.
-- [x] `OpcDaClientBuilder` methods (`new`, `host`, `server`, `timeout`, `with_legacy_dcom`, `build`) — runnable doctests in `com/client.rs`.
-- [x] `OpcDaClient` constructors & inherent methods (`builder`, `connect`, `connect_remote`, `read_tag_values`, `read_f64`, `read_i32`, `read_bool`, `read_string`, `write`, `write_batch`, `list_servers_on`, `subscribe`) — runnable doctests in `com/client.rs`.
+- [x] `TagValue`, `TagValue::is_good`, `TagResult`, `OpcValue`, `WriteResult`, `DisplayOption*`, `OpcValueOptionExt`, `SystemTimeOptionExt` — runnable doctests in `types/collection.rs`, `types/value.rs`, `types/collector.rs`.
+- [x] `TagBatch` methods (`len`, `is_empty`, `iter_str`, `into_vec`) — runnable doctests in `types/batch.rs`.
+- [x] `TagValues` methods (`new`, `len`, `is_empty`, `get`, `get_value`, `get_as`, `get_f64`, `get_f32`, `get_i32`, `get_i64`, `get_u32`, `get_u64`, `get_bool`, `get_str`, `into_vec`, `as_slice`, `iter`) — runnable doctests in `types/collection.rs`.
+- [x] `OpcServerEndpoint` methods (`local`, `remote`, `is_remote`) and host normalization functions (`normalize_host_str`, `normalize_host`, `is_remote_host`) — runnable doctests in `types/server.rs`.
+- [x] `OpcDaClientBuilder` methods (`new`, `with_legacy_dcom`, `host`, `server`, `timeout`, `build`, `build_bound`) — runnable doctests in `com/client.rs`.
+- [x] `OpcDaClient` constructors & inherent methods (`builder`, `connect`, `connect_remote`, `bind`, `bind_remote`, `read_tag_values`, `read_f64`, `read_i32`, `read_bool`, `read_string`, `write`, `write_batch`, `subscribe`) — runnable doctests in `com/client.rs`.
 - [x] `OpcProvider` trait methods (`list_servers`, `browse_tags`, `read_tag_value`, `read_tag_values`, `write_tag_value`, `write_tag_values`) — runnable doctests in `provider.rs` backed by `MockOpcProvider` assertions.
-- [x] `GroupHandle`, `ItemHandle`, `OpcQuality`, `BrowseType`, `BrowseDirection` — runnable doctests in `types.rs`.
+- [x] `ServerGroupHandle`, `ServerItemHandle`, `OpcQuality`, `BrowseType`, `BrowseDirection` — runnable doctests in `types/handles.rs`, `types/quality.rs`, `types/browse.rs`.
+- [x] `ServerGroupHandle` and `ServerItemHandle` compile-fail non-interchangeability doctests in `types/handles.rs`.
 - [x] `ComGuard` — internal-only ignored doctest in `com/guard.rs`.
-- [x] Quick Start — runnable doctest in `lib.rs`.
-- [x] Usage Examples (Listing, Reading, Writing, Browsing) — compiled doctests in `README.md`.
+- [x] Quick Start & Usage Examples (Listing, Reading, Writing, Browsing, Typestates) — runnable doctests in `lib.rs` and `README.md`.
+
+### Integration Test Suites (4 Suites in `opc-da-client/tests/`)
+
+- [x] `batch_write_test` — validates multi-item atomic COM group batch write transactions, partial item error handling, and `WriteResult` status mapping.
+- [x] `handle_type_safety_test` — validates opaque newtype wrappers `ServerGroupHandle`, `ServerItemHandle`, `ClientGroupHandle`, `ClientItemHandle` enforcing strict compile-time non-interchangeability.
+- [x] `mock_contract_stability_test` — validates `MockOpcProvider` and `MockServerConnector` contract fidelity across all segregated role traits (`ServerDiscovery`, `TagBrowser`, `TagReader`, `TagWriter`).
+- [x] `typestate_client_test` — validates compile-time `OpcDaClient<C, Unbound>` to `OpcDaClient<C, Bound>` state transitions via `bind`, `bind_remote`, and `unbind`, verifying infallible endpoint access on `Bound`.
 
 ### Integration / Manual Tests
 

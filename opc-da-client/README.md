@@ -16,25 +16,26 @@ OPC DA is deeply coupled to Windows COM/DCOM, which poses significant architectu
 
 ## Features
 
-- **Fluent Client API & Direct Connect**: Ergonomic `OpcDaClient::builder()`, direct local shortcut `OpcDaClient::connect(server)`, and remote DCOM shortcut `OpcDaClient::connect_remote(host, server)`.
-- **Zero-Allocation Batch Reads (`TagBatch` & `IntoTags`)**: Inherent `read_tag_values` accepts static slices (`&["Tag1", "Tag2"]`), fixed-size arrays (`["Tag1", "Tag2"]`), single tag strings, or owned vectors (`Vec<String>`) with zero intermediate allocations.
-- **High-Productivity Typed Getters (`TagValues`)**: Safely unwrap typed values (`values.get_f64("Tag")?`, `get_i32`, `get_bool`, `get_str`) with case-insensitive lookups, preserved diagnostics, and lenient numeric coercion.
+- **Compile-Time Typestate Client (`OpcDaClient<C, State>`)**: Zero-cost typestates `Unbound` (gateway for discovery) and `Bound` (session for reading/writing), guaranteeing infallible endpoint access during active sessions via `.endpoint(&self)`.
+- **Fluent Client API & Direct Connect**: Ergonomic `OpcDaClient::builder()`, direct local shortcut `OpcDaClient::connect(server)`, eager validation shortcut `OpcDaClient::connect_eager(server)`, remote DCOM shortcut `OpcDaClient::connect_remote(host, server)`, and typestate builder `build_bound()`.
+- **Zero-Allocation Batch Reads (`TagBatch` & `IntoTags`)**: Inherent `read_tag_values` and bound `read_tags` accept static slices (`&["Tag1", "Tag2"]`), fixed-size arrays (`["Tag1", "Tag2"]`), single tag strings, or owned vectors (`Vec<String>`) with zero intermediate allocations.
+- **High-Productivity Typed Getters (`TagValues`)**: Safely unwrap typed values (`values.get_f64("Tag")?`, `get_f32`, `get_i32`, `get_i64`, `get_u32`, `get_u64`, `get_bool`, `get_str`) or use generic extraction (`values.get_as::<f64>("Tag")?`) with case-insensitive lookups, preserved diagnostics, and lenient numeric coercion.
 - **Active Group Caching**: Automatically pools active OPC groups and item handles on repeated read cycles, reducing DCOM round-trip overhead by >75%.
-- **Native Batch Writes**: Perform multiple tag writes in a single COM atomic `SyncIO::Write` operation via `client.write_batch(...)`.
+- **Native Batch Writes**: Perform multiple tag writes in a single COM atomic `SyncIO::Write` operation via `client.write_batch(...)` or bound `client.write_tags(...)`.
 - **Non-Blocking Subscription Streams**: Stream periodic tag readings via `client.subscribe(tags, interval)` returning an asynchronous Tokio `mpsc::Receiver<TagValues>` with RAII drop cancellation.
 - **Hardened Remote DCOM (KB5004442)**: Automatically enforces `RPC_C_AUTHN_LEVEL_PKT_INTEGRITY` on remote DCOM proxy blankets, with configurable `with_legacy_dcom(true)` for legacy Windows 7 / Server 2008 R2 hosts.
-- **Async/Await Trait Abstraction**: Built on `tokio` and `async-trait`, using the canonical `OpcProvider` trait for zero-cost abstraction, backend flexibility, and straightforward test mocking.
-- **Structured Server Discovery & Direct CLSID Connectivity**: Enumerate servers with rich catalog metadata (`OpcServerInfo`, `ProgID`, `CLSID`, user-friendly title) via `list_server_details`. Automatic GUID syntax detection seamlessly coerces string identifiers into direct CLSID connections, bypassing Win32 `CLSIDFromProgID`. Local registry inspection (`inspect_local_registration`) detects out-of-process (`LocalServer32`) vs in-process (`InprocServer32`) server binaries.
+- **Async/Await Trait Abstraction**: Built on `tokio` and `async-trait`, using the canonical `OpcProvider` trait (with segregated role traits `ServerDiscovery`, `TagBrowser`, `TagReader`, `TagWriter`) for zero-cost abstraction and straightforward test mocking.
+- **Structured Server Discovery & UNC Endpoints**: Enumerate servers with rich catalog metadata (`OpcServerInfo`, `ProgID`, `CLSID`, user-friendly title) via `list_server_details`. Full support for UNC paths (`\\host\server`) via `OpcServerEndpoint` with automatic localhost normalization.
 - **Pure-Rust Connector Facade**: Strict isolation of low-level Win32 COM and FFI types behind the `ConnectedServer` and `ConnectedGroup` traits, keeping raw COM types and unsafe memory handling strictly internal.
-- **Transparent COM & Thread Management**: Automatically spawns and manages a dedicated MTA worker thread, maintaining strict thread affinity, connection pooling with auto-recovery for stale proxies, and RAII group teardown (`GroupGuard`) ensuring deterministic server cleanup across all return paths and panics.
-- **Strongly-Typed Domain Models**: `TagValue` uses `Option<OpcValue>` and `Option<std::time::SystemTime>` ensuring lossless, zero-allocation typed access on read results and writes.
+- **Transparent COM & Thread Management**: Automatically spawns and manages a dedicated MTA worker thread, maintaining strict thread affinity, connection pooling with synchronized eviction on reconnects, and RAII group teardown (`GroupGuard`) ensuring deterministic server cleanup across all return paths and panics.
+- **Strongly-Typed Domain Models & Tag Outcomes**: `TagValue` encapsulates reading outcomes as `Result<OpcValue, OpcError>`, quality (`OpcQuality`), and timestamp, with strongly-typed `TagResult` (`Result<TagSuccess, TagFailure>`) projection via `into_result()` and `to_result()`.
 - **Zero-Allocation Display Adapters**: `DisplayOptionOpcValue` and `DisplayOptionTimestamp` adapters with extension traits `OpcValueOptionExt` and `SystemTimeOptionExt` enable zero-allocation formatted streaming with width-padded table alignment.
 - **Canonical Display Formatting**: `TagValue` implements `std::fmt::Display` rendering `"{tag_id} = {value} [{quality}] @ {timestamp}"` for clean, single-line logging and diagnostics.
 - **16-Bit Quality Decomposition**: Zero-allocation `OpcQuality` struct decomposes raw OPC DA quality words into major status, substatus, and limit states with rich, human-readable diagnostics.
 - **Native Windows Backend**: Implemented natively with `windows-rs` — eliminates heavy legacy C++ binaries and external OPC crate dependencies.
 - **Context-Rich Error Handling**: Domain-specific `OpcError` via `thiserror` with inherent `.friendly_hint()` method for actionable HRESULT troubleshooting, native `From` conversions for standard channel and sync errors, and RAII unmanaged memory management.
 - **Thread-Safe Tag Collection & Cancellation**: `TagCollector` encapsulates bounded accumulation (`max_tags`), lock-free atomic length monitoring, and cooperative cancellation tokens to eliminate worker thread starvation.
-- **First-Class Test Support**: Includes pure-Rust mock implementations and an optional `MockOpcProvider` via the `test-support` feature flag.
+- **First-Class Test Support**: Includes pure-Rust mock implementations (`MockServerConnector`, `MockConnectedServer`, `MockConnectedGroup`) and an optional `MockOpcProvider` via the `test-support` feature flag.
 
 ## Feature Flags
 
@@ -204,14 +205,14 @@ use opc_da_client::{
 async fn main() -> OpcResult<()> {
     let client = OpcDaClient::builder()
         .server("Matrikon.OPC.Simulation.1")
-        .build()?;
+        .build_bound()?;
     let tags = vec![
         "Random.Int4".to_string(),
         "Random.Real8".to_string(),
         "Random.String".to_string(),
     ];
 
-    let values = client.read_tag_values(tags).await?;
+    let values = client.read_tags(tags).await?;
 
     for v in values {
         // Direct Display rendering: "Tag1 = 42.5 [Good] @ 2026-09-04 10:00:00"
@@ -338,30 +339,37 @@ async fn main() -> OpcResult<()> {
 | Type / Trait | Kind | Purpose |
 |:---|:---|:---|
 | `OpcProvider` | `pub trait` | Async trait for OPC DA operations (`list_servers`, `list_server_details`, `browse_tags`, `read_tag_values`, `read_tag_value`, `write_tag_value`, `write_tag_values`). |
-| `OpcDaClient` | `pub struct` | Primary client implementation with fluent inherent methods (`connect`, `connect_remote`, `read_tag_values`, `read_f64`, `write`, `write_batch`, `subscribe`). |
-| `OpcDaClientBuilder` | `pub struct` | Fluent builder for configuring host, server, timeout, and legacy DCOM mode before launching the worker. |
+| `OpcDaClient<C, State>` | `pub struct` | Primary client facade parameterized by state (`Unbound` gateway vs `Bound` session) with inherent session methods (`read_tag`, `read_tags`, `write_tag`, `write_tags`, `subscribe`). |
+| `Unbound` | `pub struct` | Typestate marker representing an unbound multi-server gateway. |
+| `Bound` | `pub struct` | Typestate marker representing a server-bound active session with infallible `endpoint(&self)`. |
+| `OpcDaClientBuilder` | `pub struct` | Fluent builder for configuring host, server, timeout, and legacy DCOM mode (`build()` for `Unbound`, `build_bound()` for `Bound`). |
 | `TagBatch` | `pub enum` | Zero-allocation polymorphic container for tag identifiers (`Static`, `StaticSingle`, `Shared`, `Owned`, `OwnedSingle`). |
 | `IntoTags` | `pub trait` | Universal conversion trait converting static string slices, arrays, single strings, and owned vectors into `TagBatch`. |
-| `TagValues` | `pub struct` | Collection of read tag values providing case-insensitive lookups and typed getters (`get_f64`, `get_i32`, `get_bool`, `get_str`). |
-| `TagExtractError` | `pub enum` | Domain error enum returned by `TagValues` getters (`NotRequested`, `ReadFailed`, `NoValue`, `TypeMismatch`). |
+| `TagValues` | `pub struct` | Collection of read tag values providing case-insensitive lookups, generic extraction (`get_as<T>`), and typed getters (`get_f64`, `get_f32`, `get_i32`, `get_i64`, `get_u32`, `get_u64`, `get_bool`, `get_str`). |
+| `TagExtractError` | `pub enum` | Domain error enum returned by `TagValues` getters (`NotRequested`, `ReadFailed`, `NoValue`, `TypeMismatch`). Preserves root COM error provenance. |
 | `ServerIdentifier` | `pub enum` | Strongly-typed server identifier (`ProgId` vs `Clsid`) with automatic GUID syntax parsing. |
 | `OpcServerInfo` | `pub struct` | Rich catalog metadata record (`prog_id`, `clsid`, `user_type`, `host`) with `display_name()` and `endpoint()`. |
-| `OpcServerEndpoint` | `pub struct` | Endpoint binding target `host` with `identifier: ServerIdentifier`. |
+| `OpcServerEndpoint` | `pub struct` | Endpoint binding target `host` with `identifier: ServerIdentifier`. Formats as UNC path (`\\host\server`) and implements `FromStr`. |
 | `OpcServerRegistration` | `pub struct` | Detailed Windows registry diagnostics (`clsid`, `prog_id`, `binary_path`, `server_type`). |
 | `OpcServerType` | `pub enum` | Execution model classification (`LocalServer32` executable vs `InprocServer32` DLL). |
 | `inspect_local_registration` | `pub fn` | Diagnostic helper inspecting `HKCR\CLSID\{...}` across native and WOW64 registry views. |
-| `TagValue` | `pub struct` | Canonical read result (`tag_id`, `Option<OpcValue>`, `OpcQuality`, `Option<SystemTime>`, `Option<OpcError>`) with `Display` and display helpers. |
+| `TagValue` | `pub struct` | Canonical read result holding encapsulated `outcome: Result<OpcValue, OpcError>`, `quality: OpcQuality`, and `timestamp: Option<SystemTime>`. |
+| `TagSuccess` | `pub struct` | Struct holding successfully decoded read result (`tag_id`, `value`, `quality`, `timestamp`). |
+| `TagFailure` | `pub struct` | Struct holding failed read result (`tag_id`, `quality`, `error`). |
+| `TagResult` | `pub type` | Strongly-typed result alias `Result<TagSuccess, TagFailure>`. |
 | `DisplayOptionOpcValue` | `pub struct` | Zero-allocation `Display` adapter streaming inner `OpcValue` or fallback directly into formatter. |
 | `DisplayOptionTimestamp` | `pub struct` | Zero-allocation `Display` adapter streaming formatted timestamp or fallback directly into formatter. |
 | `OpcValueOptionExt` | `pub trait` | Extension trait providing `.display()` and `.display_or("fallback")` for `Option<OpcValue>`. |
 | `SystemTimeOptionExt` | `pub trait` | Extension trait providing `.display()` and `.display_or("fallback")` for `Option<SystemTime>`. |
-| `OpcValue` | `pub enum` | Strongly-typed OPC value representation (`Int`, `Float`, `Bool`, `String`, `Empty`, `Null`). |
+| `OpcValue` | `pub enum` | Strongly-typed OPC value representation (`Int`, `UInt`, `Float`, `Bool`, `String`, `Empty`, `Null`). |
 | `OpcQuality` | `pub struct` | Zero-allocation decomposed 16-bit OPC DA quality word (`major`, `substatus`, `limit`, `raw`). |
 | `ParseQualityError` | `pub struct` | Error returned when parsing an invalid quality string via `FromStr`. |
 | `WriteResult` | `pub struct` | Tag write operation result (`tag_id`, `status: Result<(), OpcError>`, `is_success`, `is_error`, `error`). |
 | `TagCollector` | `pub struct` | Thread-safe, bounded container encapsulating thread-safe tag accumulation, atomic progress reporting, and cooperative cancellation token. |
-| `GroupHandle` | `pub struct` | Type-safe opaque handle wrapper for an OPC group. |
-| `ItemHandle` | `pub struct` | Type-safe opaque handle wrapper for an OPC item. |
+| `ClientGroupHandle` | `pub struct` | Type-safe opaque handle wrapper for client-side group identification. |
+| `ServerGroupHandle` | `pub struct` | Type-safe opaque handle wrapper for server-side group identification. |
+| `ClientItemHandle` | `pub struct` | Type-safe opaque handle wrapper for client-side item identification. |
+| `ServerItemHandle` | `pub struct` | Type-safe opaque handle wrapper for server-side item identification. |
 | `BrowseType` | `pub enum` | Tag namespace browsing filter (`Branch`, `Leaf`, `Flat`). |
 | `BrowseDirection` | `pub enum` | Tag namespace traversal direction (`Up`, `Down`, `To`). |
 | `OpcError` | `pub enum` | Domain error enum covering connection, group, item, type, and COM HRESULT failures. |

@@ -48,7 +48,18 @@ impl Default for TagValue {
 }
 
 impl TagValue {
-    /// Creates a new `TagValue`.
+    /// Creates a new `TagValue` with an initial outcome, quality, and timestamp.
+    ///
+    /// # Arguments
+    ///
+    /// * `tag_id` - The fully qualified OPC tag item identifier.
+    /// * `value` - Optional initial decoded value (defaults to [`OpcValue::Empty`] if `None`).
+    /// * `quality` - 16-bit OPC quality word.
+    /// * `timestamp` - Optional UTC timestamp of the measurement.
+    ///
+    /// # Returns
+    ///
+    /// A new [`TagValue`] instance with an `Ok` outcome.
     #[inline]
     #[must_use]
     pub fn new(
@@ -65,7 +76,18 @@ impl TagValue {
         }
     }
 
-    /// Creates a new successful `TagValue`.
+    /// Creates a new successful `TagValue` with a decoded value.
+    ///
+    /// # Arguments
+    ///
+    /// * `tag_id` - The fully qualified OPC tag item identifier.
+    /// * `value` - The successfully decoded value.
+    /// * `quality` - 16-bit OPC quality word.
+    /// * `timestamp` - Optional UTC timestamp of the measurement.
+    ///
+    /// # Returns
+    ///
+    /// A new [`TagValue`] instance with an `Ok` outcome.
     #[inline]
     #[must_use]
     pub fn success(
@@ -82,7 +104,17 @@ impl TagValue {
         }
     }
 
-    /// Creates a new `TagValue` with an error.
+    /// Creates a new `TagValue` representing a failed read operation.
+    ///
+    /// # Arguments
+    ///
+    /// * `tag_id` - The fully qualified OPC tag item identifier.
+    /// * `quality` - 16-bit OPC quality word returned by the server.
+    /// * `error` - The underlying error causing the read failure.
+    ///
+    /// # Returns
+    ///
+    /// A new [`TagValue`] instance with an `Err` outcome.
     #[inline]
     #[must_use]
     pub fn with_error(tag_id: impl Into<String>, quality: OpcQuality, error: OpcError) -> Self {
@@ -134,18 +166,30 @@ impl TagValue {
     }
 
     /// Returns `true` if quality is uncertain and the read was successful.
+    ///
+    /// # Returns
+    ///
+    /// `true` if [`TagValue::quality`] satisfies [`OpcQuality::is_uncertain`] and [`TagValue::outcome`] is `Ok(_)`.
     #[must_use]
     pub fn is_uncertain(&self) -> bool {
         self.quality.is_uncertain() && self.outcome.is_ok()
     }
 
     /// Returns `true` if quality is bad or the read encountered an error.
+    ///
+    /// # Returns
+    ///
+    /// `true` if [`TagValue::quality`] satisfies [`OpcQuality::is_bad`] or [`TagValue::outcome`] is `Err(_)`.
     #[must_use]
     pub fn is_bad(&self) -> bool {
         self.quality.is_bad() || self.outcome.is_err()
     }
 
-    /// Returns `true` if the read operation encountered an error.
+    /// Returns `true` if the read operation encountered an error, independent of quality.
+    ///
+    /// # Returns
+    ///
+    /// `true` if [`TagValue::outcome`] is `Err(_)`.
     #[must_use]
     pub fn is_error(&self) -> bool {
         self.outcome.is_err()
@@ -184,6 +228,10 @@ impl TagValue {
     ///
     /// If an error is present or value is missing, returns `Err(TagFailure)`.
     /// Otherwise returns `Ok(TagSuccess)`.
+    ///
+    /// # Returns
+    ///
+    /// A [`TagResult`] indicating success or failure.
     pub fn into_result(self) -> TagResult {
         match self.outcome {
             Ok(val) => Ok(TagSuccess {
@@ -201,6 +249,10 @@ impl TagValue {
     }
 
     /// Converts a reference to this `TagValue` into a [`TagResult`].
+    ///
+    /// # Returns
+    ///
+    /// A [`TagResult`] indicating success or failure.
     pub fn to_result(&self) -> TagResult {
         match &self.outcome {
             Ok(val) => Ok(TagSuccess {
@@ -517,6 +569,16 @@ impl TagValues {
     /// * [`TagExtractError::ReadFailed`] - Tag read failed on the server.
     /// * [`TagExtractError::NoValue`] - Tag returned a null or empty value.
     /// * [`TagExtractError::TypeMismatch`] - Value cannot be losslessly converted to `T`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use opc_da_client::{OpcQuality, OpcValue, TagValue, TagValues};
+    ///
+    /// let values = TagValues::new(vec![TagValue::new("FlowRate", Some(OpcValue::Float(42.5)), OpcQuality::GOOD, None)]);
+    /// let flow: f64 = values.get_as("FlowRate").unwrap();
+    /// assert_eq!(flow, 42.5);
+    /// ```
     pub fn get_as<T>(&self, tag: &str) -> Result<T, TagExtractError>
     where
         T: TryFrom<OpcValue>,
@@ -576,6 +638,15 @@ impl TagValues {
     /// * [`TagExtractError::ReadFailed`] - Tag read failed on the server.
     /// * [`TagExtractError::NoValue`] - Tag returned a null or empty value.
     /// * [`TagExtractError::TypeMismatch`] - Value cannot be losslessly converted to `f32`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use opc_da_client::{OpcQuality, OpcValue, TagValue, TagValues};
+    ///
+    /// let values = TagValues::new(vec![TagValue::new("Sensor.Pres", Some(OpcValue::Float(14.7)), OpcQuality::GOOD, None)]);
+    /// assert_eq!(values.get_f32("sensor.pres").unwrap(), 14.7f32);
+    /// ```
     pub fn get_f32(&self, tag: &str) -> Result<f32, TagExtractError> {
         self.get_as::<f32>(tag)
     }
@@ -627,6 +698,15 @@ impl TagValues {
     /// * [`TagExtractError::ReadFailed`] - Tag read failed on the server.
     /// * [`TagExtractError::NoValue`] - Tag returned a null or empty value.
     /// * [`TagExtractError::TypeMismatch`] - Value has a fractional part, is out of range, or is not numeric.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use opc_da_client::{OpcQuality, OpcValue, TagValue, TagValues};
+    ///
+    /// let values = TagValues::new(vec![TagValue::new("BigCounter", Some(OpcValue::Int(1_000_000_000)), OpcQuality::GOOD, None)]);
+    /// assert_eq!(values.get_i64("bigcounter").unwrap(), 1_000_000_000i64);
+    /// ```
     pub fn get_i64(&self, tag: &str) -> Result<i64, TagExtractError> {
         self.get_as::<i64>(tag)
     }
@@ -648,6 +728,15 @@ impl TagValues {
     /// * [`TagExtractError::ReadFailed`] - Tag read failed on the server.
     /// * [`TagExtractError::NoValue`] - Tag returned a null or empty value.
     /// * [`TagExtractError::TypeMismatch`] - Value has a fractional part, is negative, is out of range, or is not numeric.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use opc_da_client::{OpcQuality, OpcValue, TagValue, TagValues};
+    ///
+    /// let values = TagValues::new(vec![TagValue::new("UIntVal", Some(OpcValue::UInt(42)), OpcQuality::GOOD, None)]);
+    /// assert_eq!(values.get_u32("uintval").unwrap(), 42u32);
+    /// ```
     pub fn get_u32(&self, tag: &str) -> Result<u32, TagExtractError> {
         self.get_as::<u32>(tag)
     }
@@ -669,6 +758,15 @@ impl TagValues {
     /// * [`TagExtractError::ReadFailed`] - Tag read failed on the server.
     /// * [`TagExtractError::NoValue`] - Tag returned a null or empty value.
     /// * [`TagExtractError::TypeMismatch`] - Value has a fractional part, is negative, is out of range, or is not numeric.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use opc_da_client::{OpcQuality, OpcValue, TagValue, TagValues};
+    ///
+    /// let values = TagValues::new(vec![TagValue::new("BigUIntVal", Some(OpcValue::UInt(5_000_000_000)), OpcQuality::GOOD, None)]);
+    /// assert_eq!(values.get_u64("biguintval").unwrap(), 5_000_000_000u64);
+    /// ```
     pub fn get_u64(&self, tag: &str) -> Result<u64, TagExtractError> {
         self.get_as::<u64>(tag)
     }
@@ -797,11 +895,23 @@ impl TagValues {
     }
 
     /// Returns an iterator yielding strongly-typed [`TagResult`] outcomes for each tag.
+    ///
+    /// # Returns
+    ///
+    /// An iterator yielding [`TagResult`] values for each item in the collection.
     pub fn iter_results(&self) -> impl Iterator<Item = TagResult> + '_ {
         self.items.iter().map(TagValue::to_result)
     }
 
     /// Looks up a tag value by numeric index in the collection.
+    ///
+    /// # Arguments
+    ///
+    /// * `index` - 0-based offset into the collection.
+    ///
+    /// # Returns
+    ///
+    /// `Some(&TagValue)` if `index < self.len()`, otherwise `None`.
     #[inline]
     #[must_use]
     pub fn get_index(&self, index: usize) -> Option<&TagValue> {
@@ -815,6 +925,10 @@ impl TagValues {
     }
 
     /// Appends a new tag value to the end of this collection.
+    ///
+    /// # Arguments
+    ///
+    /// * `item` - The [`TagValue`] to append.
     #[inline]
     pub fn push(&mut self, item: TagValue) {
         self.items.push(item);
