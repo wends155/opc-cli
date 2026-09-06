@@ -348,10 +348,14 @@ impl ScopedVariant {
             let _ = windows::Win32::System::Variant::VariantClear(&raw mut self.0);
         }
     }
-}
 
-impl From<VARIANT> for ScopedVariant {
-    fn from(v: VARIANT) -> Self {
+    /// Creates a [`ScopedVariant`] from an owned raw [`VARIANT`].
+    ///
+    /// # Safety
+    /// Caller must ensure that `v` is an initialized, owned [`VARIANT`] whose underlying
+    /// resources (e.g. BSTR or SAFEARRAY) are exclusively transferred without aliasing.
+    #[must_use]
+    pub unsafe fn from_raw(v: VARIANT) -> Self {
         Self(v)
     }
 }
@@ -763,13 +767,23 @@ mod tests {
     #[test]
     fn test_scoped_variant_drop_clears_bstr_and_resets_vt() {
         let raw = opc_value_to_variant(&OpcValue::String("verification_test_bstr".into()));
-        let mut scoped = ScopedVariant::from(raw);
+        let mut scoped = unsafe { ScopedVariant::from_raw(raw) };
         unsafe {
             assert_eq!(scoped.as_raw().Anonymous.Anonymous.vt, VT_BSTR);
         }
         scoped.clear();
         unsafe {
             assert_eq!(scoped.as_raw().Anonymous.Anonymous.vt, VT_EMPTY);
+        }
+    }
+
+    #[test]
+    fn test_scoped_variant_from_raw_soundness() {
+        let raw = opc_value_to_variant(&OpcValue::Int(12345));
+        let scoped = unsafe { ScopedVariant::from_raw(raw) };
+        unsafe {
+            assert_eq!(scoped.as_raw().Anonymous.Anonymous.vt, VT_I4);
+            assert_eq!(scoped.as_raw().Anonymous.Anonymous.Anonymous.lVal, 12345);
         }
     }
 

@@ -60,6 +60,13 @@ impl Iterator for GuidIterator {
             };
 
             if code.is_ok() {
+                if self.count as usize > self.cache.len() {
+                    self.done = true;
+                    return Some(Err(crate::errors::OpcError::Internal(
+                        "COM enumerator returned count exceeding cache capacity".into(),
+                    )));
+                }
+
                 if self.count == 0 {
                     self.done = true;
                     return None;
@@ -180,6 +187,13 @@ impl Iterator for StringIterator {
                         );
 
                         if code.is_ok() {
+                            if *count as usize > cache.len() {
+                                self.done = true;
+                                return Some(Err(crate::errors::OpcError::Internal(
+                                    "COM enumerator returned count exceeding cache capacity".into(),
+                                )));
+                            }
+
                             if *count == 0 {
                                 self.done = true;
                                 return None;

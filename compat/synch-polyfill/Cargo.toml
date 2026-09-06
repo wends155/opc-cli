@@ -10,12 +10,14 @@ description = "WaitOnAddress polyfill for Windows 7 / Server 2008 R2"
 
 [lib]
 name = "api_ms_win_core_synch_l1_2_0"
-crate-type = ["cdylib"]
+crate-type = ["cdylib", "rlib"]
+
+[features]
+default = []
+std = []
 
 [workspace]
 
-[profile.dev]
-panic = "abort"
 
 [profile.release]
 panic = "abort"

@@ -873,19 +873,30 @@ impl TryFromNative<windows::Win32::Foundation::FILETIME> for std::time::SystemTi
         native: &windows::Win32::Foundation::FILETIME,
     ) -> windows::core::Result<Self> {
         let ft = ((native.dwHighDateTime as u64) << 32) | (u64::from(native.dwLowDateTime));
-        let duration_since_1601 = std::time::Duration::from_nanos(ft * 100);
+        
+        // 100-nanosecond intervals per second = 10,000,000
+        let ft_sec = ft / 10_000_000;
+        let ft_nanos = ((ft % 10_000_000) * 100) as u32;
 
-        let windows_to_unix_epoch_diff = std::time::Duration::from_secs(11_644_473_600);
-        let duration_since_unix_epoch = duration_since_1601
-            .checked_sub(windows_to_unix_epoch_diff)
+        const WINDOWS_TO_UNIX_EPOCH_SECS: u64 = 11_644_473_600;
+        if ft_sec < WINDOWS_TO_UNIX_EPOCH_SECS {
+            return Err(windows::core::Error::new(
+                windows::Win32::Foundation::E_INVALIDARG,
+                "FILETIME is before UNIX_EPOCH",
+            ));
+        }
+
+        let unix_sec = ft_sec - WINDOWS_TO_UNIX_EPOCH_SECS;
+        let duration = std::time::Duration::new(unix_sec, ft_nanos);
+
+        std::time::UNIX_EPOCH
+            .checked_add(duration)
             .ok_or_else(|| {
                 windows::core::Error::new(
                     windows::Win32::Foundation::E_INVALIDARG,
-                    "FILETIME is before UNIX_EPOCH",
+                    "FILETIME overflowed SystemTime bounds",
                 )
-            })?;
-
-        Ok(std::time::UNIX_EPOCH + duration_since_unix_epoch)
+            })
     }
 }
 
@@ -907,10 +918,35 @@ impl TryToNative<windows::Win32::Foundation::FILETIME> for std::time::SystemTime
                 )
             })?;
 
-        let duration_since_windows_epoch =
-            duration_since_unix_epoch + std::time::Duration::from_secs(11_644_473_600);
+        const WINDOWS_TO_UNIX_EPOCH_SECS: u64 = 11_644_473_600;
+        let total_secs = duration_since_unix_epoch
+            .as_secs()
+            .checked_add(WINDOWS_TO_UNIX_EPOCH_SECS)
+            .ok_or_else(|| {
+                windows::core::Error::new(
+                    windows::Win32::Foundation::E_INVALIDARG,
+                    "SystemTime overflowed FILETIME bounds",
+                )
+            })?;
 
-        let ft = duration_since_windows_epoch.as_nanos() / 100;
+        let intervals_from_secs = total_secs
+            .checked_mul(10_000_000)
+            .ok_or_else(|| {
+                windows::core::Error::new(
+                    windows::Win32::Foundation::E_INVALIDARG,
+                    "SystemTime overflowed FILETIME bounds",
+                )
+            })?;
+
+        let intervals_from_nanos = (duration_since_unix_epoch.subsec_nanos() as u64) / 100;
+        let ft = intervals_from_secs
+            .checked_add(intervals_from_nanos)
+            .ok_or_else(|| {
+                windows::core::Error::new(
+                    windows::Win32::Foundation::E_INVALIDARG,
+                    "SystemTime overflowed FILETIME bounds",
+                )
+            })?;
 
         Ok(windows::Win32::Foundation::FILETIME {
             dwLowDateTime: ft as u32,
@@ -929,6 +965,41 @@ impl TryFromNative<windows::core::PWSTR> for String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_filetime_overflow_regression() {
+        use windows::Win32::Foundation::FILETIME;
+
+        // 1. Sentinel / Maximum timestamp (0xFFFFFFFF_FFFFFFFF)
+        // Must NOT panic (previously panicked with: attempt to multiply with overflow)
+        let max_ft = FILETIME {
+            dwHighDateTime: u32::MAX,
+            dwLowDateTime: u32::MAX,
+        };
+        let result = std::time::SystemTime::try_from_native(&max_ft);
+        assert!(result.is_err(), "Sentinel FILETIME beyond SystemTime bounds must safely return Err without panicking");
+
+        // 2. Large valid future timestamp (year 2050)
+        let future_ft_val: u64 = (11_644_473_600 + 2_524_608_000) * 10_000_000;
+        let future_ft = FILETIME {
+            dwHighDateTime: (future_ft_val >> 32) as u32,
+            dwLowDateTime: (future_ft_val & 0xFFFFFFFF) as u32,
+        };
+        assert!(std::time::SystemTime::try_from_native(&future_ft).is_ok());
+
+        // 3. Exact UNIX epoch
+        let unix_epoch_ft_val: u64 = 11_644_473_600 * 10_000_000;
+        let unix_ft = FILETIME {
+            dwHighDateTime: (unix_epoch_ft_val >> 32) as u32,
+            dwLowDateTime: (unix_epoch_ft_val & 0xFFFFFFFF) as u32,
+        };
+        let epoch_result = std::time::SystemTime::try_from_native(&unix_ft).unwrap();
+        assert_eq!(epoch_result, std::time::UNIX_EPOCH);
+
+        // 4. Pre-epoch timestamp (0, 0)
+        let zero_ft = FILETIME { dwHighDateTime: 0, dwLowDateTime: 0 };
+        assert!(std::time::SystemTime::try_from_native(&zero_ft).is_err());
+    }
 
     #[test]
     fn test_remote_array_safety_and_invariants() {
