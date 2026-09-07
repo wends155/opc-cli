@@ -120,22 +120,32 @@ impl ComConnector {
         let server = connect_endpoint(endpoint, legacy_dcom)?;
 
         let common: crate::raw::bindings::comn::IOPCCommon = server.cast()?;
-        apply_proxy_blanket(&common, legacy_dcom);
+        apply_proxy_blanket(&common, legacy_dcom)?;
 
         let item_properties: crate::raw::bindings::da::IOPCItemProperties = server.cast()?;
-        apply_proxy_blanket(&item_properties, legacy_dcom);
+        apply_proxy_blanket(&item_properties, legacy_dcom)?;
 
         let server_public_groups: Option<crate::raw::bindings::da::IOPCServerPublicGroups> =
             server.cast().ok();
         if let Some(ref spg) = server_public_groups {
-            apply_proxy_blanket(spg, legacy_dcom);
+            if let Err(e) = apply_proxy_blanket(spg, legacy_dcom) {
+                tracing::warn!(
+                    error = ?e,
+                    "Failed to apply proxy blanket to IOPCServerPublicGroups"
+                );
+            }
         }
 
         let browse_server_address_space: Option<
             crate::raw::bindings::da::IOPCBrowseServerAddressSpace,
         > = server.cast().ok();
         if let Some(ref bsas) = browse_server_address_space {
-            apply_proxy_blanket(bsas, legacy_dcom);
+            if let Err(e) = apply_proxy_blanket(bsas, legacy_dcom) {
+                tracing::warn!(
+                    error = ?e,
+                    "Failed to apply proxy blanket to IOPCBrowseServerAddressSpace"
+                );
+            }
         }
 
         Ok(ComServer {

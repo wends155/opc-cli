@@ -81,17 +81,18 @@ pub const fn authn_level_for(legacy_dcom: bool) -> u32 {
 ///
 /// * `proxy` - COM interface proxy reference to blanket.
 /// * `legacy_dcom` - When `true`, uses `RPC_C_AUTHN_LEVEL_CONNECT` instead of `RPC_C_AUTHN_LEVEL_PKT_INTEGRITY`.
-pub fn apply_proxy_blanket<T: Interface>(proxy: &T, legacy_dcom: bool) {
+///
+/// # Errors
+///
+/// Returns [`crate::errors::OpcError`] if interface casting or `CoSetProxyBlanket` fails.
+pub fn apply_proxy_blanket<T: Interface>(
+    proxy: &T,
+    legacy_dcom: bool,
+) -> crate::errors::OpcResult<()> {
     let authn_level = authn_level_for(legacy_dcom);
-    let unk: windows::core::IUnknown = match proxy.cast() {
-        Ok(u) => u,
-        Err(e) => {
-            tracing::debug!(error = ?e, "Interface does not cast to IUnknown for proxy blanketing");
-            return;
-        }
-    };
+    let unk: windows::core::IUnknown = proxy.cast().map_err(crate::errors::OpcError::from)?;
     // SAFETY: Calling CoSetProxyBlanket on valid COM interface pointer with standard NT security.
-    let hr = unsafe {
+    unsafe {
         CoSetProxyBlanket(
             &unk,
             RPC_C_AUTHN_WINNT,
@@ -102,14 +103,8 @@ pub fn apply_proxy_blanket<T: Interface>(proxy: &T, legacy_dcom: bool) {
             None,
             EOAC_NONE,
         )
-    };
-    if let Err(e) = hr {
-        tracing::warn!(
-            error = ?e,
-            authn_level,
-            "Failed to set COM proxy blanket (continuing without security blanket)"
-        );
     }
+    .map_err(crate::errors::OpcError::from)
 }
 
 /// Creates an instance of a COM class on a remote host via DCOM `CoCreateInstanceEx`,
@@ -186,7 +181,7 @@ pub fn create_remote_instance<T: Interface>(
     })?;
 
     // Apply proxy blanket to the remote instance
-    apply_proxy_blanket(&unk, legacy_dcom);
+    apply_proxy_blanket(&unk, legacy_dcom)?;
 
     unk.cast().map_err(Into::into)
 }

@@ -115,11 +115,18 @@ When running M/L-tier plans, submit the draft plan to the `plan-reviewer` subage
 
 ### 5. Architect Assessment & Plan Revision
 
-Upon receiving the reactive wakeup containing the Design Review Report:
-1. Evaluate the review verdict:
-   - **✅ Approved** → Adopt the draft plan as final. Proceed to Phase 6.
-   - **⚠️ Revisions Recommended** → Revise the in-memory draft plan addressing the report's Required Plan Adjustments. (If major structural adjustments were made, the Architect may optionally re-spawn `plan-reviewer` for a second review cycle, max 1 revision cycle).
-   - **🛑 Major Rethink Required** → Inform the user of the reviewer's structural concerns and recommend scope adjustment before proceeding.
+Maintain a **Revision Cycle Counter** (mental state) starting at 1. Upon receiving the reactive wakeup containing the Design Review Report, evaluate the review verdict:
+
+- **✅ Approved** (at any cycle) → Adopt the draft plan as final. Proceed to Phase 6.
+- **⚠️ Revisions Recommended** AND **cycle < 3**:
+  1. Revise the in-memory draft plan addressing the report's Required Plan Adjustments.
+  2. Increment your Revision Cycle Counter.
+  3. Re-spawn `plan-reviewer` passing the full revised draft text and prepending "Revision Cycle [N] of 3" to the `Prompt`.
+  4. Apply the Turn Boundary Fence (Phase 4, step 4) and await the next wakeup.
+- **⚠️ Revisions Recommended** AND **cycle = 3** (cap exhausted):
+  1. Append a `## ⚠️ Reviewer Findings (Unresolved)` section to the bottom of the drafted plan, listing the Required Plan Adjustments from the final report.
+  2. Adopt this annotated draft as final. Proceed to Phase 6.
+- **🛑 Major Rethink Required** (at any cycle) → Immediately stop the loop. Inform the user of the reviewer's structural concerns and recommend scope adjustment before proceeding.
 
 ### 6. Finalize Plan, Sync & Pre-Flight Gate
 

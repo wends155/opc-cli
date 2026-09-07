@@ -138,11 +138,34 @@ impl<S: ConnectedServer> Default for ConnectionPool<S> {
     }
 }
 
+/// Maximum number of tracked endpoint failure cooldowns before LRU eviction.
+pub const MAX_COOLDOWNS: usize = 256;
+
 impl<S: ConnectedServer> ConnectionPool<S> {
     /// Creates a new empty connection pool.
     #[must_use]
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Records an endpoint failure timestamp, pruning expired circuit breaker cooldowns
+    /// and capping memory growth at [`MAX_COOLDOWNS`] via LRU eviction.
+    pub fn record_failure(&mut self, endpoint: OpcServerEndpoint) {
+        self.failure_cooldowns
+            .retain(|_, failed_at| failed_at.elapsed() < CIRCUIT_BREAKER_COOLDOWN);
+
+        if self.failure_cooldowns.len() >= MAX_COOLDOWNS {
+            if let Some(oldest) = self
+                .failure_cooldowns
+                .iter()
+                .min_by_key(|(_, t)| **t)
+                .map(|(k, _)| k.clone())
+            {
+                self.failure_cooldowns.remove(&oldest);
+            }
+        }
+
+        self.failure_cooldowns.insert(endpoint, Instant::now());
     }
 
     /// Number of active connections currently maintained in the pool.
@@ -222,8 +245,7 @@ where
             Ok(s) => s,
             Err(e) => {
                 if e.is_connection_error() {
-                    pool.failure_cooldowns
-                        .insert(endpoint.clone(), Instant::now());
+                    pool.record_failure(endpoint.clone());
                 }
                 return Err(e);
             }
@@ -253,8 +275,7 @@ where
                         server = %endpoint
                     );
                     if connect_e.is_connection_error() {
-                        pool.failure_cooldowns
-                            .insert(endpoint.clone(), Instant::now());
+                        pool.record_failure(endpoint.clone());
                     }
                     return Err(connect_e);
                 }
@@ -268,8 +289,7 @@ where
                     server = %endpoint
                 );
                 if op_e.is_connection_error() {
-                    pool.failure_cooldowns
-                        .insert(endpoint.clone(), Instant::now());
+                    pool.record_failure(endpoint.clone());
                     return result;
                 }
             }
@@ -561,5 +581,17 @@ mod tests {
 
         // Second evict should return false
         assert!(!pool.evict(&endpoint));
+    }
+
+    #[test]
+    fn test_failure_cooldowns_pruning_and_capacity_cap() {
+        use crate::com::connector::ServerConnector;
+        let mut pool: ConnectionPool<<MockServerConnector as ServerConnector>::Server> =
+            ConnectionPool::new();
+        for i in 0..=MAX_COOLDOWNS + 5 {
+            let ep = OpcServerEndpoint::from(format!("Server.{i}").as_str());
+            pool.record_failure(ep);
+        }
+        assert!(pool.failure_cooldowns.len() <= MAX_COOLDOWNS);
     }
 }

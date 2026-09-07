@@ -183,11 +183,73 @@ impl TagCollector {
         self.inner.count.fetch_add(1, Ordering::Release);
         true
     }
+
+    /// Batch-inserts tags, acquiring the Mutex once for the entire batch.
+    /// Returns the number of tags successfully inserted.
+    #[must_use = "Returns the number of tags successfully accepted"]
+    pub fn push_batch(&self, tags: impl IntoIterator<Item = String>) -> usize {
+        if self.is_cancelled() || self.is_full() {
+            return 0;
+        }
+        let mut guard = match self.inner.tags.lock() {
+            Ok(g) => g,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        let remaining = self.inner.max_tags.saturating_sub(guard.len());
+        if remaining == 0 {
+            return 0;
+        }
+        let mut count = 0;
+        for tag in tags {
+            if count >= remaining || self.is_cancelled() {
+                break;
+            }
+            guard.push(tag);
+            count += 1;
+        }
+        drop(guard);
+        if count > 0 {
+            self.inner.count.fetch_add(count, Ordering::Release);
+        }
+        count
+    }
 }
 
 impl Default for TagCollector {
     /// Creates a default `TagCollector` with `DEFAULT_MAX_TAGS` capacity.
     fn default() -> Self {
         Self::new(Self::DEFAULT_MAX_TAGS)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_collector_push_batch() {
+        let collector = TagCollector::new(5);
+        let tags = vec!["Tag1".to_string(), "Tag2".to_string(), "Tag3".to_string()];
+        let inserted = collector.push_batch(tags);
+        assert_eq!(inserted, 3);
+        assert_eq!(collector.len(), 3);
+    }
+
+    #[test]
+    fn test_collector_push_batch_respects_capacity() {
+        let collector = TagCollector::new(2);
+        let tags = vec!["T1".to_string(), "T2".to_string(), "T3".to_string()];
+        let inserted = collector.push_batch(tags);
+        assert_eq!(inserted, 2);
+        assert_eq!(collector.len(), 2);
+    }
+
+    #[test]
+    fn test_collector_push_batch_after_cancel_inserts_nothing() {
+        let collector = TagCollector::new(10);
+        collector.cancel();
+        let inserted = collector.push_batch(vec!["Tag1".to_string()]);
+        assert_eq!(inserted, 0);
+        assert_eq!(collector.len(), 0);
     }
 }

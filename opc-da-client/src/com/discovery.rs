@@ -437,14 +437,24 @@ impl OpcServerListCatalog {
             }
         };
 
-        crate::com::security::apply_proxy_blanket(&v1, legacy_dcom);
+        if let Err(e) = crate::com::security::apply_proxy_blanket(&v1, legacy_dcom) {
+            tracing::warn!(
+                error = ?e,
+                "Failed to apply proxy blanket to IOPCServerList; continuing enumeration"
+            );
+        }
 
         let v2: Option<crate::raw::bindings::comn::IOPCServerList2> = v1
             .cast::<crate::raw::bindings::comn::IOPCServerList2>()
             .ok();
 
         if let Some(ref list2) = v2 {
-            crate::com::security::apply_proxy_blanket(list2, legacy_dcom);
+            if let Err(e) = crate::com::security::apply_proxy_blanket(list2, legacy_dcom) {
+                tracing::warn!(
+                    error = ?e,
+                    "Failed to apply proxy blanket to IOPCServerList2; continuing enumeration"
+                );
+            }
         }
 
         Ok(Self { v1, v2 })

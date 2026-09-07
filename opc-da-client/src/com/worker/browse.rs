@@ -134,7 +134,11 @@ fn browse_recursive<S: ConnectedServer>(
             log_opc_err!(e, OpcOperation::BrowseRecursiveLeaves, depth = depth);
         })?;
 
+    let mut leaf_ids = Vec::new();
     for leaf_res in leaf_iter {
+        if collector.is_cancelled() || collector.is_full() {
+            break;
+        }
         let leaf_name = leaf_res.inspect_err(|e| {
             log_opc_err!(e, OpcOperation::BrowseRecursiveLeafItem, depth = depth);
         })?;
@@ -146,7 +150,12 @@ fn browse_recursive<S: ConnectedServer>(
                 leaf = %leaf_name
             );
         })?;
-        if !collector.push(item_id) {
+        leaf_ids.push(item_id);
+    }
+
+    if !leaf_ids.is_empty() {
+        collector.push_batch(leaf_ids);
+        if collector.is_cancelled() || collector.is_full() {
             return Ok(());
         }
     }
