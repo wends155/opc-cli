@@ -448,13 +448,13 @@ impl OpcServerListCatalog {
             .cast::<crate::raw::bindings::comn::IOPCServerList2>()
             .ok();
 
-        if let Some(ref list2) = v2 {
-            if let Err(e) = crate::com::security::apply_proxy_blanket(list2, legacy_dcom) {
-                tracing::warn!(
-                    error = ?e,
-                    "Failed to apply proxy blanket to IOPCServerList2; continuing enumeration"
-                );
-            }
+        if let Some(ref list2) = v2
+            && let Err(e) = crate::com::security::apply_proxy_blanket(list2, legacy_dcom)
+        {
+            tracing::warn!(
+                error = ?e,
+                "Failed to apply proxy blanket to IOPCServerList2; continuing enumeration"
+            );
         }
 
         Ok(Self { v1, v2 })
@@ -685,7 +685,10 @@ mod tests {
         use windows::Win32::System::Registry::{REG_BINARY, REG_DWORD, REG_EXPAND_SZ, REG_SZ};
         assert!(format_registry_string(REG_DWORD, "123").is_none());
         assert!(format_registry_string(REG_BINARY, "data").is_none());
-        assert_eq!(format_registry_string(REG_SZ, "Server.Name").as_deref(), Some("Server.Name"));
+        assert_eq!(
+            format_registry_string(REG_SZ, "Server.Name").as_deref(),
+            Some("Server.Name")
+        );
         assert_eq!(format_registry_string(REG_SZ, "   ").as_deref(), None);
         assert!(format_registry_string(REG_EXPAND_SZ, "C:\\server.exe").is_some());
     }

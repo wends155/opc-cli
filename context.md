@@ -1,5 +1,37 @@
 # Project Context Summary
 
+## 2026-09-07: Multi-Lens Code Review Remediation & Architectural Hardening (`opc-da-client`, `opc-cli`)
+> 📝 **Context Update:**
+> * **Feature:** Complete execution of the 24-step Implementation Plan addressing all 14 findings across Logic, Design, Performance, Security, and API lenses from `review_report.md` under the TAR-S cycle and strict Builder rules with zero warnings and clean passes across all 9 gates of `scripts/verify.ps1`.
+> * **Changes:**
+>   - **Phase 1: Foundation & Safety (`opc-da-client`):**
+>     - Deleted dead bridge traits `IntoBridge`, `ToNative`, `TryToNative` and blanket/filetime impls in `raw/memory.rs` (finding D-MEM-1).
+>     - Added `compute_safearray_bounds` with `i64` widening to eliminate signed integer overflow on malicious SafeArray bound descriptors in `com/variant.rs` (finding L-VAR-1).
+>     - Added `format_registry_string` to strictly admit only `REG_SZ` and `REG_EXPAND_SZ` registry types, preventing non-string registry value decodings in `com/discovery.rs` (finding S-DISC-1).
+>     - Removed `From<Elapsed>` in `errors.rs` that fabricated zero-duration timeouts, replacing caller with contextual `map_err` (finding L-CLI-1).
+>   - **Phase 2: Security & Engine Hardening (`opc-da-client`):**
+>     - Made `apply_proxy_blanket` return `OpcResult<()>` instead of silently discarding errors; propagated errors in `create_remote_instance` caller and `connector/server.rs` (findings S-SEC-1, S-SEC-2).
+>     - Capped `failure_cooldowns` circuit breaker table in `com/worker/pool.rs` to `MAX_COOLDOWNS = 256` with expired entry pruning and LRU eviction, preventing unbounded memory growth (finding P-POOL-1).
+>     - Added `TagCollector::push_batch` with single mutex lock acquisition, atomic count increment, and cooperative cancellation checking, mitigating recursive browse lock contention and N+1 RPC overhead (findings P-COL-1, P-BRW-1).
+>   - **Phase 3: Worker Priority Queue Fix (`opc-da-client`):**
+>     - Replaced single-request drain in `com/worker.rs` with dual-tier `PriorityRequestQueue` (split into `high` and `low` `VecDeque` queues), guaranteeing immediate FIFO preemption for interactive reads/writes over background polling without starvation (finding L-WRK-1).
+>   - **Phase 4: Client API Encapsulation (`opc-da-client`):**
+>     - Privatized fields on `OpcDaClientBuilder` (`timeout`, `legacy_dcom`) and `OpcDaClient` (`endpoint`, `timeout`), exposing accessors `timeout_duration()`, `legacy_dcom()`, `endpoint()`, and `timeout()` to seal typestate invariants (finding D-CLI-1).
+>     - Fixed `server_id()` returning `"{CLSID}"` by returning `Cow<'_, str>` formatted with `crate::types::server::format_guid_bracketed` (finding A-CLI-2).
+>     - Enforced minimum 10ms polling interval floor in `client.subscribe()` to prevent CPU spin loops (finding L-CLI-2).
+>   - **Phase 5: TUI State Machine & Logic Fixes (`opc-cli`):**
+>     - Fixed post-write refresh in `poll_write_result` by spawning read task directly from `AutoRefresher` server and tag IDs, bypassing screen guard, and clearing `DialogState` (findings L-APP-1, L-APP-2).
+>     - Guarded `poll_read_result` error transition to only eject user from `CurrentScreen::Loading` back to `TagList`, preserving user screen on background refresh failures (finding L-APP-4).
+>     - Updated `select_prev()` to initialize selection to last item (`count - 1`) when `selected_index` is `None` (finding L-APP-5).
+>     - Fixed search mode key handler so space `' '` inserts character into search query instead of toggling selection (finding L-APP-6).
+>     - Updated `resolve_write_value()` to use `TagValues::get()` for case-insensitive lookup (finding L-APP-3).
+>     - Replaced `.collect::<Vec<ListItem>>()` in `render_tag_list` with disjoint destructuring of `ViewState` and on-the-fly item iteration, eliminating per-frame heap allocations (finding P-UI-1).
+>   - **Phase 6: Verification & Documentation:**
+>     - Synchronized `architecture.md`, `opc-da-client/architecture.md`, and `opc-da-client/spec.md`.
+>     - Verified full 9-gate verification pipeline (`pwsh -File scripts/verify.ps1`): all 9 gates passed with zero warnings. Total tests increased from 320 to 330 (+ 78 doctests = 408 tests).
+> * **New Constraints:** `PriorityRequestQueue` must remain dual-queue with high priority always preempting low priority. SafeArray bounds must be computed via `compute_safearray_bounds` with widened `i64`. UI list rendering must use disjoint destructuring without per-frame `Vec` collections.
+> * **Pruned:** Dead bridge traits `IntoBridge`, `ToNative`, `TryToNative`; `From<Elapsed>` fabricated zero duration; unbounded cooldown map growth; per-frame `Vec<ListItem>` heap allocation.
+
 ## 2026-09-07: Workspace Documentation & Architecture Synchronization (`spec.md`, `architecture.md`, `README.md`, rustdocs)
 > 📝 **Context Update:**
 > * **Feature:** Post-123 remediation synchronization across behavioral specification (`opc-da-client/spec.md`), system architecture (`architecture.md` and `opc-da-client/architecture.md`), public README documentation (`README.md` and `opc-da-client/README.md`), and in-source rustdoc documentation across all crates.

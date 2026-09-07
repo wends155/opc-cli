@@ -106,7 +106,6 @@ impl<T> From<std::sync::PoisonError<T>> for OpcError {
     }
 }
 
-
 impl From<windows::core::HRESULT> for OpcError {
     fn from(hr: windows::core::HRESULT) -> Self {
         Self::Com {

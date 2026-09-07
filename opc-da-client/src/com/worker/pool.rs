@@ -154,15 +154,14 @@ impl<S: ConnectedServer> ConnectionPool<S> {
         self.failure_cooldowns
             .retain(|_, failed_at| failed_at.elapsed() < CIRCUIT_BREAKER_COOLDOWN);
 
-        if self.failure_cooldowns.len() >= MAX_COOLDOWNS {
-            if let Some(oldest) = self
+        if self.failure_cooldowns.len() >= MAX_COOLDOWNS
+            && let Some(oldest) = self
                 .failure_cooldowns
                 .iter()
                 .min_by_key(|(_, t)| **t)
                 .map(|(k, _)| k.clone())
-            {
-                self.failure_cooldowns.remove(&oldest);
-            }
+        {
+            self.failure_cooldowns.remove(&oldest);
         }
 
         self.failure_cooldowns.insert(endpoint, Instant::now());

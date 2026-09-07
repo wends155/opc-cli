@@ -788,7 +788,6 @@ impl<Native, T: FromNative<Native>> TryFromNative<Native> for T {
     }
 }
 
-
 impl TryFromNative<RemoteArray<windows::core::HRESULT>> for Vec<windows::core::Result<()>> {
     fn try_from_native(
         native: &RemoteArray<windows::core::HRESULT>,
@@ -870,8 +869,6 @@ macro_rules! try_from_native {
         $crate::raw::memory::TryFromNative::try_from_native($native)?
     };
 }
-
-
 
 impl TryFromNative<windows::core::PWSTR> for String {
     fn try_from_native(native: &windows::core::PWSTR) -> windows::core::Result<Self> {

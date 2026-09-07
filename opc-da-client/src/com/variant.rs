@@ -29,8 +29,9 @@ pub fn variant_to_string(variant: &VARIANT) -> String {
 /// Safely computes the element count and capped display count from SafeArray 1-D bounds.
 /// Widens bounds to `i64` to prevent signed overflow on malicious or extreme bounds.
 #[inline]
-pub(crate) fn compute_safearray_bounds(lb: i32, ub: i32) -> (usize, usize) {
-    let count = (i64::from(ub) - i64::from(lb) + 1).max(0) as usize;
+pub fn compute_safearray_bounds(lb: i32, ub: i32) -> (usize, usize) {
+    let diff = (i64::from(ub) - i64::from(lb) + 1).max(0);
+    let count = usize::try_from(diff).unwrap_or(usize::MAX);
     let display_count = count.min(20);
     (count, display_count)
 }
@@ -74,8 +75,8 @@ fn variant_to_string_bounded(variant: &VARIANT, depth: usize) -> String {
                     if SafeArrayAccessData(parray, &raw mut data_ptr).is_ok() {
                         let vars =
                             std::slice::from_raw_parts(data_ptr as *const VARIANT, display_count);
-                        for i in 0..display_count {
-                            elements.push(variant_to_string_bounded(&vars[i], depth + 1));
+                        for var in vars {
+                            elements.push(variant_to_string_bounded(var, depth + 1));
                         }
                         let _ = SafeArrayUnaccessData(parray);
                     }
@@ -88,8 +89,7 @@ fn variant_to_string_bounded(variant: &VARIANT, depth: usize) -> String {
                             (*temp_var.Anonymous.Anonymous).vt =
                                 windows::Win32::System::Variant::VARENUM(base_type);
 
-                            #[allow(clippy::cast_sign_loss)]
-                            let src_ptr = (data_ptr as *const u8).add((i as usize) * elem_size);
+                            let src_ptr = (data_ptr as *const u8).add(i * elem_size);
                             let dst_ptr =
                                 std::ptr::addr_of_mut!((*temp_var.Anonymous.Anonymous).Anonymous)
                                     .cast::<u8>();
@@ -987,7 +987,8 @@ mod tests {
     #[test]
     fn test_safearray_bounds_overflow_safe() {
         let (count, display) = compute_safearray_bounds(-1, i32::MAX);
-        assert_eq!(count, (i64::from(i32::MAX) + 2) as usize);
+        let expected = usize::try_from(i64::from(i32::MAX) + 2).unwrap_or(usize::MAX);
+        assert_eq!(count, expected);
         assert_eq!(display, 20);
     }
 

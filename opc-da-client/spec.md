@@ -520,7 +520,7 @@ Implemented for:
 | Method | Signature | Description |
 | :--- | :--- | :--- |
 | `endpoint(&self)` | `pub fn endpoint(&self) -> &OpcServerEndpoint` | Infallibly borrows the bound server endpoint (guaranteed by `Bound` typestate invariant). |
-| `server_id(&self)` | `pub fn server_id(&self) -> &str` | Convenience getter returning the server ProgID or CLSID string. |
+| `server_id(&self)` | `pub fn server_id(&self) -> std::borrow::Cow<'_, str>` | Convenience getter returning the server ProgID or bracketed CLSID string. |
 | `unbind(self)` | `pub fn unbind(self) -> (OpcDaClient<C, Unbound>, OpcServerEndpoint)` | Consumes bound session and returns an unbound gateway and the previous endpoint. |
 | `read_tag(&self, tag: &str)` | `pub async fn read_tag(&self, tag: &str) -> OpcResult<TagValue>` | Reads a single tag and returns full `TagValue` with outcome, quality, and timestamp. |
 | `read_tags(&self, tags: impl IntoTags)` | `pub async fn read_tags(&self, tags: impl IntoTags) -> OpcResult<TagValues>` | Reads a batch of tags and returns rich `TagValues` collection. |

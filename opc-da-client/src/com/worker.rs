@@ -261,20 +261,20 @@ fn is_high_priority(req: &ComRequest) -> bool {
 
 /// Two-tier priority request queue for the dedicated COM worker thread.
 /// High priority (Read/Write I/O) requests are always dispatched before low priority (Browse/List) requests.
-pub(crate) struct PriorityRequestQueue {
+pub struct PriorityRequestQueue {
     high: std::collections::VecDeque<ComRequest>,
     low: std::collections::VecDeque<ComRequest>,
 }
 
 impl PriorityRequestQueue {
-    pub(crate) fn new() -> Self {
+    pub fn new() -> Self {
         Self {
             high: std::collections::VecDeque::new(),
             low: std::collections::VecDeque::new(),
         }
     }
 
-    pub(crate) fn push(&mut self, req: ComRequest) {
+    pub fn push(&mut self, req: ComRequest) {
         if is_high_priority(&req) {
             self.high.push_back(req);
         } else {
@@ -282,16 +282,16 @@ impl PriorityRequestQueue {
         }
     }
 
-    pub(crate) fn pop_next(&mut self) -> Option<ComRequest> {
+    pub fn pop_next(&mut self) -> Option<ComRequest> {
         self.high.pop_front().or_else(|| self.low.pop_front())
     }
 
-    pub(crate) fn is_empty(&self) -> bool {
+    pub fn is_empty(&self) -> bool {
         self.high.is_empty() && self.low.is_empty()
     }
 
     #[allow(dead_code)]
-    pub(crate) fn clear(&mut self) {
+    pub fn clear(&mut self) {
         self.high.clear();
         self.low.clear();
     }

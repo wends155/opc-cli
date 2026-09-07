@@ -129,7 +129,7 @@ opc-da-client/
 - **Mock Availability**: N/A.
 
 ### `com::client`
-- **Owns**: Concrete public `OpcDaClient<C, State = Unbound>` struct implementing `OpcProvider`, fluent builder `OpcDaClientBuilder` (`builder()`, `host()`, `server()`, `timeout()`, `with_legacy_dcom()`, `with_connector()`, `build()`, `build_bound()`), compile-time typestates `Unbound` (gateway) and `Bound` (session), zero-cost state transitions (`bind`, `bind_remote`, `unbind`), eager connection constructor (`connect_eager`), server-bound constructors (`connect`, `connect_remote`), infallible endpoint borrower (`endpoint(&self) -> &OpcServerEndpoint`) and server ID getter (`server_id(&self) -> &str`) on `Bound`, inherent session methods (`read_tag`, `read_tags`, `write_tag`, `write_tags`), backward-compatible readers and writers (`read_tag_values`, `read_f64`, `read_i32`, `read_bool`, `read_string`, `write`, `write_batch`), remote server discovery (`list_servers_on`, deprecated in favor of `ServerDiscovery::list_servers`), Layer 2 non-blocking subscription polling stream (`client.subscribe()`), and client-side channel sender management (`mpsc::Sender<ComRequest>`).
+- **Owns**: Concrete public `OpcDaClient<C, State = Unbound>` struct implementing `OpcProvider`, fluent builder `OpcDaClientBuilder` (`builder()`, `host()`, `server()`, `timeout()`, `with_legacy_dcom()`, `with_connector()`, `build()`, `build_bound()`), compile-time typestates `Unbound` (gateway) and `Bound` (session), zero-cost state transitions (`bind`, `bind_remote`, `unbind`), eager connection constructor (`connect_eager`), server-bound constructors (`connect`, `connect_remote`), infallible endpoint borrower (`endpoint(&self) -> &OpcServerEndpoint`) and server ID getter (`server_id(&self) -> std::borrow::Cow<'_, str>`) on `Bound`, inherent session methods (`read_tag`, `read_tags`, `write_tag`, `write_tags`), backward-compatible readers and writers (`read_tag_values`, `read_f64`, `read_i32`, `read_bool`, `read_string`, `write`, `write_batch`), remote server discovery (`list_servers_on`, deprecated in favor of `ServerDiscovery::list_servers`), Layer 2 non-blocking subscription polling stream (`client.subscribe()`), and client-side channel sender management (`mpsc::Sender<ComRequest>`).
 - **Does NOT own**: Direct COM worker loop execution, unmanaged pointers, or in-apartment state (delegated across channels to `ComWorker`).
 - **Trait Interfaces**: `OpcProvider`.
 - **Mock Availability**: `MockOpcDaClient` (exported under `all(feature = "test-support", feature = "opc-da-backend")`).
@@ -166,8 +166,8 @@ opc-da-client/
 - **Mock Availability**: N/A (stateless helpers operating on Win32 COM interfaces).
 
 ### `com::worker`
-- **Owns**: Dedicated background COM MTA thread runner (`ComWorker`) structured as a lightweight request-dispatching facade coordinating private single-responsibility submodules:
-  - `com::worker::pool`: Connection cache management (`HashMap<ServerIdentifier, PooledServer<Server>>`), embedded active group caching on identical tag sets, synchronized cache eviction (purging invalid group handles and proxy state when connections drop), 5-second `failure_cooldowns` circuit breaker map, and reconnection dispatch (`dispatch_with_retry`).
+- **Owns**: Dedicated background COM MTA thread runner (`ComWorker`) utilizing a dual-tier `PriorityRequestQueue` (`VecDeque` for high and low priorities) ensuring immediate preemption of interactive reads/writes over background polling, structured as a lightweight request-dispatching facade coordinating private single-responsibility submodules:
+  - `com::worker::pool`: Connection cache management (`HashMap<ServerIdentifier, PooledServer<Server>>`), embedded active group caching on identical tag sets, synchronized cache eviction (purging invalid group handles and proxy state when connections drop), 5-second `failure_cooldowns` circuit breaker map bounded to `MAX_COOLDOWNS = 256` with LRU/expired eviction, and reconnection dispatch (`dispatch_with_retry`).
   - `com::worker::read`: Synchronous tag reading engine (`handle_read`) utilizing the shared `register_item_group` helper, in-place `TagValue` slot population, flat UTF-16 arena encoding, and per-item error preservation.
   - `com::worker::write`: Synchronous native batch tag writing engine (`handle_write_batch`, with `handle_write` delegating to it) utilizing the shared `register_item_group` helper and structured `WriteResult` error mapping.
   - `com::worker::browse`: Namespace exploration engine (`handle_browse`) supporting fast flat enumeration and recursive branch traversal protected by `BrowsePositionGuard`.
@@ -193,13 +193,13 @@ opc-da-client/
 ### `raw::memory`
 - **Owns**: Low-level RAII memory allocators and wrappers for unmanaged COM memory (`RemoteArray<T>`, `RemotePointer<T>`, `LocalPointer<T>`), guaranteeing zero leaks via `CoTaskMemFree` on `Drop`, move-only semantics, slice projections, and overflow-safe Win32 `FILETIME` conversion using quotient/remainder arithmetic.
 - **Does NOT own**: Domain types, COM interface dispatch, or higher-level business logic.
-- **Trait Interfaces**: `TryFromNative`, `TryToNative`.
+- **Trait Interfaces**: `TryFromNative`.
 - **Mock Availability**: N/A (tested via co-located unit tests).
 
 ### `raw::bridge`
 - **Owns**: Dormant C-struct bridge representations (`ItemDef`, `ItemResult`, `ItemState`), safe RAII blob guards (`ItemResultsBlobGuard`, `BlobGuard`), and conversions to native COM structs.
 - **Does NOT own**: Public domain models or COM apartment lifecycles.
-- **Trait Interfaces**: `IntoBridge`, `TryFromNative`.
+- **Trait Interfaces**: `TryFromNative`.
 - **Mock Availability**: N/A (internal FFI structures).
 
 ### `raw::bindings`
