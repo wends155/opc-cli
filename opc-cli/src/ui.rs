@@ -8,7 +8,7 @@
 //! status logs, and input widgets onto the terminal frame. It maps the state in [`App`]
 //! to visual elements using `ratatui`.
 
-use crate::app::{App, CurrentScreen};
+use crate::app::{App, CurrentScreen, ViewState};
 use opc_da_client::{OpcValueOptionExt, SystemTimeOptionExt};
 use ratatui::{
     Frame,
@@ -169,33 +169,8 @@ fn render_tag_list(f: &mut Frame, app: &mut App, area: Rect) {
         f.render_widget(search_bar, list_chunks[0]);
     }
 
-    let items: Vec<ListItem> = app
-        .view
-        .tags
-        .iter()
-        .enumerate()
-        .map(|(idx, t)| {
-            let checkbox = if app.view.is_selected(t) {
-                "[✓] "
-            } else {
-                "[ ] "
-            };
-
-            let is_match = app.search.search_mode && app.search.is_match(idx);
-            let style = if is_match {
-                Style::default().fg(Color::Yellow)
-            } else {
-                Style::default()
-            };
-
-            ListItem::new(Line::from(vec![
-                Span::raw(checkbox),
-                Span::styled(t, style),
-            ]))
-        })
-        .collect();
-
-    let title = if app.search.search_mode {
+    let search_mode = app.search.search_mode;
+    let title = if search_mode {
         format!(
             " Step 3: Browse Tags ({}/{} matches) ",
             app.search.search_matches.len(),
@@ -205,17 +180,45 @@ fn render_tag_list(f: &mut Frame, app: &mut App, area: Rect) {
         " Step 3: Browse Tags ".to_string()
     };
 
+    let search = &app.search;
+    let ViewState {
+        tags,
+        selected_tags,
+        list_state,
+        ..
+    } = &mut app.view;
+
+    let items = tags.iter().enumerate().map(|(idx, t)| {
+        let checkbox = if selected_tags.contains(t) {
+            "[✓] "
+        } else {
+            "[ ] "
+        };
+
+        let is_match = search_mode && search.is_match(idx);
+        let style = if is_match {
+            Style::default().fg(Color::Yellow)
+        } else {
+            Style::default()
+        };
+
+        ListItem::new(Line::from(vec![
+            Span::raw(checkbox),
+            Span::styled(t.as_str(), style),
+        ]))
+    });
+
     let list = List::new(items)
         .block(Block::default().borders(Borders::ALL).title(title))
         .highlight_style(Style::default().bg(Color::Green).fg(Color::Black))
         .highlight_symbol(" * ");
 
-    let list_area = if app.search.search_mode {
+    let list_area = if search_mode {
         list_chunks[1]
     } else {
         list_chunks[0]
     };
-    f.render_stateful_widget(list, list_area, &mut app.view.list_state);
+    f.render_stateful_widget(list, list_area, list_state);
 }
 
 fn render_tag_values(f: &mut Frame, app: &mut App, area: Rect) {

@@ -461,7 +461,6 @@ impl App {
                 KeyCode::Backspace => self.search_backspace(),
                 KeyCode::Tab => self.next_search_match(),
                 KeyCode::BackTab => self.prev_search_match(),
-                KeyCode::Char(' ') => self.toggle_tag_selection(),
                 KeyCode::Enter => {
                     self.exit_search_mode();
                     self.start_read_values();
@@ -621,14 +620,32 @@ impl App {
 
     /// Moves the active cursor selection backward by one row on list/table screens.
     pub fn select_prev(&mut self) {
-        if let Some(idx) = self.view.selected_index
-            && idx > 0
-        {
-            let new_idx = idx - 1;
-            self.view.selected_index = Some(new_idx);
-            self.view.list_state.select(Some(new_idx));
+        let count = match self.nav.current_screen {
+            CurrentScreen::ServerList => self.view.servers.len(),
+            CurrentScreen::TagList => self.view.tags.len(),
+            CurrentScreen::TagValues => self.view.tag_values.len(),
+            _ => 0,
+        };
+
+        if count == 0 {
+            return;
+        }
+
+        if let Some(idx) = self.view.selected_index {
+            if idx > 0 {
+                let new_idx = idx - 1;
+                self.view.selected_index = Some(new_idx);
+                self.view.list_state.select(Some(new_idx));
+                if self.nav.current_screen == CurrentScreen::TagValues {
+                    self.view.table_state.select(Some(new_idx));
+                }
+            }
+        } else {
+            let last_idx = count - 1;
+            self.view.selected_index = Some(last_idx);
+            self.view.list_state.select(Some(last_idx));
             if self.nav.current_screen == CurrentScreen::TagValues {
-                self.view.table_state.select(Some(new_idx));
+                self.view.table_state.select(Some(last_idx));
             }
         }
     }
@@ -933,7 +950,9 @@ impl App {
                 self.refresher.last_read_time = Some(std::time::Instant::now());
             }
             PollOutcome::Ready(Err(e)) => {
-                self.log_transition(CurrentScreen::TagList, "read_result_error");
+                if self.nav.current_screen == CurrentScreen::Loading {
+                    self.log_transition(CurrentScreen::TagList, "read_result_error");
+                }
                 tracing::error!(error = %e, error_chain = ?e, "Read tag values failed");
                 let msg = match e.friendly_hint() {
                     Some(h) => format!("Error reading values: {h}"),
@@ -942,7 +961,9 @@ impl App {
                 self.add_message(msg);
             }
             PollOutcome::Closed => {
-                self.log_transition(CurrentScreen::TagList, "read_result_closed");
+                if self.nav.current_screen == CurrentScreen::Loading {
+                    self.log_transition(CurrentScreen::TagList, "read_result_closed");
+                }
                 tracing::error!(
                     "Read values background task terminated unexpectedly (sender dropped)"
                 );
@@ -1048,6 +1069,7 @@ impl App {
     pub fn poll_write_result(&mut self) {
         match poll_channel(&mut self.tasks.write_result_rx) {
             PollOutcome::Ready(Ok(result)) => {
+                self.dialog.clear();
                 match &result.status {
                     Ok(()) => {
                         tracing::info!(tag = %result.tag_id, "poll_write_result: write succeeded");
@@ -1059,15 +1081,22 @@ impl App {
                     }
                 }
                 self.log_transition(CurrentScreen::TagValues, "write_result_success");
-                // Trigger a refresh to show the new value
-                self.start_read_values();
+                // Trigger an immediate refresh to show the new value without screen guard
+                if let Some(server) = self.refresher.server.clone() {
+                    let tag_ids = self.refresher.tag_ids.clone();
+                    if !tag_ids.is_empty() {
+                        self.spawn_read_task(server, tag_ids);
+                    }
+                }
             }
             PollOutcome::Ready(Err(e)) => {
+                self.dialog.clear();
                 tracing::error!(error = %e, "Write tag values failed");
                 self.add_message(format!("Write error: {e:#}"));
                 self.log_transition(CurrentScreen::TagValues, "write_result_error");
             }
             PollOutcome::Closed => {
+                self.dialog.clear();
                 self.log_transition(CurrentScreen::TagValues, "write_result_closed");
                 tracing::error!("Write background task terminated unexpectedly");
                 self.add_message("Write task terminated unexpectedly".into());
@@ -1224,8 +1253,7 @@ impl App {
         let is_bool = self
             .view
             .tag_values
-            .iter()
-            .find(|tv| tv.tag_id == tag_id)
+            .get(tag_id)
             .is_some_and(|tv| matches!(tv.value(), Some(OpcValue::Bool(_))));
 
         if is_bool {
@@ -1309,6 +1337,7 @@ pub fn test_app() -> App {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crossterm::event::{KeyEvent, KeyEventKind, KeyEventState, KeyModifiers};
     use mockall::predicate::*;
     use opc_da_client::{MockOpcProvider, OpcError, OpcQuality, OpcResult, TagValue, WriteResult};
 
@@ -2161,5 +2190,115 @@ mod tests {
             state: KeyEventState::empty(),
         };
         assert_eq!(app.handle_key(key_release), AppAction::Continue);
+    }
+
+    #[tokio::test]
+    async fn test_write_completion_triggers_immediate_read() {
+        let mut app = test_app();
+        app.nav.current_screen = CurrentScreen::TagValues;
+        app.refresher.server = Some("Matrikon.OPC.Simulation.1".into());
+        app.refresher.tag_ids = vec!["Random.Real8".into()];
+
+        let (tx, rx) = oneshot::channel();
+        app.tasks.write_result_rx = Some(rx);
+
+        let ok_res = WriteResult::success("Random.Real8");
+        let _ = tx.send(Ok(ok_res));
+
+        app.poll_write_result();
+        assert!(
+            app.tasks.read_result_rx.is_some(),
+            "write completion must trigger immediate read task"
+        );
+    }
+
+    #[test]
+    fn test_write_completion_clears_dialog_state() {
+        let mut app = test_app();
+        app.nav.current_screen = CurrentScreen::TagValues;
+        app.dialog.write_tag_id = Some("Random.Real8".into());
+        app.dialog.write_value_input = "42.0".into();
+
+        let (tx, rx) = oneshot::channel();
+        app.tasks.write_result_rx = Some(rx);
+
+        let ok_res = WriteResult::success("Random.Real8");
+        let _ = tx.send(Ok(ok_res));
+
+        app.poll_write_result();
+        assert!(app.dialog.write_tag_id.is_none());
+        assert!(app.dialog.write_value_input.is_empty());
+    }
+
+    #[test]
+    fn test_read_error_does_not_eject_from_tag_values() {
+        let mut app = test_app();
+        app.nav.current_screen = CurrentScreen::TagValues;
+
+        let (tx, rx) = oneshot::channel();
+        app.tasks.read_result_rx = Some(rx);
+
+        let _ = tx.send(Err(OpcError::Connection("Read failed".into())));
+
+        app.poll_read_result();
+        assert_eq!(
+            app.nav.current_screen,
+            CurrentScreen::TagValues,
+            "read error during refresh must not eject user from TagValues"
+        );
+    }
+
+    #[test]
+    fn test_select_prev_initializes_selection() {
+        let mut app = test_app();
+        app.nav.current_screen = CurrentScreen::TagList;
+        app.view.tags = vec!["Tag1".into(), "Tag2".into(), "Tag3".into()];
+        app.view.selected_index = None;
+
+        app.select_prev();
+        assert_eq!(app.view.selected_index, Some(2));
+        assert_eq!(app.view.list_state.selected(), Some(2));
+    }
+
+    #[test]
+    fn test_search_mode_space_bar_inserts_char() {
+        let mut app = test_app();
+        app.nav.current_screen = CurrentScreen::TagList;
+        app.view.tags = vec!["Tag 1".into(), "Tag 2".into()];
+        app.search.search_mode = true;
+        app.search.search_query = "Tag".into();
+
+        let space_key = KeyEvent {
+            code: KeyCode::Char(' '),
+            modifiers: KeyModifiers::empty(),
+            kind: KeyEventKind::Press,
+            state: KeyEventState::empty(),
+        };
+        let _ = app.handle_key(space_key);
+
+        assert_eq!(app.search.search_query, "Tag ");
+        assert!(
+            app.view.selected_tags.is_empty(),
+            "space in search mode must not toggle tag selection"
+        );
+    }
+
+    #[test]
+    fn test_resolve_write_value_case_insensitive() {
+        let mut app = test_app();
+        let tv = TagValue::new(
+            "Device.PumpRunning",
+            Some(OpcValue::Bool(false)),
+            opc_da_client::OpcQuality::GOOD,
+            None,
+        );
+        app.view.tag_values = opc_da_client::TagValues::new(vec![tv]);
+
+        let resolved = app.resolve_write_value("device.pumprunning", "1");
+        assert_eq!(
+            resolved,
+            OpcValue::Bool(true),
+            "resolve_write_value must be case-insensitive using TagValues::get"
+        );
     }
 }
