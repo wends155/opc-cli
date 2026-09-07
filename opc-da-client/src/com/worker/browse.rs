@@ -154,7 +154,7 @@ fn browse_recursive<S: ConnectedServer>(
     }
 
     if !leaf_ids.is_empty() {
-        collector.push_batch(leaf_ids);
+        let _ = collector.push_batch(leaf_ids);
         if collector.is_cancelled() || collector.is_full() {
             return Ok(());
         }

@@ -259,6 +259,44 @@ fn is_high_priority(req: &ComRequest) -> bool {
     )
 }
 
+/// Two-tier priority request queue for the dedicated COM worker thread.
+/// High priority (Read/Write I/O) requests are always dispatched before low priority (Browse/List) requests.
+pub(crate) struct PriorityRequestQueue {
+    high: std::collections::VecDeque<ComRequest>,
+    low: std::collections::VecDeque<ComRequest>,
+}
+
+impl PriorityRequestQueue {
+    pub(crate) fn new() -> Self {
+        Self {
+            high: std::collections::VecDeque::new(),
+            low: std::collections::VecDeque::new(),
+        }
+    }
+
+    pub(crate) fn push(&mut self, req: ComRequest) {
+        if is_high_priority(&req) {
+            self.high.push_back(req);
+        } else {
+            self.low.push_back(req);
+        }
+    }
+
+    pub(crate) fn pop_next(&mut self) -> Option<ComRequest> {
+        self.high.pop_front().or_else(|| self.low.pop_front())
+    }
+
+    pub(crate) fn is_empty(&self) -> bool {
+        self.high.is_empty() && self.low.is_empty()
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn clear(&mut self) {
+        self.high.clear();
+        self.low.clear();
+    }
+}
+
 /// Helper to extract panic message string from catch_unwind payload.
 fn extract_panic_message(payload: &(dyn std::any::Any + Send)) -> String {
     if let Some(s) = payload.downcast_ref::<&str>() {
@@ -294,42 +332,28 @@ fn run_worker_thread<C, I>(
     };
 
     let mut pool: pool::ConnectionPool<C::Server> = pool::ConnectionPool::new();
-    let mut low_priority_queue: std::collections::VecDeque<ComRequest> =
-        std::collections::VecDeque::new();
+    let mut queue = PriorityRequestQueue::new();
 
     loop {
         let loop_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             loop {
-                // Determine next request with priority favoring Read/Write over Browse/List
-                let next_req = if low_priority_queue.is_empty() {
-                    rx.blocking_recv()
-                } else {
-                    match rx.try_recv() {
-                        Ok(req) => Some(req),
-                        Err(_) => low_priority_queue.pop_front(),
-                    }
-                };
+                // If queue is empty, block waiting for the next incoming request
+                if queue.is_empty() {
+                    let Some(first) = rx.blocking_recv() else {
+                        break;
+                    };
+                    queue.push(first);
+                }
 
-                let Some(req) = next_req else {
+                // Opportunistically drain any pending channel items into priority-classified queues
+                while let Ok(pending) = rx.try_recv() {
+                    queue.push(pending);
+                }
+
+                // Always serve high-priority before low-priority
+                let Some(req) = queue.pop_next() else {
                     break;
                 };
-
-                // If this is a low-priority request, check if any high-priority request is waiting in rx
-                if !is_high_priority(&req) {
-                    let mut high_prio = None;
-                    while let Ok(candidate) = rx.try_recv() {
-                        if is_high_priority(&candidate) && high_prio.is_none() {
-                            high_prio = Some(candidate);
-                        } else {
-                            low_priority_queue.push_back(candidate);
-                        }
-                    }
-                    if let Some(hp) = high_prio {
-                        low_priority_queue.push_back(req);
-                        handle_request(hp, connector, &mut pool);
-                        continue;
-                    }
-                }
 
                 handle_request(req, connector, &mut pool);
             }

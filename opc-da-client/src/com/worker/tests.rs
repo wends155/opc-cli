@@ -700,3 +700,71 @@ async fn test_worker_native_write_batch_via_com_request() {
     assert_eq!(results[1].tag_id, "Random.Real8");
     assert!(results[1].is_success());
 }
+
+#[test]
+fn test_worker_priority_queue_preempts_low_priority() {
+    let mut q = PriorityRequestQueue::new();
+    let (tx1, _rx1) = oneshot::channel();
+    let (tx2, _rx2) = oneshot::channel();
+    let (tx3, _rx3) = oneshot::channel();
+
+    // Push low, then high, then another low
+    q.push(ComRequest::ListServers {
+        host: "localhost".into(),
+        reply: tx1,
+    });
+    q.push(ComRequest::ReadTagValues {
+        endpoint: OpcServerEndpoint::from("Server1"),
+        tags: TagBatch::from_str_lenient("Tag1"),
+        reply: tx2,
+    });
+    q.push(ComRequest::BrowseTags {
+        endpoint: OpcServerEndpoint::from("Server1"),
+        collector: TagCollector::new(10),
+        reply: tx3,
+    });
+
+    // Next must be high priority ReadTagValues!
+    let next = q.pop_next().expect("should have item");
+    assert!(matches!(next, ComRequest::ReadTagValues { .. }));
+
+    // Subsequent items must be the low priority ones in FIFO order
+    let next2 = q.pop_next().expect("should have item");
+    assert!(matches!(next2, ComRequest::ListServers { .. }));
+
+    let next3 = q.pop_next().expect("should have item");
+    assert!(matches!(next3, ComRequest::BrowseTags { .. }));
+
+    assert!(q.pop_next().is_none());
+}
+
+#[test]
+fn test_worker_priority_queue_drains_fifo_within_tier() {
+    let mut q = PriorityRequestQueue::new();
+    let (tx1, _rx1) = oneshot::channel();
+    let (tx2, _rx2) = oneshot::channel();
+
+    q.push(ComRequest::ReadTagValues {
+        endpoint: OpcServerEndpoint::from("Server1"),
+        tags: TagBatch::from_str_lenient("Tag1"),
+        reply: tx1,
+    });
+    q.push(ComRequest::WriteTagValue {
+        endpoint: OpcServerEndpoint::from("Server1"),
+        tag_id: "Tag2".into(),
+        value: OpcValue::Int(10),
+        reply: tx2,
+    });
+
+    let first = q.pop_next().unwrap();
+    assert!(matches!(first, ComRequest::ReadTagValues { .. }));
+    let second = q.pop_next().unwrap();
+    assert!(matches!(second, ComRequest::WriteTagValue { .. }));
+}
+
+#[test]
+fn test_worker_priority_queue_empty_pop_returns_none() {
+    let mut q = PriorityRequestQueue::new();
+    assert!(q.is_empty());
+    assert!(q.pop_next().is_none());
+}
