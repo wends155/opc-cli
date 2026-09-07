@@ -26,6 +26,15 @@ pub fn variant_to_string(variant: &VARIANT) -> String {
     variant_to_string_bounded(variant, 0)
 }
 
+/// Safely computes the element count and capped display count from SafeArray 1-D bounds.
+/// Widens bounds to `i64` to prevent signed overflow on malicious or extreme bounds.
+#[inline]
+pub(crate) fn compute_safearray_bounds(lb: i32, ub: i32) -> (usize, usize) {
+    let count = (i64::from(ub) - i64::from(lb) + 1).max(0) as usize;
+    let display_count = count.min(20);
+    (count, display_count)
+}
+
 #[allow(clippy::too_many_lines)]
 fn variant_to_string_bounded(variant: &VARIANT, depth: usize) -> String {
     if depth >= MAX_VARIANT_RECURSION_DEPTH {
@@ -51,21 +60,22 @@ fn variant_to_string_bounded(variant: &VARIANT, depth: usize) -> String {
             }
             // For 1-D arrays compute count; for multi-dim just show dims
             if dims == 1 {
-                let lb = SafeArrayGetLBound(parray, 1).unwrap_or(0);
-                let ub = SafeArrayGetUBound(parray, 1).unwrap_or(-1);
-                let count = (ub - lb + 1).max(0);
+                let Ok(lb) = SafeArrayGetLBound(parray, 1) else {
+                    return "Array[?]".to_string();
+                };
+                let Ok(ub) = SafeArrayGetUBound(parray, 1) else {
+                    return "Array[?]".to_string();
+                };
+                let (count, display_count) = compute_safearray_bounds(lb, ub);
                 let mut elements = Vec::new();
-                let display_count = count.min(20);
 
                 if base_type == windows::Win32::System::Variant::VT_VARIANT.0 {
                     let mut data_ptr: *mut std::ffi::c_void = std::ptr::null_mut();
                     if SafeArrayAccessData(parray, &raw mut data_ptr).is_ok() {
-                        #[allow(clippy::cast_sign_loss)]
                         let vars =
-                            std::slice::from_raw_parts(data_ptr as *const VARIANT, count as usize);
+                            std::slice::from_raw_parts(data_ptr as *const VARIANT, display_count);
                         for i in 0..display_count {
-                            #[allow(clippy::cast_sign_loss)]
-                            elements.push(variant_to_string_bounded(&vars[i as usize], depth + 1));
+                            elements.push(variant_to_string_bounded(&vars[i], depth + 1));
                         }
                         let _ = SafeArrayUnaccessData(parray);
                     }
@@ -972,5 +982,19 @@ mod tests {
             decode_scalar_variant(v_str.as_raw()),
             Some(OpcValue::String("hello".into()))
         );
+    }
+
+    #[test]
+    fn test_safearray_bounds_overflow_safe() {
+        let (count, display) = compute_safearray_bounds(-1, i32::MAX);
+        assert_eq!(count, (i64::from(i32::MAX) + 2) as usize);
+        assert_eq!(display, 20);
+    }
+
+    #[test]
+    fn test_safearray_bounds_inverted_returns_zero() {
+        let (count, display) = compute_safearray_bounds(5, 0);
+        assert_eq!(count, 0);
+        assert_eq!(display, 0);
     }
 }

@@ -760,22 +760,10 @@ impl LocalPointer<Vec<u16>> {
 
 // ── Native Conversion Traits ────────────────────────────────────────
 
-pub(crate) trait IntoBridge<Bridge> {
-    fn into_bridge(self) -> Bridge;
-}
-
-pub(crate) trait ToNative<Native> {
-    fn to_native(&self) -> Native;
-}
-
 pub(crate) trait FromNative<Native> {
     fn from_native(native: &Native) -> Self
     where
         Self: Sized;
-}
-
-pub(crate) trait TryToNative<Native> {
-    fn try_to_native(&self) -> windows::core::Result<Native>;
 }
 
 pub(crate) trait TryFromNative<Native> {
@@ -800,29 +788,6 @@ impl<Native, T: FromNative<Native>> TryFromNative<Native> for T {
     }
 }
 
-impl<Native, T: ToNative<Native>> TryToNative<Native> for T {
-    fn try_to_native(&self) -> windows::core::Result<Native> {
-        Ok(self.to_native())
-    }
-}
-
-impl<Bridge, B: IntoBridge<Bridge>> IntoBridge<Vec<Bridge>> for Vec<B> {
-    fn into_bridge(self) -> Vec<Bridge> {
-        self.into_iter().map(IntoBridge::into_bridge).collect()
-    }
-}
-
-impl<Bridge, B: IntoBridge<Bridge> + Clone> IntoBridge<Vec<Bridge>> for &[B] {
-    fn into_bridge(self) -> Vec<Bridge> {
-        self.iter().cloned().map(IntoBridge::into_bridge).collect()
-    }
-}
-
-impl<Native, T: TryToNative<Native>> TryToNative<Vec<Native>> for Vec<T> {
-    fn try_to_native(&self) -> windows::core::Result<Vec<Native>> {
-        self.iter().map(TryToNative::try_to_native).collect()
-    }
-}
 
 impl TryFromNative<RemoteArray<windows::core::HRESULT>> for Vec<windows::core::Result<()>> {
     fn try_from_native(
@@ -906,50 +871,7 @@ macro_rules! try_from_native {
     };
 }
 
-impl TryToNative<windows::Win32::Foundation::FILETIME> for std::time::SystemTime {
-    fn try_to_native(&self) -> windows::core::Result<windows::Win32::Foundation::FILETIME> {
-        let duration_since_unix_epoch =
-            self.duration_since(std::time::UNIX_EPOCH).map_err(|_| {
-                windows::core::Error::new(
-                    windows::Win32::Foundation::E_INVALIDARG,
-                    "SystemTime is before UNIX_EPOCH",
-                )
-            })?;
 
-        const WINDOWS_TO_UNIX_EPOCH_SECS: u64 = 11_644_473_600;
-        let total_secs = duration_since_unix_epoch
-            .as_secs()
-            .checked_add(WINDOWS_TO_UNIX_EPOCH_SECS)
-            .ok_or_else(|| {
-                windows::core::Error::new(
-                    windows::Win32::Foundation::E_INVALIDARG,
-                    "SystemTime overflowed FILETIME bounds",
-                )
-            })?;
-
-        let intervals_from_secs = total_secs.checked_mul(10_000_000).ok_or_else(|| {
-            windows::core::Error::new(
-                windows::Win32::Foundation::E_INVALIDARG,
-                "SystemTime overflowed FILETIME bounds",
-            )
-        })?;
-
-        let intervals_from_nanos = (duration_since_unix_epoch.subsec_nanos() as u64) / 100;
-        let ft = intervals_from_secs
-            .checked_add(intervals_from_nanos)
-            .ok_or_else(|| {
-                windows::core::Error::new(
-                    windows::Win32::Foundation::E_INVALIDARG,
-                    "SystemTime overflowed FILETIME bounds",
-                )
-            })?;
-
-        Ok(windows::Win32::Foundation::FILETIME {
-            dwLowDateTime: ft as u32,
-            dwHighDateTime: (ft >> 32) as u32,
-        })
-    }
-}
 
 impl TryFromNative<windows::core::PWSTR> for String {
     fn try_from_native(native: &windows::core::PWSTR) -> windows::core::Result<Self> {

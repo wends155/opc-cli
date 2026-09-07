@@ -4,147 +4,112 @@ description: On-demand code review with focused lenses (any time, advisory)
 
 # Review Workflow
 
-This workflow provides **qualitative code review** — the kind that catches logic
-bugs, design smells, and performance issues that compliance checklists miss.
+This workflow provides **qualitative code review** — the kind that catches logic bugs, design smells, security vulnerabilities, and performance bottlenecks that compliance checklists miss.
 
 > [!NOTE]
-> `/review` is **advisory** — it produces findings with severity levels,
-> NOT a pass/fail gate. For formal compliance checks, use `/audit`.
+> `/review` is **advisory** — it produces prioritized findings with severity levels, NOT a pass/fail gate. For formal compliance checks, use `/audit`.
+
+## Workflow Persona
+
+When executing this workflow, adopt the mindset of a **Lead Code Review Architect** coordinating a multi-lens review pipeline. Your role is to parse the review scope, dispatch specialized analysis subagents per lens, and synthesize their per-lens reports into a comprehensive, unified review. You delegate ALL codebase investigation — grep searches, MCP tool calls, file reading, pattern scanning — to specialized subagents running on efficient models. You focus your reasoning exclusively on cross-lens synthesis, severity calibration, deduplication, and actionable prioritization. You do NOT investigate the codebase directly.
 
 ## Trigger
 
 `/review [scope] [lens]`
 
 | Argument | Options | Default |
-|----------|---------|---------|
+|:---|:---|:---|
 | `scope` | File path, `HEAD~N`, `staged`, `all` | `staged` |
 | `lens` | `logic`, `design`, `perf`, `security`, `api`, `all` | `all` |
 
 **Examples:**
-- `/review` — review staged changes, all lenses
+- `/review` — review staged changes across all lenses
 - `/review src/server.rs design` — design smell review of one file
 - `/review HEAD~3 logic` — logic review of last 3 commits
-- `/review all security` — security-focused review of entire codebase
+- `/review all security` — security-focused sweep of the entire codebase
 
 ## Prerequisites
 
 > [!IMPORTANT]
-> **Execution Discipline:** You **MUST** use the `view_file` tool to read all listed rule files (e.g., `.agents/rules/...`) before starting Step 1. Do not rely on internal memory.
+> **Execution Discipline:** You **MUST** use the `view_file` tool to read all listed prerequisite files before starting Phase 0. Do not rely on internal memory.
 
-- Read `architecture.md` and `.agents/rules/coding-standard.md` (if present) for governance core rules. Next, check its Language Dispatch Table to determine which language skill files from `.gemini/skills/` to read based on the task's language.
-- Confirm you are operating as the **Architect** (no code edits).
-
-## Steps
-
-### 1. Parse Scope & Lens
-
-Determine what code to review and which lens to apply:
-
-- **File path** → read the file(s) directly.
-- **`HEAD~N`** → run `git log -n N --oneline` to find the boundary commit hash, then `git diff <hash> HEAD` using the explicit hash (the `~` character is banned by the IDE).
-- **`staged`** → `git diff --cached --name-only` for staged files.
-- **`all`** → full codebase scan (use Narsil `get_project_structure` if available).
-
-### 2. Gather Code
-
-Read the scoped files. For diff-based scopes, focus on changed regions but
-read enough surrounding context to understand the logic.
-
-// turbo
-> [!TIP]
-> For diff-based scopes, run:
-// turbo
-> - `git diff --cached --name-only` (staged)
-// turbo
-> - `git log -n N --name-only --oneline` (recent commits — `~` is banned by IDE; use explicit hashes for diffs)
-
-### 3. Apply Review Lenses
-
-Apply the selected lens (or all lenses). Each lens has specific questions to answer.
-
----
-
-#### 🔍 Logic Lens
-
-*Does the code do what it's supposed to do?*
-
-- [ ] Algorithm correctness — are there off-by-one errors, edge cases, or logic gaps?
-- [ ] Control flow — are all branches reachable? Are early returns used appropriately?
-- [ ] Error paths — what happens on failure? Are errors propagated or swallowed?
-- [ ] Boundary conditions — empty inputs, max values, concurrent access?
-- [ ] State management — are invariants maintained across mutations?
-
-**MCP tools:** `get_control_flow`, `get_data_flow`, `find_dead_code`, `find_uninitialized`
-
----
-
-#### 🏗️ Design Lens
-
-*Is the code well-structured and maintainable?*
-
-- [ ] **Coupling** — does this module depend on too many others? Would a change here ripple?
-- [ ] **Cohesion** — does each module/struct have a single, clear responsibility?
-- [ ] **SOLID violations** — Single Responsibility, Open/Closed, Liskov, Interface Segregation, Dependency Inversion?
-- [ ] **Mockability** — are dependencies behind traits? Can this be tested in isolation?
-- [ ] **Abstraction level** — is the code at the right level of abstraction? Too granular? Too broad?
-- [ ] **God objects** — any struct/module doing too much?
-- [ ] **Feature envy** — does a function mostly operate on another struct's data?
-
-**MCP tools:** `get_import_graph`, `find_circular_imports`, `get_dependencies`, `find_references`
-
----
-
-#### ⚡ Performance Lens
-
-*Are there unnecessary costs?*
-
-- [ ] **Allocations** — unnecessary `clone()`, `to_string()`, `collect()` where iterators suffice?
-- [ ] **Complexity** — O(n²) loops where O(n) or O(n log n) is possible?
-- [ ] **Lock contention** — holding locks across async boundaries or I/O?
-- [ ] **N+1 queries** — database calls in loops?
-- [ ] **Unbounded growth** — collections that grow without limits?
-- [ ] **Hot path** — is the critical path optimized? Are cold paths acceptably slow?
-
-**MCP tools:** `get_data_flow`, `search_code` for `.clone()`, `find_similar_code`
-
----
-
-#### 🔒 Security Lens
-
-*Could this be exploited?*
-
-- [ ] **Input validation** — is all external input validated/sanitized?
-- [ ] **Auth boundaries** — are authorization checks in place for sensitive operations?
-- [ ] **Injection** — SQL, command, path traversal risks?
-- [ ] **Secrets** — credentials in code, logs, or error messages?
-- [ ] **Trust boundaries** — is data from untrusted sources treated differently?
-- [ ] **Cryptography** — are secure algorithms and random sources used?
-
-**MCP tools:** `scan_security`, `check_owasp_top10`, `check_cwe_top25`, `find_injection_vulnerabilities`, `get_taint_sources`
-
----
-
-#### 📐 API Lens
-
-*Is the public interface ergonomic and correct?*
-
-- [ ] **Naming** — are function/type names intuitive and consistent?
-- [ ] **Error types** — are errors informative? Can the caller distinguish failure modes?
-- [ ] **Builder pattern** — are complex constructors using builders where appropriate?
-- [ ] **Type safety** — are newtypes used to prevent primitive obsession?
-- [ ] **Documentation** — do public items have doc comments with examples?
-- [ ] **Backwards compatibility** — would this change break existing callers?
-
-**MCP tools:** `find_symbols`, `get_symbol_definition`, `get_export_map`, `find_symbol_usages`
-
----
-
-### 4. Produce Review Report
-
-Structure findings as:
+- Read the relevant lens skill(s) from `.gemini/skills/` (or `global/skills/`):
+  - `.gemini/skills/review-logic/SKILL.md` (Logic Lens)
+  - `.gemini/skills/review-design/SKILL.md` (Design Lens)
+  - `.gemini/skills/review-perf/SKILL.md` (Performance Lens)
+  - `.gemini/skills/review-security/SKILL.md` (Security Lens)
+  - `.gemini/skills/review-api/SKILL.md` (API Lens)
+- Read `architecture.md` and `.agents/rules/coding-standard.md` (if present) for project conventions and Language Dispatch Table.
+- Confirm you are operating as the **Architect** (no direct code edits).
 
 > [!NOTE]
-> Once the artifact is written, you **MUST** provide a clickable markdown link to it in your final chat response (e.g., `[Review Report](file:///absolute/path/to/review_report.md)`).
+> **Graceful Fallback**: When `invoke_subagent` is unavailable (single-agent mode), the Architect executes all lens analysis inline — applying the lens checklists directly rather than delegating to subagents. The phase structure remains the same; only the executor changes.
+
+---
+
+## Phases
+
+### Phase 0: Parse Scope, Lens & Tier
+
+Determine what code to review, which lenses to apply, and the execution tier:
+
+1. **Scope Parsing:**
+   - **File path** → read target file path(s).
+   - **`HEAD~N`** → run `git log -n N --oneline` to find the boundary commit hash, then diff against explicit hash (`git diff <hash> HEAD`).
+   - **`staged`** → `git diff --cached --name-only` for staged files.
+   - **`all`** → full codebase scan.
+
+2. **Lens Selection:**
+   - Single lens: `logic`, `design`, `perf`, `security`, or `api`.
+   - `all` → all 5 lenses active.
+
+3. **Scope Tier Decision:**
+   - **S-scope**: 1 file + 1 lens → execute inline (no subagent dispatch overhead).
+   - **M-scope**: few files + specific lens(es) → dispatch 1–2 specialized subagents.
+   - **L-scope**: many files / `all` lenses → dispatch up to 5 specialized subagents in parallel.
+
+### Phase 1: Gather Scope Context
+
+Collect the scoped files and diffs to provide clear boundaries for analysis:
+- For staged diffs: run `git diff --cached`
+- For commit diffs: run `git diff <hash> HEAD`
+- For specific files: identify file paths and verify existence
+- If `/review` was triggered following an `/issue`, `/feature`, or `/brainstorm` workflow, extract relevant context from the preceding report to avoid re-investigation.
+
+### Phase 2: Dispatch Lens Subagents
+
+When running in **S-scope**, skip subagent dispatch and evaluate the lens inline.
+
+For **M-scope** and **L-scope**, delegate analysis using the respective standalone review skills:
+1. For each active lens, define its specialized subagent via `define_subagent` per its skill:
+   - 🔍 `review-logic` → `review_logic` (Senior Software Correctness Engineer)
+   - 🏗️ `review-design` → `review_design` (Principal Software Architect)
+   - ⚡ `review-perf` → `review_perf` (Senior Performance Engineer)
+   - 🔒 `review-security` → `review_security` (Senior Application Security Engineer)
+   - 📐 `review-api` → `review_api` (Senior API Design Architect)
+2. Announce subagent models per `GEMINI.md §10`:
+   > 🤖 Spawning subagent **[Role]** with model: `flash` (Gemini 3.8 Flash High)
+3. Invoke each subagent in parallel with the scoped code, checklist questions, and report template instruction.
+4. Stop calling tools and wait for all subagents to complete their analysis.
+
+### Phase 3: Architect Synthesis
+
+Once all per-lens reports are returned:
+1. **Cross-Lens Correlation:** Identify systemic patterns or code hotspots flagged across multiple lenses (e.g., a function flagged for both logic edge cases and performance allocations).
+2. **Severity Calibration:** Normalize severities across reports to ensure uniform judgment:
+   - 🔴 **Critical**: Likely bug, exploit path, or data corruption risk
+   - 🟠 **Major**: Architecture, maintenance, or scaling blocker
+   - 🟡 **Minor**: Non-blocking optimization or ergonomic improvement
+   - ⚪ **Nitpick**: Minor naming, formatting, or style preference
+3. **Deduplication:** Consolidate redundant observations across lenses into cohesive findings.
+4. **Prioritization:** Order findings by severity (Critical first) with concrete, actionable suggestions.
+
+### Phase 4: Produce Unified Review Report
+
+Format the final review as a structured report:
+
+> [!NOTE]
+> Once the artifact is written, you **MUST** provide a clickable markdown link to it in your chat response (e.g., `[Review Report](file:///absolute/path/to/review_report.md)`).
 
 ```markdown
 # Review Report
@@ -152,17 +117,19 @@ Structure findings as:
 **Scope:** [files/diff reviewed]
 **Lens:** [applied lens(es)]
 **Date:** [date]
+**Review Model:** Subagent-orchestrated (N lens agents dispatched)
 
 ## Findings
 
 ### [Severity] [Category] — [file:line] — [one-line summary]
 **Detail:** [explanation]
-**Suggestion:** [what to consider]
+**Suggestion:** [actionable improvement with code snippet if applicable]
+**Source Lens:** [which specialized subagent identified this]
 ```
 
-**Severity levels:**
+**Severity Scale:**
 | Level | Meaning |
-|-------|---------|
+|:---|:---|
 | 🔴 Critical | Likely bug, security hole, or data loss risk |
 | 🟠 Major | Design problem that will cause maintenance pain |
 | 🟡 Minor | Improvement opportunity, non-urgent |
@@ -170,24 +137,26 @@ Structure findings as:
 
 **Categories:** Logic, Design, Performance, Security, API, Readability
 
-### 5. Pause for Discussion
+### Phase 5: Pause for Discussion
 
-End the report with:
+End the review response with:
 
 > 📋 **Review Complete.**
 > These findings are advisory — no action is required.
 > You can:
 > - **Discuss** specific findings
 > - **Plan** to address Critical/Major findings via `/plan-making`
+> - **Re-run** a specific lens with deeper scope
 > - **Dismiss** findings you disagree with
+
+---
 
 ## Rules
 
 1. **No code edits** — this is investigation-only.
 2. **Advisory, not mandatory** — findings are suggestions, not compliance failures.
 3. **Don't duplicate `/audit`** — skip compliance checklists (fmt, clippy, test pass/fail). Focus on qualitative assessment.
-4. **Use MCP tools** when available for deeper analysis.
+4. **Use MCP tools** — subagents leverage Narsil MCP tools for deep AST and graph analysis.
 5. **Stay scoped** — review only what was asked. Don't expand to unrelated code.
 6. **Be constructive** — every finding should include a suggestion, not just a complaint.
-
-
+7. **Architect synthesizes, subagents investigate** — when subagents are available, delegate ALL codebase research to specialized lens subagents running on efficient models.

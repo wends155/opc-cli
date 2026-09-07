@@ -106,11 +106,6 @@ impl<T> From<std::sync::PoisonError<T>> for OpcError {
     }
 }
 
-impl From<tokio::time::error::Elapsed> for OpcError {
-    fn from(_: tokio::time::error::Elapsed) -> Self {
-        Self::Timeout(Duration::ZERO)
-    }
-}
 
 impl From<windows::core::HRESULT> for OpcError {
     fn from(hr: windows::core::HRESULT) -> Self {

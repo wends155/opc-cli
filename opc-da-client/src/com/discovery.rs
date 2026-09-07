@@ -161,6 +161,36 @@ fn open_clsid_key(
     )
 }
 
+/// Validates the registry value type and formats the extracted string.
+/// Strictly admits only `REG_SZ` and `REG_EXPAND_SZ`.
+#[inline]
+pub(crate) fn format_registry_string(
+    val_type: windows::Win32::System::Registry::REG_VALUE_TYPE,
+    raw: &str,
+) -> Option<String> {
+    use windows::Win32::System::Registry::{REG_EXPAND_SZ, REG_SZ};
+    match val_type {
+        REG_SZ => {
+            let trimmed = raw.trim();
+            if trimmed.is_empty() {
+                None
+            } else {
+                Some(trimmed.to_string())
+            }
+        }
+        REG_EXPAND_SZ => {
+            let expanded = expand_environment_string(raw);
+            let trimmed = expanded.trim();
+            if trimmed.is_empty() {
+                None
+            } else {
+                Some(trimmed.to_string())
+            }
+        }
+        _ => None,
+    }
+}
+
 fn read_string_from_key(target: windows::Win32::System::Registry::HKEY) -> Option<String> {
     use windows::Win32::Foundation::{ERROR_MORE_DATA, ERROR_SUCCESS};
     use windows::Win32::System::Registry::{
@@ -210,7 +240,10 @@ fn read_string_from_key(target: windows::Win32::System::Registry::HKEY) -> Optio
             )
         };
 
-        if status == ERROR_SUCCESS && dynamic_len > 1 {
+        if status == ERROR_SUCCESS
+            && dynamic_len > 1
+            && (val_type == REG_SZ || val_type == REG_EXPAND_SZ)
+        {
             let valid_u16_count = (dynamic_len as usize) / std::mem::size_of::<u16>();
             let val =
                 String::from_utf16_lossy(&dynamic_buf[..valid_u16_count.min(dynamic_buf.len())]);
@@ -226,17 +259,7 @@ fn read_string_from_key(target: windows::Win32::System::Registry::HKEY) -> Optio
         return None;
     }
 
-    if val_type == REG_EXPAND_SZ {
-        let expanded = expand_environment_string(&raw_string);
-        let trimmed = expanded.trim().to_string();
-        if trimmed.is_empty() {
-            None
-        } else {
-            Some(trimmed)
-        }
-    } else {
-        Some(raw_string)
-    }
+    format_registry_string(val_type, &raw_string)
 }
 
 fn read_default_string(
@@ -645,5 +668,15 @@ mod tests {
         } else {
             panic!("Expected OpcError::Com, got: {result:?}");
         }
+    }
+
+    #[test]
+    fn test_format_registry_string_rejects_non_string_types() {
+        use windows::Win32::System::Registry::{REG_BINARY, REG_DWORD, REG_EXPAND_SZ, REG_SZ};
+        assert!(format_registry_string(REG_DWORD, "123").is_none());
+        assert!(format_registry_string(REG_BINARY, "data").is_none());
+        assert_eq!(format_registry_string(REG_SZ, "Server.Name").as_deref(), Some("Server.Name"));
+        assert_eq!(format_registry_string(REG_SZ, "   ").as_deref(), None);
+        assert!(format_registry_string(REG_EXPAND_SZ, "C:\\server.exe").is_some());
     }
 }
