@@ -16,8 +16,8 @@ use std::sync::Arc;
 pub struct OpcDaClientBuilder<C = ComConnector> {
     host: Option<String>,
     server: Option<ServerIdentifier>,
-    pub timeout: Option<std::time::Duration>,
-    pub legacy_dcom: bool,
+    timeout: Option<std::time::Duration>,
+    legacy_dcom: bool,
     connector: Option<C>,
 }
 
@@ -174,6 +174,18 @@ impl<C: ServerConnector + 'static> OpcDaClientBuilder<C> {
         }
     }
 
+    /// Returns the configured timeout duration for this builder, if any.
+    #[must_use]
+    pub fn timeout_duration(&self) -> Option<std::time::Duration> {
+        self.timeout
+    }
+
+    /// Returns whether legacy DCOM authentication is enabled for this builder.
+    #[must_use]
+    pub fn legacy_dcom(&self) -> bool {
+        self.legacy_dcom
+    }
+
     /// Builds the `OpcDaClient` using an explicit connector instance.
     ///
     /// # Arguments
@@ -287,9 +299,9 @@ pub struct OpcDaClient<C: ServerConnector + 'static = ComConnector, State = Unbo
     /// Background MTA worker handle managing asynchronous request channels.
     pub(crate) worker: Arc<ComWorker<C>>,
     /// Target OPC server endpoint if bound to a specific server.
-    pub endpoint: Option<OpcServerEndpoint>,
+    endpoint: Option<OpcServerEndpoint>,
     /// Configured operation timeout.
-    pub timeout: Option<std::time::Duration>,
+    timeout: Option<std::time::Duration>,
     pub(crate) _state: std::marker::PhantomData<State>,
 }
 
@@ -512,10 +524,12 @@ impl<C: ServerConnector + 'static> OpcDaClient<C, Bound> {
     ///
     /// The string representation of the bound server identifier.
     #[must_use]
-    pub fn server_id(&self) -> &str {
+    pub fn server_id(&self) -> std::borrow::Cow<'_, str> {
         match &self.endpoint().identifier {
-            ServerIdentifier::ProgId(prog_id) => prog_id.as_str(),
-            ServerIdentifier::Clsid(_) => "{CLSID}",
+            ServerIdentifier::ProgId(prog_id) => std::borrow::Cow::Borrowed(prog_id.as_str()),
+            ServerIdentifier::Clsid(guid) => {
+                std::borrow::Cow::Owned(crate::types::server::format_guid_bracketed(guid))
+            }
         }
     }
 
@@ -615,6 +629,11 @@ impl<C: ServerConnector + 'static> OpcDaClient<C, Bound> {
 }
 
 impl<C: ServerConnector + 'static, State: Send + Sync + 'static> OpcDaClient<C, State> {
+    /// Returns the configured operation timeout, if any.
+    #[must_use]
+    pub fn timeout(&self) -> Option<std::time::Duration> {
+        self.timeout
+    }
     /// Eagerly verifies active connectivity and reachability to the configured OPC DA server.
     ///
     /// Dispatches an initial probe request to the COM worker thread to verify that
@@ -988,6 +1007,7 @@ impl<C: ServerConnector + 'static, State: Send + Sync + 'static> OpcDaClient<C, 
         tags: impl IntoTags,
         interval: std::time::Duration,
     ) -> tokio::sync::mpsc::Receiver<TagValues> {
+        let interval = interval.max(std::time::Duration::from_millis(10));
         let (tx, rx) = tokio::sync::mpsc::channel(16);
         let tags_batch = tags.into_tag_batch().into_shareable();
         let client = self.clone();
@@ -1235,11 +1255,11 @@ mod tests {
             .expect("building client should succeed");
 
         assert_eq!(
-            client.endpoint.as_ref().unwrap().host.as_deref(),
+            client.endpoint().unwrap().host.as_deref(),
             Some("192.168.1.50")
         );
         assert_eq!(
-            client.endpoint.as_ref().unwrap().identifier,
+            client.endpoint().unwrap().identifier,
             ServerIdentifier::from("Matrikon.OPC.Simulation.1")
         );
 
@@ -1248,7 +1268,7 @@ mod tests {
             .with_connector(connector)
             .build()
             .expect("building unbound client should succeed");
-        assert!(unbound_client.endpoint.is_none());
+        assert!(unbound_client.endpoint().is_none());
 
         let servers = unbound_client.list_servers("192.168.1.50").await.unwrap();
         assert_eq!(servers, vec!["Mock.Server.1".to_string()]);
@@ -1266,8 +1286,11 @@ mod tests {
         let builder = OpcDaClientBuilder::new()
             .timeout(std::time::Duration::from_millis(50))
             .with_legacy_dcom(true);
-        assert_eq!(builder.timeout, Some(std::time::Duration::from_millis(50)));
-        assert!(builder.legacy_dcom);
+        assert_eq!(
+            builder.timeout_duration(),
+            Some(std::time::Duration::from_millis(50))
+        );
+        assert!(builder.legacy_dcom());
 
         let connector = MockServerConnector::new().with_read_fn(|_, _| {
             std::thread::sleep(std::time::Duration::from_millis(150));
@@ -1281,7 +1304,7 @@ mod tests {
             .build()
             .unwrap();
 
-        assert_eq!(client.timeout, Some(std::time::Duration::from_millis(50)));
+        assert_eq!(client.timeout(), Some(std::time::Duration::from_millis(50)));
         let err = client.read_tag_values(["Tag1"]).await.unwrap_err();
         assert!(matches!(err, OpcError::Timeout(_)));
         assert!(err.is_connection_error());

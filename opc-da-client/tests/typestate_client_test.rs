@@ -53,3 +53,14 @@ async fn test_typestate_implements_opc_provider() {
     let provider_bound: Arc<dyn OpcProvider> = Arc::new(bound);
     assert!(provider_bound.list_servers("localhost").await.is_ok());
 }
+
+#[tokio::test]
+async fn test_server_id_returns_formatted_guid_for_clsid_endpoint() {
+    let clsid = windows::core::GUID::from_u128(0x13486D51_4821_11D2_A494_3CB306C10000);
+    let endpoint = OpcServerEndpoint::local(clsid);
+    let bound = MockOpcDaClient::default().bind(endpoint);
+    let sid = bound.server_id();
+    assert!(sid.starts_with('{'), "Expected GUID format, got: {sid}");
+    assert!(sid.ends_with('}'), "Expected GUID format, got: {sid}");
+    assert_ne!(sid, "{CLSID}", "Placeholder not replaced: {sid}");
+}
