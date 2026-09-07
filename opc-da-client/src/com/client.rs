@@ -1,3 +1,15 @@
+//! # OPC DA Client & Typestate Session Management
+//!
+//! Provides the primary [`OpcDaClient`] facade, fluent [`OpcDaClientBuilder`], and
+//! zero-cost compile-time typestates [`Unbound`] and [`Bound`].
+//!
+//! ## Overview
+//!
+//! This module decouples high-level asynchronous client requests from low-level Win32 COM
+//! operations by dispatching requests over channels to a dedicated Multi-Threaded Apartment
+//! (MTA) [`ComWorker`] background thread. It provides both unbound multi-server gateway
+//! operations and server-bound session operations with infallible endpoint access.
+
 use crate::com::connector::{ComConnector, ServerConnector};
 use crate::com::worker::{ComRequest, ComWorker};
 use crate::errors::{OpcError, OpcResult};
@@ -175,12 +187,20 @@ impl<C: ServerConnector + 'static> OpcDaClientBuilder<C> {
     }
 
     /// Returns the configured timeout duration for this builder, if any.
+    ///
+    /// # Returns
+    ///
+    /// `Some(Duration)` configured on this builder, or `None` if default is used.
     #[must_use]
     pub fn timeout_duration(&self) -> Option<std::time::Duration> {
         self.timeout
     }
 
     /// Returns whether legacy DCOM authentication is enabled for this builder.
+    ///
+    /// # Returns
+    ///
+    /// `true` if legacy DCOM authentication is enabled, `false` otherwise.
     #[must_use]
     pub fn legacy_dcom(&self) -> bool {
         self.legacy_dcom
@@ -292,7 +312,7 @@ pub struct Unbound;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub struct Bound;
 
-/// Concrete [`OpcProvider`] implementation for Windows OPC DA.
+/// Concrete [`crate::provider::OpcProvider`] implementation for Windows OPC DA.
 ///
 /// Uses native `windows-rs` COM interop via the internal `com` subsystem.
 pub struct OpcDaClient<C: ServerConnector + 'static = ComConnector, State = Unbound> {
@@ -630,6 +650,10 @@ impl<C: ServerConnector + 'static> OpcDaClient<C, Bound> {
 
 impl<C: ServerConnector + 'static, State: Send + Sync + 'static> OpcDaClient<C, State> {
     /// Returns the configured operation timeout, if any.
+    ///
+    /// # Returns
+    ///
+    /// `Some(Duration)` configured on this client instance, or `None` if default is used.
     #[must_use]
     pub fn timeout(&self) -> Option<std::time::Duration> {
         self.timeout
@@ -966,7 +990,7 @@ impl<C: ServerConnector + 'static, State: Send + Sync + 'static> OpcDaClient<C, 
     ///
     /// # Deprecated
     ///
-    /// Prefer calling [`ServerDiscovery::list_servers`] or [`OpcProvider::list_servers`].
+    /// Prefer calling [`ServerDiscovery::list_servers`] or [`crate::provider::OpcProvider::list_servers`].
     #[deprecated(since = "0.2.1", note = "use ServerDiscovery::list_servers instead")]
     pub async fn list_servers_on(&self, host: &str) -> OpcResult<Vec<String>> {
         self.list_servers(host).await

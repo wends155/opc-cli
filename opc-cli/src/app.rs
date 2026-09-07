@@ -35,13 +35,20 @@ const MAX_BROWSE_TAGS: usize = 10000;
 /// Screens navigable within the TUI.
 #[derive(Debug, Default, PartialEq, Eq, Clone, Copy)]
 pub enum CurrentScreen {
+    /// Initial landing screen allowing host specification and initial connection.
     #[default]
     Home,
+    /// Transient screen shown during asynchronous operations (discovery, browsing, read, write).
     Loading,
+    /// Lists discovered OPC DA servers on the target host machine.
     ServerList,
+    /// Lists browsed tag names available on the connected OPC DA server.
     TagList,
+    /// Live table displaying active values, timestamps, and quality metrics for selected tags.
     TagValues,
+    /// Modal dialog prompt accepting an input value string to write to a tag.
     WriteInput,
+    /// Terminal exit screen triggering cleanup and process shutdown.
     Exiting,
 }
 
@@ -62,9 +69,13 @@ impl std::fmt::Display for CurrentScreen {
 /// Manages screen hierarchy, host target, and browsed server context.
 #[derive(Debug, Clone)]
 pub struct NavigationState {
+    /// Active screen currently visible and receiving key events.
     pub current_screen: CurrentScreen,
+    /// Screen preceding the current screen, used for returning upon completion/cancellation.
     pub previous_screen: CurrentScreen,
+    /// Target host machine name or IP address being browsed/queried.
     pub host_input: String,
+    /// Identifier or ProgID of the currently selected/connected OPC server.
     pub browsed_server: Option<String>,
 }
 
@@ -82,7 +93,9 @@ impl Default for NavigationState {
 /// Manages modal dialog input state (e.g. write value modal).
 #[derive(Debug, Clone, Default)]
 pub struct DialogState {
+    /// Target tag ID for which the write modal was opened.
     pub write_tag_id: Option<String>,
+    /// User input buffer storing the string representation of the value to write.
     pub write_value_input: String,
 }
 
@@ -97,8 +110,11 @@ impl DialogState {
 /// Manages automatic periodic tag reading state and interval tracking.
 #[derive(Debug, Clone, Default)]
 pub struct AutoRefresher {
+    /// Server identifier associated with the active auto-refresh session.
     pub server: Option<String>,
+    /// List of tag IDs monitored during periodic refreshes.
     pub tag_ids: Vec<String>,
+    /// Timestamp of the last initiated or completed tag values read.
     pub last_read_time: Option<std::time::Instant>,
 }
 
@@ -114,11 +130,17 @@ impl AutoRefresher {
 /// Manages background asynchronous tasks, cooperative collectors, and abort handles.
 #[derive(Default)]
 pub struct TaskManager {
+    /// Cooperative tag collector accumulator for namespace browse streams.
     pub browse_collector: TagCollector,
+    /// Oneshot channel receiver delivering the completed server browse tag list.
     pub browse_result_rx: Option<oneshot::Receiver<Result<Vec<String>, OpcError>>>,
+    /// Oneshot channel receiver delivering discovered server identifiers.
     pub fetch_result_rx: Option<oneshot::Receiver<Result<Vec<String>, OpcError>>>,
+    /// Oneshot channel receiver delivering polled tag values.
     pub read_result_rx: Option<oneshot::Receiver<Result<TagValues, OpcError>>>,
+    /// Oneshot channel receiver delivering write operation outcomes.
     pub write_result_rx: Option<oneshot::Receiver<Result<WriteResult, OpcError>>>,
+    /// Abort handle for cooperative cancellation of the active asynchronous task.
     pub active_abort: Option<tokio::task::AbortHandle>,
 }
 
@@ -153,10 +175,15 @@ impl TaskManager {
 /// Encapsulates tag search state, pre-computed lowercase cache, and $O(1)$ match lookup mask.
 #[derive(Debug, Default)]
 pub struct SearchEngine {
+    /// Whether interactive search filter input mode is currently active.
     pub search_mode: bool,
+    /// Active user search filter substring.
     pub search_query: String,
+    /// Ordered list of indices in the tag list matching the current query.
     pub search_matches: Vec<usize>,
+    /// Boolean lookup mask indexed by tag position indicating match membership.
     pub search_match_mask: Vec<bool>,
+    /// Cursor index within `search_matches` currently navigated to.
     pub search_match_index: usize,
     tags_lowercase: Vec<String>,
 }
@@ -258,13 +285,21 @@ impl SearchEngine {
 
 /// Manages displayed servers, tags, selection state, table state, and the status message ring buffer.
 pub struct ViewState {
+    /// Discovered OPC DA server ProgIDs or names on the target host.
     pub servers: Vec<String>,
+    /// Browsed tag identifiers available on the currently connected server.
     pub tags: Vec<String>,
+    /// Set of tag identifiers selected for live value monitoring.
     pub selected_tags: HashSet<String>,
+    /// Map of currently retrieved tag values, qualities, and timestamps.
     pub tag_values: TagValues,
+    /// Currently highlighted index in the active list (servers or tags).
     pub selected_index: Option<usize>,
+    /// Ratatui list state managing scroll offsets and visual selection for lists.
     pub list_state: ListState,
+    /// Ratatui table state managing row highlight and scroll offsets for tag values.
     pub table_state: TableState,
+    /// Ring buffer of diagnostic status messages displayed in the status bar.
     pub messages: VecDeque<String>,
 }
 
@@ -352,12 +387,19 @@ fn poll_channel<T>(rx_slot: &mut Option<oneshot::Receiver<Result<T, OpcError>>>)
 ///
 /// Composes [`NavigationState`], [`DialogState`], [`AutoRefresher`], [`TaskManager`], [`SearchEngine`], and [`ViewState`].
 pub struct App {
+    /// Screen navigation and host targeting state.
     pub nav: NavigationState,
+    /// Active modal dialog state.
     pub dialog: DialogState,
+    /// Periodic background polling refresher state.
     pub refresher: AutoRefresher,
+    /// Active asynchronous background tasks and oneshot communication channels.
     pub tasks: TaskManager,
+    /// Filter and incremental search engine state.
     pub search: SearchEngine,
+    /// UI display, item collection, and selection state.
     pub view: ViewState,
+    /// Shared handle to the active OPC DA backend provider.
     pub opc_provider: Arc<dyn OpcProvider>,
 }
 

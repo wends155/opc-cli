@@ -382,6 +382,7 @@ async fn main() -> OpcResult<()> {
 | `MockConnectedGroup` | `pub struct` | Pure-Rust mock implementation of `ConnectedGroup` with configurable handlers for item registration and read/write I/O (under `feature = "test-support"`). |
 | `MockOpcDaClient` | `pub type` | Type alias for an `OpcDaClient` instantiated with `MockServerConnector` (under `feature = "test-support"` and `feature = "opc-da-backend"`). |
 
+<!-- custom:start -->
 ## Architecture
 
 The crate is architected in three decoupled layers:
@@ -402,3 +403,4 @@ Windows COM requires per-thread initialization and strict apartment affinity. `o
 ## License
 
 This project is licensed under the [MIT License](https://opensource.org/licenses/MIT).
+<!-- custom:end -->

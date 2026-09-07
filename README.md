@@ -4,7 +4,7 @@
 [![Docs.rs](https://docs.rs/opc-cli/badge.svg)](https://docs.rs/opc-cli)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-A modern, asynchronous TUI (Terminal User Interface) client for browsing, reading, and writing OPC DA (Data Access) tags on Windows.
+> Interactive TUI and native Windows COM client library for browsing, reading, and writing OPC DA tags
 
 ## 🏗️ Architecture
 
@@ -99,6 +99,7 @@ Output: `dist/opc-cli-win7-x64/` and `dist/opc-cli-win7-x64.zip`
 - `bcryptprimitives.dll`: `#![no_std]` polyfill routing `ProcessPrng` to `RtlGenRandom` (`advapi32.dll`).
 - `redist/`: Included OPC Core Components redistributable MSI (if placed in `vendor/redist/`).
 
+<!-- custom:start -->
 Simply copy the extracted `dist/opc-cli-win7-x64/` folder to a USB drive and run on the target machine without installing Visual C++ redistributables or Windows updates.
 
 ## 🙏 Acknowledgments
@@ -107,6 +108,7 @@ Simply copy the extracted `dist/opc-cli-win7-x64/` folder to a USB drive and run
 - [**OPC Foundation**](https://opcfoundation.org/) — OPC Data Access specification and IDL interface definitions.
 - [**windows-rs**](https://github.com/microsoft/windows-rs) by Microsoft — Windows API bindings for Rust.
 - [**ratatui**](https://github.com/ratatui/ratatui) — terminal user interface framework.
+<!-- custom:end -->
 
 ## 📄 License
 

@@ -42,9 +42,9 @@ pub struct ComGuard {
 
 impl ComGuard {
     /// Initialize COM in Multi-Threaded Apartment (MTA) mode.
+    /// # Returns
     ///
-    /// Returns `Ok(ComGuard)` on success (including `S_FALSE`, which
-    /// means COM was already initialized on this thread).
+    /// `Ok(ComGuard)` on success (including `S_FALSE`, which means COM was already initialized on this thread).
     ///
     /// # Errors
     ///

@@ -309,6 +309,10 @@ pub(crate) fn guid_to_progid(guid: &windows::core::GUID) -> OpcResult<String> {
 /// * `clsid` - 128-bit COM Class ID of the server.
 /// * `host` - Target host machine. If `Some` and not localhost/127.0.0.1, returns [`OpcError::NotImplemented`].
 ///
+/// # Returns
+///
+/// An [`OpcServerRegistration`] containing the server name, executable/DLL path, and threading model.
+///
 /// # Errors
 /// Returns [`OpcError::NotImplemented`] if `host` is a remote machine.
 /// Returns [`OpcError::Server`] if the CLSID is not found or neither `LocalServer32` nor `InprocServer32` exists.

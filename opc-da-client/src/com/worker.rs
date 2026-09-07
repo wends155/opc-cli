@@ -14,9 +14,9 @@ use crate::com::connector::{
 use crate::com::guard::GroupGuard;
 use crate::errors::{OpcError, OpcOperation, OpcResult};
 use crate::log_opc_err;
-use crate::provider::{TagCollector, WriteResult};
 use crate::types::{
-    ClientItemHandle, OpcServerEndpoint, OpcServerInfo, OpcValue, ServerIdentifier,
+    ClientItemHandle, OpcServerEndpoint, OpcServerInfo, OpcValue, ServerIdentifier, TagCollector,
+    WriteResult,
 };
 use std::sync::Arc;
 use tokio::sync::{mpsc, oneshot};

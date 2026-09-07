@@ -104,6 +104,27 @@ impl ComConnector {
     }
 
     /// Connects to an [`OpcServerEndpoint`](crate::types::OpcServerEndpoint) using this connector's settings.
+    ///
+    /// # Arguments
+    ///
+    /// * `endpoint` - Server endpoint containing the host and CLSID/ProgID.
+    ///
+    /// # Returns
+    ///
+    /// A connected [`ComServer`] instance ready for group creation.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`OpcError`] if COM initialization, instance activation, or interface queries fail.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// use opc_da_client::com::connector::ComConnector;
+    /// let connector = ComConnector::new();
+    /// let endpoint = "opc.da://localhost/Matrikon.OPC.Simulation.1".parse().unwrap();
+    /// let server = connector.connect_endpoint(&endpoint)?;
+    /// ```
     pub fn connect_endpoint(
         &self,
         endpoint: &crate::types::OpcServerEndpoint,
@@ -112,6 +133,19 @@ impl ComConnector {
     }
 
     /// Connects to an [`OpcServerEndpoint`](crate::types::OpcServerEndpoint) with optional `legacy_dcom` authentication override.
+    ///
+    /// # Arguments
+    ///
+    /// * `endpoint` - Server endpoint containing the host and CLSID/ProgID.
+    /// * `legacy_dcom` - Whether to apply legacy DCOM packet authentication levels.
+    ///
+    /// # Returns
+    ///
+    /// A connected [`ComServer`] instance ready for group creation.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`OpcError`] if COM initialization, instance activation, or interface queries fail.
     pub fn connect_endpoint_with_legacy(
         &self,
         endpoint: &crate::types::OpcServerEndpoint,

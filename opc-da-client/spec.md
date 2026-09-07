@@ -3,7 +3,7 @@
 > **Behavioral Source of Truth** for the `opc-da-client` library crate.
 > Defines *what* each module should do — independent of current implementation.
 >
-> Last verified against: a1ea491
+> Last verified against: 00f1a1d
 
 ---
 
@@ -117,8 +117,7 @@ Strongly-typed result alias returned by `TagValue::into_result` and `TagValue::t
 
 | Variant | Inner Representation | Description |
 | :--- | :--- | :--- |
-| `InlineSingle(&'a str)` | `&'a str` | Single borrowed string slice without lifetime constraints. |
-| `Borrowed(&'a [&'a str])` | `&'a [&'a str]` | Borrowed slice of string slices. |
+| `InlineSingle([u8; 31], u8)` | `[u8; 31], u8` | Inline stack buffer for small tag identifiers (up to 31 bytes) without heap allocation. |
 | `Static(&'static [&'static str])` | `&'static [&'static str]` | Zero-allocation static literal tag slice. |
 | `StaticSingle(&'static str)` | `&'static str` | Single static literal string slice. |
 | `Shared(Arc<[String]>)` | `Arc<[String]>` | Shared reference-counted tag array. |
@@ -126,10 +125,13 @@ Strongly-typed result alias returned by `TagValue::into_result` and `TagValue::t
 | `OwnedSingle(String)` | `String` | Single owned heap string. |
 
 **Methods:**
+* `from_str_lenient(s: &str) -> Self`: Constructs an `InlineSingle` if `s.len() <= 31`, or falls back to `OwnedSingle`.
+* `empty() -> Self`: Constructs an empty `Static` tag batch.
 * `len(&self) -> usize`: Returns tag count across all variants.
 * `is_empty(&self) -> bool`: Returns `true` if empty.
 * `iter_str(&self) -> TagBatchIter<'_>`: Zero-allocation string iterator projecting `&str` over all variants.
 * `iter(&self) -> TagBatchIter<'_>`: Alias for `iter_str(&self)`.
+* `into_shareable(self) -> Self`: Converts batch into `Shared(Arc<[String]>)` or preserves static/inline zero-copy variants.
 * `into_vec(self) -> Vec<String>`: Converts into owned vector, reusing existing allocations where possible.
 
 **Derives:** `Debug`, `Clone`, `PartialEq`, `Eq`.
@@ -291,6 +293,7 @@ Implemented for:
 | `snapshot` | `pub fn snapshot(&self) -> Vec<String>` | Returns a cloned copy of currently collected tags under lock. |
 | `harvest` | `pub fn harvest(&self) -> Vec<String>` | Drains and returns all collected tags, resetting count to 0. |
 | `push` | `pub fn push(&self, tag: String) -> bool` | Pushes a tag into collector if not full or cancelled. Returns `true` if added. |
+| `push_batch` | `pub fn push_batch(&self, tags: impl IntoIterator<Item = String>) -> usize` | Batch-inserts tags under a single Mutex lock acquisition, atomic count increment, and cooperative cancellation checking. Returns accepted count. |
 
 **Invariants:**
 * `Clone` performs a shallow reference-counted clone sharing the inner synchronization state.
@@ -321,6 +324,8 @@ Implemented for:
 | `Clsid(windows::core::GUID)` | `GUID` | Direct 128-bit Windows COM Class ID. |
 
 **Conversions & Methods:**
+* `as_prog_id(&self) -> Option<&str>`: Returns a borrowed reference to the ProgID string if this is a `ProgId` variant.
+* `as_clsid(&self) -> Option<&windows::core::GUID>`: Returns a borrowed reference to the CLSID GUID if this is a `Clsid` variant.
 * `is_prog_id(&self) -> bool`: Returns `true` if this is a ProgID variant.
 * `is_clsid(&self) -> bool`: Returns `true` if this is a CLSID variant.
 * `From<&str>` and `From<String>`: Automatically checks if the string matches 128-bit GUID hex syntax (with or without `{}` braces). If valid GUID syntax, coerces directly into `ServerIdentifier::Clsid`; otherwise stores as `ServerIdentifier::ProgId`.
@@ -547,9 +552,11 @@ Implements `OpcProvider` for all five trait methods (`list_servers`, `list_serve
 
 **Invariants:**
 *   All COM work runs on a dedicated, long-lived `ComWorker` thread, avoiding repeated initialization overhead and solving COM thread-affinity constraints.
+*   **Dual-Tier `PriorityRequestQueue`**: Request dispatch employs a dual-tier priority queue (`high` and `low` `VecDeque` queues) where interactive reads, writes, and state queries are enqueued with high priority and preempt background/recursive tag browsing requests without worker starvation.
 *   **Two-tier `catch_unwind` panic resilience:** Individual request handling is wrapped in `std::panic::catch_unwind` (tier 1) so driver panics return structured `OpcError::Internal` without terminating the worker thread. The outer thread loop is also protected (tier 2) to maintain client liveness.
 *   **Active Group Caching:** Connection pool in `pool.rs` embeds `PooledServer<S>` which caches active OPC groups and item handles on identical tag sets, reducing round-trip RPC overhead during cyclic polling by over 75%. Tag set changes or connection drops transparently recreate or evict the cached group.
-*   **Failure Cooldown Circuit Breaker:** Unresponsive remote endpoints trigger a 5-second cooldown in `failure_cooldowns` to avoid connection storm panics.
+*   **Failure Cooldown Circuit Breaker:** Unresponsive remote endpoints trigger a 5-second cooldown in `failure_cooldowns` bounded to `MAX_COOLDOWNS = 256` with LRU eviction and expired entry pruning to avoid connection storm panics and unbounded memory growth.
+*   **Security Blanket Error Propagation:** `apply_proxy_blanket` returns `OpcResult<()>`, propagating authentication or security blanket failures to callers rather than discarding errors silently.
 *   **Collision-Proof Group Naming:** Group names are generated using process ID and an atomic sequence counter (`generate_group_name`).
 *   **Native Batch Writes:** `handle_write_batch` performs native multi-item writes in a single COM group transaction; `handle_write` delegates directly to it.
 *   Stale connections are transparently evicted and retried during request dispatch.
@@ -661,8 +668,8 @@ Before calling `browse_recursive`, `browse_tags` attempts `browse_opc_item_ids(B
 - `QualityLimit`: Limit conditions on the tag value (`NotLimited`, `LowLimited`, `HighLimited`, `Constant`).
 - `BrowseType`: Strongly-typed enum for namespace browsing (`Branch = 1`, `Leaf = 2`, `Flat = 3`). Implements zero-cost `From<BrowseType> for u32` and fallible `TryFrom<u32> for BrowseType`.
 - `BrowseDirection`: Strongly-typed enum for address space cursor movement (`Up = 1`, `Down = 2`, `To = 3`). Implements zero-cost `From<BrowseDirection> for u32` and fallible `TryFrom<u32> for BrowseDirection`.
-- `ServerStatus` / `ServerState`: Detailed server run-state and diagnostic types.
-- `GroupState`: Metadata bounding an OPC group object.
+- `NamespaceType`: Strongly-typed enum indicating server namespace hierarchy (`Hierarchy = 1`, `Flat = 2`). Implements `From<NamespaceType> for u32` and fallible `TryFrom<u32> for NamespaceType`.
+- `BrowseFilter`: Structure encapsulating tag filtering options (name pattern, data type constraint, access rights constraint) used when traversing server address spaces.
 
 ---
 
@@ -866,13 +873,52 @@ Downstream input parsing follows a 2-phase deterministic coercion machine:
    - Numeric integers $\rightarrow$ `OpcValue::Int(i32)`.
    - Floating-point decimals $\rightarrow$ `OpcValue::Float(f64)`.
    - Explicit `"true"` / `"false"` $\rightarrow$ `OpcValue::Bool(bool)`.
-   - All other string tokens $\rightarrow$ `OpcValue::String(value_str.to_string())`.
+### 3.4 Client Typestate Transitions (`OpcDaClient<C, State>`)
+
+Compile-time typestate machine governing client initialization, binding, and session capabilities:
+
+```mermaid
+stateDiagram-v2
+    [*] --> Unbound : OpcDaClient::new(connector) / default()
+    [*] --> Unbound : OpcDaClientBuilder::build()
+    [*] --> Bound : OpcDaClient::connect(endpoint) / connect_remote()
+    [*] --> Bound : OpcDaClientBuilder::build_bound()
+    Unbound --> Bound : client.bind(endpoint) / bind_remote()
+    Bound --> Unbound : (client, ep) = client.unbind()
+    Unbound --> [*] : drop
+    Bound --> [*] : drop
+```
+
+- **Compile-Time Invariant**: An `OpcDaClient<C, Unbound>` cannot call session-bound methods (`read_tag`, `read_tags`, `write_tag`, `write_tags`, `server_id`).
+- **Infallible Endpoint Access**: `OpcDaClient<C, Bound>::endpoint(&self) -> &OpcServerEndpoint` never returns `Option` or fails, as the target endpoint is established at compile/transition time.
 
 ---
 
-## 4. Integration Points
+## 4. Command / CLI Contracts
 
-### 4.1 Internal: `com` Subsystem
+Defines the behavioral contract of the `opc-cli` binary interface:
+
+### 4.1 CLI Arguments & Flags
+- `--verbose` / `-v`: Enables DEBUG level tracing output to file log.
+- `-vv`: Enables TRACE level verbose logging.
+- `--version` / `-V`: Prints package version and exits.
+- `--help` / `-h`: Displays command-line help and options.
+- Positional argument `[HOST]`: Optional target machine hostname/IP to browse on startup (defaults to `localhost`).
+
+### 4.2 Terminal Safety & RAII Lifecycle
+- **TerminalGuard**: Custom RAII guard that captures the active terminal buffer, enables raw mode, installs an unhandled panic hook, and deterministically restores cursor visibility, alternate screen buffer, and terminal echo on all exits (including panics and signals).
+
+### 4.3 Keybinding Contracts
+- Navigation: `Up`/`Down`/`j`/`k` move cursor selection; `Home`/`End` jump to top/bottom; `PageUp`/`PageDown` jump by page.
+- Actions: `Enter` executes action or enters screen; `Esc` / `Backspace` navigates back or dismisses modal dialog; `Space` marks/toggles tag selection; `w` triggers write modal.
+- Search: `/` enters search mode; `Esc` cancels search; `Tab`/`Shift+Tab` cycle matches.
+- Application Exit: `q` or `Ctrl+C` triggers graceful shutdown.
+
+---
+
+## 5. Integration Points
+
+### 5.1 Internal: `com` Subsystem
 
 **Boundary:** `OpcDaClient` → `com::worker::ComWorker` → `com::connector::ComServer` / `ComGroup`.
 
@@ -886,6 +932,11 @@ Downstream input parsing follows a 2-phase deterministic coercion machine:
 | Tag writing | `ComServer.add_group()`, group `write()`, `remove_group()` | `IOPCServer`, `IOPCItemMgt`, `IOPCSyncIO` |
 | String iteration | `StringIterator::new()` (native COM), `StringIterator::from_vec()` (in-memory simulation) | `IEnumString::Next` (native COM) |
 
+**Windows DCOM Security**:
+- Complies with KB5004442 packet integrity hardening via `RPC_C_AUTHN_LEVEL_PKT_INTEGRITY`.
+- Registry traversal queries `HKCR\CLSID` supporting both 64-bit and WOW64 32-bit views.
+- NT 6.1 (Windows 7 / Server 2008 R2) backward compatibility provided by `compat/` polyfills (`bcrypt-polyfill`, `synch-polyfill`, `winrt-error-polyfill`).
+
 **Error Handling at Boundary:**
 *   All COM errors return canonical `OpcError::Com { source }`.
 *   Friendly hints (`err.friendly_hint()`) and formatted HRESULTs (`raw::hresult::format_hresult`) are available for error reporting.
@@ -897,7 +948,7 @@ Downstream input parsing follows a 2-phase deterministic coercion machine:
 | :--- | :--- | :--- |
 | OPC-BUG-001 | `StringIterator` produces 16 phantom `E_POINTER` errors per iterator | **FIXED**: cache zeroing + null-PWSTR skip in `StringIterator::next()` |
 
-### 4.2 Downstream: `opc-cli` (Consumer)
+### 5.2 Downstream: `opc-cli` (Consumer)
 
 **Boundary:** `opc-cli` → `dyn OpcProvider`.
 
@@ -1094,29 +1145,22 @@ Downstream input parsing follows a 2-phase deterministic coercion machine:
 
 ### Error & Diagnostic Unit Tests (in `errors.rs`)
 
-- [x] `test_opc_error_friendly_hint` — verifies `friendly_hint` returns `None` for non-COM errors and expected text for known COM errors.
-- [x] `test_friendly_hint_known_codes` — verifies HRESULT hints for known codes (`RPC_S_CALL_FAILED_DNE`, `REGDB_E_CLASSNOTREG`, `OPC_E_BADRIGHTS`, `OPC_E_BADTYPE`, `OPC_E_UNKNOWNITEMID`, `OPC_E_INVALIDITEMID`).
-- [x] `test_friendly_hint_unknown_code` — verifies `None` on unknown or internal error codes.
-- [x] `test_is_connection_error` — verifies `is_connection_error` classification for transport failure HRESULTs.
-- [x] `test_com_error_display_formatting` — verifies `Display` formatting for `OpcError::Com` with HRESULT and friendly hint.
-- [x] `test_opc_operation_display` — validates canonical string formatting across all `OpcOperation` enum variants.
-- [x] `test_log_opc_err_macro` — validates structured key-value emission and diagnostic capture via `log_opc_err!`.
-- [x] `test_channel_error_conversions_and_lock_poison` — verifies `From` conversions for `mpsc::RecvError`, `oneshot::RecvError`, `SendError`, and `PoisonError` to `OpcError::Internal`, and `OpcError::connection_failed`.
-
-### Raw Memory Safety Unit Tests (in `raw/memory.rs` and `raw/bridge.rs`)
+### Raw Memory Safety Unit Tests (in `raw/memory.rs`)
 
 - [x] `test_remote_array_safety_and_invariants` — verifies zero-allocation remote array creation, safe move-only drop semantics, and heap integrity without `Clone`.
 - [x] `test_remote_pointer_into_string_raii_safety` — verifies `RemotePointer<u16>::into_string` converts valid UTF-16, rejects null pointers with `OpcError::Com`, and automatically cleans up unmanaged COM memory via `CoTaskMemFree`.
 - [x] `test_remote_pointer_copy_slice_empty_and_valid` — verifies safe slice copying from remote COM pointers.
 - [x] `test_local_pointer_no_box_indirection` — verifies local COM pointer unmanaged allocation without Box indirection.
-- [x] `test_bridge_borrowed_blob_no_double_free` — verifies `BlobGuard` safely borrows memory without double-freeing on drop.
 
 ### Library & Re-Export Unit Tests (in `lib.rs`)
 
 - [x] `test_parse_quality_error_reexport` — verifies `ParseQualityError` is exposed at crate root and implements `std::error::Error`.
 - [x] `test_opc_da_client_builder_reexport` — verifies `OpcDaClientBuilder` is exposed at crate root.
 
-### Mock-Based Tests (in `opc-cli` — 49 Unit Tests)
+### Client Unit Tests (in `opc-da-client` — 192 Unit Tests)
+- [x] 192 unit tests across `types`, `com`, `connector`, `worker`, and `raw` modules.
+
+### Mock-Based & CLI Tests (in `opc-cli` — 56 Unit Tests + 1 Integration Test)
 
 - [x] `MockOpcProvider` returns expected server list.
 - [x] `MockOpcProvider` returns expected browse results.
@@ -1131,8 +1175,12 @@ Downstream input parsing follows a 2-phase deterministic coercion machine:
 - [x] **Async Polling Loops & Background Task Resiliency (5 tests)** — verifies background server enumeration, tag browsing timeout cancel, and 1-second auto-refresh polling loop.
 - [x] **Deconstructed App Sub-States & Actions (10 tests)** — verifies `App::handle_key` returning `AppAction`, `DialogState` input buffering, `AutoRefresher` tick and toggle mechanics, and status bar telemetry counters (`error_count` vs `bad_quality_count`).
 - [x] **Zero-Allocation Rendering (7 tests)** — validates `[Cell; 4]` stack array row generation and ANSI highlight styling in `ui.rs`.
+- [x] **Regression Integration Test** (`tests/app_deref_regression.rs`) — validates compile-time absence of Deref indirection on App.
 
-### Doc Tests (78 Tests in `opc-da-client`: 77 Passed, 1 Ignored, 2 Compile-Fail)
+### Polyfill Tests (2 Tests in `compat/`)
+- [x] `compat/synch-polyfill` alignment and wait-on-address tests.
+
+### Doc Tests (80 Tests across Workspace: 77 Passed, 1 Ignored, 2 Compile-Fail)
 
 - [x] `OpcError::friendly_hint`, `OpcError::connection_failed`, `OpcError::is_connection_error` — runnable doctests in `errors.rs`.
 - [x] `OpcResult`, `OpcError` — runnable doctests in `errors.rs`.
@@ -1145,15 +1193,17 @@ Downstream input parsing follows a 2-phase deterministic coercion machine:
 - [x] `OpcProvider` trait methods (`list_servers`, `browse_tags`, `read_tag_value`, `read_tag_values`, `write_tag_value`, `write_tag_values`) — runnable doctests in `provider.rs` backed by `MockOpcProvider` assertions.
 - [x] `ServerGroupHandle`, `ServerItemHandle`, `OpcQuality`, `BrowseType`, `BrowseDirection` — runnable doctests in `types/handles.rs`, `types/quality.rs`, `types/browse.rs`.
 - [x] `ServerGroupHandle` and `ServerItemHandle` compile-fail non-interchangeability doctests in `types/handles.rs`.
-- [x] `ComGuard` — internal-only ignored doctest in `com/guard.rs`.
+- [x] `ComGuard` and `ComConnector::connect_endpoint` — internal/offline ignored doctests.
 - [x] Quick Start & Usage Examples (Listing, Reading, Writing, Browsing, Typestates) — runnable doctests in `lib.rs` and `README.md`.
 
-### Integration Test Suites (4 Suites in `opc-da-client/tests/`)
+### Integration Test Suites (4 Suites in `opc-da-client/tests/` — 8 Tests)
 
 - [x] `batch_write_test` — validates multi-item atomic COM group batch write transactions, partial item error handling, and `WriteResult` status mapping.
 - [x] `handle_type_safety_test` — validates opaque newtype wrappers `ServerGroupHandle`, `ServerItemHandle`, `ClientGroupHandle`, `ClientItemHandle` enforcing strict compile-time non-interchangeability.
 - [x] `mock_contract_stability_test` — validates `MockOpcProvider` and `MockServerConnector` contract fidelity across all segregated role traits (`ServerDiscovery`, `TagBrowser`, `TagReader`, `TagWriter`).
 - [x] `typestate_client_test` — validates compile-time `OpcDaClient<C, Unbound>` to `OpcDaClient<C, Bound>` state transitions via `bind`, `bind_remote`, and `unbind`, verifying infallible endpoint access on `Bound`.
+
+**Total Workspace Test Suite**: 56 CLI unit + 1 CLI integration + 192 client unit + 8 client integration + 2 polyfill = 259 tests + 80 doctests = **339 total tests**.
 
 ### Integration / Manual Tests
 

@@ -142,6 +142,10 @@ pub enum ServerIdentifier {
 
 impl ServerIdentifier {
     /// Returns a borrowed reference to the ProgID if this is a [`ServerIdentifier::ProgId`].
+    ///
+    /// # Returns
+    ///
+    /// `Some(&str)` containing the ProgID, or `None` if this identifier is a CLSID.
     #[must_use]
     pub fn as_prog_id(&self) -> Option<&str> {
         match self {
@@ -151,6 +155,10 @@ impl ServerIdentifier {
     }
 
     /// Returns a borrowed reference to the CLSID GUID if this is a [`ServerIdentifier::Clsid`].
+    ///
+    /// # Returns
+    ///
+    /// `Some(&GUID)` containing the CLSID, or `None` if this identifier is a ProgID.
     #[must_use]
     pub const fn as_clsid(&self) -> Option<&windows::core::GUID> {
         match self {

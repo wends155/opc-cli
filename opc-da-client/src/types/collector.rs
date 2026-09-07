@@ -185,7 +185,24 @@ impl TagCollector {
     }
 
     /// Batch-inserts tags, acquiring the Mutex once for the entire batch.
-    /// Returns the number of tags successfully inserted.
+    ///
+    /// # Arguments
+    ///
+    /// * `tags` - An iterator of tag identifier strings to insert.
+    ///
+    /// # Returns
+    ///
+    /// The number of tags successfully accepted before capacity or cancellation was reached.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use opc_da_client::types::TagCollector;
+    ///
+    /// let collector = TagCollector::new(10);
+    /// let count = collector.push_batch(vec!["Tag1".into(), "Tag2".into()]);
+    /// assert_eq!(count, 2);
+    /// ```
     #[must_use = "Returns the number of tags successfully accepted"]
     pub fn push_batch(&self, tags: impl IntoIterator<Item = String>) -> usize {
         if self.is_cancelled() || self.is_full() {

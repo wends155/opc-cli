@@ -102,8 +102,7 @@ opc-da-client/
         ├── mod.rs          # Module declarations
         ├── bindings/       # Frozen Win32 COM interfaces (da, comn)
         ├── hresult.rs      # Strongly-typed Win32 HRESULT constants, classification helpers, hints
-        ├── memory.rs       # Unsafe COM memory management (RemoteArray, RemotePointer, LocalPointer, safe FILETIME arithmetic)
-        └── bridge.rs       # Preserved dormant COM bridge structures (ItemDef, ItemState, etc.)
+        └── memory.rs       # Unsafe COM memory management (RemoteArray, RemotePointer, LocalPointer, safe FILETIME arithmetic)
 ```
 
 ---
@@ -193,14 +192,8 @@ opc-da-client/
 ### `raw::memory`
 - **Owns**: Low-level RAII memory allocators and wrappers for unmanaged COM memory (`RemoteArray<T>`, `RemotePointer<T>`, `LocalPointer<T>`), guaranteeing zero leaks via `CoTaskMemFree` on `Drop`, move-only semantics, slice projections, and overflow-safe Win32 `FILETIME` conversion using quotient/remainder arithmetic.
 - **Does NOT own**: Domain types, COM interface dispatch, or higher-level business logic.
-- **Trait Interfaces**: `TryFromNative`.
+- **Trait Interfaces**: Pure FFI memory allocation wrappers.
 - **Mock Availability**: N/A (tested via co-located unit tests).
-
-### `raw::bridge`
-- **Owns**: Dormant C-struct bridge representations (`ItemDef`, `ItemResult`, `ItemState`), safe RAII blob guards (`ItemResultsBlobGuard`, `BlobGuard`), and conversions to native COM structs.
-- **Does NOT own**: Public domain models or COM apartment lifecycles.
-- **Trait Interfaces**: `TryFromNative`.
-- **Mock Availability**: N/A (internal FFI structures).
 
 ### `raw::bindings`
 - **Owns**: Frozen Win32 COM interface bindings (`da`, `comn`) defining COM vtables and structures (`IOPCServer`, `IOPCItemMgt`, `IOPCSyncIO`, `IOPCServerList`, `IEnumString`).
@@ -239,14 +232,13 @@ The codebase strictly enforces unidirectional dependency flow:
 | `errors` | `windows-core` (for HRESULT), `raw::hresult` (internal) | `provider`, `types`, `com` | Domain errors are foundational and self-contained |
 | `com::client` | `provider`, `types`, `errors`, `com::worker` | `raw` | Consumer facade dispatches requests to the worker |
 | `com::worker` | `types`, `errors`, `com::connector`, `com::variant`, `com::guard`, `tokio::sync` | `raw` | Worker communicates exclusively via pure-Rust connector facade |
-| `com::connector` | `types`, `errors`, `com::variant`, `com::discovery` (`guid_to_progid`), `com::security`, `raw`, `windows` | `provider` | Encapsulates all raw Win32 COM FFI marshalling |
+| `com::connector` | `types`, `errors`, `com::variant`, `com::discovery` (`guid_to_progid`), `com::security`, `com::iterator`, `raw`, `windows` | `provider` | Encapsulates all raw Win32 COM FFI marshalling |
 | `com::security` | `errors`, `windows` | `com::connector`, `com::discovery`, `com::worker`, `com::client` | Shared DCOM security blanketing and authentication level selection |
 | `com::discovery` | `types`, `errors`, `com::security`, `com::iterator`, `raw`, `windows` | `com::client`, `com::worker`, `com::connector` | Crate-internal server catalog and registry discovery |
 | `com::guard` | `com::connector`, `types`, `errors`, `windows` | `provider`, `raw` | RAII drop guards for COM runtime, group cleanup, and browse cursor |
 | `com::iterator` | `raw::memory`, `raw::hresult`, `types`, `errors`, `windows` | `provider`, `com::worker` | Safe COM enumeration wrapper with RAII cleanup |
 | `com::variant` | `types` (`OpcValue`), `raw::hresult`, `windows` | `com::client`, `com::worker`, `com::connector` | Pure Win32 VARIANT marshaling helper for COM connector |
 | `raw::memory` | `windows-core`, `types`, `errors` | `com`, `provider` | Low-level COM memory allocation abstraction |
-| `raw::bridge` | `raw::bindings`, `raw::memory`, `types`, `errors` | `com`, `provider` | Dormant C-struct bridge representations |
 | `raw::bindings` | `windows-core` | `com`, `provider` | Frozen COM interface vtable bindings |
 | `raw::hresult` | `windows-core` | `provider`, `types`, `com` | Foundational Win32 HRESULT constants and formatters |
 
@@ -259,14 +251,14 @@ All commands are run from the **workspace root** (`opc-cli/`).
 | Tool | Command | Purpose |
 | :--- | :--- | :--- |
 | Formatter | `cargo fmt --all -- --check` | Verify standard rustfmt formatting |
-| Linter | `cargo clippy --workspace --all-targets -- -D warnings` | Strict lint gating (zero warnings allowed) |
+| Linter | `cargo clippy --workspace --all-targets --all-features -- -D warnings` | Strict lint gating (zero warnings allowed) |
 | Tests | `cargo test --workspace` | Execute all workspace unit & integration tests |
-| Doc Tests | `cargo test --doc -p opc-da-client --all-features` | Verify runnable documentation code samples |
+| Doc Tests | `cargo test --doc --workspace --all-features` | Verify runnable documentation code samples |
 | Verification Script | `pwsh -File scripts/verify.ps1` | Automated 9-gate compliance pipeline (incorporating Gate 4b Feature Independence Check) |
 | Release Merge Script | `powershell -File scripts/Merge-ToMain.ps1` | Clean release merging into `main` |
 | Documentation | `cargo doc --no-deps --package opc-da-client` | Render crate rustdocs |
 
-The verification script ([verify.ps1](file:///c:/Users/WSALIGAN/code/opc-cli/scripts/verify.ps1)) sequentially runs format checks, strict clippy, doctests, unit/integration tests, feature independence check (`--no-default-features`), polyfill builds, AST-grep rules, forbidden pattern scans, and PowerShell syntax validation.
+The verification script ([verify.ps1](file:///c:/Users/WSALIGAN/code/opc-cli/scripts/verify.ps1)) sequentially runs format checks, strict clippy, doctests, unit/integration tests, feature independence check (`--no-default-features`), polyfill builds, AST-grep structural safety scans (`no-panic-or-unwrap`, `require-safety-comment`, `no-deref-on-app`, `no-raw-unaligned-deref`), forbidden pattern scans (`println!`, `dbg!`, `todo!`, `unimplemented!`, library `anyhow`, library `Box<dyn Error>`), and PowerShell syntax validation.
 
 ---
 
@@ -275,7 +267,7 @@ The verification script ([verify.ps1](file:///c:/Users/WSALIGAN/code/opc-cli/scr
 | Pattern | Details |
 | :--- | :--- |
 | Primary Return Type | `OpcResult<T>` (`Result<T, OpcError>`) across all fallible boundaries |
-| Domain Error Enum | `thiserror` based `OpcError` with structured variants (`Com`, `Connection`, `Server`, `Conversion`, `InvalidState`, `NotImplemented`, `Internal`), `OpcError::connection_failed` factory, and `OpcError::is_connection_error` predicate |
+| Domain Error Enum | `thiserror` based `OpcError` with 8 structured variants (`Com`, `Connection`, `Server`, `Conversion`, `InvalidState`, `NotImplemented`, `Timeout(Duration)`, `Internal`), `OpcError::connection_failed` factory, and `OpcError::is_connection_error` predicate |
 | HRESULT Hints | Inherent method `OpcError::friendly_hint(&self)` translates raw Windows error codes into human-readable hints; `raw::hresult::format_hresult()` yields standard `0xHHHHHHHH: <hint>` strings |
 | RAII Resource Management (`GroupGuard`, `BrowsePositionGuard`) | Temporary COM groups created during `read_tag_values` and `write_tag_value` are guarded by `GroupGuard<'_, S: ConnectedServer>`, guaranteeing deterministic `remove_group(handle, true)` invocation on `Drop` across all return paths, `?` operator exits, and thread panics; `BrowsePositionGuard` guarantees parent position restoration on Drop |
 | RAII Memory Safety Guards (`ScopedVariant`, `ItemStatesGuard`, `ItemResultsBlobGuard`) | `ScopedVariant` encapsulates Win32 `VARIANT` lifecycle across tag write paths, guaranteeing deterministic `VariantClear` on `Drop`; `ItemStatesGuard` encapsulates `tagOPCITEMSTATE` slices across read paths, guaranteeing deterministic `VariantClear` on all element variants before memory deallocation on `Drop`; `ItemResultsBlobGuard` safely cleans up unmanaged `tagOPCITEMRESULT` blob memory on Drop |
@@ -322,20 +314,20 @@ Strongly-typed `OpcOperation` enum and `log_opc_err!` macro emit unified machine
 
 ## 10. Testing Strategy
 
-### 1. Co-Located Unit Tests (173 Tests in `opc-da-client`)
+### 1. Co-Located Unit Tests (192 Tests in `opc-da-client`)
 - **`com::discovery.rs`**: Remote host rejection, quote and trailing flag path sanitization (`sanitize_binary_path`), `OpcServerType` display formatting, invalid registry key query failure (`test_open_reg_key_invalid`), environment variable token expansion and comprehensive stress testing with dynamic allocation fallback (`test_expand_environment_string`), local registration non-existent CLSID mapping to `REGDB_E_CLASSNOTREG` (`test_inspect_local_registration_nonexistent_returns_classnotreg`), and ProgID resolution (`guid_to_progid`).
 - **`com::client.rs`**: `OpcDaClient::list_server_details` dispatch and mock record verification.
-- **`com::variant.rs`**: SafeArray 1D/2D conversion, VARIANT types (integers, floats, bools, strings, VT_DATE, VT_CY), error decoding, roundtrip serialization, and RAII memory safety guards (`ScopedVariant` and `ItemStatesGuard` drop verification, SafeArray bounds clamping).
+- **`com::variant.rs`**: SafeArray 1D/2D conversion, VARIANT types (integers, floats, bools, strings, VT_DATE, VT_CY), error decoding, roundtrip serialization, and RAII memory safety guards (`ScopedVariant` and `ItemStatesGuard` drop verification, SafeArray bounds clamping with `i64` widening).
 - **`com::connector`**: Win32 GUID layout static assertions, rich metadata enumeration (`enumerate_server_details`), pure-Rust server connection mocks, and mock handler closures.
 - **`raw::hresult.rs`**: Strongly-typed Win32 HRESULT constants, signed cast verification, `is_connection_hresult` classification, and `format_hresult` output.
-- **`raw::memory.rs` & `raw::bridge.rs`**: Remote array invariants, remote pointer string conversion, safe slice copying, blob guard double-free prevention (`test_bridge_borrowed_blob_no_double_free`), and safe `FILETIME` duration calculation.
+- **`raw::memory.rs`**: Remote array invariants, remote pointer string conversion, safe slice copying, and safe `FILETIME` duration calculation.
 - **`errors.rs`**: `OpcError::friendly_hint(&self)` mapping across known COM error codes, non-COM variants returning `None`, standard `From` conversions, `is_connection_error` predicate, and `log_opc_err!` macro verification.
 - **`types.rs`**: `ServerIdentifier` conversion and display, `OpcServerInfo` display names and endpoints, UNC endpoint parsing (`OpcServerEndpoint`), 16-bit `OpcQuality` decomposition, major/substatus/limit roundtrips, string parsing, bracketed GUID formatting (`format_guid_bracketed`), numeric getters and `get_as<T>` extraction in `TagValues`, and handle semantics.
 - **`lib.rs`**: Re-export verification (`test_parse_quality_error_reexport`).
 - **`com::iterator`**: `StringIterator` null-PWSTR skipping, empty streams, error handling, RAII drop cleanup, and in-memory test vectors.
 - **`com::guard.rs`**: Thread COM initialization result type assertions, `GroupGuard` drop cleanup and disarm behavior, and `BrowsePositionGuard` position restoration on drop and disarm behavior.
 
-### 2. Integration Test Suites (4 Suites in `opc-da-client/tests/`)
+### 2. Integration Test Suites (4 Suites in `opc-da-client/tests/`, 8 tests)
 - **`batch_write_test`**: Validates multi-item atomic COM group batch write transactions, partial item error handling, and `WriteResult` status mapping.
 - **`handle_type_safety_test`**: Validates opaque newtype wrappers `ServerGroupHandle`, `ServerItemHandle`, `ClientGroupHandle`, `ClientItemHandle` enforcing strict compile-time non-interchangeability.
 - **`mock_contract_stability_test`**: Validates `MockOpcProvider` and `MockServerConnector` contract fidelity across all segregated role traits (`ServerDiscovery`, `TagBrowser`, `TagReader`, `TagWriter`).
@@ -355,7 +347,7 @@ Strongly-typed `OpcOperation` enum and `log_opc_err!` macro emit unified machine
 - **Artifact**: `MockOpcProvider` via `mockall`, allowing downstream consumers (`opc-cli`) to mock the entire OPC DA backend on any OS without COM dependencies.
 
 ### 6. Documentation Tests
-- Verified with `cargo test --doc -p opc-da-client --all-features` (78 doc-tests: 77 passed, 1 ignored, 2 compile-fail). Total workspace test suite: 228 tests (49 CLI unit + 173 client unit + 4 integration + 2 polyfill).
+- Verified with `cargo test --doc --workspace --all-features` (80 doc-tests in `opc-da-client`: 77 passed, 1 ignored, 2 compile-fail). Total workspace test suite: 339 total tests (56 CLI unit + 1 CLI integration + 192 client unit + 8 client integration + 2 polyfill = 259 compiled tests + 80 doctests).
 
 ---
 
@@ -588,7 +580,16 @@ Server enumeration intentionally does not filter exclusively for `CATID_OPCDASer
 Modern Windows releases enforce RPC packet integrity authentication (`RPC_C_AUTHN_LEVEL_PKT_INTEGRITY`) for DCOM activations. `opc-da-client` automatically applies security proxy blankets (`apply_proxy_blanket`) using packet integrity. For legacy environments (e.g. Windows 7 SP1 / Server 2008 R2), call `.with_legacy_dcom(true)` to fall back to `RPC_C_AUTHN_LEVEL_CONNECT`.
 
 ### Dual-Phase Failure Cooldown Circuit Breaker
-Unresponsive remote host endpoints trigger a 5-second failure cooldown recorded in `ConnectionPool::failure_cooldowns`. Subsequent connection or reconnect attempts within the 5-second window immediately short-circuit with a cached connection error, preventing RPC thread freezes and reconnection storms.
+Unresponsive remote host endpoints trigger a 5-second failure cooldown recorded in `ConnectionPool::failure_cooldowns`. Subsequent connection or reconnect attempts within the 5-second window immediately short-circuit with a cached connection error, preventing RPC thread freezes and reconnection storms. The cooldown table is strictly bounded to `MAX_COOLDOWNS = 256` entries with automatic expired and LRU eviction.
+
+### Worker Priority Queue Preemption
+The COM worker employs a dual-tier `PriorityRequestQueue` (split into `high` and `low` `VecDeque` queues), guaranteeing immediate FIFO preemption for interactive reads and writes over background polling tasks without worker thread starvation.
+
+### Collector Batch Accumulation
+`TagCollector::push_batch` enables batch insertion of discovered tag IDs under a single mutex lock acquisition, eliminating thread lock contention during high-volume recursive namespace browsing.
+
+### SafeArray Bounds Arithmetic Overflow Protection
+SafeArray element count calculation widens `lLbound` and `cElements` to signed `i64` prior to boundary verification, eliminating arithmetic wrap-around vulnerabilities on malicious 32-bit bound descriptors.
 
 ### Collision-Proof Group Naming
 Active and ephemeral OPC group names are generated using the process ID combined with an atomic sequence counter (`format!("opc-{:x}-{:x}", pid, seq)`). This eliminates COM group name collisions across multiple client instances or rapid reconnection cycles.

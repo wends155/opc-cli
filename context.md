@@ -1,5 +1,35 @@
 # Project Context Summary
 
+## 2026-09-07: Workspace-Wide Architecture, Documentation & Quality Synchronization (`opc-da-client`, `opc-cli`, `compat`, root)
+> 📝 **Context Update:**
+> * **Feature:** Consolidated execution of the Tier-L Implementation Plan resulting from dual subagent audits (`/update-doc` and `/architecture`) under the TAR-S cycle, restoring layer purity, achieving 100% rustdoc coverage without compiler warnings, updating behavioral contracts (`spec.md`), synchronizing root and crate architecture documents (`architecture.md`), adding README sentinels, and passing all 9 gates of `scripts/verify.ps1` with 339 total tests.
+> * **Changes:**
+>   - **Layer Inversion Remediation (`com/worker.rs`):**
+>     - Eliminated layer inversion import `use crate::provider::{TagCollector, WriteResult};`, merging `TagCollector` and `WriteResult` into `use crate::types::{...};`.
+>   - **Rustdoc Fortification & Link Warning Elimination:**
+>     - Added module doc header `//!` to `opc-da-client/src/com/client.rs` and resolved intra-doc links to ``[`crate::provider::OpcProvider`]``.
+>     - Enriched `# Arguments`, `# Returns`, `# Errors`, and offline-safe ````ignore` doctest examples across `TagCollector::push_batch`, `ServerIdentifier::as_prog_id`, `as_clsid`, `ComConnector::connect_endpoint`, `connect_endpoint_with_legacy`, `inspect_local_registration`, and `ComGuard::new`.
+>     - Added module doc header `//!` and documented all 10 exported `pub unsafe extern "system" fn` stubs with `# Safety`, `# Arguments`, and `# Returns` in `compat/winrt-error-polyfill/src/lib.rs`.
+>     - Documented all 7 `CurrentScreen` enum variants and 35 public struct fields across `NavigationState`, `DialogState`, `AutoRefresher`, `TaskManager`, `SearchEngine`, `ViewState`, and `App` in `opc-cli/src/app.rs`.
+>     - `cargo test --doc --workspace --all-features` passes cleanly (80 doctests: 78 passed + 2 compile-fail passed, 0 errors, 0 warnings).
+>   - **Behavioral Specification Parity (`opc-da-client/spec.md`):**
+>     - Updated verification commit hash to `00f1a1d`.
+>     - Reconciled `TagBatch` variants (`InlineSingle([u8; 31], u8)`, `into_shareable()`, etc.).
+>     - Documented `TagCollector::push_batch`, `ServerIdentifier::as_prog_id`, `as_clsid`, `PriorityRequestQueue`, connection cooldown cap `MAX_COOLDOWNS = 256` with LRU eviction, and `apply_proxy_blanket` error propagation.
+>     - Pruned phantom types (`ServerStatus`, `ServerState`, `GroupState`), registered `NamespaceType` and `BrowseFilter`.
+>     - Added Section 4: "Command / CLI Contracts" and Subsection 3.4 "Client Typestate Transitions (`OpcDaClient<C, State>`)".
+>     - Synchronized test inventory to exact workspace count: 339 total tests.
+>   - **Architecture Harmonization (`architecture.md` & `opc-da-client/architecture.md`):**
+>     - Root `architecture.md`: Updated layout (added `opc-cli/src/lib.rs`, `tests/`, `.ast-grep/`; pruned root `spec.md`). Documented submodules (`provider`, `types`, `errors`, `com::connector`, `com::discovery`, `com::guard`, `com::variant`, `raw::bindings`, `raw::hresult`). Removed dead `raw::bridge` and pruned FFI traits. Added `com::iterator` to `com::connector` imports. Updated AST-grep rule IDs (`no-panic-or-unwrap`, `require-safety-comment`). Updated `OpcError` variant count to 8. Added 3-Tier Layered Architecture Diagram and Typestate Transition Sequence Diagram.
+>     - `opc-da-client/architecture.md`: Purged `raw::bridge` from layout, module boundaries, dependency rules, and test strategies. Added `com::iterator` to `com::connector` imports. Aligned AST-grep rules and gate descriptions. Updated `OpcError` count to 8. Added `PriorityRequestQueue`, SafeArray `i64` widening, `TagCollector::push_batch`, and `MAX_COOLDOWNS = 256` bounding with LRU eviction to §14. Synchronized test counts to 339.
+>   - **Package Metadata & README Sentinels:**
+>     - Added `description` to root `Cargo.toml [workspace.package]`.
+>     - Aligned description and added `<!-- custom:start -->` / `<!-- custom:end -->` sentinel preservation blocks to `README.md` and `opc-da-client/README.md`.
+>   - **Verification Pipeline:**
+>     - Ran `pwsh -File scripts/verify.ps1`: All 9 verification gates passed with zero warnings and exit code 0 across all 339 tests.
+> * **New Constraints:** `com/worker.rs` must import domain models exclusively from `crate::types`. COM connector doc examples must remain marked ````ignore` to prevent offline DCOM network calls. Custom sections in `README.md` must remain enclosed within sentinel blocks.
+> * **Pruned:** Layer inversion import `com/worker.rs` -> `provider`; dead `raw::bridge` architecture entries; phantom root `spec.md` layout entry; stale test suite metrics (reconciled to 339 total tests).
+
 ## 2026-09-07: Multi-Lens Code Review Remediation & Architectural Hardening (`opc-da-client`, `opc-cli`)
 > 📝 **Context Update:**
 > * **Feature:** Complete execution of the 24-step Implementation Plan addressing all 14 findings across Logic, Design, Performance, Security, and API lenses from `review_report.md` under the TAR-S cycle and strict Builder rules with zero warnings and clean passes across all 9 gates of `scripts/verify.ps1`.
