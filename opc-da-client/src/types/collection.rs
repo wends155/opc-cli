@@ -274,7 +274,22 @@ impl From<TagExtractError> for OpcError {
     fn from(err: TagExtractError) -> Self {
         match err {
             TagExtractError::ReadFailed { source, .. } => source,
-            other => Self::Conversion(other.to_string()),
+            TagExtractError::TypeMismatch {
+                value, expected, ..
+            } => Self::Conversion(crate::errors::ConversionError::TypeMismatch {
+                actual: value,
+                expected,
+            }),
+            TagExtractError::NotRequested(tag) => {
+                Self::Conversion(crate::errors::ConversionError::Other(format!(
+                    "Tag '{tag}' was not requested in this read batch"
+                )))
+            }
+            TagExtractError::NoValue(tag) => {
+                Self::Conversion(crate::errors::ConversionError::Other(format!(
+                    "Tag '{tag}' returned no value (null or missing)"
+                )))
+            }
         }
     }
 }

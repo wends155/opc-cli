@@ -463,10 +463,12 @@ Implemented for any type `T: Into<WriteBatch>`.
 
 | Source Error | Target Variant | Formatted Message |
 | :--- | :--- | :--- |
-| `std::sync::mpsc::RecvError` | `OpcError::Internal` | `"COM worker init channel disconnected: {err}"` |
-| `tokio::sync::oneshot::error::RecvError` | `OpcError::Internal` | `"COM worker shut down during request: {err}"` |
-| `tokio::sync::mpsc::error::SendError<T>` | `OpcError::Internal` | `"COM worker channel closed (worker stopped): {err}"` |
-| `std::sync::PoisonError<T>` | `OpcError::Internal` | `"Synchronization lock poisoned: {err}"` |
+| `std::sync::mpsc::RecvError` | `OpcError::Worker(WorkerError::InitChannelDisconnected)` | `"COM worker init channel disconnected: {err}"` |
+| `tokio::sync::oneshot::error::RecvError` | `OpcError::Worker(WorkerError::ResponseChannelClosed)` | `"COM worker shut down during request"` |
+| `tokio::sync::mpsc::error::SendError<T>` | `OpcError::Worker(WorkerError::RequestChannelClosed)` | `"COM worker channel closed (worker stopped)"` |
+| `std::sync::PoisonError<T>` | `OpcError::Worker(WorkerError::LockPoisoned)` | `"Synchronization lock poisoned: {err}"` |
+| `tokio::task::JoinError` | `OpcError::Worker(WorkerError::TaskJoin)` | `"Async task join failed: {err}"` |
+| `std::num::TryFromIntError` | `OpcError::IntConversion` | Lossless integer conversion failure |
 
 ---
 
@@ -712,11 +714,13 @@ Before calling `browse_recursive`, `browse_tags` attempts `browse_opc_item_ids(B
 - `OpcError::Com { source: windows::core::Error }`: Propagated Windows COM failure with HRESULT.
 - `OpcError::Connection(String)`: Target host/server connection failure.
 - `OpcError::Server(String, u32)`: Server-specific error reported via status code.
-- `OpcError::Conversion(String)`: Data type conversion failure.
+- `OpcError::Conversion(ConversionError)`: Structured data conversion, browse discriminant, endpoint parsing, or type mismatch failure.
+- `OpcError::Worker(WorkerError)`: Background COM worker thread lifecycle, thread panic, channel closure, or lock poisoning.
 - `OpcError::IntConversion(std::num::TryFromIntError)`: Lossless integer conversion failure preserving source standard error.
 - `OpcError::InvalidState(String)`: Invalid operation sequence or unexpected server state.
 - `OpcError::NotImplemented(String)`: Unsupported optional COM interface or feature.
-- `OpcError::Internal(String)`: Channel, worker thread, or internal invariant failure.
+- `OpcError::Timeout(std::time::Duration)`: Operation timed out before completion.
+- `OpcError::Internal(String)`: Internal invariant failure.
 
 ---
 
@@ -884,14 +888,14 @@ stateDiagram-v2
         [*] --> Idle
         Idle --> ProcessingRequest : recv(ComRequest)
         ProcessingRequest --> Idle : reply(Result) via oneshot
-        ProcessingRequest --> Idle : catch_unwind (Driver Panic -> OpcError::Internal)
+        ProcessingRequest --> Idle : catch_unwind (Driver Panic -> OpcError::Worker(WorkerError::Panic))
     }
     Running --> Closed : Client Sender Dropped (Disconnect)
     Running --> Closed : Outer Thread Loop Panic
     Closed --> [*] : CoUninitialize & Thread Exit
 ```
 
-- **Panic Isolation Guarantee:** If a vendor COM server crashes or panics within a request handler, Tier 1 `std::panic::catch_unwind` catches the panic, constructs an `OpcError::Internal`, sends the failure to the client's `oneshot` channel, and keeps the worker loop running for subsequent operations.
+- **Panic Isolation Guarantee:** If a vendor COM server crashes or panics within a request handler, Tier 1 `std::panic::catch_unwind` catches the panic, constructs an `OpcError::Worker(WorkerError::Panic(msg))`, sends the failure to the client's `oneshot` channel, and keeps the worker loop running for subsequent operations.
 - **Connection Cache:** Connected server instances are pooled and cached by `ServerIdentifier`. Stale connection errors (`RPC_S_*`) trigger transparent eviction and single-retry reconnection.
 - **Persistent Group Cache:** Read operations on identical tag lists reuse active OPC groups, eliminating repeated `add_group`/`add_items` round-trips.
 

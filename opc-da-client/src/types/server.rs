@@ -397,7 +397,9 @@ impl FromStr for OpcServerEndpoint {
         let trimmed = s.trim();
         if trimmed.is_empty() {
             return Err(OpcError::Conversion(
-                "Server identifier cannot be empty".into(),
+                crate::errors::ConversionError::InvalidEndpoint(
+                    "Server identifier cannot be empty".into(),
+                ),
             ));
         }
 
@@ -412,7 +414,9 @@ impl FromStr for OpcServerEndpoint {
                 let server = raw_server.trim();
                 if server.is_empty() {
                     return Err(OpcError::Conversion(
-                        "Missing server identifier in endpoint UNC path".into(),
+                        crate::errors::ConversionError::InvalidEndpoint(
+                            "Missing server identifier in endpoint UNC path".into(),
+                        ),
                     ));
                 }
                 Ok(Self {
@@ -421,7 +425,10 @@ impl FromStr for OpcServerEndpoint {
                 })
             } else {
                 Err(OpcError::Conversion(
-                    "Invalid endpoint UNC path: expected host and server separated by '\\'".into(),
+                    crate::errors::ConversionError::InvalidEndpoint(
+                        "Invalid endpoint UNC path: expected host and server separated by '\\'"
+                            .into(),
+                    ),
                 ))
             }
         } else {

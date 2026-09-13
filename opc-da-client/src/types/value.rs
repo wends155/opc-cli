@@ -253,15 +253,18 @@ impl TryFrom<OpcValue> for i64 {
         match value {
             OpcValue::Int(i) => Ok(i),
             OpcValue::UInt(u) => i64::try_from(u)
-                .map_err(|_| crate::errors::OpcError::Conversion("UInt exceeds i64 range".into())),
+                .map_err(|_| crate::errors::OpcError::conversion("UInt exceeds i64 range")),
             OpcValue::Float(f)
                 if f.fract() == 0.0 && f >= i64::MIN as f64 && f < i64::MAX as f64 =>
             {
                 Ok(f as i64)
             }
-            other => Err(crate::errors::OpcError::Conversion(format!(
-                "Cannot convert {other:?} to i64"
-            ))),
+            other => Err(crate::errors::OpcError::conversion(
+                crate::errors::ConversionError::TypeMismatch {
+                    actual: format!("{other:?}"),
+                    expected: "i64",
+                },
+            )),
         }
     }
 }
@@ -278,17 +281,20 @@ impl TryFrom<OpcValue> for i32 {
     fn try_from(value: OpcValue) -> Result<Self, Self::Error> {
         match value {
             OpcValue::Int(i) => i32::try_from(i)
-                .map_err(|_| crate::errors::OpcError::Conversion("Int exceeds i32 range".into())),
+                .map_err(|_| crate::errors::OpcError::conversion("Int exceeds i32 range")),
             OpcValue::UInt(u) => i32::try_from(u)
-                .map_err(|_| crate::errors::OpcError::Conversion("UInt exceeds i32 range".into())),
+                .map_err(|_| crate::errors::OpcError::conversion("UInt exceeds i32 range")),
             OpcValue::Float(f)
                 if f.fract() == 0.0 && f >= i32::MIN as f64 && f <= i32::MAX as f64 =>
             {
                 Ok(f as i32)
             }
-            other => Err(crate::errors::OpcError::Conversion(format!(
-                "Cannot convert {other:?} to i32"
-            ))),
+            other => Err(crate::errors::OpcError::conversion(
+                crate::errors::ConversionError::TypeMismatch {
+                    actual: format!("{other:?}"),
+                    expected: "i32",
+                },
+            )),
         }
     }
 }
@@ -307,14 +313,17 @@ impl TryFrom<OpcValue> for u64 {
         match value {
             OpcValue::UInt(u) => Ok(u),
             OpcValue::Int(i) => u64::try_from(i).map_err(|_| {
-                crate::errors::OpcError::Conversion("Negative Int cannot convert to u64".into())
+                crate::errors::OpcError::conversion("Negative Int cannot convert to u64")
             }),
             OpcValue::Float(f) if f.fract() == 0.0 && f >= 0.0 && f < u64::MAX as f64 => {
                 Ok(f as u64)
             }
-            other => Err(crate::errors::OpcError::Conversion(format!(
-                "Cannot convert {other:?} to u64"
-            ))),
+            other => Err(crate::errors::OpcError::conversion(
+                crate::errors::ConversionError::TypeMismatch {
+                    actual: format!("{other:?}"),
+                    expected: "u64",
+                },
+            )),
         }
     }
 }
@@ -332,15 +341,18 @@ impl TryFrom<OpcValue> for u32 {
     fn try_from(value: OpcValue) -> Result<Self, Self::Error> {
         match value {
             OpcValue::UInt(u) => u32::try_from(u)
-                .map_err(|_| crate::errors::OpcError::Conversion("UInt exceeds u32 range".into())),
+                .map_err(|_| crate::errors::OpcError::conversion("UInt exceeds u32 range")),
             OpcValue::Int(i) => u32::try_from(i)
-                .map_err(|_| crate::errors::OpcError::Conversion("Int out of u32 range".into())),
+                .map_err(|_| crate::errors::OpcError::conversion("Int out of u32 range")),
             OpcValue::Float(f) if f.fract() == 0.0 && f >= 0.0 && f <= u32::MAX as f64 => {
                 Ok(f as u32)
             }
-            other => Err(crate::errors::OpcError::Conversion(format!(
-                "Cannot convert {other:?} to u32"
-            ))),
+            other => Err(crate::errors::OpcError::conversion(
+                crate::errors::ConversionError::TypeMismatch {
+                    actual: format!("{other:?}"),
+                    expected: "u32",
+                },
+            )),
         }
     }
 }
@@ -354,9 +366,12 @@ impl TryFrom<OpcValue> for f64 {
             OpcValue::Float(f) => Ok(f),
             OpcValue::Int(i) => Ok(i as Self),
             OpcValue::UInt(u) => Ok(u as Self),
-            other => Err(crate::errors::OpcError::Conversion(format!(
-                "Cannot convert {other:?} to f64"
-            ))),
+            other => Err(crate::errors::OpcError::conversion(
+                crate::errors::ConversionError::TypeMismatch {
+                    actual: format!("{other:?}"),
+                    expected: "f64",
+                },
+            )),
         }
     }
 }
@@ -374,16 +389,19 @@ impl TryFrom<OpcValue> for f32 {
                 {
                     Ok(f as Self)
                 } else {
-                    Err(crate::errors::OpcError::Conversion(
-                        "Float exceeds f32 range".into(),
+                    Err(crate::errors::OpcError::conversion(
+                        "Float exceeds f32 range",
                     ))
                 }
             }
             OpcValue::Int(i) => Ok(i as Self),
             OpcValue::UInt(u) => Ok(u as Self),
-            other => Err(crate::errors::OpcError::Conversion(format!(
-                "Cannot convert {other:?} to f32"
-            ))),
+            other => Err(crate::errors::OpcError::conversion(
+                crate::errors::ConversionError::TypeMismatch {
+                    actual: format!("{other:?}"),
+                    expected: "f32",
+                },
+            )),
         }
     }
 }
@@ -396,9 +414,12 @@ impl TryFrom<OpcValue> for bool {
             OpcValue::Bool(b) => Ok(b),
             OpcValue::Int(i) => Ok(i != 0),
             OpcValue::UInt(u) => Ok(u != 0),
-            other => Err(crate::errors::OpcError::Conversion(format!(
-                "Cannot convert {other:?} to bool"
-            ))),
+            other => Err(crate::errors::OpcError::conversion(
+                crate::errors::ConversionError::TypeMismatch {
+                    actual: format!("{other:?}"),
+                    expected: "bool",
+                },
+            )),
         }
     }
 }

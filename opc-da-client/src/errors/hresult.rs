@@ -74,6 +74,7 @@ pub fn is_connection_hresult(hr: HRESULT) -> bool {
         RPC_S_SERVER_UNAVAILABLE
             | RPC_S_CALL_FAILED
             | RPC_S_SERVER_TOO_BUSY
+            | RPC_S_CALL_FAILED_DNE
             | CO_E_SERVER_EXEC_FAILURE
     )
 }
@@ -121,6 +122,7 @@ mod tests {
         assert!(is_connection_hresult(RPC_S_SERVER_UNAVAILABLE));
         assert!(is_connection_hresult(RPC_S_CALL_FAILED));
         assert!(is_connection_hresult(RPC_S_SERVER_TOO_BUSY));
+        assert!(is_connection_hresult(RPC_S_CALL_FAILED_DNE));
         assert!(is_connection_hresult(CO_E_SERVER_EXEC_FAILURE));
         assert!(!is_connection_hresult(E_POINTER));
         assert!(!is_connection_hresult(REGDB_E_CLASSNOTREG));

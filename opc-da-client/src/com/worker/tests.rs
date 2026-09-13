@@ -4,7 +4,7 @@ use crate::com::connector::{
     MockState,
 };
 use crate::com::guard::GroupGuard;
-use crate::errors::OpcError;
+use crate::errors::{OpcError, WorkerError};
 use crate::types::{
     ClientItemHandle, IntoWriteBatch, OpcQuality, OpcServerEndpoint, OpcValue, ServerGroupHandle,
     ServerItemHandle, TagBatch, TagCollector,
@@ -243,15 +243,16 @@ async fn test_worker_panic_propagation() {
         .await;
 
     assert!(result.is_err());
-    if let Err(OpcError::Internal(msg)) = result {
-        assert!(
-            msg.contains("shut down") || msg.contains("channel closed") || msg.contains("panicked"),
-            "Expected worker termination message, got: {}",
-            msg
-        );
-    } else {
-        panic!("Expected OpcError::Internal, got {:?}", result);
-    }
+    assert!(
+        matches!(
+            result,
+            Err(OpcError::Worker(
+                WorkerError::Panic(_) | WorkerError::ResponseChannelClosed
+            ))
+        ),
+        "Expected OpcError::Worker(Panic | ResponseChannelClosed), got {:?}",
+        result
+    );
 }
 
 #[tokio::test]
@@ -274,14 +275,14 @@ async fn test_worker_thread_recovery_after_panic() {
         .await;
 
     assert!(result.is_err());
-    if let Err(OpcError::Internal(msg)) = result {
-        assert!(
-            msg.contains("panicked"),
-            "Expected worker panic message, got: {msg}"
-        );
-    } else {
-        panic!("Expected OpcError::Internal, got {:?}", result);
-    }
+    assert!(
+        matches!(
+            result,
+            Err(OpcError::Worker(WorkerError::Panic(ref msg))) if msg.contains("panic")
+        ),
+        "Expected OpcError::Worker(Panic), got {:?}",
+        result
+    );
 
     // Now disarm the panic trigger and verify worker thread survived and processes subsequent requests
     state
@@ -669,7 +670,10 @@ async fn test_worker_channel_drop_error_propagation() {
         })
         .await
         .unwrap_err();
-    assert!(matches!(err, OpcError::Internal(msg) if msg.contains("channel closed")));
+    assert!(matches!(
+        err,
+        OpcError::Worker(WorkerError::RequestChannelClosed | WorkerError::ResponseChannelClosed)
+    ));
 }
 
 #[tokio::test]

@@ -12,7 +12,7 @@ use crate::com::connector::{
     ConnectedGroup, ConnectedServer, GroupConfig, GroupItemDef, ServerConnector,
 };
 use crate::com::guard::GroupGuard;
-use crate::errors::{OpcError, OpcOperation, OpcResult};
+use crate::errors::{OpcError, OpcOperation, OpcResult, WorkerError};
 use crate::log_opc_err;
 use crate::types::{
     ClientItemHandle, OpcServerEndpoint, OpcServerInfo, OpcValue, ServerIdentifier, TagCollector,
@@ -207,7 +207,7 @@ impl<C: ServerConnector + 'static> ComWorker<C> {
 
         init_rx.recv().map_err(|e| {
             tracing::error!(error = ?e, "COM worker thread disconnected during init");
-            OpcError::Internal(format!("COM worker init failed: {e}"))
+            WorkerError::InitChannelDisconnected(e.to_string())
         })??;
 
         tracing::debug!("COM worker thread started");
@@ -242,7 +242,7 @@ impl<C: ServerConnector + 'static> ComWorker<C> {
 
         init_rx.await.map_err(|e| {
             tracing::error!(error = ?e, "COM worker thread disconnected during init");
-            OpcError::Internal(format!("COM worker init failed: {e}"))
+            WorkerError::InitChannelDisconnected(e.to_string())
         })??;
 
         tracing::debug!("COM worker thread started asynchronously");
@@ -266,7 +266,9 @@ impl<C: ServerConnector + 'static> ComWorker<C> {
             .is_some_and(std::thread::JoinHandle::is_finished)
         {
             tracing::error!("COM worker thread panicked or exited unexpectedly");
-            return Err(OpcError::Internal("COM worker thread panicked".into()));
+            return Err(OpcError::Worker(WorkerError::Panic(
+                "COM worker thread panicked".into(),
+            )));
         }
 
         let (tx, rx) = oneshot::channel();
@@ -430,14 +432,13 @@ fn dispatch_discovery_request<R, F>(
         }
         Err(payload) => {
             let msg = extract_panic_message(&*payload);
+            let err: OpcError = WorkerError::Panic(msg).into();
             log_opc_err!(
-                &OpcError::Internal(format!("COM worker panicked: {msg}")),
+                &err,
                 op,
                 host = %host_str,
             );
-            let _ = reply.send(Err(OpcError::Internal(format!(
-                "COM worker panicked: {msg}"
-            ))));
+            let _ = reply.send(Err(err));
         }
     }
 }
@@ -469,14 +470,13 @@ fn dispatch_pooled_request<C, R, F>(
                 pool.remove(&endpoint_clone);
             }));
             let msg = extract_panic_message(&*payload);
+            let err: OpcError = WorkerError::Panic(msg).into();
             log_opc_err!(
-                &OpcError::Internal(format!("COM worker panicked: {msg}")),
+                &err,
                 op,
                 server = %endpoint_clone,
             );
-            let _ = reply.send(Err(OpcError::Internal(format!(
-                "COM worker panicked: {msg}"
-            ))));
+            let _ = reply.send(Err(err));
         }
     }
 }

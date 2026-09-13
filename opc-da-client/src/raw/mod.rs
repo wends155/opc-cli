@@ -4,5 +4,5 @@
 //! (`memory`), and COM HRESULT error definitions (`hresult`).
 
 pub mod bindings;
-pub mod hresult;
+pub use crate::errors::hresult;
 pub mod memory;

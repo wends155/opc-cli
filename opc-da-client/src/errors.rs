@@ -1,5 +1,12 @@
 //! Error types for OPC DA operations.
 
+pub mod conversion;
+pub mod hresult;
+pub mod worker;
+
+pub use self::conversion::ConversionError;
+pub use self::worker::WorkerError;
+
 use std::time::Duration;
 use thiserror::Error;
 
@@ -50,8 +57,12 @@ pub enum OpcError {
     Server(String, u32),
 
     /// Errors during data type conversion or VARIANT processing.
-    #[error("Data conversion failed: {0}")]
-    Conversion(String),
+    #[error("Conversion error: {0}")]
+    Conversion(#[from] ConversionError),
+
+    /// Worker thread or concurrency synchronization failure.
+    #[error("Worker error: {0}")]
+    Worker(#[from] WorkerError),
 
     /// Operation attempted in an invalid state (e.g., group already exists).
     #[error("Invalid state: {0}")]
@@ -65,47 +76,44 @@ pub enum OpcError {
     #[error("Operation timed out after {0:?}")]
     Timeout(Duration),
 
-    /// Integer conversion error (e.g. out of range).
-    #[error("Integer conversion failed: {source}")]
-    IntConversion {
-        /// The underlying conversion error.
-        #[from]
-        #[source]
-        source: std::num::TryFromIntError,
-    },
-
     /// Catch-all for unexpected internal failures.
     #[error("Internal error: {0}")]
     Internal(String),
 }
 
+impl From<std::num::TryFromIntError> for OpcError {
+    fn from(err: std::num::TryFromIntError) -> Self {
+        Self::Conversion(ConversionError::IntConversion(err))
+    }
+}
+
 impl From<tokio::task::JoinError> for OpcError {
     fn from(err: tokio::task::JoinError) -> Self {
-        Self::Internal(format!("Async task join failed: {err}"))
+        Self::Worker(WorkerError::from(err))
     }
 }
 
 impl From<std::sync::mpsc::RecvError> for OpcError {
     fn from(err: std::sync::mpsc::RecvError) -> Self {
-        Self::Internal(format!("COM worker init channel disconnected: {err}"))
+        Self::Worker(WorkerError::from(err))
     }
 }
 
 impl From<tokio::sync::oneshot::error::RecvError> for OpcError {
     fn from(err: tokio::sync::oneshot::error::RecvError) -> Self {
-        Self::Internal(format!("COM worker shut down during request: {err}"))
+        Self::Worker(WorkerError::from(err))
     }
 }
 
 impl<T> From<tokio::sync::mpsc::error::SendError<T>> for OpcError {
     fn from(err: tokio::sync::mpsc::error::SendError<T>) -> Self {
-        Self::Internal(format!("COM worker channel closed (worker stopped): {err}"))
+        Self::Worker(WorkerError::from(err))
     }
 }
 
 impl<T> From<std::sync::PoisonError<T>> for OpcError {
     fn from(err: std::sync::PoisonError<T>) -> Self {
-        Self::Internal(format!("Synchronization lock poisoned: {err}"))
+        Self::Worker(WorkerError::from(err))
     }
 }
 
@@ -118,17 +126,9 @@ impl From<windows::core::HRESULT> for OpcError {
 }
 
 fn format_com_hint(source: &windows::core::Error) -> String {
-    #[cfg(feature = "opc-da-backend")]
-    {
-        if let Some(hint) = crate::raw::hresult::friendly_hresult_hint(source.code()) {
-            format!(" ({hint})")
-        } else {
-            String::new()
-        }
-    }
-    #[cfg(not(feature = "opc-da-backend"))]
-    {
-        let _ = source;
+    if let Some(hint) = self::hresult::friendly_hresult_hint(source.code()) {
+        format!(" ({hint})")
+    } else {
         String::new()
     }
 }
@@ -152,8 +152,8 @@ impl OpcError {
     pub fn is_connection_error(&self) -> bool {
         match self {
             Self::Connection(_) | Self::Timeout(_) => true,
-            #[cfg(feature = "opc-da-backend")]
-            Self::Com { source } => crate::raw::hresult::is_connection_hresult(source.code()),
+            Self::Com { source } => self::hresult::is_connection_hresult(source.code()),
+            Self::Worker(w) => w.is_connection_error(),
             _ => false,
         }
     }
@@ -170,20 +170,20 @@ impl OpcError {
     /// ```
     #[must_use]
     pub fn friendly_hint(&self) -> Option<&'static str> {
-        #[cfg(feature = "opc-da-backend")]
-        {
-            match self {
-                Self::Com { source } => crate::raw::hresult::friendly_hresult_hint(source.code()),
-                Self::Server(_, code) => crate::raw::hresult::friendly_hresult_hint(
-                    windows::core::HRESULT((*code).cast_signed()),
-                ),
-                _ => None,
+        match self {
+            Self::Com { source } => self::hresult::friendly_hresult_hint(source.code()),
+            Self::Server(_, code) => {
+                self::hresult::friendly_hresult_hint(windows::core::HRESULT((*code).cast_signed()))
             }
+            Self::Worker(w) => w.friendly_hint(),
+            _ => None,
         }
-        #[cfg(not(feature = "opc-da-backend"))]
-        {
-            None
-        }
+    }
+
+    /// Creates a new `Conversion` error from any type converting into `ConversionError`.
+    #[must_use]
+    pub fn conversion(err: impl Into<ConversionError>) -> Self {
+        Self::Conversion(err.into())
     }
 
     /// Constructs an [`OpcError::Connection`] indicating failure to resolve a server name to a CLSID.
@@ -459,27 +459,37 @@ mod tests {
     fn test_channel_error_conversions_and_lock_poison() {
         let mpsc_err = std::sync::mpsc::RecvError;
         let opc_err: OpcError = mpsc_err.into();
-        assert!(matches!(opc_err, OpcError::Internal(msg) if msg.contains("channel disconnected")));
+        assert!(matches!(
+            opc_err,
+            OpcError::Worker(WorkerError::InitChannelDisconnected(_))
+        ));
 
         let (tx, rx) = tokio::sync::oneshot::channel::<()>();
         drop(tx);
         let oneshot_err = rx.blocking_recv().unwrap_err();
         let opc_err: OpcError = oneshot_err.into();
-        assert!(
-            matches!(opc_err, OpcError::Internal(msg) if msg.contains("shut down during request"))
-        );
+        assert!(matches!(
+            opc_err,
+            OpcError::Worker(WorkerError::ResponseChannelClosed)
+        ));
 
         let (tx, rx) = tokio::sync::mpsc::channel::<()>(1);
         drop(rx);
         let send_err = tx.try_send(()).unwrap_err();
         if let tokio::sync::mpsc::error::TrySendError::Closed(e) = send_err {
             let opc_err: OpcError = tokio::sync::mpsc::error::SendError(e).into();
-            assert!(matches!(opc_err, OpcError::Internal(msg) if msg.contains("channel closed")));
+            assert!(matches!(
+                opc_err,
+                OpcError::Worker(WorkerError::RequestChannelClosed)
+            ));
         }
 
         let lock = std::sync::Mutex::new(0);
         let opc_err: OpcError = std::sync::PoisonError::new(lock.lock().unwrap()).into();
-        assert!(matches!(opc_err, OpcError::Internal(msg) if msg.contains("lock poisoned")));
+        assert!(matches!(
+            opc_err,
+            OpcError::Worker(WorkerError::LockPoisoned(_))
+        ));
 
         let conn_err = OpcError::connection_failed("Matrikon.OPC", "invalid CLSID");
         assert!(matches!(conn_err, OpcError::Connection(msg) if msg.contains("Matrikon.OPC")));
@@ -550,5 +560,46 @@ mod tests {
 
         let conv_err = OpcError::Conversion("conv error".into());
         assert_ne!(err, conv_err);
+    }
+
+    #[test]
+    fn test_worker_error_taxonomy() {
+        use crate::errors::worker::WorkerError;
+        let panic_err = WorkerError::Panic("simulated thread crash".into());
+        assert!(panic_err.is_connection_error());
+        assert!(panic_err.friendly_hint().is_some());
+
+        let req_closed = WorkerError::RequestChannelClosed;
+        assert!(req_closed.is_connection_error());
+
+        let init_err = WorkerError::InitializationFailed("E_FAIL".into());
+        assert!(!init_err.is_connection_error());
+        assert!(init_err.friendly_hint().is_some());
+
+        let opc_err: OpcError = panic_err.into();
+        assert!(opc_err.is_connection_error());
+        assert_eq!(
+            opc_err.friendly_hint(),
+            WorkerError::Panic(String::new()).friendly_hint()
+        );
+    }
+
+    #[test]
+    fn test_conversion_error_taxonomy() {
+        use crate::errors::conversion::ConversionError;
+        let c_err = ConversionError::InvalidBrowseType(99);
+        assert_eq!(c_err.to_string(), "Invalid browse type discriminant: 99");
+
+        let opc_err: OpcError = c_err.into();
+        assert!(matches!(
+            opc_err,
+            OpcError::Conversion(ConversionError::InvalidBrowseType(99))
+        ));
+
+        let from_str_err: ConversionError = "parse error".into();
+        assert_eq!(
+            from_str_err.to_string(),
+            "Data conversion failed: parse error"
+        );
     }
 }

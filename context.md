@@ -1,5 +1,33 @@
 # Project Context Summary
 
+## 2026-09-13: Block 2 (Wave 2A: Hierarchical Composite Error Taxonomy & DAG Inversion Remediation) Completed (`opc-da-client`)
+> 📝 **Context Update:**
+> * **Feature:** Execution of Block 2 of the 0.3.0 modularity refactoring roadmap (`review_report.md` Findings 7–9), establishing a composite error taxonomy, eradicating stringly-typed worker panics, and eliminating leaf-to-FFI DAG inversion. All 9 gates of `scripts/verify.ps1` pass with zero warnings.
+> * **Changes:**
+>   - **DAG Inversion Remediation (`errors::hresult`):**
+>     - Relocated Win32 COM HRESULT constants, classification helpers (`is_connection_hresult`), verbatim actionable diagnostic hints (`friendly_hresult_hint`), and `format_hresult` to unconditional leaf `src/errors/hresult.rs`.
+>     - Deleted obsolete `src/raw/hresult.rs` and replaced it with `pub use crate::errors::hresult;` in `raw/mod.rs`, breaking the Tier 1 leaf -> Tier 3 FFI circular/inverted dependency.
+>     - `errors.rs` now has zero dependencies on `raw`.
+>   - **Structured Worker Error Subsystem (`errors::worker::WorkerError`):**
+>     - Introduced dedicated `WorkerError` enum capturing `InitializationFailed`, `Panic(String)`, `RequestChannelClosed`, `ResponseChannelClosed`, `InitChannelDisconnected`, `TaskJoin`, and `LockPoisoned`.
+>     - Embedded `Worker(#[from] WorkerError)` into `OpcError`.
+>     - Refactored `com::worker` panic containment (`dispatch_discovery_request`, `dispatch_pooled_request`) and thread exit checks (`send_request`) to produce structured `WorkerError::Panic(msg)`.
+>     - Integrated worker channel errors into `WorkerError::RequestChannelClosed` and `WorkerError::ResponseChannelClosed`.
+>     - Preserved connection error classification: `WorkerError::is_connection_error()` returns `true` for panics and channel drops.
+>   - **Structured Conversion Error Subsystem (`errors::conversion::ConversionError`):**
+>     - Created foundational `ConversionError` in `src/errors/conversion.rs` (`InvalidBrowseType`, `InvalidBrowseDirection`, `InvalidEndpoint`, `IntConversion`, `TypeMismatch`, `Other`) with zero imports from `crate::types` to prevent circular type dependencies (`E0072`).
+>     - Preserved unboxed `TagExtractError::ReadFailed { tag, source: OpcError }` and updated `From<TagExtractError> for OpcError` to directly unwrap root `source: OpcError`, preserving underlying HRESULT codes, transport connection errors, and reconnect triggers.
+>     - Updated 14 primitive `TryFrom<OpcValue>` call sites in `types/value.rs` to use `ConversionError::TypeMismatch`.
+>     - Refactored `BrowseType`, `BrowseDirection`, and `OpcServerEndpoint::from_str` to return structured `ConversionError`.
+>   - **Composite Error & Crate Root Re-exports:**
+>     - Implemented `OpcError::conversion(err)` and explicit forwarding `From` impls for channel/sync errors and `TryFromIntError`.
+>     - Re-exported `WorkerError` and `ConversionError` at crate root `src/lib.rs`.
+>   - **Verification & Documentation:**
+>     - All 9 gates of `pwsh scripts/verify.ps1` pass cleanly with exit code 0.
+>     - Synchronized `architecture.md`, `opc-da-client/spec.md`, and `task.md`.
+> * **New Constraints:** Subsystem errors must be encapsulated into structured domain errors (`WorkerError`, `ConversionError`) rather than ad-hoc `OpcError::Internal`. Leaf `errors/` must never import from upper layers (`com/`, `raw/`, or `types/`).
+> * **Pruned:** Stringly-typed worker panics and channel errors; `src/raw/hresult.rs`.
+
 ## 2026-09-13: Block 1 (Wave 1: Foundation Leaves & Dependency Hygiene) Completed (`opc-da-client`)
 > 📝 **Context Update:**
 > * **Feature:** Execution of Block 1 of the 0.3.0 modularity refactoring roadmap (`review_report.md` Findings 1–6), passing all 9 gates of `scripts/verify.ps1` with zero warnings.

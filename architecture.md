@@ -72,7 +72,11 @@ opc-cli/
 │       │   ├── collection.rs   # TagValue, TagSuccess, TagFailure, TagResult, TagValues collection
 │       │   ├── collector.rs    # TagCollector, WriteResult
 │       │   └── tests.rs        # Domain type test suite
-│       ├── errors.rs           # Canonical OpcError (is_connection_error, Timeout, From<HRESULT>), OpcResult, OpcOperation, and log_opc_err!
+│       ├── errors/             # Hierarchical error subsystem
+│       │   ├── hresult.rs      # Unconditional Win32 COM HRESULT constants & classification
+│       │   ├── worker.rs       # WorkerError (thread panic, channel closures, init failure)
+│       │   └── conversion.rs   # ConversionError (browse types, endpoints, type mismatch)
+│       ├── errors.rs           # Canonical composite OpcError (wrapping WorkerError, ConversionError), OpcResult, OpcOperation, and log_opc_err!
 │       ├── com/                # COM subsystem (feature: opc-da-backend)
 │       │   ├── mod.rs          # COM module root & re-exports
 │       │   ├── client.rs       # OpcDaClient implementation
@@ -95,9 +99,8 @@ opc-cli/
 │       │       ├── browse.rs   # Flat/hierarchical namespace traversal with cooperative chunking & TagCollector::harvest (handle_browse)
 │       │       └── tests.rs    # Dedicated worker test suite & mock fixtures (panic recovery tests, 0 warnings)
 │       └── raw/                # Crate-internal low-level FFI subsystem (pub(crate))
-│           ├── mod.rs          # Raw module root
+│           ├── mod.rs          # Raw module root (re-exports errors::hresult)
 │           ├── bindings/       # Frozen COM bindings (windgen output, read-only: da, comn)
-│           ├── hresult.rs      # Strongly-typed Win32 HRESULT constants & classification
 │           └── memory.rs       # Safe unmanaged COM memory management (RemotePointer, RemoteArray)
 ├── compat/                     # Windows 7 / NT 6.1 Polyfill DLL Crates (#![no_std], std unit-tested)
 │   ├── bcrypt-polyfill/       # ProcessPrng -> RtlGenRandom polyfill (256 MiB chunking, null-safe)
@@ -171,7 +174,12 @@ opc-cli/
 - **Mock Availability**: N/A (pure domain types).
 
 ### `opc-da-client::errors` (Domain Error Hierarchy)
-- **Owns**: Canonical `OpcError` enum across 9 structured variants: `Com`, `Connection`, `Server`, `Conversion`, `IntConversion`, `InvalidState`, `NotImplemented`, `Timeout(Duration)`, and `Internal`. Provides `is_connection_error`, `friendly_hint`, `OpcOperation`, and `log_opc_err!`.
+- **Owns**: Composite `OpcError` enum wrapping dedicated subsystem errors:
+  - `Worker(WorkerError)`: Dedicated worker thread lifecycle, thread panics, channel closures, init disconnects, and mutex lock poisoning.
+  - `Conversion(ConversionError)`: Structured data conversion, browse discriminants, endpoint parsing, and type mismatches with zero upstream coupling to `types/`.
+  - Leaf domain variants: `Com`, `Connection`, `Server`, `IntConversion`, `InvalidState`, `NotImplemented`, `Timeout(Duration)`, and `Internal`.
+  - Unconditional Win32 HRESULT diagnostic constants and friendly hints in `errors::hresult` (inverting leaf-to-FFI dependency).
+  - Inherent diagnostic methods (`is_connection_error`, `friendly_hint`), `OpcOperation`, and `log_opc_err!`.
 - **Does NOT Own**: UI error formatting or transport retries.
 - **Trait Interfaces**: `std::error::Error`, `thiserror`.
 - **Mock Availability**: N/A (pure error definitions).
@@ -320,9 +328,9 @@ The project uses a unified dual-interface build system:
 
 ## 8. Error Handling Strategy
 
-- **Library Domain Errors**: `OpcError` (defined in `opc-da-client`) handles domain failures via `thiserror` across 9 structured variants: `Com`, `Connection`, `Server`, `Conversion`, `IntConversion`, `InvalidState`, `NotImplemented`, `Timeout(Duration)`, and `Internal`.
-- **Connection Failure Factory & Predicates**: `OpcError::connection_failed(source)` constructs actionable connection failures, while `OpcError::is_connection_error(&self)` identifies recoverable transport/RPC dropouts.
-- **Friendly Hint Engine**: `OpcError::friendly_hint(&self)` and `raw::hresult::friendly_hresult_hint` map technical HRESULT codes (e.g. `0x800706BA` RPC Unavailable, `0x80070005` DCOM Access Denied) to actionable plain-English text.
+- **Library Domain Errors**: `OpcError` (defined in `opc-da-client`) handles domain failures via `thiserror` as a composite enum wrapping specialized subsystem error enums (`Worker(WorkerError)`, `Conversion(ConversionError)`) alongside domain variants (`Com`, `Connection`, `Server`, `IntConversion`, `InvalidState`, `NotImplemented`, `Timeout(Duration)`, and `Internal`).
+- **Connection Failure Factory & Predicates**: `OpcError::connection_failed(source)` constructs actionable connection failures, while `OpcError::is_connection_error(&self)` identifies recoverable transport/RPC dropouts, delegating across underlying HRESULT codes and `WorkerError::is_connection_error()`.
+- **Friendly Hint Engine**: `OpcError::friendly_hint(&self)` and `errors::hresult::friendly_hresult_hint` map technical HRESULT codes (e.g. `0x800706BA` RPC Unavailable, `0x80070005` DCOM Access Denied) to actionable plain-English text. Relocating HRESULT diagnostics to unconditional `errors::hresult` remediates DAG inversion, removing any dependency from `errors` to `raw`.
 - **Coherent Tag Outcomes (`TagValue`)**: `TagValue` encapsulates reading outcomes as `Result<OpcValue, OpcError>`, accessed via `.outcome()`, `.value()`, and `.error()` accessors, completely eradicating invalid states (such as simultaneous `Some(val)` and `Some(err)` or both `None`).
 - **RAII Resource & Cursor Management (`GroupGuard`, `BrowsePositionGuard`)**: Temporary COM groups created during `read_tag_values` and `write_tag_value` are guarded by `GroupGuard<'_, S: ConnectedServer>` supporting `.disarm()`, guaranteeing deterministic `remove_group(handle, true)` invocation on `Drop` across all return paths, `?` operator exits, and thread panics. Namespace browsing uses `BrowsePositionGuard` to deterministically restore parent cursor position (`BrowseDirection::Up`) across error returns and thread panics.
 - **RAII Memory Safety Guards (`ScopedVariant`, `ItemStatesGuard`, `ItemResultsBlobGuard`, `CoTaskPwstr`)**: Win32 COM `VARIANT` allocations are strictly encapsulated in RAII drop guards: `ScopedVariant` guarantees deterministic `VariantClear` on `Drop` across tag write paths; `ItemStatesGuard` wraps `tagOPCITEMSTATE` slices across read paths, ensuring `VariantClear` is executed across all element variants before unmanaged memory is freed; `ItemResultsBlobGuard` wraps `tagOPCITEMRESULT` arrays and cleans up allocated blob pointers on `Drop`; `CoTaskPwstr` ensures dynamically allocated COM `PWSTR` strings are freed deterministically via `CoTaskMemFree` on `Drop`.

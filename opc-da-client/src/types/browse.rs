@@ -39,7 +39,9 @@ impl TryFrom<u32> for BrowseType {
             1 => Ok(Self::Branch),
             2 => Ok(Self::Leaf),
             3 => Ok(Self::Flat),
-            _ => Err(OpcError::Conversion(format!("Invalid BrowseType: {value}"))),
+            _ => Err(OpcError::Conversion(
+                crate::errors::ConversionError::InvalidBrowseType(value),
+            )),
         }
     }
 }
@@ -81,9 +83,9 @@ impl TryFrom<u32> for BrowseDirection {
             1 => Ok(Self::Up),
             2 => Ok(Self::Down),
             3 => Ok(Self::To),
-            _ => Err(OpcError::Conversion(format!(
-                "Invalid BrowseDirection: {value}"
-            ))),
+            _ => Err(OpcError::Conversion(
+                crate::errors::ConversionError::InvalidBrowseDirection(value),
+            )),
         }
     }
 }
