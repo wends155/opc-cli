@@ -3,7 +3,7 @@
 > **Behavioral Source of Truth** for the `opc-da-client` library crate.
 > Defines *what* each module should do — independent of current implementation.
 >
-> Last verified against: 83b053b
+> Last verified against: 8332d89
 
 ---
 
@@ -1278,7 +1278,7 @@ Defines the behavioral contract of the `opc-cli` binary interface:
 
 - [x] `OpcError::friendly_hint`, `OpcError::connection_failed`, `OpcError::is_connection_error` — runnable doctests in `errors.rs`.
 - [x] `OpcResult`, `OpcError` — runnable doctests in `errors.rs`.
-- [x] `TagValue`, `TagValue::is_good`, `TagResult`, `OpcValue`, `WriteResult`, `DisplayOption*`, `OpcValueOptionExt`, `SystemTimeOptionExt` — runnable doctests in `types/collection.rs`, `types/value.rs`, `types/collector.rs`.
+- [x] `TagValue`, `TagValue::is_good`, `OpcValue`, `WriteResult`, `DisplayOption*`, `OpcValueOptionExt`, `SystemTimeOptionExt` — runnable doctests in `types/collection.rs`, `types/value.rs`, `types/collector.rs`.
 - [x] `TagBatch` methods (`len`, `is_empty`, `iter_str`, `into_vec`) — runnable doctests in `types/batch.rs`.
 - [x] `TagValues` methods (`new`, `len`, `is_empty`, `get`, `get_value`, `get_as`, `get_f64`, `get_f32`, `get_i32`, `get_i64`, `get_u32`, `get_u64`, `get_bool`, `get_str`, `into_vec`, `as_slice`, `iter`) — runnable doctests in `types/collection.rs`.
 - [x] `OpcServerEndpoint` methods (`local`, `remote`, `is_remote`) and host normalization functions (`normalize_host_str`, `normalize_host`, `is_remote_host`) — runnable doctests in `types/server.rs`.
