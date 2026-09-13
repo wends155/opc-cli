@@ -1,5 +1,15 @@
 # Project Context Summary
 
+## 2026-09-14: Documentation Sync for 0.3.0 Modernization (`opc-da-client/spec.md`, `README.md`)
+> 📝 **Context Update:**
+> * **Feature:** Documentation sync for workspace (`opc-da-client/spec.md`, `opc-da-client/README.md`, `README.md`).
+> * **Changes:**
+>   - Updated `opc-da-client/spec.md` verification hash to `8332d89` and removed pruned `TagResult` reference from test checklist.
+>   - Synchronized `opc-da-client/README.md` to reflect native Rust 2024 AFIT (`impl Future + Send`) and bound `read_tags`/`read_tag` session methods.
+>   - Updated workspace root `README.md` to reference `ServerBackend` SPI trait and encapsulated `TagValue` outcomes.
+> * **New Constraints:** Documentation must always reflect native AFIT methods and unboxed `TagValue` outcome architecture.
+> * **Pruned:** Stale references to `async-trait` and legacy `TagResult` projection.
+
 ## 2026-09-14: Block 5 (Wave 4: Rust 2024 Native Async Traits, Public Surface Sealing & `opc-cli` Synchronization) Completed (`opc-da-client` & `opc-cli`)
 > 📝 **Context Update:**
 > * **Feature:** Execution of Block 5 of the 0.3.0 modularity refactoring roadmap (`review_report.md` Findings 16–18), establishing native Rust 2024 async trait methods (`impl Future<Output = ...> + Send`), completely eradicating the `async-trait` dependency and heap allocations, disambiguating inherent session methods (`read_tags`/`read_tag`), sealing crate surface via `pub(crate) mod com;`, parameterizing `opc-cli`'s `App<P: OpcProvider = OpcDaClient>` for static monomorphization with zero dynamic dispatch overhead, and migrating integration test suites.
