@@ -184,11 +184,8 @@ pub struct CreatedGroup<G> {
 
 // ── Connector & Facade Traits ───────────────────────────────────────
 
-/// Factory for connecting to OPC DA servers.
-pub trait ServerConnector: Send + Sync {
-    /// The server facade type returned by [`Self::connect`].
-    type Server: ConnectedServer;
-
+/// Factory for enumerating OPC DA server catalogs on local or remote hosts.
+pub trait ServerCatalogDiscovery: Send + Sync {
     /// Enumerate all OPC DA server ProgIDs on the specified host.
     ///
     /// Pass `"localhost"` or `""` for local server discovery.
@@ -219,6 +216,12 @@ pub trait ServerConnector: Send + Sync {
             })
             .collect())
     }
+}
+
+/// Factory for connecting to OPC DA servers.
+pub trait ServerConnector: Send + Sync {
+    /// The server facade type returned by [`Self::connect`].
+    type Server: ConnectedServer;
 
     /// Connect to an OPC DA server specified by an [`OpcServerEndpoint`].
     ///
@@ -251,6 +254,10 @@ pub trait ServerConnector: Send + Sync {
         self.connect_identifier(&ServerIdentifier::ProgId(server_name.to_string()))
     }
 }
+
+/// Composite service-provider interface combining connection lifecycle and catalog discovery.
+pub trait ServerBackend: ServerConnector + ServerCatalogDiscovery {}
+impl<T: ServerConnector + ServerCatalogDiscovery> ServerBackend for T {}
 
 /// Facade over a connected OPC DA server instance.
 pub trait ConnectedServer {

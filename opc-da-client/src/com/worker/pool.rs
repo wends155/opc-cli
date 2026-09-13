@@ -9,37 +9,37 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 /// Circuit breaker cooldown period for unreachable endpoints (5 seconds).
-pub const CIRCUIT_BREAKER_COOLDOWN: Duration = Duration::from_secs(5);
+pub(crate) const CIRCUIT_BREAKER_COOLDOWN: Duration = Duration::from_secs(5);
 
 /// Cached active group holding server handle, group proxy, item handles, and tag IDs.
 #[allow(dead_code)]
-pub struct CachedGroup<G> {
+pub(crate) struct CachedGroup<G> {
     /// Tag IDs associated with this cached group in registration order.
-    pub tags: Vec<String>,
+    pub(crate) tags: Vec<String>,
     /// Underlying connected group facade instance.
-    pub group: G,
+    pub(crate) group: G,
     /// Server-assigned handle for the group.
-    pub server_handle: ServerGroupHandle,
+    pub(crate) server_handle: ServerGroupHandle,
     /// Server-assigned handles for items corresponding to `tags`.
-    pub server_item_handles: Vec<ServerItemHandle>,
+    pub(crate) server_item_handles: Vec<ServerItemHandle>,
     /// Indices of items that were successfully registered on the server.
-    pub valid_indices: Vec<usize>,
+    pub(crate) valid_indices: Vec<usize>,
     /// Rejected item indices and their errors.
-    pub rejected_errors: Vec<(usize, OpcError)>,
+    pub(crate) rejected_errors: Vec<(usize, OpcError)>,
 }
 
 /// A connected server instance held in the connection pool with an optional cached active group.
-pub struct PooledServer<S: ConnectedServer> {
+pub(crate) struct PooledServer<S: ConnectedServer> {
     /// Connected server facade instance.
-    pub server: S,
+    pub(crate) server: S,
     /// Optional cached active group reused across consecutive reads of identical tag batches.
-    pub active_group: Option<CachedGroup<S::Group>>,
+    pub(crate) active_group: Option<CachedGroup<S::Group>>,
 }
 
 impl<S: ConnectedServer> PooledServer<S> {
     /// Creates a new pooled server wrapper without an active group.
     #[must_use]
-    pub fn new(server: S) -> Self {
+    pub(crate) fn new(server: S) -> Self {
         Self {
             server,
             active_group: None,
@@ -47,7 +47,7 @@ impl<S: ConnectedServer> PooledServer<S> {
     }
 
     /// Explicitly removes and clears the cached active group from the server if one exists.
-    pub fn clear_active_group(&mut self) {
+    pub(crate) fn clear_active_group(&mut self) {
         if let Some(cached) = self.active_group.take() {
             let _ = self
                 .server
@@ -109,11 +109,11 @@ impl<S: ConnectedServer> ConnectedServer for PooledServer<S> {
 }
 
 /// Connection pool managing active server instances and failure cooldowns keyed by [`OpcServerEndpoint`].
-pub struct ConnectionPool<S: ConnectedServer> {
+pub(crate) struct ConnectionPool<S: ConnectedServer> {
     /// Map of active pooled server connections.
-    pub connections: HashMap<OpcServerEndpoint, PooledServer<S>>,
+    pub(crate) connections: HashMap<OpcServerEndpoint, PooledServer<S>>,
     /// Map of endpoint failure timestamps for circuit breaker cooldowns.
-    pub failure_cooldowns: HashMap<OpcServerEndpoint, Instant>,
+    pub(crate) failure_cooldowns: HashMap<OpcServerEndpoint, Instant>,
 }
 
 impl<S: ConnectedServer> Default for ConnectionPool<S> {
@@ -126,18 +126,18 @@ impl<S: ConnectedServer> Default for ConnectionPool<S> {
 }
 
 /// Maximum number of tracked endpoint failure cooldowns before LRU eviction.
-pub const MAX_COOLDOWNS: usize = 256;
+pub(crate) const MAX_COOLDOWNS: usize = 256;
 
 impl<S: ConnectedServer> ConnectionPool<S> {
     /// Creates a new empty connection pool.
     #[must_use]
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self::default()
     }
 
     /// Records an endpoint failure timestamp, pruning expired circuit breaker cooldowns
     /// and capping memory growth at [`MAX_COOLDOWNS`] via LRU eviction.
-    pub fn record_failure(&mut self, endpoint: OpcServerEndpoint) {
+    pub(crate) fn record_failure(&mut self, endpoint: OpcServerEndpoint) {
         self.failure_cooldowns
             .retain(|_, failed_at| failed_at.elapsed() < CIRCUIT_BREAKER_COOLDOWN);
 
@@ -157,32 +157,32 @@ impl<S: ConnectedServer> ConnectionPool<S> {
     /// Number of active connections currently maintained in the pool.
     #[must_use]
     #[allow(dead_code)]
-    pub fn len(&self) -> usize {
+    pub(crate) fn len(&self) -> usize {
         self.connections.len()
     }
 
     /// Returns `true` if the connection pool holds no active connections.
     #[must_use]
     #[allow(dead_code)]
-    pub fn is_empty(&self) -> bool {
+    pub(crate) fn is_empty(&self) -> bool {
         self.connections.is_empty()
     }
 
     /// Clears all active connections (triggering group cleanups via `Drop`) and resets failure cooldowns.
-    pub fn clear(&mut self) {
+    pub(crate) fn clear(&mut self) {
         self.connections.clear();
         self.failure_cooldowns.clear();
     }
 
     /// Removes an endpoint from the connection pool, returning its `PooledServer` if present.
-    pub fn remove(&mut self, endpoint: &OpcServerEndpoint) -> Option<PooledServer<S>> {
+    pub(crate) fn remove(&mut self, endpoint: &OpcServerEndpoint) -> Option<PooledServer<S>> {
         self.connections.remove(endpoint)
     }
 
     /// Evicts an endpoint from the connection pool, synchronously clearing any active group proxy before removal.
     ///
     /// Returns `true` if an active connection was present and evicted.
-    pub fn evict(&mut self, endpoint: &OpcServerEndpoint) -> bool {
+    pub(crate) fn evict(&mut self, endpoint: &OpcServerEndpoint) -> bool {
         if let Some(mut pooled) = self.connections.remove(endpoint) {
             pooled.clear_active_group();
             true
@@ -195,7 +195,7 @@ impl<S: ConnectedServer> ConnectionPool<S> {
 /// Dispatches an operation against a pooled server connection, transparently evicting
 /// and reconnecting if a stale proxy RPC error is detected, while enforcing circuit breaker cooldowns.
 #[tracing::instrument(level = "debug", skip(pool, connector, operation))]
-pub fn dispatch_with_retry<C, F, R>(
+pub(crate) fn dispatch_with_retry<C, F, R>(
     pool: &mut ConnectionPool<C::Server>,
     connector: &Arc<C>,
     endpoint: &OpcServerEndpoint,

@@ -55,6 +55,7 @@ missing_const_for_fn = "allow"
 items_after_statements = "allow"
 doc_markdown = "allow"
 uninlined_format_args = "allow"
+redundant_pub_crate = "allow"
 
 [workspace.lints.rust]
 unsafe_code = "allow"

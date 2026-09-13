@@ -10,7 +10,7 @@
 //! (MTA) [`ComWorker`] background thread. It provides both unbound multi-server gateway
 //! operations and server-bound session operations with infallible endpoint access.
 
-use crate::com::connector::{ComConnector, ServerConnector};
+use crate::com::connector::{ComConnector, ServerBackend};
 use crate::com::worker::{ComRequest, ComWorker};
 use crate::errors::{OpcError, OpcResult};
 use crate::provider::{
@@ -93,7 +93,7 @@ impl OpcDaClientBuilder<ComConnector> {
     }
 }
 
-impl<C: ServerConnector + 'static> OpcDaClientBuilder<C> {
+impl<C: ServerBackend + 'static> OpcDaClientBuilder<C> {
     /// Sets the target remote host (or `"localhost"`).
     ///
     /// # Arguments
@@ -168,13 +168,13 @@ impl<C: ServerConnector + 'static> OpcDaClientBuilder<C> {
     ///
     /// # Arguments
     ///
-    /// * `connector` - Backend connector implementing [`ServerConnector`].
+    /// * `connector` - Backend connector implementing [`ServerBackend`].
     ///
     /// # Returns
     ///
     /// A new builder parameterized by the connector type `C2`.
     #[must_use]
-    pub fn with_connector<C2: ServerConnector + 'static>(
+    pub fn with_connector<C2: ServerBackend + 'static>(
         self,
         connector: C2,
     ) -> OpcDaClientBuilder<C2> {
@@ -247,7 +247,7 @@ impl<C: ServerConnector + 'static> OpcDaClientBuilder<C> {
     }
 }
 
-impl<C: ServerConnector + Default + 'static> OpcDaClientBuilder<C> {
+impl<C: ServerBackend + Default + 'static> OpcDaClientBuilder<C> {
     /// Builds the `OpcDaClient` using the configured options and default connector.
     ///
     /// # Returns
@@ -316,7 +316,7 @@ pub struct Bound;
 /// Concrete [`crate::provider::OpcProvider`] implementation for Windows OPC DA.
 ///
 /// Uses native `windows-rs` COM interop via the internal `com` subsystem.
-pub struct OpcDaClient<C: ServerConnector + 'static = ComConnector, State = Unbound> {
+pub struct OpcDaClient<C: ServerBackend + 'static = ComConnector, State = Unbound> {
     /// Background MTA worker handle managing asynchronous request channels.
     pub(crate) worker: Arc<ComWorker<C>>,
     /// Target OPC server endpoint if bound to a specific server.
@@ -326,7 +326,7 @@ pub struct OpcDaClient<C: ServerConnector + 'static = ComConnector, State = Unbo
     pub(crate) _state: std::marker::PhantomData<State>,
 }
 
-impl<C: ServerConnector + 'static, State> Clone for OpcDaClient<C, State> {
+impl<C: ServerBackend + 'static, State> Clone for OpcDaClient<C, State> {
     fn clone(&self) -> Self {
         Self {
             worker: Arc::clone(&self.worker),
@@ -424,12 +424,12 @@ impl OpcDaClient<ComConnector, Unbound> {
     }
 }
 
-impl<C: ServerConnector + 'static> OpcDaClient<C, Unbound> {
+impl<C: ServerBackend + 'static> OpcDaClient<C, Unbound> {
     /// Creates a new `OpcDaClient` with the given connector in the [`Unbound`] typestate.
     ///
     /// # Arguments
     ///
-    /// * `connector` - Backend connector implementing [`ServerConnector`].
+    /// * `connector` - Backend connector implementing [`ServerBackend`].
     ///
     /// # Returns
     ///
@@ -521,7 +521,7 @@ impl<C: ServerConnector + 'static> OpcDaClient<C, Unbound> {
     }
 }
 
-impl<C: ServerConnector + 'static> OpcDaClient<C, Bound> {
+impl<C: ServerBackend + 'static> OpcDaClient<C, Bound> {
     /// Returns the target OPC server endpoint guaranteed to be present in the [`Bound`] typestate.
     ///
     /// # Returns
@@ -1045,7 +1045,7 @@ impl<C: ServerConnector + 'static> OpcDaClient<C, Bound> {
     }
 }
 
-impl<C: ServerConnector + 'static, State: Send + Sync + 'static> OpcDaClient<C, State> {
+impl<C: ServerBackend + 'static, State: Send + Sync + 'static> OpcDaClient<C, State> {
     /// Returns the configured operation timeout, if any.
     ///
     /// # Returns
@@ -1138,7 +1138,7 @@ impl<C: ServerConnector + 'static, State: Send + Sync + 'static> OpcDaClient<C, 
 }
 
 #[async_trait]
-impl<C: ServerConnector + 'static, State: Send + Sync + 'static> ServerDiscovery
+impl<C: ServerBackend + 'static, State: Send + Sync + 'static> ServerDiscovery
     for OpcDaClient<C, State>
 {
     #[tracing::instrument(level = "info", skip(self), err)]
@@ -1163,7 +1163,7 @@ impl<C: ServerConnector + 'static, State: Send + Sync + 'static> ServerDiscovery
 }
 
 #[async_trait]
-impl<C: ServerConnector + 'static, State: Send + Sync + 'static> TagBrowser
+impl<C: ServerBackend + 'static, State: Send + Sync + 'static> TagBrowser
     for OpcDaClient<C, State>
 {
     #[tracing::instrument(level = "info", skip(self, collector), err)]
@@ -1179,9 +1179,7 @@ impl<C: ServerConnector + 'static, State: Send + Sync + 'static> TagBrowser
 }
 
 #[async_trait]
-impl<C: ServerConnector + 'static, State: Send + Sync + 'static> TagReader
-    for OpcDaClient<C, State>
-{
+impl<C: ServerBackend + 'static, State: Send + Sync + 'static> TagReader for OpcDaClient<C, State> {
     #[tracing::instrument(level = "info", skip(self, tags), fields(tag_count = tags.len()), err)]
     async fn read_tag_values(&self, server: &str, tags: TagBatch) -> OpcResult<TagValues> {
         let endpoint = crate::types::OpcServerEndpoint::from(server);
@@ -1211,9 +1209,7 @@ impl<C: ServerConnector + 'static, State: Send + Sync + 'static> TagReader
 }
 
 #[async_trait]
-impl<C: ServerConnector + 'static, State: Send + Sync + 'static> TagWriter
-    for OpcDaClient<C, State>
-{
+impl<C: ServerBackend + 'static, State: Send + Sync + 'static> TagWriter for OpcDaClient<C, State> {
     #[tracing::instrument(level = "info", skip(self, value), err)]
     async fn write_tag_value(
         &self,

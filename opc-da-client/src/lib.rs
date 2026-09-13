@@ -31,7 +31,8 @@ pub use types::{
 pub use com::{
     client::{Bound, OpcDaClient, OpcDaClientBuilder, Unbound},
     connector::{
-        ComConnector, ConnectedGroup, ConnectedServer, GroupRemovalMode, ItemWrite, ServerConnector,
+        ComConnector, ConnectedGroup, ConnectedServer, GroupRemovalMode, ItemWrite, ServerBackend,
+        ServerCatalogDiscovery, ServerConnector,
     },
     discovery::{OpcServerRegistration, OpcServerType, inspect_local_registration},
 };

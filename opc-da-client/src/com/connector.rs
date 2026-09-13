@@ -39,5 +39,6 @@ pub use mock::{
 pub use server::{ComConnector, ComServer};
 pub use traits::{
     ConnectedGroup, ConnectedServer, CreatedGroup, DataSource, GroupConfig, GroupItemDef,
-    GroupItemResult, GroupItemState, GroupRemovalMode, ItemWrite, ServerConnector,
+    GroupItemResult, GroupItemState, GroupRemovalMode, ItemWrite, ServerBackend,
+    ServerCatalogDiscovery, ServerConnector,
 };

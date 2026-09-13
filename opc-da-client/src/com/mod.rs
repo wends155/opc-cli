@@ -15,6 +15,7 @@ pub(crate) mod worker;
 
 pub use client::OpcDaClient;
 pub use connector::{
-    ComConnector, ComGroup, ComServer, ConnectedGroup, ConnectedServer, ServerConnector,
+    ComConnector, ComGroup, ComServer, ConnectedGroup, ConnectedServer, ServerBackend,
+    ServerCatalogDiscovery, ServerConnector,
 };
 pub use discovery::{OpcServerRegistration, OpcServerType, inspect_local_registration};

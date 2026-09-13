@@ -772,3 +772,18 @@ fn test_worker_priority_queue_empty_pop_returns_none() {
     assert!(q.is_empty());
     assert!(q.pop_next().is_none());
 }
+
+#[test]
+fn test_elapsed_ms_calculation() {
+    use crate::com::worker::elapsed_ms;
+    use std::time::{Duration, Instant};
+
+    let start = Instant::now()
+        .checked_sub(Duration::from_millis(25))
+        .expect("valid instant subtraction");
+    let elapsed = elapsed_ms(start);
+    assert!(
+        elapsed >= 25,
+        "expected at least 25ms elapsed, got {elapsed}ms"
+    );
+}

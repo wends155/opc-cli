@@ -9,7 +9,7 @@ mod write;
 mod tests;
 
 use crate::com::connector::{
-    ConnectedGroup, ConnectedServer, GroupConfig, GroupItemDef, ServerConnector,
+    ConnectedGroup, ConnectedServer, GroupConfig, GroupItemDef, ServerBackend, ServerConnector,
 };
 use crate::com::guard::GroupGuard;
 use crate::errors::{OpcError, OpcOperation, OpcResult, WorkerError};
@@ -23,27 +23,27 @@ use tokio::sync::{mpsc, oneshot};
 
 /// Calculates elapsed milliseconds from an [`std::time::Instant`].
 #[inline]
-pub fn elapsed_ms(start: std::time::Instant) -> u64 {
+pub(crate) fn elapsed_ms(start: std::time::Instant) -> u64 {
     u64::try_from(start.elapsed().as_millis()).unwrap_or(u64::MAX)
 }
 
 static GROUP_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
 
 /// Generates a collision-proof group name composed of a prefix, process ID, and atomic sequence.
-pub fn generate_group_name(prefix: &str) -> String {
+pub(crate) fn generate_group_name(prefix: &str) -> String {
     let pid = std::process::id();
     let seq = GROUP_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     format!("{prefix}-{pid:x}-{seq:x}")
 }
 
 /// An ephemeral group created on an OPC server with items registered and validated.
-pub struct RegisteredItemGroup<'a, S: ConnectedServer> {
+pub(crate) struct RegisteredItemGroup<'a, S: ConnectedServer> {
     /// Connected group proxy.
-    pub group: S::Group,
+    pub(crate) group: S::Group,
     /// Guard that deletes the group on drop unless disarmed.
-    pub group_guard: GroupGuard<'a, S>,
+    pub(crate) group_guard: GroupGuard<'a, S>,
     /// Results of the `add_items` call, matching the input tag order.
-    pub item_results: Vec<crate::com::connector::GroupItemResult>,
+    pub(crate) item_results: Vec<crate::com::connector::GroupItemResult>,
 }
 
 /// Helper to create an ephemeral group and register items on a connected OPC server.
@@ -55,7 +55,7 @@ pub struct RegisteredItemGroup<'a, S: ConnectedServer> {
 /// * `tags` - Slice of tag names to register in the group.
 /// * `add_group_op` - Operation name for group creation logging.
 /// * `add_items_op` - Operation name for item addition logging.
-pub fn register_item_group<'a, S: ConnectedServer>(
+pub(crate) fn register_item_group<'a, S: ConnectedServer>(
     server: &'a S,
     server_id: &ServerIdentifier,
     prefix: &str,
@@ -177,7 +177,7 @@ pub enum ComRequest {
 ///
 /// Dispatches requests received over an `mpsc` channel to Windows COM interfaces while maintaining
 /// a persistent connection pool and transparently evicting stale connection handles on RPC errors.
-pub struct ComWorker<C: ServerConnector + 'static> {
+pub struct ComWorker<C: ServerBackend + 'static> {
     /// Channel sender for dispatching requests to the worker loop.
     pub sender: mpsc::Sender<ComRequest>,
     /// Thread join handle for clean worker thread teardown.
@@ -185,7 +185,7 @@ pub struct ComWorker<C: ServerConnector + 'static> {
     _phantom: std::marker::PhantomData<C>,
 }
 
-impl<C: ServerConnector + 'static> ComWorker<C> {
+impl<C: ServerBackend + 'static> ComWorker<C> {
     /// Starts the background COM worker thread with default MTA initialization.
     pub fn start(connector: Arc<C>) -> Result<Self, OpcError> {
         Self::start_with_initializer::<crate::com::guard::DefaultComInit>(connector)
@@ -283,7 +283,7 @@ impl<C: ServerConnector + 'static> ComWorker<C> {
     }
 }
 
-impl<C: ServerConnector + 'static> Drop for ComWorker<C> {
+impl<C: ServerBackend + 'static> Drop for ComWorker<C> {
     fn drop(&mut self) {
         tracing::debug!("ComWorker dropping — channel closing, signaling thread shutdown");
     }
@@ -353,7 +353,7 @@ fn run_worker_thread<C, I, S>(
     connector: &Arc<C>,
     signal_init: S,
 ) where
-    C: ServerConnector + 'static,
+    C: ServerBackend + 'static,
     I: crate::com::guard::ComInitializer,
     S: FnOnce(Result<(), OpcError>),
 {
@@ -483,7 +483,7 @@ fn dispatch_pooled_request<C, R, F>(
 
 /// Processes a single request dispatched to the COM worker thread.
 #[allow(clippy::too_many_lines)]
-fn handle_request<C: ServerConnector + 'static>(
+fn handle_request<C: ServerBackend + 'static>(
     req: ComRequest,
     connector: &Arc<C>,
     pool: &mut pool::ConnectionPool<C::Server>,

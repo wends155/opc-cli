@@ -5,7 +5,8 @@
 
 use crate::com::connector::traits::{
     ConnectedGroup, ConnectedServer, CreatedGroup, DataSource, GroupConfig, GroupItemDef,
-    GroupItemResult, GroupItemState, GroupRemovalMode, ItemWrite, ServerConnector,
+    GroupItemResult, GroupItemState, GroupRemovalMode, ItemWrite, ServerCatalogDiscovery,
+    ServerConnector,
 };
 use crate::com::iterator::StringIterator;
 use crate::errors::{OpcError, OpcResult};
@@ -581,9 +582,7 @@ impl MockServerConnector {
     }
 }
 
-impl ServerConnector for MockServerConnector {
-    type Server = std::sync::Arc<MockConnectedServer>;
-
+impl ServerCatalogDiscovery for MockServerConnector {
     fn enumerate_servers(&self, host: &str) -> OpcResult<Vec<String>> {
         if self
             .state
@@ -617,6 +616,10 @@ impl ServerConnector for MockServerConnector {
         let details = self.server_details.lock()?;
         Ok(details.clone())
     }
+}
+
+impl ServerConnector for MockServerConnector {
+    type Server = std::sync::Arc<MockConnectedServer>;
 
     fn connect_endpoint(
         &self,
@@ -1071,5 +1074,35 @@ mod tests {
             read_res[0].as_ref().unwrap().value,
             OpcValue::String("mock-hook".into())
         );
+    }
+
+    #[test]
+    fn test_server_catalog_discovery_segregated_contract() {
+        use crate::com::connector::traits::{
+            ServerBackend, ServerCatalogDiscovery, ServerConnector,
+        };
+        use crate::types::OpcServerInfo;
+
+        let connector = MockServerConnector::new().with_server_details(vec![OpcServerInfo::new(
+            "Matrikon.OPC.Simulation.1",
+            crate::types::Clsid::zeroed(),
+            Some("Matrikon Sim".into()),
+            None,
+        )]);
+
+        // 1. Verify dynamic dispatch via segregated ServerCatalogDiscovery
+        let discovery: &dyn ServerCatalogDiscovery = &connector;
+        let servers = discovery
+            .enumerate_servers("localhost")
+            .expect("enumerate_servers failed");
+        assert_eq!(servers, vec!["Matrikon.OPC.Simulation.1"]);
+
+        // 2. Verify connection capability via ServerConnector
+        fn assert_connector<C: ServerConnector + ?Sized>(_c: &C) {}
+        assert_connector(&connector);
+
+        // 3. Verify static bound via composite ServerBackend
+        fn assert_backend<B: ServerBackend + ?Sized>(_b: &B) {}
+        assert_backend(&connector);
     }
 }

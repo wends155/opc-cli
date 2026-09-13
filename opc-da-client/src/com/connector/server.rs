@@ -5,7 +5,8 @@
 
 use crate::com::connector::group::ComGroup;
 use crate::com::connector::traits::{
-    ConnectedServer, CreatedGroup, GroupConfig, GroupRemovalMode, ServerConnector,
+    ConnectedServer, CreatedGroup, GroupConfig, GroupRemovalMode, ServerCatalogDiscovery,
+    ServerConnector,
 };
 use crate::com::iterator::StringIterator;
 use crate::com::security::apply_proxy_blanket;
@@ -201,9 +202,7 @@ impl ComConnector {
     }
 }
 
-impl ServerConnector for ComConnector {
-    type Server = ComServer;
-
+impl ServerCatalogDiscovery for ComConnector {
     #[tracing::instrument(level = "info", skip(self), err)]
     fn enumerate_servers(&self, host: &str) -> OpcResult<Vec<String>> {
         let details = self.enumerate_server_details(host)?;
@@ -219,6 +218,10 @@ impl ServerConnector for ComConnector {
         let catalog = crate::com::discovery::OpcServerListCatalog::new(Some(host), false)?;
         catalog.enumerate_details(host)
     }
+}
+
+impl ServerConnector for ComConnector {
+    type Server = ComServer;
 
     #[tracing::instrument(level = "info", skip(self), err)]
     fn connect_endpoint(
