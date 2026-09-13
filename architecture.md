@@ -251,11 +251,11 @@ opc-cli/
 - **Trait Interfaces**: Native COM interface declarations.
 - **Mock Availability**: N/A.
 
-### `opc-da-client::raw::hresult` (Win32 HRESULT Diagnostics)
-- **Owns**: Strongly-typed Win32 HRESULT constants (`E_POINTER`, `RPC_S_*`, `OPC_E_*`), HRESULT classification (`is_connection_hresult`), diagnostic hint lookup (`friendly_hresult_hint`), and hex string formatting (`format_hresult`).
-- **Does NOT Own**: Public domain errors (`errors::OpcError`) or high-level error logging.
-- **Trait Interfaces**: Pure functional classification & formatting helpers.
-- **Mock Availability**: N/A (tested via co-located unit tests).
+### `opc-da-client::raw::hresult` (Internal Compatibility Facade)
+- **Owns**: Crate-internal re-export facade (`pub(crate) use crate::errors::hresult;` in `raw/mod.rs`) providing seamless access to Win32 HRESULT constants, classification (`is_connection_hresult`), and diagnostic hints without DAG inversion. Canonical ownership and definitions reside unconditionally in `opc-da-client::errors::hresult`.
+- **Does NOT Own**: Canonical HRESULT definition (owned by `errors::hresult`), public domain errors (`errors::OpcError`), or high-level error logging.
+- **Trait Interfaces**: Pure functional classification & formatting helpers re-exported from `errors::hresult`.
+- **Mock Availability**: N/A (tested via co-located unit tests in `errors::hresult`).
 
 ### `ComWorker` (MTA Worker Thread Pool)
 - **Owns**: Dedicated OS background thread, 2-tier `catch_unwind` panic resilience with priority queue dispatch favoring reads and writes over background browses (`PriorityRequestQueue`), `CoInitializeEx(MTA)` lifecycle (`ComGuard`), connection pool caching keyed by `ServerIdentifier` with active group reuse (`PooledServer`), 5-second failure cooldown circuit breaker bounded to `MAX_COOLDOWNS = 256` with LRU eviction, native batch writes (`handle_write_batch`), generic `dispatch_pooled_request` with transparent stale connection eviction on RPC errors (`0x800706BA`), and modular worker dispatch engines (`pool::dispatch_with_retry`, `read::handle_read`, `write::handle_write`, `browse::handle_browse`).
@@ -274,18 +274,18 @@ opc-cli/
 | Module | May Import | Must NOT Import |
 |:---|:---|:---|
 | `opc-cli` (Core App: `app.rs`, `ui.rs`) | `opc-da-client` (`OpcProvider` trait, `OpcValue`, `TagValue`, `WriteResult`, `TagCollector`, `OpcError`), `ratatui`, `crossterm`, `tokio`, `tracing` (Note: `opc-cli/src/main.rs` serves as Composition Root wiring concrete client or mocks) | Direct Windows COM APIs (`windows::Win32::System::Com`), `com::client` / `com::worker` concrete types |
-| `opc-da-client::provider` | `types`, `errors`, `chrono`, `thiserror`, `async-trait`, `windows-core` (`GUID`) | `windows`, `ratatui`, `crossterm`, `tokio`, `com`, `raw`, `serde` |
-| `opc-da-client::types` | `errors`, `windows-core` (`GUID`) | `provider`, `com`, `raw`, `windows` |
-| `opc-da-client::errors` | `windows-core` (HRESULT), `raw::hresult` | `provider`, `types`, `com` |
+| `opc-da-client::provider` | `types`, `errors`, `thiserror`, `tokio::sync`, `tracing` | `windows`, `chrono`, `async-trait`, `ratatui`, `crossterm`, `com`, `raw`, `serde` |
+| `opc-da-client::types` | `errors` (uses self-contained 128-bit `Clsid`) | `provider`, `com`, `raw`, `windows` |
+| `opc-da-client::errors` | `windows-core` (`HRESULT`) | `provider`, `types`, `com`, `raw` |
 | `opc-da-client::com::client` | `provider`, `types`, `errors`, `com::worker` | `raw` |
 | `opc-da-client::com::worker` | `types`, `errors`, `com::connector`, `com::variant`, `com::guard`, `tokio::sync` | `raw` |
 | `opc-da-client::com::connector` | `types`, `errors`, `com::variant`, `com::discovery` (`guid_to_progid`), `com::security`, `com::iterator`, `raw`, `windows` | `provider` |
 | `opc-da-client::com::security` | `errors`, `windows` | `com::connector`, `com::discovery`, `com::worker`, `com::client` |
 | `opc-da-client::com::discovery` | `types`, `errors`, `com::security`, `com::iterator`, `raw`, `windows` | `com::client`, `com::worker`, `com::connector` |
 | `opc-da-client::com::guard` | `com::connector`, `types`, `errors`, `windows` | `provider`, `raw` |
-| `opc-da-client::com::iterator` | `raw::memory`, `raw::hresult`, `types`, `errors`, `windows` | `provider`, `com::worker` |
-| `opc-da-client::com::variant` | `types` (`OpcValue`), `raw::hresult`, `windows` | `com::client`, `com::worker`, `com::connector` |
-| `opc-da-client::raw` | `windows-core`, `types`, `errors` | `com`, `provider` |
+| `opc-da-client::com::iterator` | `raw::memory`, `errors::hresult`, `types`, `errors`, `windows` | `provider`, `com::worker` |
+| `opc-da-client::com::variant` | `types` (`OpcValue`), `errors::hresult`, `windows` | `com::client`, `com::worker`, `com::connector` |
+| `opc-da-client::raw` | `windows-core`, `types`, `errors` (`errors::hresult`) | `com`, `provider` |
 | `compat/*` (Polyfills) | `core`, `windows-sys` / raw Win32 FFI | `std`, `tokio`, `opc-cli`, `opc-da-client` |
 
 ## 7. Toolchain
@@ -401,6 +401,9 @@ graph TD
         OpcQuality["struct OpcQuality (16-bit)"]
         OpcValue["enum OpcValue"]
         OpcError["enum OpcError"]
+        WorkerError["enum WorkerError"]
+        ConversionError["enum ConversionError"]
+        Clsid["struct Clsid (128-bit)"]
         ServerIdentifier["enum ServerIdentifier"]
         OpcServerInfo["struct OpcServerInfo"]
         OpcServerEndpoint["struct OpcServerEndpoint"]
@@ -411,7 +414,7 @@ graph TD
         ClientBound["struct OpcDaClient<C, Bound>"]
         Worker["struct ComWorker (MTA Thread)"]
         ReqChan["mpsc::channel(ComRequest)"]
-        ServerConnectorTrait["trait ServerConnector"]
+        ServerBackendTrait["trait ServerBackend (ServerConnector + ServerCatalogDiscovery)"]
         ConnServerTrait["trait ConnectedServer"]
         ConnGroupTrait["trait ConnectedGroup"]
         PureDTOs["GroupItemDef / GroupItemState / GroupItemResult"]
@@ -438,9 +441,9 @@ graph TD
     ClientUnbound --> ReqChan
     ClientBound --> ReqChan
     ReqChan --> Worker
-    Worker --> ServerConnectorTrait
-    ServerConnectorTrait -.-> ComConnector
-    ServerConnectorTrait -.-> Mocks
+    Worker --> ServerBackendTrait
+    ServerBackendTrait -.-> ComConnector
+    ServerBackendTrait -.-> Mocks
     ComConnector --> Security
     ComConnector --> Discovery
     ComConnector --> ComServer

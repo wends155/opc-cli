@@ -1694,3 +1694,18 @@ emove_group errors now logged instead of silently discarded.
 >   - `opc-da-client` crate root is free of non-Rust scratch scripts.
 > * **Pruned:**
 >   - Orphaned Python script and stale Cargo package exclude entry removed.
+
+## 2026-09-14: Architecture Specification Synchronization (0.3.0 Modernization)
+> 📝 **Context Update:**
+> * **Feature:** Synchronize `architecture.md` with post-0.3.0 modernization AST, dependency graph, and module contracts across Waves 1–4.
+> * **Changes:**
+>   - Updated §6 Dependency Direction Rules table: purged eradicated dependencies (`chrono`, `async-trait`, `windows-core (GUID)`) from `provider`, `types`, and `errors`; correctly documented `types` as self-contained with pure 128-bit `Clsid`, `errors` with zero dependencies on `raw`, and `raw` consuming `errors::hresult`.
+>   - Updated §5 Module Boundaries: refined `opc-da-client::raw::hresult` from canonical owner to an internal re-export facade (`pub(crate) use crate::errors::hresult;`), formally documenting `errors::hresult` as canonical definition location.
+>   - Updated §13 3-Tier Layered Architecture Mermaid diagram: registered `Clsid`, `WorkerError`, and `ConversionError` in Public Domain subgraph; updated trait boundary from `ServerConnector` to `ServerBackendTrait` (`ServerConnector + ServerCatalogDiscovery`); refreshed worker wiring.
+>   - Verified all 9 gates of verification pipeline (`scripts/verify.ps1`) pass with exit code 0.
+> * **New Constraints:**
+>   - `architecture.md` must strictly mirror the pure Rust domain leaf isolation; `types` must never import `windows` or `raw`.
+>   - Canonical Win32 HRESULT constants and diagnostics belong unconditionally in `errors::hresult`, with `raw/mod.rs` acting solely as a re-export facade.
+> * **Pruned:**
+>   - Purged stale references to `chrono`, `async-trait`, and `windows-core (GUID)` in Dependency Direction Rules.
+
