@@ -4,6 +4,7 @@ use std::fmt;
 use std::str::FromStr;
 
 use crate::errors::OpcError;
+use crate::types::clsid::Clsid;
 
 /// Normalizes a host string slice, returning `None` if it represents the local machine.
 ///
@@ -91,43 +92,6 @@ pub fn is_remote_host(host: Option<&str>) -> bool {
     normalize_host_str(host).is_some()
 }
 
-/// Helper to parse a standard GUID string into a [`windows::core::GUID`].
-fn parse_guid(s: &str) -> Option<windows::core::GUID> {
-    let trimmed = s.trim();
-    let inner = trimmed
-        .strip_prefix('{')
-        .and_then(|t| t.strip_suffix('}'))
-        .unwrap_or(trimmed);
-    let parts: Vec<&str> = inner.split('-').collect();
-    if parts.len() != 5 {
-        return None;
-    }
-    if parts[0].len() != 8
-        || parts[1].len() != 4
-        || parts[2].len() != 4
-        || parts[3].len() != 4
-        || parts[4].len() != 12
-    {
-        return None;
-    }
-    let data1 = u32::from_str_radix(parts[0], 16).ok()?;
-    let data2 = u16::from_str_radix(parts[1], 16).ok()?;
-    let data3 = u16::from_str_radix(parts[2], 16).ok()?;
-    let d4_a = u16::from_str_radix(parts[3], 16).ok()?;
-    let d4_b = u64::from_str_radix(parts[4], 16).ok()?;
-
-    let mut data4 = [0u8; 8];
-    data4[..2].copy_from_slice(&d4_a.to_be_bytes());
-    data4[2..8].copy_from_slice(&d4_b.to_be_bytes()[2..8]);
-
-    Some(windows::core::GUID {
-        data1,
-        data2,
-        data3,
-        data4,
-    })
-}
-
 /// Strongly-typed identifier for an OPC DA server.
 ///
 /// An OPC server can be referenced either by its human-readable Programmatic
@@ -137,7 +101,7 @@ pub enum ServerIdentifier {
     /// Server referenced by human-readable ProgID (e.g., `"Matrikon.OPC.Simulation.1"`).
     ProgId(String),
     /// Server referenced directly by Windows COM CLSID.
-    Clsid(windows::core::GUID),
+    Clsid(Clsid),
 }
 
 impl ServerIdentifier {
@@ -154,15 +118,15 @@ impl ServerIdentifier {
         }
     }
 
-    /// Returns a borrowed reference to the CLSID GUID if this is a [`ServerIdentifier::Clsid`].
+    /// Returns a borrowed reference to the CLSID if this is a [`ServerIdentifier::Clsid`].
     ///
     /// # Returns
     ///
-    /// `Some(&GUID)` containing the CLSID, or `None` if this identifier is a ProgID.
+    /// `Some(&Clsid)` containing the CLSID, or `None` if this identifier is a ProgID.
     #[must_use]
-    pub const fn as_clsid(&self) -> Option<&windows::core::GUID> {
+    pub const fn as_clsid(&self) -> Option<&Clsid> {
         match self {
-            Self::Clsid(guid) => Some(guid),
+            Self::Clsid(clsid) => Some(clsid),
             Self::ProgId(_) => None,
         }
     }
@@ -182,43 +146,38 @@ impl ServerIdentifier {
 
 /// Formats a 128-bit COM GUID into a bracketed registry/DCOM string:
 /// `"{XXXXXXXX-XXXX-XXXX-XXXX-XXXXXXXXXXXX}"`.
+#[cfg(all(test, feature = "opc-da-backend"))]
 #[must_use]
-pub(crate) fn format_guid_bracketed(guid: &windows::core::GUID) -> String {
-    format!(
-        "{{{:08X}-{:04X}-{:04X}-{:02X}{:02X}-{:02X}{:02X}{:02X}{:02X}{:02X}{:02X}}}",
-        guid.data1,
-        guid.data2,
-        guid.data3,
-        guid.data4[0],
-        guid.data4[1],
-        guid.data4[2],
-        guid.data4[3],
-        guid.data4[4],
-        guid.data4[5],
-        guid.data4[6],
-        guid.data4[7]
-    )
+pub(crate) fn format_guid_bracketed(guid: &windows_core::GUID) -> String {
+    Clsid::from_windows_guid(*guid).to_bracketed()
 }
 
 impl fmt::Display for ServerIdentifier {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::ProgId(prog_id) => write!(f, "{prog_id}"),
-            Self::Clsid(guid) => write!(f, "{}", format_guid_bracketed(guid)),
+            Self::Clsid(clsid) => write!(f, "{clsid}"),
         }
     }
 }
 
-impl From<windows::core::GUID> for ServerIdentifier {
-    fn from(guid: windows::core::GUID) -> Self {
-        Self::Clsid(guid)
+impl From<Clsid> for ServerIdentifier {
+    fn from(clsid: Clsid) -> Self {
+        Self::Clsid(clsid)
+    }
+}
+
+#[cfg(feature = "opc-da-backend")]
+impl From<windows_core::GUID> for ServerIdentifier {
+    fn from(guid: windows_core::GUID) -> Self {
+        Self::Clsid(Clsid::from_windows_guid(guid))
     }
 }
 
 impl From<&str> for ServerIdentifier {
     fn from(s: &str) -> Self {
-        if let Some(guid) = parse_guid(s) {
-            Self::Clsid(guid)
+        if let Some(clsid) = Clsid::parse(s) {
+            Self::Clsid(clsid)
         } else {
             Self::ProgId(s.to_string())
         }
@@ -237,7 +196,7 @@ pub struct OpcServerInfo {
     /// Programmatic Identifier of the server (e.g., `"Matrikon.OPC.Simulation.1"`).
     pub prog_id: String,
     /// 128-bit COM Class ID of the server.
-    pub clsid: windows::core::GUID,
+    pub clsid: Clsid,
     /// Human-readable server title from catalog metadata, or `None` if absent.
     pub user_type: Option<String>,
     /// Target host machine (or `None` for localhost).
@@ -250,13 +209,13 @@ impl OpcServerInfo {
     #[allow(clippy::needless_pass_by_value)]
     pub fn new(
         prog_id: impl Into<String>,
-        clsid: windows::core::GUID,
+        clsid: impl Into<Clsid>,
         user_type: Option<String>,
         host: Option<String>,
     ) -> Self {
         Self {
             prog_id: prog_id.into(),
-            clsid,
+            clsid: clsid.into(),
             user_type,
             host: normalize_host(host.as_deref()),
         }

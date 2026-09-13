@@ -29,7 +29,7 @@ pub(crate) fn connect_endpoint(
     legacy_dcom: bool,
 ) -> OpcResult<crate::raw::bindings::da::IOPCServer> {
     let clsid_raw = match &endpoint.identifier {
-        ServerIdentifier::Clsid(guid) => *guid,
+        ServerIdentifier::Clsid(clsid) => clsid.to_windows_guid(),
         ServerIdentifier::ProgId(server_name) => {
             let server_lp = LocalPointer::from(server_name.as_str());
             // SAFETY: Calling COM function CLSIDFromProgID with a null-terminated wide string.
@@ -388,7 +388,7 @@ impl ConnectedServer for ComServer {
         // SAFETY: Calling COM interface method RemoveGroup with server handle and mode flag.
         unsafe {
             self.server
-                .RemoveGroup(server_group.as_raw(), mode.into())?;
+                .RemoveGroup(server_group.as_raw(), mode.is_force())?;
         }
         Ok(())
     }

@@ -66,7 +66,7 @@ pub trait ServerDiscovery: Send + Sync {
             .into_iter()
             .map(|prog_id| OpcServerInfo {
                 prog_id,
-                clsid: windows::core::GUID::zeroed(),
+                clsid: crate::types::Clsid::zeroed(),
                 user_type: None,
                 host: host_opt.clone(),
             })
@@ -614,7 +614,7 @@ mod tests {
         let details = p.list_server_details("localhost").await.unwrap();
         assert_eq!(details.len(), 2);
         assert_eq!(details[0].prog_id, "Server.A");
-        assert_eq!(details[0].clsid, windows::core::GUID::zeroed());
+        assert_eq!(details[0].clsid, crate::types::Clsid::zeroed());
         assert_eq!(details[0].user_type, None);
         assert_eq!(details[0].host, None);
     }

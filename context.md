@@ -1,5 +1,32 @@
 # Project Context Summary
 
+## 2026-09-13: Block 3 (Wave 2B: Pure 128-Bit `Clsid` Domain Type & Platform Leak Severing) Completed (`opc-da-client`)
+> 📝 **Context Update:**
+> * **Feature:** Execution of Block 3 of the 0.3.0 modularity refactoring roadmap (`review_report.md` Findings 10–12), establishing a pure self-contained 128-bit `Clsid` domain type, severing Win32 COM `GUID` and `windows::core::BOOL` platform leaks from public domain and connector types, gating `windows` behind optional feature `opc-da-backend`, and achieving clean headless non-Windows mock compilation (`cargo check -p opc-da-client --no-default-features`).
+> * **Changes:**
+>   - **Pure 128-Bit `Clsid` Domain Type (`types::clsid`):**
+>     - Created `opc-da-client/src/types/clsid.rs` defining `Clsid` (`#[repr(C)]` with `data1: u32, data2: u16, data3: u16, data4: [u8; 8]`), mirroring Win32 `GUID` layout exactly without platform SDK dependencies.
+>     - Implemented zero heap allocation big-endian `from_u128`/`to_u128`, `zeroed`, `nil`, `is_zero`, `Display`, and `FromStr` returning structured `ParseClsidError`.
+>     - Added ASCII multibyte guard in `Clsid::parse` (`!s.is_ascii() || s.len() != 36`) preventing slice panics on arbitrary UTF-8.
+>     - Implemented lossless roundtrip conversions `to_windows_guid()` and `from_windows_guid(&windows_core::GUID)`.
+>     - Declared `pub mod clsid; pub use clsid::*;` in `types.rs` and re-exported `Clsid` and `ParseClsidError` at crate root `src/lib.rs`.
+>   - **Domain DTO & Identifier Refactoring:**
+>     - Refactored `ServerIdentifier::Clsid(Clsid)` and `OpcServerInfo.clsid: Clsid` in `src/types/server.rs`.
+>     - Added backward-compatible constructor `OpcServerInfo::new(..., clsid: impl Into<Clsid>, ...)`.
+>     - Delegated bracketed GUID formatting to `Clsid::to_bracketed()`.
+>     - Refactored all direct callers across `com/connector/server.rs`, `com/client.rs`, `com/connector/mock.rs`, `provider.rs`, and `com/discovery.rs` (`OpcServerRegistration.clsid` and `inspect_local_registration`).
+>   - **Platform Leak Severing in Connector SPI:**
+>     - Converted `GroupRemovalMode` call site in `src/com/connector/server.rs` to pass native Rust `bool` directly via `mode.is_force()`.
+>     - Deleted `From<GroupRemovalMode> for windows::core::BOOL` from `src/com/connector/traits.rs`.
+>   - **Platform SDK Gating & Gate 4b Compliance:**
+>     - Gated `windows = { workspace = true, optional = true }` behind `opc-da-backend = ["dep:windows"]` in `opc-da-client/Cargo.toml`.
+>     - Migrated `src/errors.rs` and `src/errors/hresult.rs` to unconditional `windows_core::` and replaced `windows::Win32::Foundation::E_POINTER` with `crate::errors::hresult::E_POINTER`.
+>     - Verified `cargo check -p opc-da-client --no-default-features` passes cleanly with exit code 0.
+>   - **Universal Quality Verification:**
+>     - All 9 gates of `pwsh scripts/verify.ps1` pass cleanly with exit code 0, zero warnings, and 100% tests passing.
+> * **New Constraints:** Domain types (`ServerIdentifier`, `OpcServerInfo`, etc.) must use `Clsid`, never raw Win32 `GUID`. FFI SDK dependencies must remain gated behind `opc-da-backend`. Core error types and HRESULT constants depend only on `windows-core`.
+> * **Pruned:** `From<GroupRemovalMode> for windows::core::BOOL`; direct `windows::core::GUID` dependencies in canonical domain types; unconditional `windows` dependency in `opc-da-client/Cargo.toml`.
+
 ## 2026-09-13: Block 2 (Wave 2A: Hierarchical Composite Error Taxonomy & DAG Inversion Remediation) Completed (`opc-da-client`)
 > 📝 **Context Update:**
 > * **Feature:** Execution of Block 2 of the 0.3.0 modularity refactoring roadmap (`review_report.md` Findings 7–9), establishing a composite error taxonomy, eradicating stringly-typed worker panics, and eliminating leaf-to-FFI DAG inversion. All 9 gates of `scripts/verify.ps1` pass with zero warnings.

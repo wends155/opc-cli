@@ -63,7 +63,7 @@ Composite marker trait representing the full OPC DA client capability set. A bla
 
 *   All methods are `Send + Sync` safe; they are safe to call from an async context.
 *   `list_servers` returns a **sorted, deduplicated** list of ProgID strings.
-*   `list_server_details` default implementation synthesizes `OpcServerInfo` with `GUID::zeroed()` and `user_type: None`, ensuring full backward compatibility.
+*   `list_server_details` default implementation synthesizes `OpcServerInfo` with `Clsid::zeroed()` and `user_type: None`, ensuring full backward compatibility.
 *   `browse_tags` **never** collects more than `collector.max_tags()` items.
 *   `browse_tags` pushes tags to `collector` incrementally; on timeout the caller can harvest partial results.
 *   `browse_tags` updates `collector` length atomically and lock-free for each discovered tag.
@@ -342,6 +342,56 @@ Implemented for any type `T: Into<WriteBatch>`.
 
 ---
 
+##### `struct Clsid`
+
+**Purpose:** Pure, self-contained 128-bit Windows COM Class Identifier (`CLSID` / `GUID`) representation independent of platform SDKs (`windows` or `windows-core`).
+
+| Field | Type | Description |
+| :--- | :--- | :--- |
+| `data1` | `u32` | First 32-bit segment of the 128-bit identifier. |
+| `data2` | `u16` | Second 16-bit segment. |
+| `data3` | `u16` | Third 16-bit segment. |
+| `data4` | `[u8; 8]` | Final 8-byte array segment. |
+
+**Layout & Invariants:**
+* `#[repr(C)]` layout guarantees byte-for-byte memory compatibility with Win32 COM `GUID`.
+* Zero heap allocations across all constructors, parsers, and conversions.
+* Multibyte UTF-8 guard in `parse` (`!s.is_ascii() || s.len() != 36`) completely prevents slice indexing panics.
+
+**Methods & Conversions:**
+* `new(data1, data2, data3, data4) -> Self`: Explicit field constructor.
+* `zeroed() -> Self`: Returns all-zero CLSID `{00000000-0000-0000-0000-000000000000}`.
+* `nil() -> Self`: Alias for `zeroed()`.
+* `is_zero(&self) -> bool`: Returns `true` if all 128 bits are zero.
+* `from_u128(val: u128) -> Self`: Big-endian decomposition from a 128-bit unsigned integer.
+* `to_u128(&self) -> u128`: Big-endian reconstruction into a 128-bit unsigned integer.
+* `parse(s: &str) -> Option<Self>`: Fast stack-based parser supporting bracketed `{...}` or unbracketed 36-character hyphenated hex syntax.
+* `to_bracketed(&self) -> String`: Formats canonical bracketed uppercase string `{XXXXXXXX-XXXX-XXXX-XXXX-XXXXXXXXXXXX}`.
+* `FromStr`: Implements string parsing returning `Result<Self, ParseClsidError>`.
+* `Display`: Canonical uppercase bracketed formatting.
+* `to_windows_guid(&self) -> windows_core::GUID`: Lossless conversion to COM SDK GUID.
+* `from_windows_guid(guid: &windows_core::GUID) -> Self`: Lossless conversion from COM SDK GUID.
+
+**Derives:** `Debug`, `Clone`, `Copy`, `PartialEq`, `Eq`, `PartialOrd`, `Ord`, `Hash`, `Default`.
+
+---
+
+##### `struct ParseClsidError`
+
+**Purpose:** Error type returned when parsing an invalid CLSID string representation.
+
+| Field | Type | Description |
+| :--- | :--- | :--- |
+| `0` | `String` | Private raw input string causing the parse failure. |
+
+**Methods:**
+* `new(raw: impl Into<String>) -> Self`: Constructor.
+* `raw(&self) -> &str`: Accessor for the invalid raw string.
+
+**Derives:** `Debug`, `Clone`, `PartialEq`, `Eq`, `thiserror::Error`. Formats as `"Invalid CLSID string: '{0}'"`.
+
+---
+
 ##### `enum ServerIdentifier`
 
 **Purpose:** Strongly-typed identifier referencing an OPC DA server either by its Programmatic Identifier (`ProgID`) or directly by its 128-bit COM Class ID (`CLSID`).
@@ -349,15 +399,16 @@ Implemented for any type `T: Into<WriteBatch>`.
 | Variant | Inner Type | Description |
 | :--- | :--- | :--- |
 | `ProgId(String)` | `String` | Human-readable Programmatic Identifier (e.g. `"Matrikon.OPC.Simulation.1"`). |
-| `Clsid(windows::core::GUID)` | `GUID` | Direct 128-bit Windows COM Class ID. |
+| `Clsid(Clsid)` | `Clsid` | Direct 128-bit Windows COM Class ID. |
 
 **Conversions & Methods:**
 * `as_prog_id(&self) -> Option<&str>`: Returns a borrowed reference to the ProgID string if this is a `ProgId` variant.
-* `as_clsid(&self) -> Option<&windows::core::GUID>`: Returns a borrowed reference to the CLSID GUID if this is a `Clsid` variant.
+* `as_clsid(&self) -> Option<&Clsid>`: Returns a borrowed reference to the CLSID if this is a `Clsid` variant.
 * `is_prog_id(&self) -> bool`: Returns `true` if this is a ProgID variant.
 * `is_clsid(&self) -> bool`: Returns `true` if this is a CLSID variant.
 * `From<&str>` and `From<String>`: Automatically checks if the string matches 128-bit GUID hex syntax (with or without `{}` braces). If valid GUID syntax, coerces directly into `ServerIdentifier::Clsid`; otherwise stores as `ServerIdentifier::ProgId`.
-* `From<windows::core::GUID>`: Converts directly to `ServerIdentifier::Clsid`.
+* `From<Clsid>`: Converts directly to `ServerIdentifier::Clsid`.
+* `From<windows_core::GUID>`: Converts directly to `ServerIdentifier::Clsid` (when `opc-da-backend` is enabled).
 * `Display`: Formats `ProgId` as string literal; formats `Clsid` as canonical `{XXXXXXXX-XXXX-XXXX-XXXX-XXXXXXXXXXXX}`.
 
 **Derives:** `Debug`, `Clone`, `PartialEq`, `Eq`, `Hash`.
@@ -371,11 +422,12 @@ Implemented for any type `T: Into<WriteBatch>`.
 | Field | Type | Description |
 | :--- | :--- | :--- |
 | `prog_id` | `String` | Programmatic Identifier of the server. |
-| `clsid` | `windows::core::GUID` | 128-bit COM Class ID. |
+| `clsid` | `Clsid` | 128-bit COM Class ID. |
 | `user_type` | `Option<String>` | Human-readable server title/description from catalog metadata, or `None` if unassigned. |
 | `host` | `Option<String>` | Target host machine (`None` for localhost). |
 
 **Methods:**
+* `new(prog_id: impl Into<String>, clsid: impl Into<Clsid>, user_type: Option<String>, host: Option<String>) -> Self`: Constructor supporting flexible CLSID conversion from `Clsid` or `windows_core::GUID`.
 * `display_name(&self) -> &str`: Returns `user_type` if present and non-empty, otherwise falls back to `prog_id`.
 * `endpoint(&self) -> OpcServerEndpoint`: Builds an `OpcServerEndpoint` targeting this server.
 
@@ -736,7 +788,7 @@ Before calling `browse_recursive`, `browse_tags` attempts `browse_opc_item_ids(B
 
 | Field | Type | Description |
 | :--- | :--- | :--- |
-| `clsid` | `windows::core::GUID` | 128-bit COM Class ID. |
+| `clsid` | `Clsid` | 128-bit COM Class ID. |
 | `prog_id` | `String` | Programmatic Identifier. |
 | `version_independent_prog_id` | `Option<String>` | Version-independent ProgID, or `None` if unassigned. |
 | `binary_path` | `std::path::PathBuf` | Resolved executable or DLL file path on disk. |
@@ -759,12 +811,12 @@ Before calling `browse_recursive`, `browse_tags` attempts `browse_opc_item_ids(B
 
 ---
 
-##### `inspect_local_registration(clsid: &GUID, host: Option<&str>) -> OpcResult<OpcServerRegistration>`
+##### `inspect_local_registration(clsid: &Clsid, host: Option<&str>) -> OpcResult<OpcServerRegistration>`
 
 **Description:** Inspects the local machine Windows registry for an OPC DA server's registration details by querying `HKCR\CLSID\{...}` across both native and 32-bit (`KEY_WOW64_32KEY`) views. Registry key traversal is consolidated through a private `open_reg_key` helper wrapping `RegOpenKeyExW` with `KEY_READ`. Registry value reading incorporates two-phase dynamic buffer reallocation on `ERROR_MORE_DATA` (234) and resolves `REG_EXPAND_SZ` strings using `windows::Win32::System::Environment::ExpandEnvironmentStringsW` with safe slice bounds checking.
 
 **Inputs:**
-* `clsid`: Reference to the 128-bit COM Class ID.
+* `clsid`: Reference to the 128-bit COM Class ID (`Clsid`).
 * `host`: Target host machine. If `Some` and not localhost/127.0.0.1, returns [`OpcError::NotImplemented`].
 
 **Returns:**
@@ -1051,8 +1103,11 @@ Defines the behavioral contract of the `opc-cli` binary interface:
 - [x] `test_opc_quality_uncertain_limits` — validates Uncertain with EGU Exceeded & High Limited (0x0056) decoding and Display.
 - [x] `test_opc_quality_roundtrip_u16` — validates lossless roundtripping between u16 and OpcQuality.
 - [x] `test_opc_quality_from_str` — validates string conversion helpers.
-- [x] `test_server_identifier_conversions_and_display` — validates `ServerIdentifier` conversions from `&str`, `String`, `GUID`, GUID hex syntax auto-detection, and `Display` formatting.
-- [x] `test_format_guid_bracketed` — validates bracketed GUID uppercase string formatting matching COM registry conventions.
+- [x] `test_clsid_constructors_and_representations` — validates `Clsid::new`, `zeroed`, `nil`, `from_u128`, `to_u128`, and `is_zero`.
+- [x] `test_clsid_parsing_and_display` — validates `Clsid::parse`, `to_bracketed`, `FromStr`, `Display`, and `Debug`.
+- [x] `test_clsid_windows_guid_conversion` — validates lossless roundtrip between `Clsid` and `windows_core::GUID`.
+- [x] `test_server_identifier_conversions_and_display` — validates `ServerIdentifier` conversions from `&str`, `String`, `Clsid`, `windows_core::GUID` (when backend enabled), GUID hex syntax auto-detection, and `Display` formatting.
+- [x] `test_format_guid_bracketed` — validates bracketed GUID uppercase string formatting matching COM registry conventions via `Clsid::to_bracketed()`.
 - [x] `test_opc_server_info_display_name_and_endpoint` — validates `OpcServerInfo` display name fallback and endpoint generation.
 - [x] `test_tag_batch_into_tags_conversions` — validates `TagBatch` and `IntoTags` zero-allocation conversions across static slices, arrays, owned vectors, borrowed slices, and Arc slices.
 - [x] `test_feature_independence_no_default_features` — validates `types.rs` compiles and tests pass independently without default features.

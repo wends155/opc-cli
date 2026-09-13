@@ -46,13 +46,6 @@ impl From<GroupRemovalMode> for bool {
     }
 }
 
-impl From<GroupRemovalMode> for windows::core::BOOL {
-    #[inline]
-    fn from(mode: GroupRemovalMode) -> Self {
-        Self::from(mode.is_force())
-    }
-}
-
 /// Pairing of a server item handle and its target value for writing.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ItemWrite {
@@ -219,7 +212,7 @@ pub trait ServerConnector: Send + Sync {
             .map(|prog_id| {
                 OpcServerInfo::new(
                     prog_id,
-                    windows::core::GUID::zeroed(),
+                    crate::types::Clsid::zeroed(),
                     None,
                     host_opt.clone(),
                 )
@@ -366,14 +359,6 @@ mod tests {
         assert_eq!(GroupRemovalMode::from(true), GroupRemovalMode::Force);
         assert!(!bool::from(GroupRemovalMode::Normal));
         assert!(bool::from(GroupRemovalMode::Force));
-        assert_eq!(
-            windows::core::BOOL::from(GroupRemovalMode::Normal),
-            windows::core::BOOL(0)
-        );
-        assert_eq!(
-            windows::core::BOOL::from(GroupRemovalMode::Force),
-            windows::core::BOOL(1)
-        );
     }
 
     #[test]

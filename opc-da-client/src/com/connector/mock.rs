@@ -11,7 +11,7 @@ use crate::com::iterator::StringIterator;
 use crate::errors::{OpcError, OpcResult};
 use crate::raw::hresult::RPC_S_SERVER_UNAVAILABLE;
 use crate::types::{
-    BrowseDirection, BrowseType, ClientItemHandle, NamespaceType, OpcQuality, OpcServerInfo,
+    BrowseDirection, BrowseType, ClientItemHandle, Clsid, NamespaceType, OpcQuality, OpcServerInfo,
     OpcValue, ServerGroupHandle, ServerIdentifier, ServerItemHandle,
 };
 
@@ -414,7 +414,7 @@ impl Default for MockServerConnector {
         });
         let default_details = vec![OpcServerInfo {
             prog_id: "Matrikon.OPC.Simulation.1".to_string(),
-            clsid: windows::core::GUID::zeroed(),
+            clsid: Clsid::zeroed(),
             user_type: Some("Matrikon OPC Simulation Server".to_string()),
             host: None,
         }];
@@ -452,7 +452,7 @@ impl MockServerConnector {
         });
         let default_details = vec![OpcServerInfo {
             prog_id: "Mock.Server.1".to_string(),
-            clsid: windows::core::GUID::zeroed(),
+            clsid: Clsid::zeroed(),
             user_type: Some("Mock Server 1".to_string()),
             host: None,
         }];
@@ -488,7 +488,7 @@ impl MockServerConnector {
             .iter()
             .map(|s| OpcServerInfo {
                 prog_id: s.clone(),
-                clsid: windows::core::GUID::zeroed(),
+                clsid: Clsid::zeroed(),
                 user_type: None,
                 host: None,
             })
@@ -859,7 +859,7 @@ mod tests {
         use crate::types::OpcServerInfo;
         let mock = MockServerConnector::new().with_server_details(vec![OpcServerInfo {
             prog_id: "Custom.Mock.1".into(),
-            clsid: windows::core::GUID::zeroed(),
+            clsid: Clsid::zeroed(),
             user_type: Some("Custom Mock Title".into()),
             host: None,
         }]);

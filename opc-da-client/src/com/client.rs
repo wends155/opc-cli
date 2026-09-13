@@ -548,9 +548,7 @@ impl<C: ServerConnector + 'static> OpcDaClient<C, Bound> {
     pub fn server_id(&self) -> std::borrow::Cow<'_, str> {
         match &self.endpoint().identifier {
             ServerIdentifier::ProgId(prog_id) => std::borrow::Cow::Borrowed(prog_id.as_str()),
-            ServerIdentifier::Clsid(guid) => {
-                std::borrow::Cow::Owned(crate::types::server::format_guid_bracketed(guid))
-            }
+            ServerIdentifier::Clsid(clsid) => std::borrow::Cow::Owned(clsid.to_bracketed()),
         }
     }
 
@@ -1272,7 +1270,7 @@ mod tests {
     async fn test_client_list_server_details() {
         let connector = MockServerConnector::new().with_server_details(vec![OpcServerInfo {
             prog_id: "Test.Server.1".into(),
-            clsid: windows::core::GUID::zeroed(),
+            clsid: crate::types::Clsid::zeroed(),
             user_type: Some("Test OPC Server".into()),
             host: None,
         }]);

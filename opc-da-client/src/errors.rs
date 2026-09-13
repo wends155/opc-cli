@@ -39,13 +39,13 @@ pub type OpcResult<T> = Result<T, OpcError>;
 pub enum OpcError {
     /// Standard Windows COM/DCOM error.
     ///
-    /// This variant wraps a [`windows::core::Error`] and provides a friendly
+    /// This variant wraps a [`windows_core::Error`] and provides a friendly
     /// hint for common OPC-related HRESULT codes.
     #[error("COM error: {source}{}", format_com_hint(.source))]
     Com {
         /// The underlying Windows COM/DCOM error.
         #[from]
-        source: windows::core::Error,
+        source: windows_core::Error,
     },
 
     /// Connection-related errors (e.g., host unreachable, resolution failure).
@@ -117,15 +117,15 @@ impl<T> From<std::sync::PoisonError<T>> for OpcError {
     }
 }
 
-impl From<windows::core::HRESULT> for OpcError {
-    fn from(hr: windows::core::HRESULT) -> Self {
+impl From<windows_core::HRESULT> for OpcError {
+    fn from(hr: windows_core::HRESULT) -> Self {
         Self::Com {
-            source: windows::core::Error::from_hresult(hr),
+            source: windows_core::Error::from_hresult(hr),
         }
     }
 }
 
-fn format_com_hint(source: &windows::core::Error) -> String {
+fn format_com_hint(source: &windows_core::Error) -> String {
     if let Some(hint) = self::hresult::friendly_hresult_hint(source.code()) {
         format!(" ({hint})")
     } else {
@@ -173,7 +173,7 @@ impl OpcError {
         match self {
             Self::Com { source } => self::hresult::friendly_hresult_hint(source.code()),
             Self::Server(_, code) => {
-                self::hresult::friendly_hresult_hint(windows::core::HRESULT((*code).cast_signed()))
+                self::hresult::friendly_hresult_hint(windows_core::HRESULT((*code).cast_signed()))
             }
             Self::Worker(w) => w.friendly_hint(),
             _ => None,
@@ -338,7 +338,7 @@ mod tests {
         #[cfg(feature = "opc-da-backend")]
         {
             let com_err = OpcError::Com {
-                source: windows::core::Error::from_hresult(windows::core::HRESULT(
+                source: windows_core::Error::from_hresult(windows_core::HRESULT(
                     0x8004_0154_u32.cast_signed(),
                 )),
             };
@@ -353,7 +353,7 @@ mod tests {
     #[cfg(feature = "opc-da-backend")]
     fn test_friendly_hint_known_codes() {
         let err = OpcError::Com {
-            source: windows::core::Error::from_hresult(windows::core::HRESULT(
+            source: windows_core::Error::from_hresult(windows_core::HRESULT(
                 0x8007_06F4_u32.cast_signed(),
             )),
         };
@@ -363,7 +363,7 @@ mod tests {
         );
 
         let err = OpcError::Com {
-            source: windows::core::Error::from_hresult(windows::core::HRESULT(
+            source: windows_core::Error::from_hresult(windows_core::HRESULT(
                 0x8004_0154_u32.cast_signed(),
             )),
         };
@@ -373,7 +373,7 @@ mod tests {
         );
 
         let err = OpcError::Com {
-            source: windows::core::Error::from_hresult(windows::core::HRESULT(
+            source: windows_core::Error::from_hresult(windows_core::HRESULT(
                 0xC004_0004_u32.cast_signed(),
             )),
         };
@@ -383,7 +383,7 @@ mod tests {
         );
 
         let err = OpcError::Com {
-            source: windows::core::Error::from_hresult(windows::core::HRESULT(
+            source: windows_core::Error::from_hresult(windows_core::HRESULT(
                 0xC004_0006_u32.cast_signed(),
             )),
         };
@@ -393,7 +393,7 @@ mod tests {
         );
 
         let err = OpcError::Com {
-            source: windows::core::Error::from_hresult(windows::core::HRESULT(
+            source: windows_core::Error::from_hresult(windows_core::HRESULT(
                 0xC004_0007_u32.cast_signed(),
             )),
         };
@@ -403,7 +403,7 @@ mod tests {
         );
 
         let err = OpcError::Com {
-            source: windows::core::Error::from_hresult(windows::core::HRESULT(
+            source: windows_core::Error::from_hresult(windows_core::HRESULT(
                 0xC004_0008_u32.cast_signed(),
             )),
         };
@@ -507,13 +507,13 @@ mod tests {
         {
             use crate::raw::hresult::RPC_S_SERVER_UNAVAILABLE;
             let rpc_err = OpcError::Com {
-                source: windows::core::Error::from_hresult(RPC_S_SERVER_UNAVAILABLE),
+                source: windows_core::Error::from_hresult(RPC_S_SERVER_UNAVAILABLE),
             };
             assert!(rpc_err.is_connection_error());
 
-            use windows::Win32::Foundation::E_POINTER;
+            use crate::errors::hresult::E_POINTER;
             let pointer_err = OpcError::Com {
-                source: windows::core::Error::from_hresult(E_POINTER),
+                source: windows_core::Error::from_hresult(E_POINTER),
             };
             assert!(!pointer_err.is_connection_error());
         }
@@ -525,15 +525,15 @@ mod tests {
         {
             use crate::raw::hresult::RPC_S_SERVER_UNAVAILABLE;
             let rpc_err = OpcError::Com {
-                source: windows::core::Error::from_hresult(RPC_S_SERVER_UNAVAILABLE),
+                source: windows_core::Error::from_hresult(RPC_S_SERVER_UNAVAILABLE),
             };
             let formatted = rpc_err.to_string();
             assert!(formatted.contains("The RPC server is unavailable"));
             assert!(!formatted.contains("No hint available"));
 
-            use windows::Win32::Foundation::E_POINTER;
+            use crate::errors::hresult::E_POINTER;
             let pointer_err = OpcError::Com {
-                source: windows::core::Error::from_hresult(E_POINTER),
+                source: windows_core::Error::from_hresult(E_POINTER),
             };
             let formatted_ptr = pointer_err.to_string();
             assert!(!formatted_ptr.contains("No hint available"));
@@ -547,7 +547,7 @@ mod tests {
         assert!(timeout_err.is_connection_error());
         assert_eq!(timeout_err.to_string(), "Operation timed out after 5s");
 
-        let hr = windows::core::HRESULT(0x8000_4005_u32.cast_signed()); // E_FAIL
+        let hr = windows_core::HRESULT(0x8000_4005_u32.cast_signed()); // E_FAIL
         let com_err: OpcError = hr.into();
         assert!(matches!(com_err, OpcError::Com { .. }));
     }

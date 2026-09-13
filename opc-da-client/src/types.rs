@@ -5,6 +5,7 @@
 
 pub mod batch;
 pub mod browse;
+pub mod clsid;
 pub mod collection;
 pub mod collector;
 pub mod handles;
@@ -18,6 +19,7 @@ mod tests;
 
 pub use batch::*;
 pub use browse::*;
+pub use clsid::*;
 pub use collection::*;
 pub use collector::*;
 pub use handles::*;

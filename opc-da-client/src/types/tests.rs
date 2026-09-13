@@ -149,16 +149,24 @@ fn test_server_identifier_conversions_and_display() {
     assert!(parsed.is_clsid());
     assert_eq!(parsed.to_string().to_uppercase(), clsid_str.to_uppercase());
 
-    let direct_guid = windows::core::GUID::from_u128(0x28E6_8F9A_8D75_11D1_8DC3_3C30_2A00_0000);
-    let from_guid = ServerIdentifier::from(direct_guid);
-    assert!(from_guid.is_clsid());
+    #[cfg(feature = "opc-da-backend")]
+    {
+        let direct_guid = windows_core::GUID::from_u128(0x28E6_8F9A_8D75_11D1_8DC3_3C30_2A00_0000);
+        let from_guid = ServerIdentifier::from(direct_guid);
+        assert!(from_guid.is_clsid());
+    }
+
+    let direct_clsid = Clsid::from_u128(0x28E6_8F9A_8D75_11D1_8DC3_3C30_2A00_0000);
+    let from_clsid = ServerIdentifier::from(direct_clsid);
+    assert!(from_clsid.is_clsid());
+    assert_eq!(from_clsid.as_clsid(), Some(&direct_clsid));
 }
 
 #[test]
 fn test_opc_server_info_display_name_and_endpoint() {
     let info_with_user_type = OpcServerInfo {
         prog_id: "Matrikon.OPC.Simulation.1".into(),
-        clsid: windows::core::GUID::zeroed(),
+        clsid: Clsid::zeroed(),
         user_type: Some("Matrikon Simulation Server".into()),
         host: None,
     };
@@ -173,7 +181,7 @@ fn test_opc_server_info_display_name_and_endpoint() {
 
     let info_without_user_type = OpcServerInfo {
         prog_id: "Kepware.KEPServerEX.V6".into(),
-        clsid: windows::core::GUID::zeroed(),
+        clsid: Clsid::zeroed(),
         user_type: None,
         host: Some("192.168.1.10".into()),
     };
@@ -187,22 +195,23 @@ fn test_opc_server_info_display_name_and_endpoint() {
     );
 }
 
+#[cfg(feature = "opc-da-backend")]
 #[test]
 fn test_format_guid_bracketed() {
-    let guid = windows::core::GUID::zeroed();
+    let guid = windows_core::GUID::zeroed();
     assert_eq!(
         format_guid_bracketed(&guid),
         "{00000000-0000-0000-0000-000000000000}"
     );
     assert_eq!(
         format_guid_bracketed(&guid),
-        ServerIdentifier::Clsid(guid).to_string()
+        ServerIdentifier::Clsid(Clsid::from_windows_guid(guid)).to_string()
     );
 
-    let custom_guid = windows::core::GUID::from_u128(0x01234567_89AB_CDEF_0123_456789ABCDEF);
+    let custom_guid = windows_core::GUID::from_u128(0x01234567_89AB_CDEF_0123_456789ABCDEF);
     assert_eq!(
         format_guid_bracketed(&custom_guid),
-        ServerIdentifier::Clsid(custom_guid).to_string()
+        ServerIdentifier::Clsid(Clsid::from_windows_guid(custom_guid)).to_string()
     );
 }
 
@@ -873,4 +882,124 @@ fn test_write_result_co_located() {
         err.error(),
         Some(&OpcError::Connection("Disconnected".into()))
     );
+}
+
+#[test]
+fn test_clsid_construction_and_components() {
+    use crate::types::clsid::Clsid;
+
+    let clsid = Clsid::new(
+        0x1234_5678,
+        0x1234,
+        0x5678,
+        [0x12, 0x34, 0x56, 0x78, 0x9a, 0xbc, 0xde, 0xf0],
+    );
+    assert_eq!(clsid.data1, 0x1234_5678);
+    assert_eq!(clsid.data2, 0x1234);
+    assert_eq!(clsid.data3, 0x5678);
+    assert_eq!(
+        clsid.data4,
+        [0x12, 0x34, 0x56, 0x78, 0x9a, 0xbc, 0xde, 0xf0]
+    );
+    assert!(!clsid.is_zero());
+
+    let zero = Clsid::zeroed();
+    assert!(zero.is_zero());
+    assert_eq!(zero, Clsid::nil());
+    assert_eq!(zero, Clsid::default());
+}
+
+#[test]
+fn test_clsid_u128_roundtrip() {
+    use crate::types::clsid::Clsid;
+
+    let val = 0x1234_5678_1234_5678_1234_5678_9abc_def0_u128;
+    let clsid = Clsid::from_u128(val);
+    assert_eq!(clsid.data1, 0x1234_5678);
+    assert_eq!(clsid.data2, 0x1234);
+    assert_eq!(clsid.data3, 0x5678);
+    assert_eq!(
+        clsid.data4,
+        [0x12, 0x34, 0x56, 0x78, 0x9a, 0xbc, 0xde, 0xf0]
+    );
+    assert_eq!(clsid.to_u128(), val);
+
+    let from_trait: Clsid = val.into();
+    assert_eq!(from_trait, clsid);
+    let to_trait: u128 = clsid.into();
+    assert_eq!(to_trait, val);
+}
+
+#[test]
+fn test_clsid_parse_and_display() {
+    use crate::types::clsid::{Clsid, ParseClsidError};
+    use std::str::FromStr;
+
+    let raw = "{13486D51-4821-11D2-A494-3CB306C10000}";
+    let clsid = Clsid::parse(raw).expect("should parse bracketed GUID");
+    assert_eq!(clsid.data1, 0x1348_6D51);
+    assert_eq!(clsid.data2, 0x4821);
+    assert_eq!(clsid.data3, 0x11D2);
+    assert_eq!(
+        clsid.data4,
+        [0xA4, 0x94, 0x3C, 0xB3, 0x06, 0xC1, 0x00, 0x00]
+    );
+
+    // Format matches canonical uppercase bracketed string
+    assert_eq!(clsid.to_bracketed(), raw);
+    assert_eq!(format!("{clsid}"), raw);
+    assert_eq!(format!("{clsid:?}"), format!("Clsid({raw})"));
+
+    // Unbracketed lowercase parses identically
+    let lower_unbracketed = "13486d51-4821-11d2-a494-3cb306c10000";
+    let clsid_lower =
+        Clsid::from_str(lower_unbracketed).expect("should parse unbracketed lowercase");
+    assert_eq!(clsid_lower, clsid);
+
+    // Whitespace trimming
+    let spaced = "  {13486D51-4821-11D2-A494-3CB306C10000} \n";
+    assert_eq!(Clsid::parse(spaced), Some(clsid));
+
+    // Error cases
+    assert!(Clsid::parse("").is_none());
+    assert!(Clsid::parse("not-a-guid").is_none());
+    assert!(Clsid::parse("{13486D51-4821-11D2-A494-3CB306C1000}").is_none()); // short
+    assert!(Clsid::parse("13486D51_4821_11D2_A494_3CB306C10000").is_none()); // wrong delimiter
+    assert!(Clsid::parse("{13486D51-4821-11D2-A494-3CB306C10000").is_none()); // mismatched bracket
+
+    // ParseClsidError verification
+    let err: ParseClsidError = Clsid::from_str("invalid-clsid").unwrap_err();
+    assert_eq!(err.raw(), "invalid-clsid");
+    assert_eq!(
+        format!("{err}"),
+        "Invalid CLSID GUID string: 'invalid-clsid'"
+    );
+}
+
+#[cfg(feature = "opc-da-backend")]
+#[test]
+fn test_clsid_windows_guid_conversion() {
+    use crate::types::clsid::Clsid;
+
+    let guid = windows_core::GUID {
+        data1: 0x1348_6D51,
+        data2: 0x4821,
+        data3: 0x11D2,
+        data4: [0xA4, 0x94, 0x3C, 0xB3, 0x06, 0xC1, 0x00, 0x00],
+    };
+
+    let clsid = Clsid::from_windows_guid(guid);
+    assert_eq!(clsid.data1, guid.data1);
+    assert_eq!(clsid.data2, guid.data2);
+    assert_eq!(clsid.data3, guid.data3);
+    assert_eq!(clsid.data4, guid.data4);
+
+    let roundtrip_guid = clsid.to_windows_guid();
+    assert_eq!(roundtrip_guid, guid);
+
+    let from_into: Clsid = guid.into();
+    assert_eq!(from_into, clsid);
+
+    let to_into: windows_core::GUID = clsid.into();
+    assert_eq!(to_into, guid);
 }

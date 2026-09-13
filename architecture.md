@@ -166,7 +166,9 @@ opc-cli/
   - `TagValues`: Collection wrapper for tag values with $O(1)$ indexing and typed conversions.
   - `TagBatch`: Zero-allocation polymorphic tag batching (`InlineSingle`, `Borrowed`, `Static`, `StaticSingle`, `Shared`, `Owned`, `OwnedSingle`).
   - `TagCollector`: Thread-safe accumulator with `push`, `push_batch`, and `harvest` for cooperative chunking.
-  - `ServerIdentifier`: ProgID or CLSID identification with `as_prog_id()` and `as_clsid()`.
+  - `Clsid`: Pure 128-bit Windows COM Class ID representation with `#[repr(C)]` layout identical to `GUID`, big-endian `u128` arithmetic, zero heap allocations, multibyte UTF-8 guard, and `ParseClsidError`.
+  - `ServerIdentifier`: Strongly-typed identifier referencing an OPC DA server either by ProgID or CLSID (`Clsid`) with `as_prog_id()` and `as_clsid()`.
+  - `OpcServerInfo`: Canonical structured server record with ProgID, `Clsid`, user type description, and host.
   - `handles`: Distinct typestates `ClientGroupHandle`, `ServerGroupHandle`, `ClientItemHandle`, `ServerItemHandle`.
   - `browse`: `BrowseType`, `BrowseDirection`, `BrowseFilter`, `NamespaceType` with Win32 discriminants.
 - **Does NOT Own**: Wire protocols, COM apartment scheduling, or GUI state.

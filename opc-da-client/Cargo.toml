@@ -27,7 +27,7 @@ workspace = true
 
 [features]
 default = ["opc-da-backend"]
-opc-da-backend = []
+opc-da-backend = ["dep:windows"]
 test-support = ["dep:mockall"]
 dev-diagnostics = []
 
@@ -37,9 +37,10 @@ async-trait = "0.1.86"
 tokio = { workspace = true, features = ["sync", "time", "rt"] }
 tracing = { workspace = true }
 thiserror = { workspace = true }
-# OS: Windows (required)
-windows = { workspace = true }
 windows-core = { workspace = true }
+
+# Backend: Windows COM/DCOM (optional)
+windows = { workspace = true, optional = true }
 
 # Test support: mock provider (optional)
 mockall = { version = "0.13.1", optional = true }

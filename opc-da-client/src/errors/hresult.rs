@@ -1,6 +1,6 @@
 //! Low-level Win32 COM HRESULT constants, diagnostics, and formatters.
 
-use windows::core::HRESULT;
+use windows_core::HRESULT;
 
 pub const E_POINTER: HRESULT = HRESULT(0x8000_4003_u32.cast_signed());
 pub const E_ACCESSDENIED: HRESULT = HRESULT(0x8007_0005_u32.cast_signed());
@@ -111,10 +111,7 @@ mod tests {
 
     #[test]
     fn test_friendly_hresult_hint_unknown() {
-        assert_eq!(
-            friendly_hresult_hint(windows::core::HRESULT(0x1234_5678)),
-            None
-        );
+        assert_eq!(friendly_hresult_hint(HRESULT(0x1234_5678)), None);
     }
 
     #[test]
@@ -134,9 +131,6 @@ mod tests {
             format_hresult(E_POINTER),
             "0x80004003: Invalid pointer (E_POINTER)"
         );
-        assert_eq!(
-            format_hresult(windows::core::HRESULT(0x1234_5678)),
-            "0x12345678"
-        );
+        assert_eq!(format_hresult(HRESULT(0x1234_5678)), "0x12345678");
     }
 }

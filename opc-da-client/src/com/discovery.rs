@@ -6,7 +6,7 @@
 
 use crate::errors::{OpcError, OpcOperation, OpcResult};
 use crate::log_opc_err;
-use crate::types::OpcServerInfo;
+use crate::types::{Clsid, OpcServerInfo};
 use windows::core::Interface;
 
 /// Execution model of an installed COM OPC DA server.
@@ -31,7 +31,7 @@ impl std::fmt::Display for OpcServerType {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OpcServerRegistration {
     /// 128-bit COM Class ID.
-    pub clsid: windows::core::GUID,
+    pub clsid: Clsid,
     /// Programmatic Identifier.
     pub prog_id: String,
     /// Version-independent ProgID, or `None` if unassigned.
@@ -318,7 +318,7 @@ pub(crate) fn guid_to_progid(guid: &windows::core::GUID) -> OpcResult<String> {
 /// Returns [`OpcError::Server`] if the CLSID is not found or neither `LocalServer32` nor `InprocServer32` exists.
 #[tracing::instrument(level = "info", skip(clsid), err)]
 pub fn inspect_local_registration(
-    clsid: &windows::core::GUID,
+    clsid: &Clsid,
     host: Option<&str>,
 ) -> OpcResult<OpcServerRegistration> {
     if crate::types::is_remote_host(host) {
@@ -329,7 +329,7 @@ pub fn inspect_local_registration(
         return Err(err);
     }
 
-    let clsid_str = crate::types::format_guid_bracketed(clsid);
+    let clsid_str = clsid.to_bracketed();
 
     use windows::Win32::System::Registry::{KEY_WOW64_32KEY, REG_SAM_FLAGS};
     let views = [REG_SAM_FLAGS(0), KEY_WOW64_32KEY];
@@ -338,7 +338,7 @@ pub fn inspect_local_registration(
         if let Some(key_guard) = open_clsid_key(&clsid_str, view) {
             let key = key_guard.0;
             let prog_id = read_default_string(key, Some("ProgID"), view)
-                .or_else(|| guid_to_progid(clsid).ok())
+                .or_else(|| guid_to_progid(&clsid.to_windows_guid()).ok())
                 .unwrap_or_else(|| clsid_str.clone());
 
             let version_independent_prog_id =
@@ -573,7 +573,7 @@ mod tests {
 
     #[test]
     fn test_inspect_local_registration_remote_rejected() {
-        let clsid = windows::core::GUID::zeroed();
+        let clsid = Clsid::zeroed();
         let err = inspect_local_registration(&clsid, Some("192.168.1.100")).unwrap_err();
         match err {
             OpcError::NotImplemented(msg) => {
@@ -657,8 +657,7 @@ mod tests {
 
     #[test]
     fn test_inspect_local_registration_nonexistent_returns_classnotreg() {
-        let nonexistent_clsid =
-            windows::core::GUID::from_u128(0xFEEDFACE_CAFE_BEEF_0123_456789ABCDEF);
+        let nonexistent_clsid = Clsid::from_u128(0xFEEDFACE_CAFE_BEEF_0123_456789ABCDEF);
         let err = inspect_local_registration(&nonexistent_clsid, None).unwrap_err();
         match err {
             OpcError::Server(msg, code) => {
