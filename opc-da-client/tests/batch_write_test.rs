@@ -18,8 +18,9 @@ async fn test_opc_provider_batch_write_atomic() {
         ("Tag3".to_string(), OpcValue::Int(30)),
     ];
 
-    let provider: &dyn OpcProvider = &client;
-    let results = provider
+    fn assert_provider<P: OpcProvider>(_p: &P) {}
+    assert_provider(&client);
+    let results = client
         .write_tag_batch("Mock.Server.1", writes.into())
         .await
         .expect("batch write should succeed");

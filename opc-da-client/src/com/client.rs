@@ -21,7 +21,6 @@ use crate::types::{
     IntoTags, IntoWriteBatch, OpcServerEndpoint, OpcServerInfo, ServerIdentifier, TagBatch,
     TagValues,
 };
-use async_trait::async_trait;
 use std::sync::Arc;
 
 /// Fluent builder for configuring and constructing an [`OpcDaClient`].
@@ -591,7 +590,7 @@ impl<C: ServerBackend + 'static> OpcDaClient<C, Bound> {
     /// Returns [`OpcError::Connection`] if connecting or communicating with the server fails.
     #[tracing::instrument(level = "info", skip(self), err)]
     pub async fn connect_eager(&self) -> OpcResult<()> {
-        let _ = self.read_tag_values(TagBatch::default()).await?;
+        let _ = self.read_tags(TagBatch::default()).await?;
         Ok(())
     }
 
@@ -617,23 +616,23 @@ impl<C: ServerBackend + 'static> OpcDaClient<C, Bound> {
     /// ```rust,no_run
     /// # #[tokio::main]
     /// # async fn main() -> opc_da_client::OpcResult<()> {
+    /// # #[allow(deprecated)]
+    /// # {
     /// use opc_da_client::OpcDaClient;
     ///
     /// let client = OpcDaClient::connect("Matrikon.OPC.Simulation.1")?;
     /// let values = client.read_tag_values(["Random.Int4", "Random.Real8"]).await?;
+    /// # }
     /// # Ok(())
     /// # }
     /// ```
-    #[tracing::instrument(level = "info", skip(self, tags), err)]
+    #[deprecated(
+        since = "0.3.0",
+        note = "Use `read_tags` instead to avoid shadowing TagReader"
+    )]
+    #[inline]
     pub async fn read_tag_values(&self, tags: impl IntoTags) -> OpcResult<TagValues> {
-        let endpoint = self.endpoint().clone();
-        let batch = tags.into_tag_batch();
-        self.dispatch_request(|reply| ComRequest::ReadTagValues {
-            endpoint,
-            tags: batch,
-            reply,
-        })
-        .await
+        self.read_tags(tags).await
     }
 
     /// Reads a single tag and unwraps its value using the supplied extractor closure.
@@ -642,7 +641,7 @@ impl<C: ServerBackend + 'static> OpcDaClient<C, Bound> {
         F: FnOnce(&TagValues, &str) -> Result<T, crate::types::TagExtractError>,
     {
         let batch = TagBatch::from_str_lenient(tag);
-        let values = self.read_tag_values(batch).await?;
+        let values = self.read_tags(batch).await?;
         extract(&values, tag).map_err(Into::into)
     }
 
@@ -784,13 +783,14 @@ impl<C: ServerBackend + 'static> OpcDaClient<C, Bound> {
     /// # Errors
     ///
     /// Returns [`OpcError`] if the read fails.
-    #[tracing::instrument(level = "info", skip(self), err)]
+    /// Deprecated inherent 1-arg reader.
+    #[deprecated(
+        since = "0.3.0",
+        note = "Use `read_tag` instead to avoid shadowing TagReader"
+    )]
+    #[inline]
     pub async fn read_tag_value(&self, tag: &str) -> OpcResult<TagValue> {
-        let batch = TagBatch::from_str_lenient(tag);
-        let values = self.read_tag_values(batch).await?;
-        values.into_iter().next().ok_or_else(|| {
-            OpcError::Internal(format!("Tag '{tag}' returned no response from server"))
-        })
+        self.read_tag(tag).await
     }
 
     /// Reads a single tag and returns its full [`TagValue`].
@@ -808,7 +808,11 @@ impl<C: ServerBackend + 'static> OpcDaClient<C, Bound> {
     /// Returns [`OpcError`] on transport, timeout, or COM failure.
     #[tracing::instrument(level = "info", skip(self), err)]
     pub async fn read_tag(&self, tag: &str) -> OpcResult<TagValue> {
-        self.read_tag_value(tag).await
+        let batch = TagBatch::from_str_lenient(tag);
+        let values = self.read_tags(batch).await?;
+        values.into_iter().next().ok_or_else(|| {
+            OpcError::Internal(format!("Tag '{tag}' returned no response from server"))
+        })
     }
 
     /// Reads a batch of tags and returns their [`TagValues`].
@@ -826,7 +830,14 @@ impl<C: ServerBackend + 'static> OpcDaClient<C, Bound> {
     /// Returns [`OpcError`] on transport, timeout, or COM failure.
     #[tracing::instrument(level = "info", skip(self, tags), err)]
     pub async fn read_tags(&self, tags: impl IntoTags) -> OpcResult<TagValues> {
-        self.read_tag_values(tags).await
+        let endpoint = self.endpoint().clone();
+        let batch = tags.into_tag_batch();
+        self.dispatch_request(|reply| ComRequest::ReadTagValues {
+            endpoint,
+            tags: batch,
+            reply,
+        })
+        .await
     }
 
     /// Asynchronously writes a typed value to a tag.
@@ -1001,7 +1012,7 @@ impl<C: ServerBackend + 'static> OpcDaClient<C, Bound> {
                 if tx.is_closed() {
                     break;
                 }
-                match client.read_tag_values(tags_batch.clone()).await {
+                match client.read_tags(tags_batch.clone()).await {
                     Ok(values) => {
                         if tx.send(values).await.is_err() {
                             break;
@@ -1137,7 +1148,6 @@ impl<C: ServerBackend + 'static, State: Send + Sync + 'static> OpcDaClient<C, St
     }
 }
 
-#[async_trait]
 impl<C: ServerBackend + 'static, State: Send + Sync + 'static> ServerDiscovery
     for OpcDaClient<C, State>
 {
@@ -1162,7 +1172,6 @@ impl<C: ServerBackend + 'static, State: Send + Sync + 'static> ServerDiscovery
     }
 }
 
-#[async_trait]
 impl<C: ServerBackend + 'static, State: Send + Sync + 'static> TagBrowser
     for OpcDaClient<C, State>
 {
@@ -1178,7 +1187,6 @@ impl<C: ServerBackend + 'static, State: Send + Sync + 'static> TagBrowser
     }
 }
 
-#[async_trait]
 impl<C: ServerBackend + 'static, State: Send + Sync + 'static> TagReader for OpcDaClient<C, State> {
     #[tracing::instrument(level = "info", skip(self, tags), fields(tag_count = tags.len()), err)]
     async fn read_tag_values(&self, server: &str, tags: TagBatch) -> OpcResult<TagValues> {
@@ -1208,7 +1216,6 @@ impl<C: ServerBackend + 'static, State: Send + Sync + 'static> TagReader for Opc
     }
 }
 
-#[async_trait]
 impl<C: ServerBackend + 'static, State: Send + Sync + 'static> TagWriter for OpcDaClient<C, State> {
     #[tracing::instrument(level = "info", skip(self, value), err)]
     async fn write_tag_value(
@@ -1342,7 +1349,7 @@ mod tests {
             .unwrap();
 
         assert_eq!(client.timeout(), Some(std::time::Duration::from_millis(50)));
-        let err = client.read_tag_values(["Tag1"]).await.unwrap_err();
+        let err = client.read_tags(["Tag1"]).await.unwrap_err();
         assert!(matches!(err, OpcError::Timeout(_)));
         assert!(err.is_connection_error());
     }
@@ -1419,9 +1426,9 @@ mod tests {
             .build_bound()
             .expect("client build");
 
-        // Test inherent read_tag_values with static array
+        // Test inherent read_tags with static array
         let values = client
-            .read_tag_values(["Random.Int4", "Random.Real8"])
+            .read_tags(["Random.Int4", "Random.Real8"])
             .await
             .expect("batch read");
         assert_eq!(values.len(), 2);
@@ -1534,12 +1541,14 @@ mod tests {
         let state = std::sync::Arc::new(crate::com::connector::mock::MockState::default());
         let connector = MockServerConnector::with_state(state.clone());
 
-        let client: Arc<dyn OpcProvider> = Arc::new(
+        fn assert_provider<P: OpcProvider>(_p: &P) {}
+        let client = Arc::new(
             OpcDaClient::builder()
                 .with_connector(connector)
                 .build()
                 .unwrap(),
         );
+        assert_provider(&*client);
 
         // ServerDiscovery
         let servers = client.list_servers("localhost").await.unwrap();
@@ -1572,5 +1581,37 @@ mod tests {
             .await
             .unwrap();
         assert!(res.is_success());
+    }
+
+    #[tokio::test]
+    async fn test_inherent_read_tags_and_read_tag_session_methods() {
+        let state = std::sync::Arc::new(crate::com::connector::mock::MockState::default());
+        let connector = MockServerConnector::with_state(state.clone());
+        let client = OpcDaClient::builder()
+            .with_connector(connector)
+            .build()
+            .unwrap()
+            .bind("Mock.Server.1");
+
+        // Test inherent read_tags (1 argument: tags)
+        let values = client.read_tags(vec!["Tag1".to_string()]).await.unwrap();
+        assert_eq!(values.len(), 1);
+
+        // Test inherent read_tag (1 argument: tag)
+        let val = client.read_tag("Tag1").await.unwrap();
+        assert_eq!(val.tag_id, "Tag1");
+
+        // Test deprecated read_tag_values and read_tag_value continue working
+        #[allow(deprecated)]
+        {
+            let legacy_values = client
+                .read_tag_values(vec!["Tag1".to_string()])
+                .await
+                .unwrap();
+            assert_eq!(legacy_values.len(), 1);
+
+            let legacy_val = client.read_tag_value("Tag1").await.unwrap();
+            assert_eq!(legacy_val.tag_id, "Tag1");
+        }
     }
 }

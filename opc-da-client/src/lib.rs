@@ -9,7 +9,7 @@ pub mod types;
 pub(crate) mod raw;
 
 #[cfg(feature = "opc-da-backend")]
-pub mod com;
+pub(crate) mod com;
 
 // Stable public API
 pub use errors::{ConversionError, OpcError, OpcResult, WorkerError};

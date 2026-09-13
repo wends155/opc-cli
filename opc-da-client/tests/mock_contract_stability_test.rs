@@ -1,6 +1,6 @@
 use opc_da_client::{
-    MockOpcProvider, OpcProvider, OpcQuality, OpcValue, TagBatch, TagCollector, TagValue,
-    TagValues, WriteResult,
+    MockOpcProvider, OpcProvider, OpcQuality, OpcValue, ServerDiscovery, TagBatch, TagBrowser,
+    TagCollector, TagReader, TagValue, TagValues, TagWriter, WriteResult,
 };
 
 #[tokio::test]
@@ -69,8 +69,10 @@ async fn test_mock_opc_provider_full_contract_stability() {
     mock.expect_write_tag_value()
         .returning(|_, tag, _| Ok(WriteResult::success(tag)));
 
-    // Verify dynamic dispatch via &dyn OpcProvider
-    let provider: &dyn OpcProvider = &mock;
+    // Verify static dispatch via OpcProvider
+    fn assert_provider<P: OpcProvider>(_p: &P) {}
+    assert_provider(&mock);
+    let provider = &mock;
 
     // Test list_servers
     let servers = provider.list_servers("localhost").await.unwrap();

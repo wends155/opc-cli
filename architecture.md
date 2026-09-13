@@ -30,6 +30,7 @@
 * **Language**: Rust (Edition 2024, MSRV 1.93.1).
 * **OS Target**: Windows (Strict) due to OPC DA reliance on Windows COM/DCOM (`windows` crate 0.61.3).
 * **Async Runtime**: `tokio` (Multi-thread runtime).
+* **Async Traits**: Rust 2024 native async trait methods returning `impl Future<Output = ...> + Send` (zero-allocation AFIT, completely eliminating `async-trait` dependency and `Pin<Box<dyn Future>>` heap indirection).
 * **TUI Engine**: `ratatui` (v0.29) + `crossterm` (v0.28).
 * **Published Crates**: `opc-cli` v0.2.1, `opc-da-client` v0.2.0 (crates.io).
 
@@ -77,7 +78,7 @@ opc-cli/
 │       │   ├── worker.rs       # WorkerError (thread panic, channel closures, init failure)
 │       │   └── conversion.rs   # ConversionError (browse types, endpoints, type mismatch)
 │       ├── errors.rs           # Canonical composite OpcError (wrapping WorkerError, ConversionError), OpcResult, OpcOperation, and log_opc_err!
-│       ├── com/                # COM subsystem (feature: opc-da-backend)
+│       ├── com/                # COM subsystem (sealed pub(crate) mod com; gated behind opc-da-backend)
 │       │   ├── mod.rs          # COM module root & re-exports
 │       │   ├── client.rs       # OpcDaClient implementation
 │       │   ├── connector.rs    # Slim coordinator facade (pure connector submodules, zero raw::memory leak)
@@ -130,6 +131,7 @@ opc-cli/
   - **Encapsulated Event Handling**: Key handling is cleanly encapsulated in `App::handle_key(&mut self, key: KeyEvent) -> AppAction`, returning an `AppAction` enum (`None`, `Quit`, `Spawn(ActiveTask)`) to decouple raw terminal events from the event loop.
   - **Zero-Allocation Table Rows**: Table row rendering in `ui.rs` uses stack-allocated `[Cell; 4]` arrays with ANSI highlight styling, eliminating heap allocations in hot render frames.
   - **Status Bar Telemetry**: Separate counters track fatal read/write transport or COM errors (`error_count`) versus data quality anomalies (`bad_quality_count`), ensuring transparent visibility into communication versus signal health.
+  - **Static Monomorphization**: `App<P: OpcProvider = OpcDaClient>` is generic over the OPC provider and stores `Arc<P>`, completely eliminating `Box<dyn OpcProvider>` dynamic dispatch overhead across UI renders and background tasks while retaining 100% test mockability with `MockOpcProvider`.
 - **Does NOT Own**: Raw COM initialization, registry enumeration, OPC group creation, HRESULT interpretation logic.
 - **Trait Interfaces**: Consumes composite `OpcProvider` (or sub-traits `ServerDiscovery`, `TagBrowser`, `TagReader`, `TagWriter`) asynchronously.
 - **Mock Availability**: Fully mockable via `MockOpcProvider` (compiled when `feature = "test-support"` is active in `opc-da-client`) and unit test fixtures (`test_app()`, `TestAppBuilder`).
@@ -187,7 +189,7 @@ opc-cli/
 - **Mock Availability**: N/A (pure error definitions).
 
 ### `opc-da-client::com::client` (Public Client Implementation)
-- **Owns**: Public concrete `OpcDaClient<C, State>` struct implementing `OpcProvider`, fluent builder `OpcDaClientBuilder` (`builder()`), typestate transitions (`bind`, `bind_remote`, `unbind`), eager connection constructors (`connect`, `connect_remote`, `connect_eager`), inherent async readers and writers sealed to `Bound` (`read_tag_values`, `read_tag_value`, `read_f64`, `read_i32`, `read_bool`, `read_string`, `write`, `write_batch`, `browse`, `subscribe`), remote server discovery (`list_servers_on`), Layer 2 subscription polling stream (`subscribe` with zero-allocation shareable batch clones), request dispatch channel management (`mpsc::Sender<ComRequest>`), and public constructors (`OpcDaClient::new`).
+- **Owns**: Public concrete `OpcDaClient<C, State>` struct implementing `OpcProvider`, fluent builder `OpcDaClientBuilder` (`builder()`), typestate transitions (`bind`, `bind_remote`, `unbind`), eager connection constructors (`connect`, `connect_remote`, `connect_eager`), inherent async readers and writers sealed to `Bound` (`read_tags`, `read_tag`, deprecated inherent `read_tag_values`, deprecated inherent `read_tag_value`, `read_f64`, `read_i32`, `read_bool`, `read_string`, `write`, `write_batch`, `browse`, `subscribe`), remote server discovery (`list_servers_on`), Layer 2 subscription polling stream (`subscribe` with zero-allocation shareable batch clones), request dispatch channel management (`mpsc::Sender<ComRequest>`), and public constructors (`OpcDaClient::new`). Note that while `com/` is internal (`pub(crate) mod com;`), `OpcDaClient`, `OpcDaClientBuilder`, and typestates are re-exported at the crate root.
 - **Does NOT Own**: In-apartment Win32 COM operations, unmanaged memory pointers, or direct FFI calls (all delegated across channels to `ComWorker`).
 - **Trait Interfaces**: Implements `OpcProvider`, `ServerDiscovery`, `TagBrowser`, `TagReader`, `TagWriter`.
 - **Mock Availability**: `MockOpcDaClient` alias available under `all(feature = "test-support", feature = "opc-da-backend")`.

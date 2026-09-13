@@ -1,5 +1,36 @@
 # Project Context Summary
 
+## 2026-09-14: Block 5 (Wave 4: Rust 2024 Native Async Traits, Public Surface Sealing & `opc-cli` Synchronization) Completed (`opc-da-client` & `opc-cli`)
+> 📝 **Context Update:**
+> * **Feature:** Execution of Block 5 of the 0.3.0 modularity refactoring roadmap (`review_report.md` Findings 16–18), establishing native Rust 2024 async trait methods (`impl Future<Output = ...> + Send`), completely eradicating the `async-trait` dependency and heap allocations, disambiguating inherent session methods (`read_tags`/`read_tag`), sealing crate surface via `pub(crate) mod com;`, parameterizing `opc-cli`'s `App<P: OpcProvider = OpcDaClient>` for static monomorphization with zero dynamic dispatch overhead, and migrating integration test suites.
+> * **Changes:**
+>   - **Inherent Session Method Disambiguation (`com/client.rs`):**
+>     - Standardized inherent session batch and single-tag reads on `read_tags(&self, tags: impl IntoTags)` and `read_tag(&self, tag: &str)` on `OpcDaClient<C, Bound>`.
+>     - Deprecated inherent 1-arg `read_tag_values` and `read_tag_value` (`#[deprecated(since = "0.3.0", note = "use read_tags...")]`), resolving method collision with `TagReader` role trait when imported.
+>     - Migrated internal callers (`read_single_typed`, `subscribe`, `connect_eager`, unit tests) to `read_tags`/`read_tag`.
+>   - **Native Rust 2024 Async Traits & Dependency Pruning (`provider.rs`):**
+>     - Removed `#[async_trait]` across `ServerDiscovery`, `TagBrowser`, `TagReader`, `TagWriter`, and `OpcProvider`.
+>     - Desugared all trait method declarations to `-> impl std::future::Future<Output = OpcResult<...>> + Send`, ensuring thread safety across `tokio::spawn` task boundaries without requiring nightly Return Type Notation (`<method(): Send>`).
+>     - Stripped `#[async_trait]` from all trait implementations on `OpcDaClient<C, State>` and `MockOpcProvider`.
+>     - Removed `async-trait = "0.1.86"` from `opc-da-client/Cargo.toml`.
+>     - Updated all runnable doc-tests in `provider.rs` and `opc-da-client/README.md` to return plain `Ok(...)` without `Box::pin(async { ... })`.
+>   - **Crate Public Surface Sealing (`src/lib.rs`):**
+>     - Sealed `pub(crate) mod com;` in `opc-da-client/src/lib.rs`, preventing internal COM plumbing types from leaking.
+>     - Verified curated crate-root re-exports (`OpcDaClient`, `OpcDaClientBuilder`, `Bound`, `Unbound`, `ServerBackend`, `ServerConnector`, `ServerCatalogDiscovery`).
+>     - Cleaned up redundant and dead `pub use` statements in `com/mod.rs` and `com/connector.rs`, eliminating compiler warnings under `--all-targets`.
+>   - **Downstream `opc-cli` Parameterization & Synchronization (`app.rs`, `ui.rs`, `main.rs`):**
+>     - Parameterized `App<P: OpcProvider = OpcDaClient>` and stored `Arc<P>` provider reference.
+>     - Monomorphized all 4 async background task spawners (`start_fetch_servers`, `start_browse_tags`, `spawn_read_task`, `start_write_value`), cloning `Arc<P>` into asynchronous Tokio tasks with zero dynamic dispatch overhead.
+>     - Parameterized `TestAppBuilder::build` and `test_app` to instantiate `App<MockOpcProvider>`, retaining 100% unit test mockability without live COM servers.
+>     - Parameterized `ui::render<P: OpcProvider>` and all 8 private render helper functions in `ui.rs`.
+>     - Parameterized `run_app<B, P: OpcProvider>` and `handle_key_event<P: OpcProvider>` in `main.rs`.
+>   - **Integration Test Suite Migration:**
+>     - Updated `batch_write_test.rs`, `mock_contract_stability_test.rs`, and `typestate_client_test.rs` to import role traits (`TagReader`, `TagWriter`, `TagBrowser`, `ServerDiscovery`), use static dispatch, and return raw values in `mockall` expectations.
+>   - **Universal Quality Verification:**
+>     - All 9 gates of `pwsh scripts/verify.ps1` pass cleanly with exit code 0, zero warnings, and 100% tests passing across the workspace.
+> * **New Constraints:** Trait methods in `provider.rs` use native AFIT with `impl Future + Send`. Downstream consumers should use generic parameterization `P: OpcProvider` rather than `Box<dyn OpcProvider>`. Inherent session reads use `read_tags` and `read_tag`. `com/` module remains crate-private (`pub(crate)`).
+> * **Pruned:** `async-trait` dependency; overexposed `pub mod com;`; legacy inherent method collisions on `OpcDaClient<C, Bound>`.
+
 ## 2026-09-13: Block 4 (Wave 3: `com/` Subsystem Internals, SPI Segregation & Visibility Fencing) Completed (`opc-da-client`)
 > 📝 **Context Update:**
 > * **Feature:** Execution of Block 4 of the 0.3.0 modularity refactoring roadmap (`review_report.md` Findings 13–15), establishing internal worker & connection pool visibility fencing, SPI trait segregation (`ServerCatalogDiscovery`, `ServerConnector`, `ServerBackend`), implementor & client facade bounds migration, and symmetric re-exports.

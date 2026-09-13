@@ -4,16 +4,15 @@
 //! tag reading/writing, and address space browsing, along with domain types such as
 //! [`TagValue`], [`WriteResult`], and bounded [`TagCollector`].
 
+#![allow(async_fn_in_trait)]
+
 use crate::errors::OpcResult;
 pub use crate::types::{
     DisplayOptionOpcValue, DisplayOptionTimestamp, OpcQuality, OpcServerInfo, OpcValue,
     OpcValueOptionExt, QualityLimit, QualityMajor, QualitySubstatus, SystemTimeOptionExt, TagBatch,
     TagCollector, TagValue, TagValues, WriteResult,
 };
-use async_trait::async_trait;
-
 /// Role trait for discovering OPC DA servers and querying catalog details.
-#[async_trait]
 pub trait ServerDiscovery: Send + Sync {
     /// List available OPC DA servers on the given host.
     ///
@@ -34,48 +33,40 @@ pub trait ServerDiscovery: Send + Sync {
     /// # async fn main() -> opc_da_client::OpcResult<()> {
     /// # let mut mock = opc_da_client::MockOpcProvider::new();
     /// # mock.expect_list_servers().returning(|_| Ok(vec!["Matrikon.OPC.Simulation.1".into()]));
-    /// # let client: &dyn opc_da_client::OpcProvider = &mock;
-    /// use opc_da_client::{OpcProvider, OpcResult};
+    /// # let client = &mock;
+    /// use opc_da_client::{OpcProvider, OpcResult, ServerDiscovery};
     ///
     /// let servers = client.list_servers("localhost").await?;
     /// assert_eq!(servers, vec!["Matrikon.OPC.Simulation.1"]);
     /// # Ok(())
     /// # }
     /// ```
-    async fn list_servers(&self, host: &str) -> OpcResult<Vec<String>>;
+    fn list_servers(
+        &self,
+        host: &str,
+    ) -> impl std::future::Future<Output = OpcResult<Vec<String>>> + Send;
 
-    /// List available OPC DA servers on the given host with rich catalog metadata.
-    ///
-    /// The default implementation delegates to [`ServerDiscovery::list_servers`] and synthesizes
-    /// [`OpcServerInfo`] records with zeroed CLSIDs and empty descriptions. Concrete implementations
-    /// (such as `OpcDaClient`) override this to query rich COM catalog metadata via
-    /// `IOPCServerList`/`IOPCServerList2`.
-    ///
-    /// # Arguments
-    /// * `host` - Hostname or IP address to target (e.g., `"localhost"`).
-    ///
-    /// # Returns
-    /// A list of [`OpcServerInfo`] records.
-    ///
-    /// # Errors
-    /// Returns [`crate::errors::OpcError`] if enumeration fails.
-    async fn list_server_details(&self, host: &str) -> OpcResult<Vec<OpcServerInfo>> {
-        let servers = self.list_servers(host).await?;
-        let host_opt = crate::types::normalize_host(Some(host));
-        Ok(servers
-            .into_iter()
-            .map(|prog_id| OpcServerInfo {
-                prog_id,
-                clsid: crate::types::Clsid::zeroed(),
-                user_type: None,
-                host: host_opt.clone(),
-            })
-            .collect())
+    fn list_server_details(
+        &self,
+        host: &str,
+    ) -> impl std::future::Future<Output = OpcResult<Vec<OpcServerInfo>>> + Send {
+        async {
+            let servers = self.list_servers(host).await?;
+            let host_opt = crate::types::normalize_host(Some(host));
+            Ok(servers
+                .into_iter()
+                .map(|prog_id| OpcServerInfo {
+                    prog_id,
+                    clsid: crate::types::Clsid::zeroed(),
+                    user_type: None,
+                    host: host_opt.clone(),
+                })
+                .collect())
+        }
     }
 }
 
 /// Role trait for browsing OPC DA address spaces.
-#[async_trait]
 pub trait TagBrowser: Send + Sync {
     /// Browse tags recursively using the supplied [`TagCollector`].
     ///
@@ -103,8 +94,8 @@ pub trait TagBrowser: Send + Sync {
     /// #     let _ = collector.push("Random.Int4".into());
     /// #     Ok(collector.snapshot())
     /// # });
-    /// # let client: &dyn opc_da_client::OpcProvider = &mock;
-    /// use opc_da_client::{OpcProvider, OpcResult, TagCollector};
+    /// # let client = &mock;
+    /// use opc_da_client::{OpcProvider, OpcResult, TagBrowser, TagCollector};
     ///
     /// let collector = TagCollector::new(100);
     /// let tags = client.browse_tags("Matrikon.OPC.Simulation.1", collector).await?;
@@ -112,11 +103,14 @@ pub trait TagBrowser: Send + Sync {
     /// # Ok(())
     /// # }
     /// ```
-    async fn browse_tags(&self, server: &str, collector: TagCollector) -> OpcResult<Vec<String>>;
+    fn browse_tags(
+        &self,
+        server: &str,
+        collector: TagCollector,
+    ) -> impl std::future::Future<Output = OpcResult<Vec<String>>> + Send;
 }
 
 /// Role trait for reading OPC DA tag values.
-#[async_trait]
 pub trait TagReader: Send + Sync {
     /// Read current values for the given tag batch.
     ///
@@ -145,8 +139,8 @@ pub trait TagReader: Send + Sync {
     /// #         None,
     /// #     )).collect()))
     /// # });
-    /// # let client: &dyn opc_da_client::OpcProvider = &mock;
-    /// use opc_da_client::{OpcProvider, OpcResult, TagBatch, TagValue};
+    /// # let client = &mock;
+    /// use opc_da_client::{OpcProvider, OpcResult, TagBatch, TagReader, TagValue};
     ///
     /// let tags = TagBatch::from(vec!["Random.Int4".to_string(), "Random.Real8".to_string()]);
     /// let values = client.read_tag_values("Matrikon.OPC.Simulation.1", tags).await?;
@@ -156,7 +150,11 @@ pub trait TagReader: Send + Sync {
     /// # Ok(())
     /// # }
     /// ```
-    async fn read_tag_values(&self, server: &str, tags: TagBatch) -> OpcResult<TagValues>;
+    fn read_tag_values(
+        &self,
+        server: &str,
+        tags: TagBatch,
+    ) -> impl std::future::Future<Output = OpcResult<TagValues>> + Send;
 
     /// Read a value from a single OPC DA tag.
     ///
@@ -186,25 +184,30 @@ pub trait TagReader: Send + Sync {
     /// #         None,
     /// #     ))
     /// # });
-    /// # let client: &dyn opc_da_client::OpcProvider = &mock;
-    /// use opc_da_client::{OpcProvider, OpcResult, TagValue};
+    /// # let client = &mock;
+    /// use opc_da_client::{OpcProvider, OpcResult, TagReader, TagValue};
     ///
     /// let tag = client.read_tag_value("Matrikon.OPC.Simulation.1", "Random.Int4").await?;
     /// assert_eq!(tag.tag_id, "Random.Int4");
     /// # Ok(())
     /// # }
     /// ```
-    async fn read_tag_value(&self, server: &str, tag_id: &str) -> OpcResult<TagValue> {
-        let batch = TagBatch::from_str_lenient(tag_id);
-        let results = self.read_tag_values(server, batch).await?;
-        results.into_vec().pop().ok_or_else(|| {
-            crate::errors::OpcError::Internal("Server returned empty tag values".to_string())
-        })
+    fn read_tag_value(
+        &self,
+        server: &str,
+        tag_id: &str,
+    ) -> impl std::future::Future<Output = OpcResult<TagValue>> + Send {
+        async {
+            let batch = TagBatch::from_str_lenient(tag_id);
+            let results = self.read_tag_values(server, batch).await?;
+            results.into_vec().pop().ok_or_else(|| {
+                crate::errors::OpcError::Internal("Server returned empty tag values".to_string())
+            })
+        }
     }
 }
 
 /// Role trait for writing OPC DA tag values.
-#[async_trait]
 pub trait TagWriter: Send + Sync {
     /// Write a value to a single OPC DA tag.
     ///
@@ -229,8 +232,8 @@ pub trait TagWriter: Send + Sync {
     /// # mock.expect_write_tag_value().returning(|_, id, _| {
     /// #     Ok(opc_da_client::WriteResult::success(id.to_string()))
     /// # });
-    /// # let client: &dyn opc_da_client::OpcProvider = &mock;
-    /// use opc_da_client::{OpcProvider, OpcResult, OpcValue, WriteResult};
+    /// # let client = &mock;
+    /// use opc_da_client::{OpcProvider, OpcResult, OpcValue, TagWriter, WriteResult};
     ///
     /// let result = client
     ///     .write_tag_value("Matrikon.OPC.Simulation.1", "Bucket Brigade.Int4", OpcValue::Int(42))
@@ -239,12 +242,12 @@ pub trait TagWriter: Send + Sync {
     /// # Ok(())
     /// # }
     /// ```
-    async fn write_tag_value(
+    fn write_tag_value(
         &self,
         server: &str,
         tag_id: &str,
         value: OpcValue,
-    ) -> OpcResult<WriteResult>;
+    ) -> impl std::future::Future<Output = OpcResult<WriteResult>> + Send;
 
     /// Write typed values to multiple OPC DA tags in a batch using [`crate::types::WriteBatch`].
     ///
@@ -261,20 +264,22 @@ pub trait TagWriter: Send + Sync {
     ///
     /// # Errors
     /// Returns [`crate::errors::OpcError`] if an unrecoverable error occurs.
-    async fn write_tag_batch(
+    fn write_tag_batch(
         &self,
         server: &str,
         writes: crate::types::WriteBatch,
-    ) -> OpcResult<Vec<WriteResult>> {
-        let mut results = Vec::with_capacity(writes.len());
-        for (tag_id, value) in writes {
-            let res = match self.write_tag_value(server, &tag_id, value).await {
-                Ok(r) => r,
-                Err(e) => WriteResult::failure(tag_id, e),
-            };
-            results.push(res);
+    ) -> impl std::future::Future<Output = OpcResult<Vec<WriteResult>>> + Send {
+        async {
+            let mut results = Vec::with_capacity(writes.len());
+            for (tag_id, value) in writes {
+                let res = match self.write_tag_value(server, &tag_id, value).await {
+                    Ok(r) => r,
+                    Err(e) => WriteResult::failure(tag_id, e),
+                };
+                results.push(res);
+            }
+            Ok(results)
         }
-        Ok(results)
     }
 
     /// Write typed values to multiple OPC DA tags in a batch.
@@ -282,54 +287,62 @@ pub trait TagWriter: Send + Sync {
     /// # Deprecated
     /// Use [`TagWriter::write_tag_batch`] instead.
     #[deprecated(since = "0.2.0", note = "Use write_tag_batch instead")]
-    async fn write_tag_values(
+    fn write_tag_values(
         &self,
         server: &str,
         writes: &[(String, OpcValue)],
-    ) -> OpcResult<Vec<WriteResult>> {
-        self.write_tag_batch(server, crate::types::WriteBatch::Owned(writes.to_vec()))
-            .await
+    ) -> impl std::future::Future<Output = OpcResult<Vec<WriteResult>>> + Send {
+        async {
+            self.write_tag_batch(server, crate::types::WriteBatch::Owned(writes.to_vec()))
+                .await
+        }
     }
 }
 
 /// Composite asynchronous OPC DA service provider abstraction.
 ///
 /// Blends [`ServerDiscovery`], [`TagBrowser`], [`TagReader`], and [`TagWriter`].
-pub trait OpcProvider: ServerDiscovery + TagBrowser + TagReader + TagWriter {}
+///
+/// All asynchronous role methods are bound by Return Type Notation (RTN) to yield [`Send`]
+/// futures so they can safely cross thread boundaries in asynchronous runtimes.
+#[allow(deprecated)]
+pub trait OpcProvider:
+    ServerDiscovery + TagBrowser + TagReader + TagWriter + Send + Sync + 'static
+{
+}
 
-impl<T> OpcProvider for T where T: ServerDiscovery + TagBrowser + TagReader + TagWriter + ?Sized {}
+#[allow(deprecated)]
+impl<T> OpcProvider for T where
+    T: ServerDiscovery + TagBrowser + TagReader + TagWriter + Send + Sync + 'static
+{
+}
 
 #[cfg(feature = "test-support")]
 mod mock {
-    #![allow(clippy::struct_field_names)]
+    #![allow(clippy::struct_field_names, deprecated)]
     use super::{
         OpcResult, OpcServerInfo, OpcValue, ServerDiscovery, TagBatch, TagBrowser, TagCollector,
         TagReader, TagValue, TagValues, TagWriter, WriteResult,
     };
-    use async_trait::async_trait;
 
     mockall::mock! {
         /// Pure-Rust mock implementation of [`OpcProvider`] for unit and integration tests.
         pub OpcProvider {}
 
-        #[async_trait]
         impl ServerDiscovery for OpcProvider {
             async fn list_servers(&self, host: &str) -> OpcResult<Vec<String>>;
             async fn list_server_details(&self, host: &str) -> OpcResult<Vec<OpcServerInfo>>;
         }
 
-        #[async_trait]
         impl TagBrowser for OpcProvider {
             async fn browse_tags(&self, server: &str, collector: TagCollector) -> OpcResult<Vec<String>>;
         }
 
-        #[async_trait]
         impl TagReader for OpcProvider {
             async fn read_tag_values(&self, server: &str, tags: TagBatch) -> OpcResult<TagValues>;
             async fn read_tag_value(&self, server: &str, tag_id: &str) -> OpcResult<TagValue>;
         }
 
-        #[async_trait]
         impl TagWriter for OpcProvider {
             async fn write_tag_value(
                 &self,
@@ -580,25 +593,21 @@ mod tests {
     #[tokio::test]
     async fn test_provider_default_list_server_details() {
         struct TestProvider;
-        #[async_trait::async_trait]
         impl ServerDiscovery for TestProvider {
             async fn list_servers(&self, _host: &str) -> OpcResult<Vec<String>> {
                 Ok(vec!["Server.A".into(), "Server.B".into()])
             }
         }
-        #[async_trait::async_trait]
         impl TagBrowser for TestProvider {
             async fn browse_tags(&self, _s: &str, _c: TagCollector) -> OpcResult<Vec<String>> {
                 Ok(vec![])
             }
         }
-        #[async_trait::async_trait]
         impl TagReader for TestProvider {
             async fn read_tag_values(&self, _s: &str, _t: TagBatch) -> OpcResult<TagValues> {
                 Ok(TagValues::default())
             }
         }
-        #[async_trait::async_trait]
         impl TagWriter for TestProvider {
             async fn write_tag_value(
                 &self,
@@ -623,19 +632,16 @@ mod tests {
     #[allow(deprecated)]
     async fn test_provider_default_read_tag_value() {
         struct TestProvider;
-        #[async_trait::async_trait]
         impl ServerDiscovery for TestProvider {
             async fn list_servers(&self, _host: &str) -> OpcResult<Vec<String>> {
                 Ok(vec![])
             }
         }
-        #[async_trait::async_trait]
         impl TagBrowser for TestProvider {
             async fn browse_tags(&self, _s: &str, _c: TagCollector) -> OpcResult<Vec<String>> {
                 Ok(vec![])
             }
         }
-        #[async_trait::async_trait]
         impl TagReader for TestProvider {
             async fn read_tag_values(&self, _s: &str, tags: TagBatch) -> OpcResult<TagValues> {
                 Ok(TagValues::new(
@@ -652,7 +658,6 @@ mod tests {
                 ))
             }
         }
-        #[async_trait::async_trait]
         impl TagWriter for TestProvider {
             async fn write_tag_value(
                 &self,
@@ -702,25 +707,21 @@ mod tests {
     #[allow(deprecated)]
     async fn test_provider_default_write_tag_values_partial_failure() {
         struct FailingProvider;
-        #[async_trait::async_trait]
         impl ServerDiscovery for FailingProvider {
             async fn list_servers(&self, _host: &str) -> OpcResult<Vec<String>> {
                 Ok(vec![])
             }
         }
-        #[async_trait::async_trait]
         impl TagBrowser for FailingProvider {
             async fn browse_tags(&self, _s: &str, _c: TagCollector) -> OpcResult<Vec<String>> {
                 Ok(vec![])
             }
         }
-        #[async_trait::async_trait]
         impl TagReader for FailingProvider {
             async fn read_tag_values(&self, _s: &str, _tags: TagBatch) -> OpcResult<TagValues> {
                 Ok(TagValues::default())
             }
         }
-        #[async_trait::async_trait]
         impl TagWriter for FailingProvider {
             async fn write_tag_value(
                 &self,

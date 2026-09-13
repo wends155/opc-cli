@@ -17,31 +17,31 @@
 
 ##### Segregated Role Traits & Composite `OpcProvider`
 
-All methods use `#[async_trait]`.
+All methods use native Rust 2024 async trait methods returning `impl Future<Output = ...> + Send` (eliminating `#[async_trait]` macro indirection and dynamic dispatch box allocation).
 
 ###### `trait ServerDiscovery: Send + Sync`
 | Method | Signature | Description |
 | :--- | :--- | :--- |
-| `list_servers` | `async fn list_servers(&self, host: &str) -> OpcResult<Vec<String>>` | Enumerate OPC DA servers available on `host`. |
-| `list_server_details` | `async fn list_server_details(&self, host: &str) -> OpcResult<Vec<OpcServerInfo>>` | Enumerate OPC DA servers on `host` with rich metadata (`ProgID`, `CLSID`, user-readable name). Default implementation synthesizes records wrapping `list_servers`. |
+| `list_servers` | `fn list_servers(&self, host: &str) -> impl Future<Output = OpcResult<Vec<String>>> + Send` | Enumerate OPC DA servers available on `host`. |
+| `list_server_details` | `fn list_server_details(&self, host: &str) -> impl Future<Output = OpcResult<Vec<OpcServerInfo>>> + Send` | Enumerate OPC DA servers on `host` with rich metadata (`ProgID`, `CLSID`, user-readable name). Default implementation synthesizes records wrapping `list_servers`. |
 
 ###### `trait TagBrowser: Send + Sync`
 | Method | Signature | Description |
 | :--- | :--- | :--- |
-| `browse_tags` | `async fn browse_tags(&self, server: &str, collector: TagCollector) -> OpcResult<Vec<String>>` | Recursively discover tags on `server`, pushing each to `collector` as found. |
+| `browse_tags` | `fn browse_tags(&self, server: &str, collector: TagCollector) -> impl Future<Output = OpcResult<Vec<String>>> + Send` | Recursively discover tags on `server`, pushing each to `collector` as found. |
 
 ###### `trait TagReader: Send + Sync`
 | Method | Signature | Description |
 | :--- | :--- | :--- |
-| `read_tag_values` | `async fn read_tag_values(&self, server: &str, tag_ids: TagBatch) -> OpcResult<TagValues>` | Read current value, quality, and timestamp for the given tag IDs, returning a rich `TagValues` collection. |
-| `read_tag_value` | `async fn read_tag_value(&self, server: &str, tag_id: &str) -> OpcResult<TagValue>` | Convenience helper to read a single tag on `server`. Default implementation delegates to `read_tag_values`. |
+| `read_tag_values` | `fn read_tag_values(&self, server: &str, tag_ids: TagBatch) -> impl Future<Output = OpcResult<TagValues>> + Send` | Read current value, quality, and timestamp for the given tag IDs, returning a rich `TagValues` collection. |
+| `read_tag_value` | `fn read_tag_value(&self, server: &str, tag_id: &str) -> impl Future<Output = OpcResult<TagValue>> + Send` | Convenience helper to read a single tag on `server`. Default implementation delegates to `read_tag_values`. |
 
 ###### `trait TagWriter: Send + Sync`
 | Method | Signature | Description |
 | :--- | :--- | :--- |
-| `write_tag_value` | `async fn write_tag_value(&self, server: &str, tag_id: &str, value: OpcValue) -> OpcResult<WriteResult>` | Write a typed value to a single tag on `server`. |
-| `write_tag_batch` | `async fn write_tag_batch(&self, server: &str, writes: WriteBatch) -> OpcResult<Vec<WriteResult>>` | Write typed values to multiple OPC DA tags in a batch using polymorphic `WriteBatch`. |
-| `write_tag_values` | `async fn write_tag_values(&self, server: &str, writes: &[(String, OpcValue)]) -> OpcResult<Vec<WriteResult>>` | *(Deprecated since 0.2.0, prefer `write_tag_batch`)* Convenience helper to write multiple tags sequentially on `server`. |
+| `write_tag_value` | `fn write_tag_value(&self, server: &str, tag_id: &str, value: OpcValue) -> impl Future<Output = OpcResult<WriteResult>> + Send` | Write a typed value to a single tag on `server`. |
+| `write_tag_batch` | `fn write_tag_batch(&self, server: &str, writes: WriteBatch) -> impl Future<Output = OpcResult<Vec<WriteResult>>> + Send` | Write typed values to multiple OPC DA tags in a batch using polymorphic `WriteBatch`. |
+| `write_tag_values` | `fn write_tag_values(&self, server: &str, writes: &[(String, OpcValue)]) -> impl Future<Output = OpcResult<Vec<WriteResult>>> + Send` | *(Deprecated since 0.2.0, prefer `write_tag_batch`)* Convenience helper to write multiple tags sequentially on `server`. |
 
 ###### `trait OpcProvider: ServerDiscovery + TagBrowser + TagReader + TagWriter + Send + Sync`
 Composite marker trait representing the full OPC DA client capability set. A blanket implementation is provided for any type implementing all four segregated role traits.
@@ -612,8 +612,8 @@ Implemented for any type `T: Into<WriteBatch>`.
 | `connect_eager(&self)` | `pub async fn connect_eager(&self) -> OpcResult<()>` | Eagerly connects to the bound server endpoint, verifying connectivity upfront. |
 | `read_tag(&self, tag: &str)` | `pub async fn read_tag(&self, tag: &str) -> OpcResult<TagValue>` | Reads a single tag and returns full `TagValue` with outcome, quality, and timestamp. |
 | `read_tags(&self, tags: impl IntoTags)` | `pub async fn read_tags(&self, tags: impl IntoTags) -> OpcResult<TagValues>` | Reads a batch of tags and returns rich `TagValues` collection. |
-| `read_tag_values(&self, tags: impl IntoTags)` | `pub async fn read_tag_values(&self, tags: impl IntoTags) -> OpcResult<TagValues>` | Zero-allocation batch read returning a rich `TagValues` collection. |
-| `read_tag_value(&self, tag: &str)` | `pub async fn read_tag_value(&self, tag: &str) -> OpcResult<TagValue>` | Reads a single tag returning `TagValue`. |
+| `read_tag_values(&self, tags: impl IntoTags)` | `pub async fn read_tag_values(&self, tags: impl IntoTags) -> OpcResult<TagValues>` | *(Deprecated since 0.3.0, prefer `read_tags`)* Zero-allocation batch read returning a rich `TagValues` collection. Deprecated to avoid method collision with `TagReader::read_tag_values`. |
+| `read_tag_value(&self, tag: &str)` | `pub async fn read_tag_value(&self, tag: &str) -> OpcResult<TagValue>` | *(Deprecated since 0.3.0, prefer `read_tag`)* Reads a single tag returning `TagValue`. Deprecated to avoid method collision with `TagReader::read_tag_value`. |
 | `read_f64(&self, tag: &str)` | `pub async fn read_f64(&self, tag: &str) -> OpcResult<f64>` | Reads a single tag and coerces value to `f64`. |
 | `read_i32(&self, tag: &str)` | `pub async fn read_i32(&self, tag: &str) -> OpcResult<i32>` | Reads a single tag and coerces value to `i32`. |
 | `read_bool(&self, tag: &str)` | `pub async fn read_bool(&self, tag: &str) -> OpcResult<bool>` | Reads a single tag and coerces value to `bool`. |

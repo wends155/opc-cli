@@ -1,7 +1,6 @@
 use opc_da_client::{
     Bound, MockOpcDaClient, OpcDaClient, OpcProvider, OpcServerEndpoint, OpcValue, Unbound,
 };
-use std::sync::Arc;
 
 #[tokio::test]
 async fn test_client_typestate_bind_and_unbind() {
@@ -45,13 +44,15 @@ async fn test_client_typestate_bind_and_unbind() {
 
 #[tokio::test]
 async fn test_typestate_implements_opc_provider() {
+    fn assert_provider<P: OpcProvider>(_p: &P) {}
+
     let unbound = MockOpcDaClient::default();
-    let provider_unbound: Arc<dyn OpcProvider> = Arc::new(unbound);
-    assert!(provider_unbound.list_servers("localhost").await.is_ok());
+    assert_provider(&unbound);
+    assert!(unbound.list_servers("localhost").await.is_ok());
 
     let bound = MockOpcDaClient::default().bind("Matrikon.OPC.Simulation.1");
-    let provider_bound: Arc<dyn OpcProvider> = Arc::new(bound);
-    assert!(provider_bound.list_servers("localhost").await.is_ok());
+    assert_provider(&bound);
+    assert!(bound.list_servers("localhost").await.is_ok());
 }
 
 #[tokio::test]

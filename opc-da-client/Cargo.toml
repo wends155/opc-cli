@@ -33,7 +33,6 @@ dev-diagnostics = []
 
 [dependencies]
 # Core (always included)
-async-trait = "0.1.86"
 tokio = { workspace = true, features = ["sync", "time", "rt"] }
 tracing = { workspace = true }
 thiserror = { workspace = true }

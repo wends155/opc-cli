@@ -9,7 +9,7 @@
 //! to visual elements using `ratatui`.
 
 use crate::app::{App, CurrentScreen, ViewState};
-use opc_da_client::{OpcValueOptionExt, SystemTimeOptionExt};
+use opc_da_client::{OpcProvider, OpcValueOptionExt, SystemTimeOptionExt};
 use ratatui::{
     Frame,
     layout::{Constraint, Direction, Layout, Rect},
@@ -28,7 +28,7 @@ use ratatui::{
 ///
 /// * `f` - Mutable terminal frame from Ratatui.
 /// * `app` - Mutable reference to the application state.
-pub fn render(f: &mut Frame, app: &mut App) {
+pub fn render<P: OpcProvider>(f: &mut Frame, app: &mut App<P>) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints(
@@ -64,7 +64,7 @@ pub fn render(f: &mut Frame, app: &mut App) {
     render_help(f, app, help_area);
 }
 
-fn render_help(f: &mut Frame, app: &App, area: Rect) {
+fn render_help<P: OpcProvider>(f: &mut Frame, app: &App<P>, area: Rect) {
     let msg = match app.nav.current_screen {
         CurrentScreen::Home => "Enter: Connect | Esc: Quit | Type hostname",
         CurrentScreen::ServerList => {
@@ -87,7 +87,7 @@ fn render_help(f: &mut Frame, app: &App, area: Rect) {
     f.render_widget(Paragraph::new(span), area);
 }
 
-fn render_home(f: &mut Frame, app: &App, area: Rect) {
+fn render_home<P: OpcProvider>(f: &mut Frame, app: &App<P>, area: Rect) {
     let display_text = format!("> {input}_", input = app.nav.host_input);
     let input = Paragraph::new(display_text)
         .style(Style::default().fg(Color::Yellow))
@@ -120,7 +120,7 @@ fn render_home(f: &mut Frame, app: &App, area: Rect) {
     f.render_widget(input, horizontal_chunks[1]);
 }
 
-fn render_server_list(f: &mut Frame, app: &mut App, area: Rect) {
+fn render_server_list<P: OpcProvider>(f: &mut Frame, app: &mut App<P>, area: Rect) {
     let items: Vec<ListItem> = app
         .view
         .servers
@@ -145,7 +145,7 @@ fn render_server_list(f: &mut Frame, app: &mut App, area: Rect) {
     f.render_stateful_widget(list, area, &mut app.view.list_state);
 }
 
-fn render_tag_list(f: &mut Frame, app: &mut App, area: Rect) {
+fn render_tag_list<P: OpcProvider>(f: &mut Frame, app: &mut App<P>, area: Rect) {
     let list_chunks = if app.search.search_mode {
         Layout::default()
             .direction(Direction::Vertical)
@@ -221,7 +221,7 @@ fn render_tag_list(f: &mut Frame, app: &mut App, area: Rect) {
     f.render_stateful_widget(list, list_area, list_state);
 }
 
-fn render_tag_values(f: &mut Frame, app: &mut App, area: Rect) {
+fn render_tag_values<P: OpcProvider>(f: &mut Frame, app: &mut App<P>, area: Rect) {
     use ratatui::widgets::{Cell, Row, Table};
 
     let header = Row::new(["Tag ID", "Value", "Quality", "Timestamp"]).style(
@@ -291,7 +291,7 @@ fn render_tag_values(f: &mut Frame, app: &mut App, area: Rect) {
     f.render_stateful_widget(table, area, &mut app.view.table_state);
 }
 
-fn render_status_bar(f: &mut Frame, app: &App, area: Rect) {
+fn render_status_bar<P: OpcProvider>(f: &mut Frame, app: &App<P>, area: Rect) {
     let display_messages: Vec<Line> = app
         .view
         .messages
@@ -313,7 +313,7 @@ fn render_status_bar(f: &mut Frame, app: &App, area: Rect) {
     f.render_widget(paragraph, area);
 }
 
-fn render_write_input(f: &mut Frame, app: &App, area: Rect) {
+fn render_write_input<P: OpcProvider>(f: &mut Frame, app: &App<P>, area: Rect) {
     let tag_id = app.dialog.write_tag_id.as_deref().unwrap_or("Unknown");
     let display_text = format!(
         "Tag: {tag_id}\nValue: {input}_",
@@ -334,7 +334,7 @@ fn render_write_input(f: &mut Frame, app: &App, area: Rect) {
     f.render_widget(input, area);
 }
 
-fn render_loading_popup(f: &mut Frame, app: &App, area: Rect) {
+fn render_loading_popup<P: OpcProvider>(f: &mut Frame, app: &App<P>, area: Rect) {
     let progress = app.loading_progress();
     let msg = if progress > 0 {
         format!("Browsing OPC tags... ({progress} found so far)\nPress Esc to cancel")
@@ -380,7 +380,7 @@ mod tests {
     use ratatui::{Terminal, backend::TestBackend};
     use std::sync::Arc;
 
-    fn create_test_app() -> App {
+    fn create_test_app() -> App<MockOpcProvider> {
         let mock = MockOpcProvider::new();
         App::new(Arc::new(mock))
     }

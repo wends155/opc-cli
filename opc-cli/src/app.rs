@@ -10,7 +10,7 @@
 
 use crossterm::event::{KeyCode, KeyEvent, KeyEventKind};
 use opc_da_client::{
-    OpcError, OpcProvider, OpcValue, TagBatch, TagCollector, TagValues, WriteResult,
+    OpcDaClient, OpcError, OpcProvider, OpcValue, TagBatch, TagCollector, TagValues, WriteResult,
 };
 use ratatui::widgets::{ListState, TableState};
 use std::collections::{HashSet, VecDeque};
@@ -386,7 +386,7 @@ fn poll_channel<T>(rx_slot: &mut Option<oneshot::Receiver<Result<T, OpcError>>>)
 /// Main application state for the OPC DA Client TUI.
 ///
 /// Composes [`NavigationState`], [`DialogState`], [`AutoRefresher`], [`TaskManager`], [`SearchEngine`], and [`ViewState`].
-pub struct App {
+pub struct App<P: OpcProvider = OpcDaClient> {
     /// Screen navigation and host targeting state.
     pub nav: NavigationState,
     /// Active modal dialog state.
@@ -400,10 +400,10 @@ pub struct App {
     /// UI display, item collection, and selection state.
     pub view: ViewState,
     /// Shared handle to the active OPC DA backend provider.
-    pub opc_provider: Arc<dyn OpcProvider>,
+    pub opc_provider: Arc<P>,
 }
 
-impl App {
+impl<P: OpcProvider> App<P> {
     /// Logs a screen transition event for diagnostics and field support.
     pub fn log_transition(&mut self, to: CurrentScreen, trigger: &str) {
         let from = self.nav.current_screen;
@@ -418,7 +418,7 @@ impl App {
     }
 
     /// Create a new `App` instance with the given OPC provider.
-    pub fn new(opc_provider: Arc<dyn OpcProvider>) -> Self {
+    pub fn new(opc_provider: Arc<P>) -> Self {
         Self {
             nav: NavigationState::default(),
             dialog: DialogState::default(),
@@ -1352,7 +1352,7 @@ impl TestAppBuilder {
         self
     }
 
-    pub fn build(self) -> App {
+    pub fn build(self) -> App<MockOpcProvider> {
         let provider = self.mock_provider.unwrap_or_default();
         let mut app = App::new(Arc::new(provider));
         app.nav.current_screen = self.screen;
@@ -1372,7 +1372,7 @@ impl TestAppBuilder {
 }
 
 #[cfg(test)]
-pub fn test_app() -> App {
+pub fn test_app() -> App<MockOpcProvider> {
     TestAppBuilder::new().build()
 }
 

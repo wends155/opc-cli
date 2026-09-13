@@ -430,6 +430,7 @@ impl Default for MockServerConnector {
     }
 }
 
+#[allow(dead_code)]
 impl MockServerConnector {
     /// Creates a new `MockServerConnector` with default simulation settings.
     #[must_use]

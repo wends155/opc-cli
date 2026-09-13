@@ -19,7 +19,7 @@ use crossterm::{
 };
 use opc_cli::app::{App, AppAction, CurrentScreen};
 use opc_cli::ui;
-use opc_da_client::{ComConnector, OpcDaClient};
+use opc_da_client::{ComConnector, OpcDaClient, OpcProvider};
 use ratatui::{Terminal, backend::CrosstermBackend};
 use std::{io, sync::Arc, time::Duration};
 use tracing_subscriber::{EnvFilter, fmt, prelude::*};
@@ -124,9 +124,9 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
-fn run_app<B: ratatui::backend::Backend>(
+fn run_app<B: ratatui::backend::Backend, P: OpcProvider>(
     terminal: &mut Terminal<B>,
-    app: &mut App,
+    app: &mut App<P>,
 ) -> io::Result<()> {
     // Clear any leftover events (like the Enter key used to start the app)
     while event::poll(Duration::from_millis(0))? {
@@ -156,7 +156,7 @@ fn run_app<B: ratatui::backend::Backend>(
 }
 
 #[cfg(test)]
-fn handle_key_event(app: &mut App, key: event::KeyEvent) {
+fn handle_key_event<P: OpcProvider>(app: &mut App<P>, key: event::KeyEvent) {
     app.handle_key(key);
 }
 

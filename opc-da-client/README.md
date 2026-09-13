@@ -82,7 +82,7 @@ async fn main() -> OpcResult<()> {
     let client = OpcDaClient::connect("Matrikon.OPC.Simulation.1")?;
 
     // 2. Read tag batch with zero intermediate allocation (accepts arrays, slices, or Vec<String>)
-    let values = client.read_tag_values(["Random.Int4", "Random.Real8", "Random.String"]).await?;
+    let values = client.read_tags(["Random.Int4", "Random.Real8", "Random.String"]).await?;
 
     // 3. Extract strongly typed values with lenient numeric coercion
     let count: i32 = values.get_i32("Random.Int4")?;
@@ -300,7 +300,9 @@ async fn main() -> OpcResult<()> {
 Verify downstream business logic on any platform without requiring Windows COM runtimes:
 
 ```rust
-use opc_da_client::{MockOpcProvider, OpcProvider, OpcQuality, OpcResult, OpcValue, TagValue};
+use opc_da_client::{
+    MockOpcProvider, OpcProvider, OpcQuality, OpcResult, OpcValue, TagReader, TagValue,
+};
 use std::sync::Arc;
 
 #[tokio::main]
@@ -322,7 +324,7 @@ async fn main() -> OpcResult<()> {
                 .collect())
         });
 
-    let provider: Arc<dyn OpcProvider> = Arc::new(mock);
+    let provider = Arc::new(mock);
     let values = provider
         .read_tag_values("SimulatedServer", vec!["Sensor.Temp".into()].into())
         .await?;

@@ -21,22 +21,9 @@ const _: () = assert!(
     "windows::core::GUID must be at least 4-byte aligned"
 );
 
-pub use crate::com::iterator::{GuidIterator, StringIterator};
-pub use crate::errors::{OpcError, OpcResult};
-#[allow(deprecated)]
-pub use crate::types::{
-    BrowseDirection, BrowseType, ClientGroupHandle, ClientItemHandle, GroupHandle, ItemHandle,
-    OpcQuality, OpcServerEndpoint, OpcServerInfo, OpcValue, ServerGroupHandle, ServerIdentifier,
-    ServerItemHandle,
-};
-
-pub use group::ComGroup;
 #[cfg(any(test, feature = "test-support"))]
-pub use mock::{
-    MockAddItemsFn, MockConnectedGroup, MockConnectedServer, MockReadFn, MockServerConnector,
-    MockState, MockWriteFn,
-};
-pub use server::{ComConnector, ComServer};
+pub use mock::{MockConnectedGroup, MockConnectedServer, MockServerConnector, MockState};
+pub use server::ComConnector;
 pub use traits::{
     ConnectedGroup, ConnectedServer, CreatedGroup, DataSource, GroupConfig, GroupItemDef,
     GroupItemResult, GroupItemState, GroupRemovalMode, ItemWrite, ServerBackend,

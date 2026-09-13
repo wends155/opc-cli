@@ -12,10 +12,3 @@ pub mod iterator;
 pub(crate) mod security;
 pub(crate) mod variant;
 pub(crate) mod worker;
-
-pub use client::OpcDaClient;
-pub use connector::{
-    ComConnector, ComGroup, ComServer, ConnectedGroup, ConnectedServer, ServerBackend,
-    ServerCatalogDiscovery, ServerConnector,
-};
-pub use discovery::{OpcServerRegistration, OpcServerType, inspect_local_registration};
