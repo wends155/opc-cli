@@ -140,13 +140,6 @@ Other workflows can fall back to manual investigation.
 2. **Index Health**: Call `get_knowledge_stats` (if available) to report document count and chunk count.
 3. **Report**: Add to Session Readiness Report under ### MCP Servers table.
 
-#### Chrome DevTools MCP
-
-1. **Connectivity**: Call `list_pages` — if it returns (even an empty list), `chrome-devtools-mcp` is connected.
-   - If it returns, Chrome DevTools Protocol automation is available for browser testing skills.
-   - If it errors or the tool is not found, note as a warning — not a blocker. Browser skills will skip gracefully.
-2. **Report**: Add to Session Readiness Report under ### MCP Servers table.
-
 #### Antigravity v2 Session Detection
 
 Detect whether the current session is running under Antigravity v2 (standalone
@@ -209,7 +202,6 @@ Produce the final structured report:
 | Sequential Thinking | ✅/❌ | available/unavailable |
 | Context7 | ✅/❌ | available/unavailable |
 | Knowledge-RAG | ✅/❌ | documents indexed, chunk count |
-| Chrome DevTools | ✅/❌ | available for browser testing skills |
 
 ### Workflow Ecosystem
 | Component | Status |

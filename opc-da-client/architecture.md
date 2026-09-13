@@ -57,7 +57,7 @@ The `opc-da-client` library provides an async, trait-based API that abstracts aw
 | :--- | :--- |
 | Language | Rust (2024 Edition) |
 | Minimum Supported Rust Version | `1.93.1` |
-| Async Runtime | `tokio` (features: `rt`, `sync`, `rt-multi-thread`) |
+| Async Runtime | `tokio` (features: `sync`, `time`, `rt`) |
 | Platform Target | **Windows-only** (`x86_64-pc-windows-msvc`, `i686-pc-windows-msvc`) |
 | COM Threading Model | Dedicated background Multi-Threaded Apartment (MTA) worker thread |
 | Trait Async | `async-trait` crate |
@@ -116,7 +116,7 @@ opc-da-client/
 - **Mock Availability**: `MockOpcProvider` (exported under `test-support` feature via `mockall`).
 
 ### `types`
-- **Owns**: Canonical domain types, strongly-typed server identifiers (`ServerIdentifier` ProgID vs direct CLSID), rich catalog metadata (`OpcServerInfo`), connection endpoints (`OpcServerEndpoint`), canonical `OpcValue` (with `FromStr`, primitive `From<T>`, and typed borrowing accessors), opaque encapsulated handle newtypes (`GroupHandle`, `ItemHandle` with private `.0`), quality decomposition (`OpcQuality` with `FromStr`, `QualityMajor`, `QualitySubstatus`, `QualityLimit`), browse enums (`BrowseType`, `BrowseDirection`), server status structs (`ServerState`, `ServerStatus`), canonical DTOs (`TagValue` with `error: Option<OpcError>`, `new()`, `with_error()`, and `Default`, `WriteResult`, `TagCollector`), zero-allocation `TagBatch` enum and `IntoTags` trait, `TagValues` collection (case-insensitive indexing, lenient typed extractions, numeric coercion, `ReadFailed` preservation), and `TagExtractError`.
+- **Owns**: Canonical domain types, strongly-typed server identifiers (`ServerIdentifier` ProgID vs direct CLSID), rich catalog metadata (`OpcServerInfo`), connection endpoints (`OpcServerEndpoint`), canonical `OpcValue` (with `FromStr`, primitive `From<T>`, and typed borrowing accessors), opaque encapsulated handle newtypes (`GroupHandle`, `ItemHandle` with private `.0`), quality decomposition (`OpcQuality` with `FromStr`, `QualityMajor`, `QualitySubstatus`, `QualityLimit`), browse enums (`BrowseType`, `BrowseDirection`), server status structs (`ServerState`, `ServerStatus`), canonical DTOs (`TagValue` with `error: Option<OpcError>`, `new()`, `with_error()`, and `Default`, `WriteResult`, `TagCollector`), zero-allocation `TagBatch` enum and `IntoTags` trait, zero-allocation `WriteBatch` enum (`Single`, `Shared`, `Owned`) and `IntoWriteBatch` trait, `TagValues` collection (case-insensitive indexing, lenient typed extractions, numeric coercion, `ReadFailed` preservation), and `TagExtractError`.
 - **Does NOT own**: Raw Win32 COM types, dormant bridge types, raw pointers, or allocator logic.
 - **Trait Interfaces**: Pure domain data structures.
 - **Mock Availability**: N/A (data types).
@@ -128,7 +128,7 @@ opc-da-client/
 - **Mock Availability**: N/A.
 
 ### `com::client`
-- **Owns**: Concrete public `OpcDaClient<C, State = Unbound>` struct implementing `OpcProvider`, fluent builder `OpcDaClientBuilder` (`builder()`, `host()`, `server()`, `timeout()`, `with_legacy_dcom()`, `with_connector()`, `build()`, `build_bound()`), compile-time typestates `Unbound` (gateway) and `Bound` (session), zero-cost state transitions (`bind`, `bind_remote`, `unbind`), eager connection constructor (`connect_eager`), server-bound constructors (`connect`, `connect_remote`), infallible endpoint borrower (`endpoint(&self) -> &OpcServerEndpoint`) and server ID getter (`server_id(&self) -> std::borrow::Cow<'_, str>`) on `Bound`, inherent session methods (`read_tag`, `read_tags`, `write_tag`, `write_tags`), backward-compatible readers and writers (`read_tag_values`, `read_f64`, `read_i32`, `read_bool`, `read_string`, `write`, `write_batch`), remote server discovery (`list_servers_on`, deprecated in favor of `ServerDiscovery::list_servers`), Layer 2 non-blocking subscription polling stream (`client.subscribe()`), and client-side channel sender management (`mpsc::Sender<ComRequest>`).
+- **Owns**: Concrete public `OpcDaClient<C, State = Unbound>` struct implementing `OpcProvider`, fluent builder `OpcDaClientBuilder` (`builder()`, `host()`, `server()`, `timeout()`, `with_legacy_dcom()`, `with_connector()`, `build()`, `build_bound()`), compile-time typestates `Unbound` (gateway) and `Bound` (session), zero-cost state transitions (`bind`, `bind_remote`, `unbind`), eager connection constructor (`connect_eager`), server-bound constructors (`connect`, `connect_remote`), infallible endpoint borrower (`endpoint(&self) -> &OpcServerEndpoint`) and server ID getter (`server_id(&self) -> std::borrow::Cow<'_, str>`) on `Bound`, inherent session methods strictly sealed to `Bound` (`read_tag`, `read_tags`, `read_tag_values`, `read_single_typed`, `read_f64`, `read_i32`, `read_bool`, `read_string`, `write`, `write_tag`, `write_batch`, `write_tags`, `browse`, `subscribe`), remote server discovery (`list_servers_on`, deprecated in favor of `ServerDiscovery::list_servers`), Layer 2 non-blocking subscription polling stream (`client.subscribe()`), and client-side channel sender management (`mpsc::Sender<ComRequest>`).
 - **Does NOT own**: Direct COM worker loop execution, unmanaged pointers, or in-apartment state (delegated across channels to `ComWorker`).
 - **Trait Interfaces**: `OpcProvider`.
 - **Mock Availability**: `MockOpcDaClient` (exported under `all(feature = "test-support", feature = "opc-da-backend")`).
@@ -227,7 +227,7 @@ The codebase strictly enforces unidirectional dependency flow:
 
 | Module | May Import | Must NOT Import | Rationale |
 | :--- | :--- | :--- | :--- |
-| `provider` | `types`, `errors`, `chrono`, `thiserror`, `async-trait`, `windows-core` (`GUID`) | `com`, `raw`, `serde` | Public domain interface must be backend-agnostic |
+| `provider` | `types`, `errors`, `thiserror`, `async-trait`, `windows-core` (`GUID`) | `com`, `raw`, `serde` | Public domain interface must be backend-agnostic |
 | `types` | `errors`, `windows-core` (`GUID`) | `provider`, `com`, `raw`, `windows` | Canonical domain models must never depend on implementation details |
 | `errors` | `windows-core` (for HRESULT), `raw::hresult` (internal) | `provider`, `types`, `com` | Domain errors are foundational and self-contained |
 | `com::client` | `provider`, `types`, `errors`, `com::worker` | `raw` | Consumer facade dispatches requests to the worker |
@@ -267,7 +267,7 @@ The verification script ([verify.ps1](file:///c:/Users/WSALIGAN/code/opc-cli/scr
 | Pattern | Details |
 | :--- | :--- |
 | Primary Return Type | `OpcResult<T>` (`Result<T, OpcError>`) across all fallible boundaries |
-| Domain Error Enum | `thiserror` based `OpcError` with 8 structured variants (`Com`, `Connection`, `Server`, `Conversion`, `InvalidState`, `NotImplemented`, `Timeout(Duration)`, `Internal`), `OpcError::connection_failed` factory, and `OpcError::is_connection_error` predicate |
+| Domain Error Enum | `thiserror` based `OpcError` with 9 structured variants (`Com`, `Connection`, `Server`, `Conversion`, `IntConversion`, `InvalidState`, `NotImplemented`, `Timeout(Duration)`, `Internal`), `OpcError::connection_failed` factory, and `OpcError::is_connection_error` predicate |
 | HRESULT Hints | Inherent method `OpcError::friendly_hint(&self)` translates raw Windows error codes into human-readable hints; `raw::hresult::format_hresult()` yields standard `0xHHHHHHHH: <hint>` strings |
 | RAII Resource Management (`GroupGuard`, `BrowsePositionGuard`) | Temporary COM groups created during `read_tag_values` and `write_tag_value` are guarded by `GroupGuard<'_, S: ConnectedServer>`, guaranteeing deterministic `remove_group(handle, true)` invocation on `Drop` across all return paths, `?` operator exits, and thread panics; `BrowsePositionGuard` guarantees parent position restoration on Drop |
 | RAII Memory Safety Guards (`ScopedVariant`, `ItemStatesGuard`, `ItemResultsBlobGuard`) | `ScopedVariant` encapsulates Win32 `VARIANT` lifecycle across tag write paths, guaranteeing deterministic `VariantClear` on `Drop`; `ItemStatesGuard` encapsulates `tagOPCITEMSTATE` slices across read paths, guaranteeing deterministic `VariantClear` on all element variants before memory deallocation on `Drop`; `ItemResultsBlobGuard` safely cleans up unmanaged `tagOPCITEMRESULT` blob memory on Drop |
@@ -369,8 +369,7 @@ Strongly-typed `OpcOperation` enum and `log_opc_err!` macro emit unified machine
 | :--- | :--- | :--- |
 | `thiserror` | 2.0 | Domain error definition |
 | `async-trait` | 0.1.86 | Async method declarations in traits |
-| `chrono` | 0.4.43 | FILETIME → local time conversions |
-| `tokio` | 1.43.0 | Async runtime (`rt`, `sync`, `rt-multi-thread`) |
+| `tokio` | 1.43.0 | Async runtime (features: `sync`, `time`, `rt`; `rt-multi-thread` & `macros` in `dev-dependencies`) |
 | `tracing` | 0.1.41 | Structured diagnostics and logging |
 | `windows` | 0.61.3 | Win32 COM, OLE, Variant, Foundation, Registry, and Environment APIs |
 | `windows-core` | 0.61.2 | Core Windows COM runtime types (HRESULT, PWSTR) |
@@ -593,6 +592,18 @@ SafeArray element count calculation widens `lLbound` and `cElements` to signed `
 
 ### Collision-Proof Group Naming
 Active and ephemeral OPC group names are generated using the process ID combined with an atomic sequence counter (`format!("opc-{:x}-{:x}", pid, seq)`). This eliminates COM group name collisions across multiple client instances or rapid reconnection cycles.
+
+### Principle of Least Privilege Impersonation
+Dynamic DCOM proxy blanketing (`apply_proxy_blanket`) enforces `RPC_C_IMP_LEVEL_IDENTIFY` rather than full `RPC_C_IMP_LEVEL_IMPERSONATE`. The COM server can verify the caller's identity without obtaining the rights to impersonate the client credentials across subsequent network hops. Furthermore, newly created OPC group interfaces in `ComServer::add_group` explicitly receive `apply_proxy_blanket` protection.
+
+### Zero-Allocation Batch Writes (`WriteBatch`)
+`WriteBatch` (`Single`, `Shared`, `Owned`) and the universal `IntoWriteBatch` trait enable zero-allocation batch writes across threads and channels. Borrowed iterators (`WriteBatchIter`) stream `(&str, &OpcValue)` directly into COM SAFEARRAY and variant marshaling without intermediate `String` or `Vec` heap allocations.
+
+### Float-to-Integer Boundary Verification
+Conversions from `OpcValue::Float` to signed `i64` and unsigned `u64` enforce strict bounds against non-inclusive upper boundaries (`2.0f64.powi(63)` and `2.0f64.powi(64)`). This prevents silent saturation where values near `i64::MAX` silently saturated to `i64::MAX` due to floating point round-up during `as f64` casts.
+
+### Typestate Invariant Sealing
+All session-dependent operations (`read_tag_values`, `read_single_typed`, `read_f64`, `read_i32`, `read_bool`, `read_string`, `write`, `write_tag`, `write_batch`, `write_tags`, `browse`, `subscribe`) are strictly sealed to `OpcDaClient<C, Bound>`. Calling these operations on an unbound client fails at compile time, eliminating runtime `Option<&OpcServerEndpoint>` unwrapping and enforcing infallible endpoint availability.
 
 ---
 

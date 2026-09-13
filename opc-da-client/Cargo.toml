@@ -34,8 +34,7 @@ dev-diagnostics = []
 [dependencies]
 # Core (always included)
 async-trait = "0.1.86"
-chrono = "0.4.43"
-tokio = { workspace = true }
+tokio = { workspace = true, features = ["sync", "time", "rt"] }
 tracing = { workspace = true }
 thiserror = { workspace = true }
 # OS: Windows (required)
@@ -44,6 +43,9 @@ windows-core = { workspace = true }
 
 # Test support: mock provider (optional)
 mockall = { version = "0.13.1", optional = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
 
 [[test]]
 name = "batch_write_test"

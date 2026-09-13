@@ -492,45 +492,6 @@ fn test_tag_values_coercion_overflow_and_null_edge_cases() {
 }
 
 #[test]
-fn test_tag_result_decomposition_and_conversions() {
-    let success = TagSuccess::new(
-        "Sensor.Temperature",
-        OpcValue::Float(23.5),
-        OpcQuality::GOOD,
-        None,
-    );
-    let tv: TagValue = success.into();
-    assert!(tv.is_good());
-    assert_eq!(tv.tag_id, "Sensor.Temperature");
-
-    let result = tv.to_result();
-    assert!(result.is_ok());
-    let unwrapped = result.unwrap();
-    assert_eq!(unwrapped.tag_id, "Sensor.Temperature");
-    assert_eq!(unwrapped.value, OpcValue::Float(23.5));
-
-    let failure = TagFailure::new(
-        "Sensor.Faulty",
-        OpcQuality::BAD_COMM_FAILURE,
-        OpcError::Connection("Device unplugged".into()),
-    );
-    let tv_fail: TagValue = failure.into();
-    assert!(tv_fail.is_error());
-
-    let res_fail = tv_fail.clone().into_result();
-    assert!(res_fail.is_err());
-    let unwrapped_fail = res_fail.unwrap_err();
-    assert_eq!(unwrapped_fail.tag_id, "Sensor.Faulty");
-    assert_eq!(unwrapped_fail.quality, OpcQuality::BAD_COMM_FAILURE);
-
-    let tvs = TagValues::new(vec![tv, tv_fail]);
-    let results: Vec<TagResult> = tvs.iter_results().collect();
-    assert_eq!(results.len(), 2);
-    assert!(results[0].is_ok());
-    assert!(results[1].is_err());
-}
-
-#[test]
 fn test_tag_value_outcome_facade() {
     let success = TagValue::success("Tag1", OpcValue::Int(10), OpcQuality::GOOD, None);
     assert!(success.is_good());
@@ -551,9 +512,6 @@ fn test_tag_value_outcome_facade() {
     assert!(failure.error().is_some());
     assert!(failure.outcome().is_err());
     assert_eq!(failure.display_value(), "Error");
-
-    let converted = failure.into_result();
-    assert!(converted.is_err());
 }
 
 #[test]
@@ -630,7 +588,7 @@ fn test_tag_value_quality_semantic_matrix() {
     assert!(!q1.is_uncertain());
     assert!(!q1.is_bad());
     assert_eq!(q1.error(), None);
-    assert!(q1.into_result().is_ok());
+    assert!(q1.outcome().is_ok());
 
     // Quadrant 2: UNCERTAIN quality + Ok(val) (The Bug Quadrant)
     let q2 = TagValue::new("Q2", Some(OpcValue::Int(42)), OpcQuality::UNCERTAIN, None);
@@ -639,7 +597,7 @@ fn test_tag_value_quality_semantic_matrix() {
     assert!(!q2.is_error(), "Outcome is Ok, so is_error() must be false");
     assert!(!q2.is_bad());
     assert_eq!(q2.error(), None);
-    assert!(q2.into_result().is_ok());
+    assert!(q2.outcome().is_ok());
 
     // Quadrant 3: BAD quality + Ok(val) (Clamped/Stale cache)
     let q3 = TagValue::new(
@@ -653,7 +611,7 @@ fn test_tag_value_quality_semantic_matrix() {
     assert!(q3.is_bad());
     assert!(!q3.is_error());
     assert_eq!(q3.error(), None);
-    assert!(q3.into_result().is_ok());
+    assert!(q3.outcome().is_ok());
 
     // Quadrant 4: BAD quality + Err(OpcError) (Failed Read)
     let q4 = TagValue::with_error(
@@ -666,7 +624,7 @@ fn test_tag_value_quality_semantic_matrix() {
     assert!(q4.is_bad());
     assert!(q4.is_error());
     assert!(q4.error().is_some());
-    assert!(q4.into_result().is_err());
+    assert!(q4.outcome().is_err());
 }
 
 #[test]
@@ -854,4 +812,65 @@ fn test_endpoint_unc_parsing_roundtrip() {
     assert!(OpcServerEndpoint::from_str("   ").is_err());
     assert!(OpcServerEndpoint::from_str(r"\\").is_err());
     assert!(OpcServerEndpoint::from_str(r"\\host\").is_err());
+}
+
+#[test]
+fn test_parse_quality_error_raw_accessor() {
+    use crate::types::quality::ParseQualityError;
+    let err = ParseQualityError::new("CORRUPT_QUALITY");
+    assert_eq!(err.raw(), "CORRUPT_QUALITY");
+    assert_eq!(
+        format!("{err}"),
+        "Invalid OPC quality string: 'CORRUPT_QUALITY'"
+    );
+}
+
+#[test]
+#[allow(clippy::many_single_char_names, clippy::duration_suboptimal_units)]
+fn test_display_option_timestamp_civil() {
+    use crate::types::value::{SystemTimeOptionExt, secs_to_civil};
+    use std::time::{Duration, SystemTime};
+
+    // 1. Unix Epoch
+    assert_eq!(format!("{}", Some(SystemTime::UNIX_EPOCH).display()), "N/A");
+
+    // 2. Fixed Timestamp: 1700000000 = 2023-11-14 22:13:20 UTC
+    let ts = SystemTime::UNIX_EPOCH + Duration::from_secs(1_700_000_000);
+    assert_eq!(format!("{}", Some(ts).display()), "2023-11-14 22:13:20");
+
+    // 3. Leap Year: 2024-02-29 12:00:00 UTC = 1709208000
+    let leap_ts = SystemTime::UNIX_EPOCH + Duration::from_secs(1_709_208_000);
+    assert_eq!(
+        format!("{}", Some(leap_ts).display()),
+        "2024-02-29 12:00:00"
+    );
+
+    // 4. Pre-1970 via secs_to_civil: -86400 = 1969-12-31 00:00:00
+    let (y, m, d, h, min, s) = secs_to_civil(-86400);
+    assert_eq!((y, m, d, h, min, s), (1969, 12, 31, 0, 0, 0));
+}
+
+#[test]
+fn test_write_result_co_located() {
+    use crate::errors::OpcError;
+    use crate::types::WriteResult;
+
+    let ok = WriteResult::success("Channel.Device.Tag1");
+    assert!(ok.is_success());
+    assert!(!ok.is_error());
+    assert_eq!(ok.tag_id, "Channel.Device.Tag1");
+    assert_eq!(ok.status, Ok(()));
+    assert!(ok.error().is_none());
+
+    let err = WriteResult::failure(
+        "Channel.Device.Tag2",
+        OpcError::Connection("Disconnected".into()),
+    );
+    assert!(err.is_error());
+    assert!(!err.is_success());
+    assert_eq!(err.tag_id, "Channel.Device.Tag2");
+    assert_eq!(
+        err.error(),
+        Some(&OpcError::Connection("Disconnected".into()))
+    );
 }

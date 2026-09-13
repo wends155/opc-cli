@@ -1,5 +1,62 @@
 # Project Context Summary
 
+## 2026-09-13: Block 1 (Wave 1: Foundation Leaves & Dependency Hygiene) Completed (`opc-da-client`)
+> 📝 **Context Update:**
+> * **Feature:** Execution of Block 1 of the 0.3.0 modularity refactoring roadmap (`review_report.md` Findings 1–6), passing all 9 gates of `scripts/verify.ps1` with zero warnings.
+> * **Changes:**
+>   - **Dependency Hygiene & Manifest Pruning:**
+>     - Pruned 3 unused Windows features (`Win32_Graphics_Gdi`, `Win32_Security`, `Win32_System_WinRT`) from root `Cargo.toml`.
+>     - Stripped default features from workspace `tokio` dependency, trimming `opc-da-client` to `features = ["sync", "time", "rt"]` and moving `rt-multi-thread` and `macros` into `[dev-dependencies]`.
+>     - Eradicated `chrono = "0.4.43"` entirely from `opc-da-client/Cargo.toml`.
+>   - **Zero-Dependency Civil Date Formatting:**
+>     - Implemented pure-arithmetic Howard Hinnant Euclidean civil calendar algorithm (`secs_to_civil`) and zero-allocation `format_system_time_buf` in `types/value.rs` with UTC specification.
+>     - Updated `DisplayOptionTimestamp::fmt` to stream formatted UTC `"YYYY-MM-DD HH:MM:SS"` directly into formatter.
+>     - Refactored `ole_date_to_string` in `com/variant.rs` to use `secs_to_civil` with Euclidean pre-1970 underflow safety.
+>     - Updated `test_system_time_option_ext_some` in `provider.rs` to assert against deterministic UTC timestamp string.
+>   - **Type Encapsulation & Co-location:**
+>     - Encapsulated `ParseQualityError(String)` in `types/quality.rs` using `thiserror::Error`, making inner tuple field private and exposing `.raw() -> &str` accessor.
+>     - Co-located `WriteResult` into `types/write_batch.rs` with write batch domain types, removing it from `types/collector.rs` while maintaining symmetric crate root re-export `opc_da_client::WriteResult`.
+>   - **Dead Type Pruning & Re-export Symmetry:**
+>     - Pruned parallel type hierarchy `TagSuccess`, `TagFailure`, `TagResult`, and their methods `into_result`, `to_result`, and `iter_results` from `types/collection.rs`.
+>     - Re-exported `WriteBatch`, `WriteBatchIter`, `WriteBatchIntoIter`, `IntoWriteBatch` at crate root in `src/lib.rs`.
+>   - **Verification & Documentation:**
+>     - All 9 gates of `pwsh scripts/verify.ps1` pass cleanly with exit code 0.
+>     - Synchronized `opc-da-client/README.md`, `opc-da-client/spec.md`, `opc-da-client/architecture.md`, and `task.md`.
+> * **New Constraints:** Quality parsing errors must be inspected via `err.raw()` or `err.to_string()`. Batch write results belong in `types::write_batch`. Date conversions must use pure civil calendar arithmetic without external crates.
+> * **Pruned:** `chrono` dependency from `opc-da-client`; `TagSuccess`, `TagFailure`, `TagResult` types; dead Win32 features `Win32_Graphics_Gdi`, `Win32_Security`, `Win32_System_WinRT`.
+
+## 2026-09-07: 12-Finding Deep Code Review Remediation, Typestate Invariant Sealing & DCOM Proxy Hardening (`opc-da-client`)
+> 📝 **Context Update:**
+> * **Feature:** Complete end-to-end execution of the 20-step Tier-L Implementation Plan resolving all 12 Major and Critical findings identified during the deep architectural, logical, performance, and security code reviews (`review_report.md`) for `opc-da-client` under the TAR-S cycle and strict Builder rules, passing all 9 gates of `scripts/verify.ps1`.
+> * **Changes:**
+>   - **Types & Error Subsystems (Lane A):**
+>     - Fixed float-to-integer conversion precision loss and silent saturation in `types/value.rs` for `TryFrom<OpcValue> for i64` and `TryFrom<OpcValue> for u64` by enforcing strict non-inclusive upper boundaries (`2.0f64.powi(63)` and `2.0f64.powi(64)`). Added unit test `test_try_from_f64_precision_saturation`.
+>     - Added `IntConversion(#[from] std::num::TryFromIntError)` variant with `#[source]` to `OpcError` in `errors.rs` while preserving `Clone` and `PartialEq` across `OpcError`. Added unit test `test_opcerror_clone_partialeq`.
+>     - Refactored typed getters in `types/collection.rs` (`get_f64`, `get_f32`, `get_i32`, `get_i64`, `get_u32`, `get_u64`, `get_bool`) to borrow from `&val.value` directly without cloning.
+>     - Synchronized atomic counter with mutex lock in `types/collector.rs` across `push`, `push_batch`, and `harvest` to eliminate race windows.
+>     - Preserved stack allocation variant `TagBatch::InlineSingle` on `.into_shareable()` clone in `types/batch.rs`.
+>     - Introduced zero-allocation `WriteBatch` enum (`Single`, `Shared`, `Owned`), zero-allocation borrowed iterator `WriteBatchIter`, owning iterator `WriteBatchIntoIter`, and `IntoWriteBatch` trait in `types/write_batch.rs` and re-exported in `types.rs`.
+>   - **Worker Engine & Security Blanket Hardening (Lane B):**
+>     - Updated `ComRequest::WriteTagValues` to take `WriteBatch`.
+>     - Decoupled worker initialization signaling in `com/worker.rs`: `start_with_initializer` uses `std::sync::mpsc::sync_channel(1)` (safe in Tokio runtimes without `blocking_recv` panics), and `start_async_with_initializer` uses non-blocking `tokio::sync::oneshot`.
+>     - Refactored `handle_write_batch` and `handle_write` in `com/worker/write.rs` to process `&WriteBatch` directly without heap allocations.
+>     - Enforced least privilege in `com/security.rs` by switching `apply_proxy_blanket` and `create_remote_instance` from `RPC_C_IMP_LEVEL_IMPERSONATE` to `RPC_C_IMP_LEVEL_IDENTIFY`.
+>     - In `com/connector/server.rs`, secured newly created group proxies in `add_group` with `apply_proxy_blanket`, made `IOPCItemProperties` query resilient via `.cast().ok()`, and converted `tracing::warn!` to structured logging.
+>     - In `com/connector/traits.rs`, enforced `crate::types::is_remote_host(endpoint.host.as_deref())` rejection in default `connect_endpoint`.
+>     - Removed `Deref`/`DerefMut` anti-pattern from `PooledServer` in `com/worker/pool.rs`.
+>     - Added `write_tag_batch` and deprecated `write_tag_values` on `TagWriter` in `provider.rs`, isolating `mockall` warnings with `#![allow(clippy::struct_field_names)]`.
+>   - **Client Facade Typestate Sealing (Lane C):**
+>     - Moved all operational methods (`connect_eager`, `read_tag_values`, `read_single_typed`, `read_f64`, `read_i32`, `read_bool`, `read_string`, `read_tag_value`, `read_tag`, `read_tags`, `write`, `write_tag`, `write_batch`, `write_tags`, `subscribe`, `browse`) to `impl<C: ServerConnector + 'static> OpcDaClient<C, Bound>`.
+>     - Removed runtime `endpoint.as_ref().ok_or_else()` checks; bound client methods now access `self.endpoint()` infallibly.
+>     - Optimized `read_tag_value` to yield first item via `into_iter().next()` instead of `.pop()`.
+>     - Fixed `subscribe` background loop to terminate immediately on receiver drop (`tx.is_closed()`) or connection dropout (`err.is_connection_error()`).
+>     - Instrumented all public async methods on `OpcDaClient` with `#[tracing::instrument(level = "info", skip(...), err)]`.
+>   - **Documentation & Universal Verification:**
+>     - Synchronized `opc-da-client/spec.md`, `opc-da-client/architecture.md`, and root `architecture.md`.
+>     - Ran `pwsh -File scripts/verify.ps1`: All 9 verification gates passed with zero warnings and exit code 0 across the entire workspace.
+> * **New Constraints:** Operational client methods (`read_tag_values`, `write`, `subscribe`, etc.) require the compile-time `Bound` typestate. `apply_proxy_blanket` must never use `IMPERSONATE`. Batch writes should use `WriteBatch` to avoid channel heap allocations.
+> * **Pruned:** Runtime endpoint unwrap checks on bound clients; `Deref`/`DerefMut` on `PooledServer`; unbounded `subscribe` error spinning; float-to-int saturation edge cases; silent unblanketed COM group proxies.
+
 ## 2026-09-07: Workspace-Wide Architecture, Documentation & Quality Synchronization (`opc-da-client`, `opc-cli`, `compat`, root)
 > 📝 **Context Update:**
 > * **Feature:** Consolidated execution of the Tier-L Implementation Plan resulting from dual subagent audits (`/update-doc` and `/architecture`) under the TAR-S cycle, restoring layer purity, achieving 100% rustdoc coverage without compiler warnings, updating behavioral contracts (`spec.md`), synchronizing root and crate architecture documents (`architecture.md`), adding README sentinels, and passing all 9 gates of `scripts/verify.ps1` with 339 total tests.

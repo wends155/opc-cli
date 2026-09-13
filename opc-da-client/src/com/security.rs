@@ -25,7 +25,11 @@ pub const RPC_C_AUTHN_WINNT: u32 = 10;
 /// Default authorization service (`RPC_C_AUTHZ_NONE` = 0).
 pub const RPC_C_AUTHZ_NONE: u32 = 0;
 
-/// Impersonation level (`RPC_C_IMP_LEVEL_IMPERSONATE` = 3).
+/// Impersonation level identify (`RPC_C_IMP_LEVEL_IDENTIFY` = 2).
+pub const RPC_C_IMP_LEVEL_IDENTIFY: u32 = 2;
+
+/// Impersonation level impersonate (`RPC_C_IMP_LEVEL_IMPERSONATE` = 3).
+#[allow(dead_code)]
 pub const RPC_C_IMP_LEVEL_IMPERSONATE: u32 = 3;
 
 /// DCOM authentication security level for remote RPC connections.
@@ -99,7 +103,7 @@ pub fn apply_proxy_blanket<T: Interface>(
             RPC_C_AUTHZ_NONE,
             None,
             RPC_C_AUTHN_LEVEL(authn_level),
-            RPC_C_IMP_LEVEL(RPC_C_IMP_LEVEL_IMPERSONATE),
+            RPC_C_IMP_LEVEL(RPC_C_IMP_LEVEL_IDENTIFY),
             None,
             EOAC_NONE,
         )
@@ -135,7 +139,7 @@ pub fn create_remote_instance<T: Interface>(
         dwAuthzSvc: RPC_C_AUTHZ_NONE,
         pwszServerPrincName: windows::core::PWSTR::null(),
         dwAuthnLevel: authn_level,
-        dwImpersonationLevel: RPC_C_IMP_LEVEL_IMPERSONATE,
+        dwImpersonationLevel: RPC_C_IMP_LEVEL_IDENTIFY,
         pAuthIdentityData: std::ptr::null_mut(),
         dwCapabilities: 0,
     };

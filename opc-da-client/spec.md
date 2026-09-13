@@ -3,7 +3,7 @@
 > **Behavioral Source of Truth** for the `opc-da-client` library crate.
 > Defines *what* each module should do — independent of current implementation.
 >
-> Last verified against: 00f1a1d
+> Last verified against: 83b053b
 
 ---
 
@@ -40,7 +40,8 @@ All methods use `#[async_trait]`.
 | Method | Signature | Description |
 | :--- | :--- | :--- |
 | `write_tag_value` | `async fn write_tag_value(&self, server: &str, tag_id: &str, value: OpcValue) -> OpcResult<WriteResult>` | Write a typed value to a single tag on `server`. |
-| `write_tag_values` | `async fn write_tag_values(&self, server: &str, writes: &[(String, OpcValue)]) -> OpcResult<Vec<WriteResult>>` | Convenience helper to write multiple tags sequentially on `server`. Default implementation iterates over `write_tag_value`. |
+| `write_tag_batch` | `async fn write_tag_batch(&self, server: &str, writes: WriteBatch) -> OpcResult<Vec<WriteResult>>` | Write typed values to multiple OPC DA tags in a batch using polymorphic `WriteBatch`. |
+| `write_tag_values` | `async fn write_tag_values(&self, server: &str, writes: &[(String, OpcValue)]) -> OpcResult<Vec<WriteResult>>` | *(Deprecated since 0.2.0, prefer `write_tag_batch`)* Convenience helper to write multiple tags sequentially on `server`. |
 
 ###### `trait OpcProvider: ServerDiscovery + TagBrowser + TagReader + TagWriter + Send + Sync`
 Composite marker trait representing the full OPC DA client capability set. A blanket implementation is provided for any type implementing all four segregated role traits.
@@ -93,21 +94,10 @@ Composite marker trait representing the full OPC DA client capability set. A bla
 * `is_uncertain(&self) -> bool`: Returns `true` if quality is uncertain and outcome is `Ok`.
 * `is_bad(&self) -> bool`: Returns `true` if quality is bad or outcome is `Err`.
 * `is_error(&self) -> bool`: Returns `true` if outcome is `Err` (independent of quality).
-* `into_result(self) -> TagResult`: Converts into strongly-typed `Result<TagSuccess, TagFailure>`.
-* `to_result(&self) -> TagResult`: Converts borrowed reference into `TagResult`.
 * `Default`: Yields empty tag ID, `Ok(OpcValue::Empty)`, default quality (`0x0000`), and `None` timestamp.
 * `Display`: Canonical formatting rendering `"{tag_id} = {value} [{quality}] @ {timestamp}"`.
 
 **Derives:** `Debug`, `Clone`, `PartialEq`, `Default`.
-
-###### `struct TagSuccess`
-Represents a successfully decoded tag read holding `tag_id: String`, `value: OpcValue`, `quality: OpcQuality`, and `timestamp: Option<SystemTime>`.
-
-###### `struct TagFailure`
-Represents a failed tag read holding `tag_id: String`, `quality: OpcQuality`, and `error: OpcError`.
-
-###### `type TagResult = Result<TagSuccess, TagFailure>`
-Strongly-typed result alias returned by `TagValue::into_result` and `TagValue::to_result`.
 
 ---
 
@@ -154,6 +144,45 @@ Implemented for:
 
 ---
 
+##### `enum WriteBatch`
+
+**Purpose:** Zero-allocation polymorphic batch write representation avoiding forced string and tuple allocations across threads and channels.
+
+| Variant | Internal Storage | Description |
+| :--- | :--- | :--- |
+| `Single(String, OpcValue)` | Single tag identifier string and value | Single-item write representation. |
+| `Shared(Arc<[(String, OpcValue)]>)` | Atomic reference-counted slice | Shareable, multi-consumer batch write representation ($O(1)$ clone). |
+| `Owned(Vec<(String, OpcValue)>)` | Heap vector | Owning dynamic batch write representation. |
+
+**Methods:**
+* `len(&self) -> usize`: Returns number of write items in the batch.
+* `is_empty(&self) -> bool`: Returns `true` if batch contains 0 write items.
+* `iter(&self) -> WriteBatchIter<'_>`: Yields zero-allocation borrowed iterator yielding `(&str, &OpcValue)`.
+* `into_iter(self) -> WriteBatchIntoIter`: Consumes batch into owning iterator yielding `(String, OpcValue)`.
+
+**Traits:**
+* `From<Vec<(String, OpcValue)>>`: Converts owned vector into `WriteBatch::Owned`.
+* `From<(String, OpcValue)>`: Converts single owned pair into `WriteBatch::Single`.
+* `From<(&str, OpcValue)>`: Converts single borrowed tag and owned value into `WriteBatch::Single`.
+* `From<Arc<[(String, OpcValue)]>>`: Converts reference-counted slice into `WriteBatch::Shared`.
+* `From<&[(String, OpcValue)]>`: Converts slice of owned pairs into `WriteBatch::Owned`.
+* `From<&[(&str, OpcValue)]>`: Converts slice of borrowed tag pairs into `WriteBatch::Owned`.
+* `From<[(String, OpcValue); N]>`: Converts fixed-size array into `WriteBatch::Owned`.
+* `From<[(&str, OpcValue); N]>`: Converts fixed-size borrowed array into `WriteBatch::Owned`.
+* `Default`: Yields `WriteBatch::Owned(Vec::new())`.
+
+**Derives:** `Debug`, `Clone`, `PartialEq`.
+
+---
+
+##### `trait IntoWriteBatch`
+
+**Purpose:** Conversion trait providing ergonomics for callers passing single or multiple writes into `OpcDaClient::write_batch` and `TagWriter::write_tag_batch`.
+
+Implemented for any type `T: Into<WriteBatch>`.
+
+---
+
 ##### `struct TagValues`
 
 **Purpose:** Rich collection wrapping `Vec<TagValue>` with linear search, case-insensitive indexing, lenient typed extraction, numeric coercion, and per-item error preservation.
@@ -178,7 +207,6 @@ Implemented for:
 | `as_slice(&self)` | `pub fn as_slice(&self) -> &[TagValue]` | Projects borrowed slice of inner tag values. |
 | `into_vec(self)` | `pub fn into_vec(self) -> Vec<TagValue>` | Unwraps inner vector. |
 | `iter(&self)` | `pub fn iter(&self) -> std::slice::Iter<'_, TagValue>` | Yields iterator over borrowed `&TagValue` items. |
-| `iter_results(&self)` | `pub fn iter_results(&self) -> impl Iterator<Item = TagResult> + '_` | Yields iterator projecting each tag into strongly-typed `TagResult`. |
 | `clear(&mut self)` | `pub fn clear(&mut self)` | Empties the collection. |
 | `push(&mut self, value: TagValue)` | `pub fn push(&mut self, value: TagValue)` | Appends a `TagValue` to the end of the collection. |
 
@@ -527,26 +555,28 @@ Implemented for:
 | `endpoint(&self)` | `pub fn endpoint(&self) -> &OpcServerEndpoint` | Infallibly borrows the bound server endpoint (guaranteed by `Bound` typestate invariant). |
 | `server_id(&self)` | `pub fn server_id(&self) -> std::borrow::Cow<'_, str>` | Convenience getter returning the server ProgID or bracketed CLSID string. |
 | `unbind(self)` | `pub fn unbind(self) -> (OpcDaClient<C, Unbound>, OpcServerEndpoint)` | Consumes bound session and returns an unbound gateway and the previous endpoint. |
+| `connect_eager(&self)` | `pub async fn connect_eager(&self) -> OpcResult<()>` | Eagerly connects to the bound server endpoint, verifying connectivity upfront. |
 | `read_tag(&self, tag: &str)` | `pub async fn read_tag(&self, tag: &str) -> OpcResult<TagValue>` | Reads a single tag and returns full `TagValue` with outcome, quality, and timestamp. |
 | `read_tags(&self, tags: impl IntoTags)` | `pub async fn read_tags(&self, tags: impl IntoTags) -> OpcResult<TagValues>` | Reads a batch of tags and returns rich `TagValues` collection. |
+| `read_tag_values(&self, tags: impl IntoTags)` | `pub async fn read_tag_values(&self, tags: impl IntoTags) -> OpcResult<TagValues>` | Zero-allocation batch read returning a rich `TagValues` collection. |
+| `read_tag_value(&self, tag: &str)` | `pub async fn read_tag_value(&self, tag: &str) -> OpcResult<TagValue>` | Reads a single tag returning `TagValue`. |
+| `read_f64(&self, tag: &str)` | `pub async fn read_f64(&self, tag: &str) -> OpcResult<f64>` | Reads a single tag and coerces value to `f64`. |
+| `read_i32(&self, tag: &str)` | `pub async fn read_i32(&self, tag: &str) -> OpcResult<i32>` | Reads a single tag and coerces value to `i32`. |
+| `read_bool(&self, tag: &str)` | `pub async fn read_bool(&self, tag: &str) -> OpcResult<bool>` | Reads a single tag and coerces value to `bool`. |
+| `read_string(&self, tag: &str)` | `pub async fn read_string(&self, tag: &str) -> OpcResult<String>` | Reads a single tag as a `String`. |
 | `write_tag(&self, tag: &str, value: impl Into<OpcValue>) -> OpcResult<WriteResult>` | `pub async fn write_tag(&self, tag: &str, value: impl Into<OpcValue>) -> OpcResult<WriteResult>` | Writes a single typed value to a tag. |
-| `write_tags(&self, writes: Vec<(String, OpcValue)>) -> OpcResult<Vec<WriteResult>>` | `pub async fn write_tags(&self, writes: Vec<(String, OpcValue)>) -> OpcResult<Vec<WriteResult>>` | Writes multiple tags in a single native DCOM batch operation. |
+| `write_tags(&self, writes: impl IntoWriteBatch) -> OpcResult<Vec<WriteResult>>` | `pub async fn write_tags(&self, writes: impl IntoWriteBatch) -> OpcResult<Vec<WriteResult>>` | Writes multiple tags in a single native DCOM batch operation. |
+| `write(&self, tag: &str, value: impl Into<OpcValue>) -> OpcResult<WriteResult>` | `pub async fn write(&self, tag: &str, value: impl Into<OpcValue>) -> OpcResult<WriteResult>` | Writes a single value to a tag, returning a `WriteResult`. |
+| `write_batch(&self, writes: impl IntoWriteBatch) -> OpcResult<Vec<WriteResult>>` | `pub async fn write_batch(&self, writes: impl IntoWriteBatch) -> OpcResult<Vec<WriteResult>>` | Writes multiple tags in a single native DCOM batch operation using `IntoWriteBatch`. |
+| `browse(&self, filter: BrowseFilter) -> OpcResult<TagCollector>` | `pub async fn browse(&self, filter: BrowseFilter) -> OpcResult<TagCollector>` | Browses the address space of the bound server. |
+| `subscribe(&self, tags: impl IntoTags, interval: Duration)` | `pub fn subscribe(&self, tags: impl IntoTags, interval: Duration) -> tokio::sync::mpsc::Receiver<TagValues>` | Starts a Layer 2 non-blocking polling stream yielding `TagValues` periodically. Terminates on channel close or connection error. |
 
 **General & Compatibility Methods on `OpcDaClient<C, State>`:**
 | Method | Signature | Description |
 | :--- | :--- | :--- |
 | `endpoint(&self)` | `pub fn endpoint(&self) -> Option<&OpcServerEndpoint>` | Returns `Some(&OpcServerEndpoint)` if bound, `None` if unbound. |
 | `is_bound(&self)` | `pub fn is_bound(&self) -> bool` | Checks whether this client instance is bound to a server. |
-| `read_tag_values(&self, tags: impl IntoTags)` | `async fn read_tag_values(&self, tags: impl IntoTags) -> OpcResult<TagValues>` | Zero-allocation batch read returning a rich `TagValues` collection. |
-| `read_tag_value(&self, tag: &str)` | `async fn read_tag_value(&self, tag: &str) -> OpcResult<TagValue>` | Reads a single tag returning `TagValue`. |
-| `read_f64(&self, tag: &str)` | `async fn read_f64(&self, tag: &str) -> OpcResult<f64>` | Reads a single tag and coerces value to `f64`. |
-| `read_i32(&self, tag: &str)` | `async fn read_i32(&self, tag: &str) -> OpcResult<i32>` | Reads a single tag and coerces value to `i32`. |
-| `read_bool(&self, tag: &str)` | `async fn read_bool(&self, tag: &str) -> OpcResult<bool>` | Reads a single tag and coerces value to `bool`. |
-| `read_string(&self, tag: &str)` | `async fn read_string(&self, tag: &str) -> OpcResult<String>` | Reads a single tag as a `String`. |
-| `write(&self, tag: &str, value: impl Into<OpcValue>) -> OpcResult<WriteResult>` | `async fn write(&self, tag: &str, value: impl Into<OpcValue>) -> OpcResult<WriteResult>` | Writes a single value to a tag, returning a `WriteResult`. |
-| `write_batch(&self, writes: Vec<(String, OpcValue)>) -> OpcResult<Vec<WriteResult>>` | `async fn write_batch(&self, writes: Vec<(String, OpcValue)>) -> OpcResult<Vec<WriteResult>>` | Writes multiple tags in a single native DCOM batch operation. |
-| `list_servers_on(&self, host: &str)` | `async fn list_servers_on(&self, host: &str) -> OpcResult<Vec<String>>` | *(Deprecated since 0.2.1)* Discovers OPC servers on a host. Prefer `ServerDiscovery::list_servers`. |
-| `subscribe(&self, tags: impl IntoTags, interval: Duration)` | `fn subscribe(&self, tags: impl IntoTags, interval: Duration) -> tokio::sync::mpsc::Receiver<TagValues>` | Starts a Layer 2 non-blocking polling stream yielding `TagValues` periodically. Dropping the receiver cancels the background task. |
+| `list_servers_on(&self, host: &str)` | `pub async fn list_servers_on(&self, host: &str) -> OpcResult<Vec<String>>` | *(Deprecated since 0.2.1)* Discovers OPC servers on a host. Prefer `ServerDiscovery::list_servers`. |
 
 Implements `OpcProvider` for all five trait methods (`list_servers`, `list_server_details`, `browse_tags`, `read_tag_values`, `write_tag_value`) by dispatching to the `ComWorker`.
 
@@ -661,7 +691,7 @@ Before calling `browse_recursive`, `browse_tags` attempts `browse_opc_item_ids(B
 - `ServerItemHandle`: Encapsulated opaque typestate newtype representing server-assigned item identifier, with constructor `new(u32)`, and accessors `as_raw(&self) -> u32`, `into_raw(self) -> u32`.
 - `ItemHandle`: Legacy backward-compatible type alias for `ServerItemHandle`.
 - `OpcQuality`: Fully decomposed, zero-allocation 16-bit OPC DA quality word with private fields and getter methods (`major()`, `substatus()`, `limit()`, `raw()`). Implements `From<u16>`, `From<OpcQuality> for u16`, `Display` (rich human-readable diagnostics), `std::str::FromStr` returning `Result<Self, ParseQualityError>`, and predicates (`is_good`, `is_bad`, `is_uncertain`, `is_limited`).
-- `ParseQualityError`: Error struct returned when parsing an invalid quality string via `FromStr`. Implements `Display` and `std::error::Error`.
+- `ParseQualityError`: Error struct returned when parsing an invalid quality string via `FromStr`. Implements `Display`, `thiserror::Error`, and `std::error::Error`, with private `String` storage and `.raw()` accessor.
 - `OpcValue`: Canonical domain value enum (`String(String)`, `Int(i64)`, `UInt(u64)`, `Float(f64)`, `Bool(bool)`, `Empty`, `Null`). Implements `std::str::FromStr`, `From` for primitive integer, float, boolean, and string types, and typed accessors (`as_str`, `as_int`, `as_uint`, `as_float`, `as_bool`, `is_empty`, `is_null`).
 - `QualityMajor`: Major OPC DA quality status (`Good`, `Bad`, `Uncertain`, `Unknown(u8)`).
 - `QualitySubstatus`: Detailed substatus reason code (all OPC DA 2.05a codes: `NonSpecific`, `ConfigurationError`, `NotConnected`, `DeviceFailure`, `SensorFailure`, `LastKnownValue`, `CommFailure`, `OutOfService`, `WaitingForInitialData`, `LastUsableValue`, `SensorCalNeeded`, `EguExceeded`, `SubNormal`, `LocalOverride`, and `Raw(u8)`).
@@ -670,6 +700,8 @@ Before calling `browse_recursive`, `browse_tags` attempts `browse_opc_item_ids(B
 - `BrowseDirection`: Strongly-typed enum for address space cursor movement (`Up = 1`, `Down = 2`, `To = 3`). Implements zero-cost `From<BrowseDirection> for u32` and fallible `TryFrom<u32> for BrowseDirection`.
 - `NamespaceType`: Strongly-typed enum indicating server namespace hierarchy (`Hierarchy = 1`, `Flat = 2`). Implements `From<NamespaceType> for u32` and fallible `TryFrom<u32> for NamespaceType`.
 - `BrowseFilter`: Structure encapsulating tag filtering options (name pattern, data type constraint, access rights constraint) used when traversing server address spaces.
+- `WriteBatch`: Zero-allocation polymorphic batch write representation (`Single`, `Shared`, `Owned`) with zero-allocation borrowed iterator `WriteBatchIter` and owning iterator `WriteBatchIntoIter`.
+- `IntoWriteBatch`: Universal conversion trait for batch write payloads.
 
 ---
 
@@ -681,6 +713,7 @@ Before calling `browse_recursive`, `browse_tags` attempts `browse_opc_item_ids(B
 - `OpcError::Connection(String)`: Target host/server connection failure.
 - `OpcError::Server(String, u32)`: Server-specific error reported via status code.
 - `OpcError::Conversion(String)`: Data type conversion failure.
+- `OpcError::IntConversion(std::num::TryFromIntError)`: Lossless integer conversion failure preserving source standard error.
 - `OpcError::InvalidState(String)`: Invalid operation sequence or unexpected server state.
 - `OpcError::NotImplemented(String)`: Unsupported optional COM interface or feature.
 - `OpcError::Internal(String)`: Channel, worker thread, or internal invariant failure.

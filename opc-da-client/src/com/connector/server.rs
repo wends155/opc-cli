@@ -156,8 +156,16 @@ impl ComConnector {
         let common: crate::raw::bindings::comn::IOPCCommon = server.cast()?;
         apply_proxy_blanket(&common, legacy_dcom)?;
 
-        let item_properties: crate::raw::bindings::da::IOPCItemProperties = server.cast()?;
-        apply_proxy_blanket(&item_properties, legacy_dcom)?;
+        let item_properties: Option<crate::raw::bindings::da::IOPCItemProperties> =
+            server.cast().ok();
+        if let Some(ref ip) = item_properties
+            && let Err(e) = apply_proxy_blanket(ip, legacy_dcom)
+        {
+            tracing::warn!(
+                error = ?e,
+                "Failed to apply proxy blanket to IOPCItemProperties"
+            );
+        }
 
         let server_public_groups: Option<crate::raw::bindings::da::IOPCServerPublicGroups> =
             server.cast().ok();
@@ -236,7 +244,7 @@ impl ServerConnector for ComConnector {
 pub struct ComServer {
     pub(crate) server: crate::raw::bindings::da::IOPCServer,
     pub(crate) common: crate::raw::bindings::comn::IOPCCommon,
-    pub(crate) item_properties: crate::raw::bindings::da::IOPCItemProperties,
+    pub(crate) item_properties: Option<crate::raw::bindings::da::IOPCItemProperties>,
     pub(crate) server_public_groups: Option<crate::raw::bindings::da::IOPCServerPublicGroups>,
     pub(crate) browse_server_address_space:
         Option<crate::raw::bindings::da::IOPCBrowseServerAddressSpace>,
@@ -257,7 +265,10 @@ impl ConnectedServer for ComServer {
             2 => Ok(NamespaceType::Flat),
             1 => Ok(NamespaceType::Hierarchy),
             other => {
-                tracing::warn!("Unknown OPC namespace type: {other}, defaulting to Hierarchy");
+                tracing::warn!(
+                    raw_type = other,
+                    "Unknown OPC namespace type, defaulting to Hierarchy"
+                );
                 Ok(NamespaceType::Hierarchy)
             }
         }
@@ -356,6 +367,7 @@ impl ConnectedServer for ComServer {
             }),
             Some(group) => {
                 let unknown: windows::core::IUnknown = group.cast()?;
+                apply_proxy_blanket(&unknown, self.legacy_dcom)?;
                 let group: ComGroup = unknown.try_into()?;
 
                 Ok(CreatedGroup {

@@ -1,71 +1,7 @@
-//! Write results and tag collection accumulators.
+//! Tag collection accumulators and progress monitors.
 
-use crate::errors::OpcError;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-
-/// Result of a single write operation.
-///
-/// # Examples
-///
-/// ```
-/// use opc_da_client::{OpcError, WriteResult};
-///
-/// let ok_res = WriteResult::success("Tag1");
-/// assert!(ok_res.is_success());
-/// assert!(ok_res.status.is_ok());
-/// assert!(ok_res.error().is_none());
-///
-/// let err_res = WriteResult::failure("Tag2", OpcError::Connection("Lost".into()));
-/// assert!(err_res.is_error());
-/// assert!(err_res.status.is_err());
-/// assert_eq!(err_res.error(), Some(&OpcError::Connection("Lost".into())));
-/// ```
-#[derive(Debug, Clone, PartialEq)]
-pub struct WriteResult {
-    /// The tag that was written to.
-    pub tag_id: String,
-    /// Outcome of the write operation: `Ok(())` on success, or `Err(OpcError)` on failure.
-    pub status: Result<(), OpcError>,
-}
-
-impl WriteResult {
-    /// Creates a successful write result.
-    #[must_use]
-    pub fn success(tag_id: impl Into<String>) -> Self {
-        Self {
-            tag_id: tag_id.into(),
-            status: Ok(()),
-        }
-    }
-
-    /// Creates a failed write result with a domain error.
-    #[must_use]
-    pub fn failure(tag_id: impl Into<String>, error: OpcError) -> Self {
-        Self {
-            tag_id: tag_id.into(),
-            status: Err(error),
-        }
-    }
-
-    /// Returns `true` if the write succeeded.
-    #[must_use]
-    pub fn is_success(&self) -> bool {
-        self.status.is_ok()
-    }
-
-    /// Returns `true` if the write failed.
-    #[must_use]
-    pub fn is_error(&self) -> bool {
-        self.status.is_err()
-    }
-
-    /// Returns the error if the write failed, or `None` if it succeeded.
-    #[must_use]
-    pub fn error(&self) -> Option<&OpcError> {
-        self.status.as_ref().err()
-    }
-}
 
 /// Thread-safe accumulator, capacity limiter, and progress monitor for OPC tag namespace browsing.
 ///
@@ -160,8 +96,8 @@ impl TagCollector {
             Err(poisoned) => poisoned.into_inner(),
         };
         let harvested = std::mem::take(&mut *guard);
-        drop(guard);
         self.inner.count.store(0, Ordering::Release);
+        drop(guard);
         harvested
     }
 
@@ -179,8 +115,8 @@ impl TagCollector {
             return false;
         }
         guard.push(tag);
-        drop(guard);
         self.inner.count.fetch_add(1, Ordering::Release);
+        drop(guard);
         true
     }
 
@@ -224,10 +160,10 @@ impl TagCollector {
             guard.push(tag);
             count += 1;
         }
-        drop(guard);
         if count > 0 {
             self.inner.count.fetch_add(count, Ordering::Release);
         }
+        drop(guard);
         count
     }
 }

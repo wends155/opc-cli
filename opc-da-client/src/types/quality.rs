@@ -279,16 +279,21 @@ impl From<OpcQuality> for u16 {
 }
 
 /// Error returned when parsing an invalid quality string.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ParseQualityError(pub String);
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[error("Invalid OPC quality string: '{0}'")]
+pub struct ParseQualityError(String);
 
-impl fmt::Display for ParseQualityError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "Invalid OPC quality string: '{}'", self.0)
+impl ParseQualityError {
+    #[must_use]
+    pub fn new(raw: impl Into<String>) -> Self {
+        Self(raw.into())
+    }
+
+    #[must_use]
+    pub fn raw(&self) -> &str {
+        &self.0
     }
 }
-
-impl std::error::Error for ParseQualityError {}
 
 impl std::str::FromStr for OpcQuality {
     type Err = ParseQualityError;

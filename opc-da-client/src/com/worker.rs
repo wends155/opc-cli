@@ -157,8 +157,8 @@ pub enum ComRequest {
     WriteTagValues {
         /// Target OPC server endpoint.
         endpoint: OpcServerEndpoint,
-        /// List of tag ID and typed value pairs to write.
-        writes: Vec<(String, OpcValue)>,
+        /// Batch of tag writes.
+        writes: crate::types::WriteBatch,
         /// One-shot channel to send back write operation results.
         reply: oneshot::Sender<OpcResult<Vec<WriteResult>>>,
     },
@@ -197,17 +197,55 @@ impl<C: ServerConnector + 'static> ComWorker<C> {
         connector: Arc<C>,
     ) -> Result<Self, OpcError> {
         let (tx, rx) = mpsc::channel(32);
-        let (init_tx, init_rx) = std::sync::mpsc::channel();
+        let (init_tx, init_rx) = std::sync::mpsc::sync_channel(1);
 
         let handle = std::thread::spawn(move || {
-            run_worker_thread::<C, I>(rx, &connector, &init_tx);
+            run_worker_thread::<C, I, _>(rx, &connector, move |res| {
+                let _ = init_tx.send(res);
+            });
         });
 
-        init_rx.recv().inspect_err(
-            |e| tracing::error!(error = ?e, "COM worker thread disconnected during init"),
-        )??;
+        init_rx.recv().map_err(|e| {
+            tracing::error!(error = ?e, "COM worker thread disconnected during init");
+            OpcError::Internal(format!("COM worker init failed: {e}"))
+        })??;
 
         tracing::debug!("COM worker thread started");
+
+        Ok(Self {
+            sender: tx,
+            handle: Some(handle),
+            _phantom: std::marker::PhantomData,
+        })
+    }
+
+    /// Starts the background COM worker thread asynchronously without blocking the executor.
+    #[allow(dead_code)]
+    pub async fn start_async(connector: Arc<C>) -> Result<Self, OpcError> {
+        Self::start_async_with_initializer::<crate::com::guard::DefaultComInit>(connector).await
+    }
+
+    /// Starts the background COM worker thread asynchronously with a specified COM initialization strategy.
+    #[allow(dead_code)]
+    #[tracing::instrument(skip(connector))]
+    pub async fn start_async_with_initializer<I: crate::com::guard::ComInitializer>(
+        connector: Arc<C>,
+    ) -> Result<Self, OpcError> {
+        let (tx, rx) = mpsc::channel(32);
+        let (init_tx, init_rx) = oneshot::channel();
+
+        let handle = std::thread::spawn(move || {
+            run_worker_thread::<C, I, _>(rx, &connector, move |res| {
+                let _ = init_tx.send(res);
+            });
+        });
+
+        init_rx.await.map_err(|e| {
+            tracing::error!(error = ?e, "COM worker thread disconnected during init");
+            OpcError::Internal(format!("COM worker init failed: {e}"))
+        })??;
+
+        tracing::debug!("COM worker thread started asynchronously");
 
         Ok(Self {
             sender: tx,
@@ -261,17 +299,16 @@ fn is_high_priority(req: &ComRequest) -> bool {
 
 /// Two-tier priority request queue for the dedicated COM worker thread.
 /// High priority (Read/Write I/O) requests are always dispatched before low priority (Browse/List) requests.
+#[derive(Default)]
 pub struct PriorityRequestQueue {
     high: std::collections::VecDeque<ComRequest>,
     low: std::collections::VecDeque<ComRequest>,
 }
 
 impl PriorityRequestQueue {
+    #[must_use]
     pub fn new() -> Self {
-        Self {
-            high: std::collections::VecDeque::new(),
-            low: std::collections::VecDeque::new(),
-        }
+        Self::default()
     }
 
     pub fn push(&mut self, req: ComRequest) {
@@ -309,24 +346,25 @@ fn extract_panic_message(payload: &(dyn std::any::Any + Send)) -> String {
 }
 
 /// Executes the main event loop on the dedicated COM STA/MTA worker thread.
-fn run_worker_thread<C, I>(
+fn run_worker_thread<C, I, S>(
     mut rx: mpsc::Receiver<ComRequest>,
     connector: &Arc<C>,
-    init_tx: &std::sync::mpsc::Sender<Result<(), OpcError>>,
+    signal_init: S,
 ) where
     C: ServerConnector + 'static,
     I: crate::com::guard::ComInitializer,
+    S: FnOnce(Result<(), OpcError>),
 {
     tracing::debug!("COM worker thread spawned, initializing COM (MTA)");
     let _guard = match I::init() {
         Ok(g) => {
             tracing::info!("COM MTA initialized successfully on worker thread");
-            let _ = init_tx.send(Ok(()));
+            signal_init(Ok(()));
             g
         }
         Err(e) => {
             tracing::error!(error = ?e, "COM worker failed to initialize MTA");
-            let _ = init_tx.send(Err(e));
+            signal_init(Err(e));
             return;
         }
     };

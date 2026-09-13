@@ -21,9 +21,9 @@ pub use provider::{
 #[allow(deprecated)]
 pub use types::{
     BrowseDirection, BrowseType, ClientGroupHandle, ClientItemHandle, GroupHandle, IntoTags,
-    ItemHandle, OpcServerEndpoint, OpcServerInfo, ParseQualityError, ServerGroupHandle,
-    ServerIdentifier, ServerItemHandle, TagBatch, TagBatchIter, TagExtractError, TagFailure,
-    TagResult, TagSuccess, TagValues,
+    IntoWriteBatch, ItemHandle, OpcServerEndpoint, OpcServerInfo, ParseQualityError,
+    ServerGroupHandle, ServerIdentifier, ServerItemHandle, TagBatch, TagBatchIter, TagExtractError,
+    TagValues, WriteBatch, WriteBatchIntoIter, WriteBatchIter,
 };
 
 // Backend re-exports (conditional)

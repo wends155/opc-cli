@@ -25,8 +25,26 @@ description: Loaded by `/plan-making` workflow. Defines plan format, revision pr
 | Tier | Files | Required Sections |
 |------|-------|-------------------|
 | **S** (patch) | 1-3 | Header, Problem Statement, Plan Objectives, Global Execution Order, Verification Plan, Plan Summary |
-| **M** (feature) | 4-10 | + Builder Context, Plan Objectives, Interface Contracts, Blast Radius Table, Deprecation Schedule *(if triggered)*, Test Plan, Negative Scope, Phase Context *(if multi-phase)* |
-| **L** (refactor) | 10+ | + Plan Objectives, Module Boundaries, Cross-Module Handshakes, Architecture Diagram, Dependency Chain, Blast Radius Table, Deprecation Schedule *(if triggered)*, Phase Manifest *(if multi-phase)* |
+| **M** (feature) | 4-10 | + Builder Context, Plan Objectives, Review History & Verdict, Interface Contracts, Blast Radius Table, Deprecation Schedule *(if triggered)*, Test Plan, Negative Scope, Phase Context *(if multi-phase)* |
+| **L** (refactor) | 10+ | + Plan Objectives, Review History & Verdict, Module Boundaries, Cross-Module Handshakes, Architecture Diagram, Dependency Chain, Blast Radius Table, Deprecation Schedule *(if triggered)*, Phase Manifest *(if multi-phase)* |
+
+### Review History & Verdict *(M/L tier)*
+
+Tracks the iterative review loop deterministically across turns:
+
+| Cycle | Reviewer | Model | Verdict | Adjustments Applied |
+|---|---|---|---|---|
+| 1 | `plan-reviewer` (or `inline`) | `flash` | `[✅ Approved | ⚠️ Revisions Recommended | 🛑 Major Rethink Required]` | <Summary of changes or "Initial Draft"> |
+
+### Optional Specialist Sections *(Activated by Sub-Planners)*
+
+These sections are added to the plan when the corresponding specialist sub-planner is activated in Phase 3 of `/plan-making`. They are not mandated by tier, but by design concern:
+
+| Section | Activated By | Purpose |
+|---|---|---|
+| `### Concurrency Model` | `concurrency-planner` | Task supervisor topology, lock inventory, async boundary cancellation |
+| `### Security Constraints` | `security-planner` | Trust boundaries, input validation matrix, authorization gates, crypto |
+| `### Performance Constraints` | `perf-planner` | Hot-path algorithm choices, allocation budget, caching/batching policy |
 
 ### Header
 
@@ -370,88 +388,8 @@ Architect declares parallel lanes in the plan:
   on the integrated workspace.
 - **No file may appear in more than one lane** (strict module partitioning).
 - If multi-agent orchestration is NOT available, ignore this section entirely.
-  The standard sequential GEO applies.
 
-### Dependency Chain *(L tier)*
-
-Show which steps depend on which:
-
-```
-1 → 2 → 3
-         ↘
-     4 → 5 → 6 🔒
-```
-
-### Architecture Diagram *(if applicable, M/L tier)*
-
-Include a Mermaid diagram for any structural or data-flow changes.
-
-### Edge Cases & Risks
-
-List edge cases the implementation must handle. Document risks or trade-offs.
-
-### Test Plan (TDD) *(M/L tier)*
-
-> [!IMPORTANT]
-> Plans **must** specify tests **before** implementation code. The Builder writes
-> tests first, verifies they fail (Red), then implements until they pass (Green).
-
-For each proposed change, define:
-
-1. **Test cases**: Function signatures and assertions — written as executable code, not prose.
-2. **Test type**: Unit, integration, property-based, or doc-test.
-3. **Expected failures**: What the test asserts when run *before* implementation.
-4. **Test file location**: Co-located `#[cfg(test)]` module or dedicated test file.
-
-**Code snippets as executable tests:** Instead of describing expected output in prose,
-express verification as a test assertion. The plan's code should be testable, not illustrative.
-
-### Verification Plan *(all tiers)*
-
-| Type | Required? | Details |
-|------|-----------|---------|
-| **Automated tests** | Yes | Exact command (e.g., `cargo test`, `npm test`) |
-| **Lint / Format** | Yes | Exact command (e.g., `cargo fmt --check`) |
-| **Manual testing** | If applicable | Step-by-step instructions |
-| **Browser testing** | If applicable | Specific pages/flows |
-
-> [!IMPORTANT]
-> Do NOT invent test commands. Refer to `architecture.md § Toolchain`.
-
-### Plan Summary *(all tiers)*
-
-| Metric | Value |
-|--------|-------|
-| Tier | S / M / L |
-| Files | N |
-| Steps | N |
-| Checkpoints | N |
-| Estimated effort | Low / Medium / High |
-
-## 3. Revision Protocol
-
-> 📘 **Skill:** [`scaffold-plan`](../../.gemini/skills/scaffold-plan/SKILL.md) — Load this skill when instructed to review and update an existing plan.
-
-## 4. Decision Resolution
-
-> 📘 **Skill:** [`scaffold-plan`](../../.gemini/skills/scaffold-plan/SKILL.md) — Load this skill when asked to finalize a drafted plan by resolving open decisions or selecting among alternatives.
-
-## 5. Handoff-Ready Requirements
-
-Before the Architect can request "Proceed", the plan must satisfy:
-
-| Requirement | Verification |
-|-------------|-------------|
-| Every file listed with `[NEW]`/`[MODIFY]`/`[DELETE]`/`[TEST]` tags | Manual review |
-| Every change has a discrete, verifiable description | Manual review |
-| Test cases pre-specified (TDD: Red → Green → Refactor) | Test Plan section exists |
-| Verification commands sourced from `architecture.md § Toolchain` | Cross-reference check |
-| Plan Summary filled in | Manual review |
-| `task.md` aligned | Pre-Flight Gate (Validate task.md procedure) |
-
-## 6. The task.md Contract
-
-`task.md` is the bridge between the Architect's plan and the Builder's execution:
+## 6. task.md Contract
 
 1. **Generated** by the Architect during the `/plan-making` workflow.
 2. **1:1 Mapping**: Each checklist item maps to exactly one plan item.
@@ -486,4 +424,30 @@ If a step broke prior work, note the regression in the STOP report.
 
 > 📘 **Skill:** [`scaffold-plan`](../../.gemini/skills/scaffold-plan/SKILL.md) — Load this skill when starting a new session to resume execution of an approved plan.
 
+## 9. Sub-Planner Fragment Contract
 
+When Phase 3 of `/plan-making` is active, specialist sub-planners produce domain
+fragments. The Architect incorporates these directly into the plan:
+
+| Sub-Planner | Skill | Activate When | Fragment → Plan Section |
+|---|---|---|---|
+| `api-planner` | `.gemini/skills/api-planner/SKILL.md` | Adds/modifies public signatures | `### Interface Contracts` |
+| `type-planner` | `.gemini/skills/type-planner/SKILL.md` | Adds/modifies types or domain concepts | `### Interface Contracts` (types), GEO `[NEW]` |
+| `module-planner` | `.gemini/skills/module-planner/SKILL.md` | Cross-module file changes | `### Module Boundaries`, `### Cross-Module Handshakes` |
+| `test-planner` | `.gemini/skills/test-planner/SKILL.md` | Functions requiring test coverage | `### Test Plan`, `[TEST]` GEO steps |
+| `concurrency-planner` | `.gemini/skills/concurrency-planner/SKILL.md` | Async, tasks, channels, mutexes | `### Concurrency Model` |
+| `security-planner` | `.gemini/skills/security-planner/SKILL.md` | Auth, validation, crypto, trust | `### Security Constraints` |
+| `perf-planner` | `.gemini/skills/perf-planner/SKILL.md` | Hot paths, algorithms, caching | `### Performance Constraints` |
+
+**Fragment Authority:** Specialist fragments are authoritative within their domain.
+The Architect may override only if a fragment contradicts `architecture.md` — and
+MUST document the override reason inline in the plan.
+
+**Focused Prompt Contract:** Sub-planner prompts MUST be distilled from Phase 2
+synthesis output. Passing the raw recon report as the sole prompt is a workflow
+violation — it shifts domain reasoning back to the specialist and defeats the
+token-efficiency goal.
+
+**Single-Agent Fallback:** If Phase 3 was skipped, the Architect fills all
+sections inline using Phase 2 Structured Reasoning. Mark the plan header's Scope
+field with `[Single-Agent Mode]`.

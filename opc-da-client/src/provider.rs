@@ -246,7 +246,7 @@ pub trait TagWriter: Send + Sync {
         value: OpcValue,
     ) -> OpcResult<WriteResult>;
 
-    /// Write typed values to multiple OPC DA tags in a batch.
+    /// Write typed values to multiple OPC DA tags in a batch using [`crate::types::WriteBatch`].
     ///
     /// Default implementation iteratively invokes [`TagWriter::write_tag_value`].
     /// Note: Partial failures do NOT abort the remaining writes; all writes are attempted
@@ -254,49 +254,41 @@ pub trait TagWriter: Send + Sync {
     ///
     /// # Arguments
     /// * `server` - ProgID or identifier of the OPC server.
-    /// * `writes` - Slice of `(tag_id, value)` pairs to write.
+    /// * `writes` - Batch of tag writes.
     ///
     /// # Returns
     /// A vector of [`WriteResult`] structs corresponding to each tag write attempt.
     ///
     /// # Errors
     /// Returns [`crate::errors::OpcError`] if an unrecoverable error occurs.
+    async fn write_tag_batch(
+        &self,
+        server: &str,
+        writes: crate::types::WriteBatch,
+    ) -> OpcResult<Vec<WriteResult>> {
+        let mut results = Vec::with_capacity(writes.len());
+        for (tag_id, value) in writes {
+            let res = match self.write_tag_value(server, &tag_id, value).await {
+                Ok(r) => r,
+                Err(e) => WriteResult::failure(tag_id, e),
+            };
+            results.push(res);
+        }
+        Ok(results)
+    }
+
+    /// Write typed values to multiple OPC DA tags in a batch.
     ///
-    /// # Examples
-    ///
-    /// ```rust
-    /// # #[tokio::main]
-    /// # async fn main() -> opc_da_client::OpcResult<()> {
-    /// # let mut mock = opc_da_client::MockOpcProvider::new();
-    /// # mock.expect_write_tag_values().returning(|_, writes| {
-    /// #     Ok(writes.iter().map(|(id, _)| opc_da_client::WriteResult::success(id.clone())).collect())
-    /// # });
-    /// # let client: &dyn opc_da_client::OpcProvider = &mock;
-    /// use opc_da_client::{OpcProvider, OpcResult, OpcValue, WriteResult};
-    ///
-    /// let writes = vec![
-    ///     ("Bucket Brigade.Int4".to_string(), OpcValue::Int(42)),
-    ///     ("Bucket Brigade.Real4".to_string(), OpcValue::Float(3.14)),
-    /// ];
-    /// let results = client.write_tag_values("Matrikon.OPC.Simulation.1", &writes).await?;
-    /// assert_eq!(results.len(), 2);
-    /// # Ok(())
-    /// # }
-    /// ```
+    /// # Deprecated
+    /// Use [`TagWriter::write_tag_batch`] instead.
+    #[deprecated(since = "0.2.0", note = "Use write_tag_batch instead")]
     async fn write_tag_values(
         &self,
         server: &str,
         writes: &[(String, OpcValue)],
     ) -> OpcResult<Vec<WriteResult>> {
-        let mut results = Vec::with_capacity(writes.len());
-        for (tag_id, value) in writes {
-            let res = match self.write_tag_value(server, tag_id, value.clone()).await {
-                Ok(r) => r,
-                Err(e) => WriteResult::failure(tag_id.clone(), e),
-            };
-            results.push(res);
-        }
-        Ok(results)
+        self.write_tag_batch(server, crate::types::WriteBatch::Owned(writes.to_vec()))
+            .await
     }
 }
 
@@ -308,42 +300,58 @@ pub trait OpcProvider: ServerDiscovery + TagBrowser + TagReader + TagWriter {}
 impl<T> OpcProvider for T where T: ServerDiscovery + TagBrowser + TagReader + TagWriter + ?Sized {}
 
 #[cfg(feature = "test-support")]
-mockall::mock! {
-    /// Pure-Rust mock implementation of [`OpcProvider`] for unit and integration tests.
-    pub OpcProvider {}
+mod mock {
+    #![allow(clippy::struct_field_names)]
+    use super::{
+        OpcResult, OpcServerInfo, OpcValue, ServerDiscovery, TagBatch, TagBrowser, TagCollector,
+        TagReader, TagValue, TagValues, TagWriter, WriteResult,
+    };
+    use async_trait::async_trait;
 
-    #[async_trait]
-    impl ServerDiscovery for OpcProvider {
-        async fn list_servers(&self, host: &str) -> OpcResult<Vec<String>>;
-        async fn list_server_details(&self, host: &str) -> OpcResult<Vec<OpcServerInfo>>;
-    }
+    mockall::mock! {
+        /// Pure-Rust mock implementation of [`OpcProvider`] for unit and integration tests.
+        pub OpcProvider {}
 
-    #[async_trait]
-    impl TagBrowser for OpcProvider {
-        async fn browse_tags(&self, server: &str, collector: TagCollector) -> OpcResult<Vec<String>>;
-    }
+        #[async_trait]
+        impl ServerDiscovery for OpcProvider {
+            async fn list_servers(&self, host: &str) -> OpcResult<Vec<String>>;
+            async fn list_server_details(&self, host: &str) -> OpcResult<Vec<OpcServerInfo>>;
+        }
 
-    #[async_trait]
-    impl TagReader for OpcProvider {
-        async fn read_tag_values(&self, server: &str, tags: TagBatch) -> OpcResult<TagValues>;
-        async fn read_tag_value(&self, server: &str, tag_id: &str) -> OpcResult<TagValue>;
-    }
+        #[async_trait]
+        impl TagBrowser for OpcProvider {
+            async fn browse_tags(&self, server: &str, collector: TagCollector) -> OpcResult<Vec<String>>;
+        }
 
-    #[async_trait]
-    impl TagWriter for OpcProvider {
-        async fn write_tag_value(
-            &self,
-            server: &str,
-            tag_id: &str,
-            value: OpcValue,
-        ) -> OpcResult<WriteResult>;
-        async fn write_tag_values(
-            &self,
-            server: &str,
-            writes: &[(String, OpcValue)],
-        ) -> OpcResult<Vec<WriteResult>>;
+        #[async_trait]
+        impl TagReader for OpcProvider {
+            async fn read_tag_values(&self, server: &str, tags: TagBatch) -> OpcResult<TagValues>;
+            async fn read_tag_value(&self, server: &str, tag_id: &str) -> OpcResult<TagValue>;
+        }
+
+        #[async_trait]
+        impl TagWriter for OpcProvider {
+            async fn write_tag_value(
+                &self,
+                server: &str,
+                tag_id: &str,
+                value: OpcValue,
+            ) -> OpcResult<WriteResult>;
+            async fn write_tag_batch(
+                &self,
+                server: &str,
+                writes: crate::types::WriteBatch,
+            ) -> OpcResult<Vec<WriteResult>>;
+            async fn write_tag_values(
+                &self,
+                server: &str,
+                writes: &[(String, OpcValue)],
+            ) -> OpcResult<Vec<WriteResult>>;
+        }
     }
 }
+#[cfg(feature = "test-support")]
+pub use mock::MockOpcProvider;
 
 #[cfg(test)]
 mod tests {
@@ -413,11 +421,10 @@ mod tests {
 
     #[test]
     fn test_system_time_option_ext_some() {
-        // Non-epoch time
+        // Non-epoch time (1700000000 = 2023-11-14 22:13:20 UTC)
         let ts = SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1_700_000_000);
         let ts_opt = Some(ts);
-        let dt: chrono::DateTime<chrono::Local> = ts.into();
-        let expected = dt.format("%Y-%m-%d %H:%M:%S").to_string();
+        let expected = "2023-11-14 22:13:20";
         assert_eq!(format!("{}", ts_opt.display()), expected);
         assert_eq!(format!("{}", ts_opt.display_or("Custom")), expected);
     }
@@ -613,6 +620,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(deprecated)]
     async fn test_provider_default_read_tag_value() {
         struct TestProvider;
         #[async_trait::async_trait]
@@ -674,9 +682,24 @@ mod tests {
         assert_eq!(batch_write.len(), 2);
         assert!(batch_write[0].is_success());
         assert!(batch_write[1].is_success());
+
+        let batch_direct = p
+            .write_tag_batch(
+                "Server.A",
+                crate::types::WriteBatch::Owned(vec![
+                    ("Tag.1".into(), OpcValue::Int(10)),
+                    ("Tag.2".into(), OpcValue::Int(20)),
+                ]),
+            )
+            .await
+            .unwrap();
+        assert_eq!(batch_direct.len(), 2);
+        assert!(batch_direct[0].is_success());
+        assert!(batch_direct[1].is_success());
     }
 
     #[tokio::test]
+    #[allow(deprecated)]
     async fn test_provider_default_write_tag_values_partial_failure() {
         struct FailingProvider;
         #[async_trait::async_trait]

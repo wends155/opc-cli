@@ -45,7 +45,17 @@ async fn test_mock_opc_provider_full_contract_stability() {
             ))
         });
 
-    // 5. write_tag_values expectation (ensures &[ (String, OpcValue) ] slice contract is preserved)
+    // 5. write_tag_batch expectation
+    mock.expect_write_tag_batch().returning(|server, writes| {
+        assert_eq!(server, "Matrikon.OPC.Simulation.1");
+        let results = writes
+            .iter()
+            .map(|(tag, _)| WriteResult::success(tag))
+            .collect();
+        Ok(results)
+    });
+
+    // 5b. write_tag_values expectation (ensures deprecated slice contract is preserved)
     mock.expect_write_tag_values().returning(|server, writes| {
         assert_eq!(server, "Matrikon.OPC.Simulation.1");
         let results = writes
@@ -90,14 +100,23 @@ async fn test_mock_opc_provider_full_contract_stability() {
         .unwrap();
     assert_eq!(single_val.value(), Some(&OpcValue::Int(42)));
 
-    // Test write_tag_values
+    // Test write_tag_batch
     let writes = vec![("Random.Int4".to_string(), OpcValue::Int(123))];
     let write_results = provider
-        .write_tag_values("Matrikon.OPC.Simulation.1", &writes)
+        .write_tag_batch("Matrikon.OPC.Simulation.1", writes.clone().into())
         .await
         .unwrap();
     assert_eq!(write_results.len(), 1);
     assert!(write_results[0].is_success());
+
+    // Test deprecated write_tag_values backward compatibility
+    #[allow(deprecated)]
+    let deprecated_results = provider
+        .write_tag_values("Matrikon.OPC.Simulation.1", &writes)
+        .await
+        .unwrap();
+    assert_eq!(deprecated_results.len(), 1);
+    assert!(deprecated_results[0].is_success());
 
     // Test write_tag_value
     let single_write = provider

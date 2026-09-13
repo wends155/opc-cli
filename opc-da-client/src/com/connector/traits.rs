@@ -234,6 +234,11 @@ pub trait ServerConnector: Send + Sync {
     /// # Errors
     /// Returns an [`OpcError`] if connection fails.
     fn connect_endpoint(&self, endpoint: &OpcServerEndpoint) -> OpcResult<Self::Server> {
+        if crate::types::is_remote_host(endpoint.host.as_deref()) {
+            return Err(OpcError::NotImplemented(
+                "Remote DCOM connections are not supported by this connector implementation".into(),
+            ));
+        }
         self.connect_identifier(&endpoint.identifier)
     }
 

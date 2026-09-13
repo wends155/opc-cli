@@ -40,12 +40,14 @@
 [Clear restatement of the issue in the user's own words]
 
 ### Investigation Findings
+- **Issue location:** `<file path>:<line>:<Type::method_name()>` (or entity sentinel `(Module)`, `struct <Name>`)
 - **Affected files:** [list of files with links]
 - **Root cause analysis:** [diagnosis based on investigation]
 - **Impact scope:** narrow (single function) / module / cross-cutting
+- **Blast radius & call graph:** [callers, callees, downstream impact from codebase-recon; or "N/A (low severity — lightweight)"]
 - **Related history:** [anything from context.md or git log]
 - **Recent changes:** [relevant commits, if any]
-- **Test coverage:** [existing tests in this area, pass/fail status]
+- **Test coverage:** [existing tests in this area, pass/fail status; or "N/A (lightweight)"]
 
 ### Open Questions
 - [Any ambiguities or unknowns that need user clarification]
@@ -59,20 +61,27 @@
 
 Depth scales with severity:
 
-| Severity | Depth | Required Analysis |
-|----------|-------|-------------------|
-| `critical` / `high` | Full | Blast radius, dependency graph, related history, all test status |
-| `medium` | Standard | Affected files, root cause, relevant tests |
-| `low` | Lightweight | Affected files, brief root cause |
+| Severity | Depth | Required Analysis | Search Mode & Tool Bounds |
+|----------|-------|-------------------|---------------------------|
+| `critical` / `high` | Full | Blast radius, dependency graph, related history, all test status | MCP AST & graph tools first (`get_callers`, `search_code`); bounded `git log -n 10`; no whole-repo text sweeps by root Architect |
+| `medium` | Standard | Affected files, root cause, relevant tests | Targeted symbol lookup (`find_symbols`, `view_file` with line slices); no whole-repo sweeps |
+| `low` | Lightweight | Affected files, brief root cause | Scoped inspection of known file/function only; zero broad searches; no subagents spawned |
 
-For **critical/high** issues, the Architect **SHOULD** use `sequentialthinking` to structure the investigation, evaluate competing hypotheses, and avoid jumping to conclusions.
+For **critical/high** issues, the Architect **SHOULD** use `sequentialthinking` to structure
+the investigation, evaluate competing hypotheses, and avoid jumping to conclusions.
 
 For **medium/low** issues, skip sequential thinking — the overhead isn't worth it.
 
 ## 4. Diagnostic Constraints
 
-1. **No solutions** — do not propose fixes, implementations, or code changes. The Issue Report is a diagnostic input, not a plan.
-2. **No code edits** — this is an investigation-only phase. Read files, don't modify them.
-3. **No planning** — do not propose architecture changes or implementation steps.
-4. **Ask early** — if the issue is ambiguous, ask clarifying questions before investigating, not after.
-5. **Stay focused** — investigate just enough to produce a clear report. Avoid rabbit holes.
+1. **No solutions or code edits** — do not propose fixes, architecture changes, implementations,
+   or code edits. The Issue Report is a diagnostic input, not a plan.
+2. **No planning** — do not draft implementation plans or architectural redesigns during this phase.
+3. **Ask early** — if the issue is ambiguous, ask clarifying questions in Step 1 before
+   investigating, not after.
+4. **Token & search efficiency** — prioritize indexed MCP tools (`search_code`, `find_symbols`,
+   `search_knowledge`) before text scanning. When using `grep_search`, restrict to candidate
+   subtrees and use `MatchPerLine: false` (filename-only) before full-text queries.
+   Cap initial search results to 20 matches maximum.
+5. **Bounded inspection** — read code using targeted line slices (`StartLine`/`EndLine` with
+   `view_file`). Avoid reading entire files into context. Avoid loading unbounded log streams.

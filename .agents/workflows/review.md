@@ -68,17 +68,22 @@ Determine what code to review, which lenses to apply, and the execution tier:
    - **M-scope**: few files + specific lens(es) → dispatch 1–2 specialized subagents.
    - **L-scope**: many files / `all` lenses → dispatch up to 5 specialized subagents in parallel.
 
+> **Inline Execution Contract:** When executing inline under S-scope (or fallback when subagent tools are unavailable), the Architect MUST adhere to the same signature extraction and sentinel rules as subagents, recording type-qualified signatures (`Type::method()`) or appropriate entity sentinels (`struct <Name>`, `(Module)`, `(Config)`, `(File)`).
+
 ### Phase 1: Gather Scope Context
 
 Collect the scoped files and diffs to provide clear boundaries for analysis:
 - For staged diffs: run `git diff --cached`
 - For commit diffs: run `git diff <hash> HEAD`
 - For specific files: identify file paths and verify existence
-- If `/review` was triggered following an `/issue`, `/feature`, or `/brainstorm` workflow, extract relevant context from the preceding report to avoid re-investigation.
+- If `/review` was triggered following an `/issue`, `/review`, `/audit`, or `/feature` workflow **and that report was explicitly cited** by the user or invoking workflow, perform **Report Distillation** before Phase 2 dispatch:
+  1. Read the cited report with `view_file`.
+  2. For each active lens, extract domain-relevant findings per that lens skill's § 2 domain-specific field list.
+  3. Record a separate `Distilled [Lens] Context` block for each active lens: each finding as `<file path>:<line>:<Type::method_name()>` (or appropriate entity sentinel) — <domain-relevant summary>. In Phase 2, each lens subagent receives only its own lens's block. In S-scope inline execution, the Architect applies each block directly.
 
 ### Phase 2: Dispatch Lens Subagents
 
-When running in **S-scope**, skip subagent dispatch and evaluate the lens inline.
+When running in **S-scope** (or fallback execution when subagent tools are unavailable), skip subagent dispatch and evaluate the lens inline. The Architect MUST record type-qualified signatures (`Type::method()`) and entity sentinels (`struct <Name>`, `(Module)`, etc.) directly into the findings matrix and detailed findings.
 
 For **M-scope** and **L-scope**, delegate analysis using the respective standalone review skills:
 1. For each active lens, define its specialized subagent via `define_subagent` per its skill:
@@ -89,20 +94,30 @@ For **M-scope** and **L-scope**, delegate analysis using the respective standalo
    - 📐 `review-api` → `review_api` (Senior API Design Architect)
 2. Announce subagent models per `GEMINI.md §10`:
    > 🤖 Spawning subagent **[Role]** with model: `flash` (Gemini 3.8 Flash High)
-3. Invoke each subagent in parallel with the scoped code, checklist questions, and report template instruction.
+3. Invoke each subagent in parallel using `invoke_subagent` adhering to the mandatory prompt contract:
+   - Target scope (files, diffs, or targets to inspect).
+   - `Repository Workspace: <path>` (explicit workspace root path).
+   - Negative boundary reminder: `"Confine all searches strictly to the repository workspace; never search parent or user directories."`
+   - Report formatting reminder: `"Format findings strictly following the report template provided in your system prompt."`
+   - If a `Distilled [Lens] Context` block was produced in Phase 1 for this lens: include it verbatim, formatted as:
+     **Upstream Context (distilled from [report name]):**
+     - `<file path>:<line>:<Type::method_name()>` (or entity sentinel) — <domain-relevant finding summary>
+     Always include `File:Line:Function Signature` (or entity sentinel) for every anchor.
 4. Stop calling tools and wait for all subagents to complete their analysis.
 
 ### Phase 3: Architect Synthesis
 
 Once all per-lens reports are returned:
-1. **Cross-Lens Correlation:** Identify systemic patterns or code hotspots flagged across multiple lenses (e.g., a function flagged for both logic edge cases and performance allocations).
-2. **Severity Calibration:** Normalize severities across reports to ensure uniform judgment:
+1. **Severity Calibration:** Normalize severities across reports to ensure uniform judgment:
    - 🔴 **Critical**: Likely bug, exploit path, or data corruption risk
    - 🟠 **Major**: Architecture, maintenance, or scaling blocker
    - 🟡 **Minor**: Non-blocking optimization or ergonomic improvement
    - ⚪ **Nitpick**: Minor naming, formatting, or style preference
-3. **Deduplication:** Consolidate redundant observations across lenses into cohesive findings.
-4. **Prioritization:** Order findings by severity (Critical first) with concrete, actionable suggestions.
+2. **Canonical Symbol Indexing & Deduplication vs. Correlation:**
+   Index all findings by `(File:Line, Function Signature)` to distinguish between redundancy and correlation:
+   - **Redundant Deduplication:** When multiple lenses report the *exact same root issue* on the same symbol/line (e.g. both API and Logic lenses flag missing parameter validation on `Client::connect`), consolidate them into a single finding in the matrix and concatenate their source lenses (e.g., `API, Logic`).
+   - **Multi-Lens Hotspot Correlation:** When multiple lenses report *distinct defects* on the same symbol/function (e.g., Logic flags an edge-case panic in `Token::parse_token` while Perf flags excessive heap allocations in the same function), retain them as distinct, separate findings in the matrix and detailed sections. Flag the symbol as a multi-lens architectural hotspot in the Review Summary.
+3. **Prioritization:** Order findings in the Unified Findings Matrix by severity (Critical first, then Major, Minor, Nitpick), maintaining stable numeric IDs (`# 1`, `# 2`, ...).
 
 ### Phase 4: Produce Unified Review Report
 
@@ -114,17 +129,37 @@ Format the final review as a structured report:
 ```markdown
 # Review Report
 
-**Scope:** [files/diff reviewed]
-**Lens:** [applied lens(es)]
-**Date:** [date]
-**Review Model:** Subagent-orchestrated (N lens agents dispatched)
+## 1. Review Summary
+- **Scope:** [files/diff reviewed]
+- **Active Lenses:** [applied lens(es)]
+- **Date:** [YYYY-MM-DD]
+- **Review Model:** Subagent-orchestrated (N lens agents dispatched) / Inline Architect
+- **Findings Breakdown:** N Total (🔴 Critical: X, 🟠 Major: Y, 🟡 Minor: Z, ⚪ Nitpick: W)
+- **Health Assessment:** [Clean | Minor Issues | Needs Attention | Critical Issues]
+- **Multi-Lens Hotspots:** [None | Identified hotspot symbols flagged across multiple lenses]
 
-## Findings
+## 2. Unified Findings Matrix
 
-### [Severity] [Category] — [file:line] — [one-line summary]
-**Detail:** [explanation]
-**Suggestion:** [actionable improvement with code snippet if applicable]
-**Source Lens:** [which specialized subagent identified this]
+| # | Severity | Category | File:Line | Function Signature | Summary | Source Lens |
+|---|----------|----------|-----------|--------------------|---------|-------------|
+| 1 | 🔴 Critical | Security | src/db.rs:62 | Database::query_raw(&self, query: &str) -> Result<Rows> | Raw SQL query formatting enables SQL injection | Security |
+| 2 | 🟠 Major | Design | src/domain/mod.rs:1 | (Module) | Circular dependency between domain and infra modules | Design |
+
+## 3. Detailed Findings
+
+### Finding 1: [Severity] [Category] — [Title]
+- **Severity:** [🔴 Critical | 🟠 Major | 🟡 Minor | ⚪ Nitpick]
+- **Category:** [Logic | Design | Performance | Security | API]
+- **File & Line:** `filepath:line`
+- **Function Signature:** `signature` (or sentinel such as `(Module)`)
+- **Source Lens:** [Lens name(s)]
+- **Detail:** [Clear explanation of why this is an issue and its potential impact]
+- **Suggestion:** [Actionable recommendation with code snippet if applicable]
+
+## 4. Architectural Synthesis & Discussion Guidance
+- **Systemic Themes:** [Cross-cutting architectural patterns, technical debt, or systemic risks identified across lenses]
+- **Trade-offs:** [Key architectural trade-offs to evaluate, e.g. performance vs readability]
+- **Discussion Points:** [Specific open questions or decision points recommended for developer alignment]
 ```
 
 **Severity Scale:**

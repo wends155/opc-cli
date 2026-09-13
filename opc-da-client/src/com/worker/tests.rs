@@ -6,8 +6,8 @@ use crate::com::connector::{
 use crate::com::guard::GroupGuard;
 use crate::errors::OpcError;
 use crate::types::{
-    ClientItemHandle, OpcQuality, OpcServerEndpoint, OpcValue, ServerGroupHandle, ServerItemHandle,
-    TagBatch, TagCollector,
+    ClientItemHandle, IntoWriteBatch, OpcQuality, OpcServerEndpoint, OpcValue, ServerGroupHandle,
+    ServerItemHandle, TagBatch, TagCollector,
 };
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
@@ -688,7 +688,7 @@ async fn test_worker_native_write_batch_via_com_request() {
     let results = worker
         .send_request(|reply| ComRequest::WriteTagValues {
             endpoint: OpcServerEndpoint::from("Mock.Server.1"),
-            writes,
+            writes: writes.into_write_batch(),
             reply,
         })
         .await

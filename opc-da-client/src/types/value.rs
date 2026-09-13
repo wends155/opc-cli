@@ -255,7 +255,7 @@ impl TryFrom<OpcValue> for i64 {
             OpcValue::UInt(u) => i64::try_from(u)
                 .map_err(|_| crate::errors::OpcError::Conversion("UInt exceeds i64 range".into())),
             OpcValue::Float(f)
-                if f.fract() == 0.0 && f >= i64::MIN as f64 && f <= i64::MAX as f64 =>
+                if f.fract() == 0.0 && f >= i64::MIN as f64 && f < i64::MAX as f64 =>
             {
                 Ok(f as i64)
             }
@@ -309,7 +309,7 @@ impl TryFrom<OpcValue> for u64 {
             OpcValue::Int(i) => u64::try_from(i).map_err(|_| {
                 crate::errors::OpcError::Conversion("Negative Int cannot convert to u64".into())
             }),
-            OpcValue::Float(f) if f.fract() == 0.0 && f >= 0.0 && f <= u64::MAX as f64 => {
+            OpcValue::Float(f) if f.fract() == 0.0 && f >= 0.0 && f < u64::MAX as f64 => {
                 Ok(f as u64)
             }
             other => Err(crate::errors::OpcError::Conversion(format!(
@@ -475,26 +475,93 @@ impl std::fmt::Display for DisplayOptionOpcValue<'_> {
 
 /// Zero-allocation display adapter for [`Option<std::time::SystemTime>`].
 ///
-/// Implements [`std::fmt::Display`] to stream a local formatted timestamp or
-/// a fallback string directly into the output formatter without heap allocations.
+/// Implements [`std::fmt::Display`] to stream a standard UTC timestamp formatted as
+/// `"YYYY-MM-DD HH:MM:SS"` or a fallback string directly into the output formatter
+/// without heap allocations and without external crate dependencies.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct DisplayOptionTimestamp<'a> {
     opt: Option<std::time::SystemTime>,
     fallback: &'a str,
 }
 
+#[allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    clippy::cast_possible_wrap,
+    clippy::unreadable_literal,
+    clippy::many_single_char_names
+)]
+#[inline]
+pub(crate) const fn secs_to_civil(secs: i64) -> (i64, u32, u32, u32, u32, u32) {
+    let days = secs.div_euclid(86400);
+    let rem_secs = secs.rem_euclid(86400) as u32;
+    let hour = rem_secs / 3600;
+    let min = (rem_secs % 3600) / 60;
+    let sec = rem_secs % 60;
+
+    let z = days + 719468;
+    let era = (if z >= 0 { z } else { z - 146096 }).div_euclid(146097);
+    let doe = (z - era * 146097) as u32;
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+    let y = (yoe as i64) + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    let y = if m <= 2 { y + 1 } else { y };
+
+    (y, m, d, hour, min, sec)
+}
+
+#[allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_possible_wrap,
+    clippy::cast_sign_loss
+)]
+#[inline]
+pub(crate) fn format_system_time_buf(ts: std::time::SystemTime) -> Option<[u8; 19]> {
+    let dur = ts.duration_since(std::time::SystemTime::UNIX_EPOCH).ok()?;
+    let (y, m, d, hour, min, sec) = secs_to_civil(dur.as_secs() as i64);
+    if !(0..=9999).contains(&y) {
+        return None;
+    }
+
+    let mut buf = [0u8; 19];
+    let y_u = y as u32;
+    buf[0] = b'0' + ((y_u / 1000) % 10) as u8;
+    buf[1] = b'0' + ((y_u / 100) % 10) as u8;
+    buf[2] = b'0' + ((y_u / 10) % 10) as u8;
+    buf[3] = b'0' + (y_u % 10) as u8;
+    buf[4] = b'-';
+    buf[5] = b'0' + ((m / 10) % 10) as u8;
+    buf[6] = b'0' + (m % 10) as u8;
+    buf[7] = b'-';
+    buf[8] = b'0' + ((d / 10) % 10) as u8;
+    buf[9] = b'0' + (d % 10) as u8;
+    buf[10] = b' ';
+    buf[11] = b'0' + ((hour / 10) % 10) as u8;
+    buf[12] = b'0' + (hour % 10) as u8;
+    buf[13] = b':';
+    buf[14] = b'0' + ((min / 10) % 10) as u8;
+    buf[15] = b'0' + (min % 10) as u8;
+    buf[16] = b':';
+    buf[17] = b'0' + ((sec / 10) % 10) as u8;
+    buf[18] = b'0' + (sec % 10) as u8;
+
+    Some(buf)
+}
+
 impl std::fmt::Display for DisplayOptionTimestamp<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> fmt::Result {
         match self.opt {
             Some(ts) if ts != std::time::SystemTime::UNIX_EPOCH => {
-                let dt: chrono::DateTime<chrono::Local> = ts.into();
-                let formatted = dt.format("%Y-%m-%d %H:%M:%S");
-                if f.width().is_some() {
-                    let s = formatted.to_string();
-                    f.pad(&s)
-                } else {
-                    write!(f, "{formatted}")
+                if let Some(buf) = format_system_time_buf(ts) {
+                    let Ok(s) = std::str::from_utf8(&buf) else {
+                        return f.pad(self.fallback);
+                    };
+                    return f.pad(s);
                 }
+                f.pad(self.fallback)
             }
             _ => f.pad(self.fallback),
         }
@@ -577,5 +644,27 @@ mod tests {
 
         let parsed_uint: OpcValue = "9223372036854775808".parse().unwrap();
         assert_eq!(parsed_uint, OpcValue::UInt(9_223_372_036_854_775_808));
+    }
+
+    #[test]
+    #[allow(clippy::cast_precision_loss, clippy::similar_names)]
+    fn test_try_from_f64_precision_saturation() {
+        let f_i64 = i64::MAX as f64; // 2^63 (9223372036854775808.0), exceeds i64::MAX
+        let val_f64_i64 = OpcValue::Float(f_i64);
+        let res_i64 = i64::try_from(val_f64_i64);
+        assert!(
+            res_i64.is_err(),
+            "Float exceeding i64 precision should return error, got {:?}",
+            res_i64
+        );
+
+        let f_u64 = u64::MAX as f64; // 2^64 (18446744073709551616.0), exceeds u64::MAX
+        let val_f64_u64 = OpcValue::Float(f_u64);
+        let res_u64 = u64::try_from(val_f64_u64);
+        assert!(
+            res_u64.is_err(),
+            "Float exceeding u64 precision should return error, got {:?}",
+            res_u64
+        );
     }
 }

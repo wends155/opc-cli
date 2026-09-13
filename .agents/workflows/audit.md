@@ -188,26 +188,13 @@ Re-run the project's standard verification pipeline and confirm zero-exit:
 >
 > All three must exit 0.
 
-**Browser-Based Validation** *(when chrome-devtools-mcp is available)*:
+**Browser-Based Validation** *(Antigravity v2 only)*: When the browser validation
+tool is available (detected during /toolcheck), run automated visual checks:
+- Viewport responsiveness (desktop, tablet, mobile breakpoints)
+- WCAG contrast ratio compliance (AA minimum)
+- Interactive element accessibility (focus indicators, ARIA labels)
 
-> 📘 **Skill:** [`browser-smoke-test`](.gemini/skills/browser-smoke-test/SKILL.md) — WASM boot verification and console error scanning
-
-When `chrome-devtools-mcp` is detected (via `/toolcheck` Session Readiness Report):
-- Invoke the `browser-smoke-test` skill to verify WASM boot and zero console panics.
-- Optionally invoke `browser-visual-audit` skill with **diff mode enabled** to compare viewport screenshots against committed baselines in `tests/visual_baselines/`. Report delta percentages as advisory findings. Visual regressions > 0.1% should be noted in the audit report but do not constitute a blocking failure.
-- Optionally invoke `browser-e2e-canvas` skill for interactive canvas verification, **including theme toggle regression test**.
-
-If chrome-devtools-mcp is NOT available, skip this section. It is advisory, not blocking.
-
-**Narsil Code Intelligence** *(when Narsil MCP is available)*:
-
-When Narsil MCP is detected (via `/toolcheck` Session Readiness Report):
-- Run `find_dead_code` — expect 0 dead exports (or documented exceptions)
-- Run `get_complexity` on changed files — flag functions exceeding complexity 15
-- Run `find_unused_exports` — expect 0 unintentional public exports
-
-If Narsil MCP is NOT available, skip this section. It is advisory, not blocking.
-
+If browser validation is NOT available, skip this row. It is advisory, not blocking.
 
 ### 4. Audit Report
 

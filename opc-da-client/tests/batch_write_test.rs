@@ -20,7 +20,7 @@ async fn test_opc_provider_batch_write_atomic() {
 
     let provider: &dyn OpcProvider = &client;
     let results = provider
-        .write_tag_values("Mock.Server.1", &writes)
+        .write_tag_batch("Mock.Server.1", writes.into())
         .await
         .expect("batch write should succeed");
 
@@ -33,6 +33,6 @@ async fn test_opc_provider_batch_write_atomic() {
     assert_eq!(
         state.add_group_count.load(Ordering::Relaxed),
         1,
-        "write_tag_values must dispatch a single atomic batch write group, not N individual groups"
+        "write_tag_batch must dispatch a single atomic batch write group, not N individual groups"
     );
 }

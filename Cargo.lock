@@ -608,7 +608,6 @@ name = "opc-da-client"
 version = "0.2.0"
 dependencies = [
  "async-trait",
- "chrono",
  "mockall",
  "thiserror 2.0.18",
  "tokio",

@@ -4,7 +4,7 @@ use crate::com::connector::traits::ItemWrite;
 use crate::com::connector::{ConnectedGroup, ConnectedServer};
 use crate::errors::{OpcError, OpcOperation, OpcResult};
 use crate::log_opc_err;
-use crate::types::{OpcValue, ServerIdentifier, WriteResult};
+use crate::types::{OpcValue, ServerIdentifier, WriteBatch, WriteResult};
 
 /// Executes synchronous batch writing across multiple tags in a single atomic COM group, returning
 /// a list of structured [`WriteResult`]s preserving the original index ordering.
@@ -18,7 +18,7 @@ use crate::types::{OpcValue, ServerIdentifier, WriteResult};
 #[allow(clippy::too_many_lines)]
 pub fn handle_write_batch<S: ConnectedServer>(
     server_id: &ServerIdentifier,
-    writes: &[(String, OpcValue)],
+    writes: &WriteBatch,
     opc_server: &S,
 ) -> OpcResult<Vec<WriteResult>> {
     if writes.is_empty() {
@@ -34,7 +34,8 @@ pub fn handle_write_batch<S: ConnectedServer>(
     );
     let start = std::time::Instant::now();
 
-    let tag_names: Vec<&str> = writes.iter().map(|(t, _)| t.as_str()).collect();
+    let items: Vec<(&str, &OpcValue)> = writes.iter().collect();
+    let tag_names: Vec<&str> = items.iter().map(|(t, _)| *t).collect();
     let reg = crate::com::worker::register_item_group(
         opc_server,
         server_id,
@@ -47,11 +48,11 @@ pub fn handle_write_batch<S: ConnectedServer>(
     let _group_guard = reg.group_guard;
     let results = reg.item_results;
 
-    let mut write_results: Vec<WriteResult> = writes
+    let mut write_results: Vec<WriteResult> = items
         .iter()
         .map(|(tag_id, _)| {
             WriteResult::failure(
-                tag_id,
+                *tag_id,
                 OpcError::InvalidState("Item rejected during add_items".into()),
             )
         })
@@ -61,7 +62,7 @@ pub fn handle_write_batch<S: ConnectedServer>(
     let mut valid_indices = Vec::with_capacity(results.len());
 
     for (idx, item_res) in results.iter().enumerate() {
-        let tag_id = &writes[idx].0;
+        let (tag_id, val) = items[idx];
         if let Some(ref e) = item_res.error {
             log_opc_err!(
                 e,
@@ -71,10 +72,7 @@ pub fn handle_write_batch<S: ConnectedServer>(
             );
             write_results[idx] = WriteResult::failure(tag_id, e.clone());
         } else {
-            valid_writes.push(ItemWrite::new(
-                item_res.server_handle,
-                writes[idx].1.clone(),
-            ));
+            valid_writes.push(ItemWrite::new(item_res.server_handle, val.clone()));
             valid_indices.push(idx);
         }
     }
@@ -90,7 +88,7 @@ pub fn handle_write_batch<S: ConnectedServer>(
         })?;
 
         for (res, &orig_idx) in server_write_results.into_iter().zip(&valid_indices) {
-            let tag_id = &writes[orig_idx].0;
+            let (tag_id, _) = items[orig_idx];
             write_results[orig_idx] = match res {
                 Ok(()) => WriteResult::success(tag_id),
                 Err(e) => {
@@ -130,7 +128,7 @@ pub fn handle_write<S: ConnectedServer>(
 ) -> OpcResult<WriteResult> {
     let mut results = handle_write_batch(
         server_id,
-        &[(tag_id.to_string(), value.clone())],
+        &WriteBatch::Single(tag_id.to_string(), value.clone()),
         opc_server,
     )?;
     results
@@ -143,7 +141,7 @@ mod tests {
     use super::*;
     use crate::com::connector::GroupItemDef;
     use crate::com::connector::mock::MockConnectedServer;
-    use crate::types::ServerItemHandle;
+    use crate::types::{IntoWriteBatch, ServerItemHandle};
 
     #[test]
     fn test_handle_write_success() {
@@ -214,7 +212,7 @@ mod tests {
             ("Tag3".to_string(), OpcValue::Int(30)),
         ];
 
-        let results = handle_write_batch(&server_id, &writes, &server)
+        let results = handle_write_batch(&server_id, &writes.into_write_batch(), &server)
             .expect("batch write must return results");
         assert_eq!(results.len(), 3);
 

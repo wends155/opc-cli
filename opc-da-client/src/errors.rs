@@ -65,6 +65,15 @@ pub enum OpcError {
     #[error("Operation timed out after {0:?}")]
     Timeout(Duration),
 
+    /// Integer conversion error (e.g. out of range).
+    #[error("Integer conversion failed: {source}")]
+    IntConversion {
+        /// The underlying conversion error.
+        #[from]
+        #[source]
+        source: std::num::TryFromIntError,
+    },
+
     /// Catch-all for unexpected internal failures.
     #[error("Internal error: {0}")]
     Internal(String),
@@ -73,12 +82,6 @@ pub enum OpcError {
 impl From<tokio::task::JoinError> for OpcError {
     fn from(err: tokio::task::JoinError) -> Self {
         Self::Internal(format!("Async task join failed: {err}"))
-    }
-}
-
-impl From<std::num::TryFromIntError> for OpcError {
-    fn from(err: std::num::TryFromIntError) -> Self {
-        Self::Conversion(format!("Integer conversion error: {err}"))
     }
 }
 
@@ -537,5 +540,15 @@ mod tests {
         let hr = windows::core::HRESULT(0x8000_4005_u32.cast_signed()); // E_FAIL
         let com_err: OpcError = hr.into();
         assert!(matches!(com_err, OpcError::Com { .. }));
+    }
+
+    #[test]
+    fn test_opcerror_clone_partialeq() {
+        let err = OpcError::Internal("test".into());
+        let cloned = err.clone();
+        assert_eq!(err, cloned);
+
+        let conv_err = OpcError::Conversion("conv error".into());
+        assert_ne!(err, conv_err);
     }
 }

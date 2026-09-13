@@ -11,6 +11,7 @@ pub mod handles;
 pub mod quality;
 pub mod server;
 pub mod value;
+pub mod write_batch;
 
 #[cfg(test)]
 mod tests;
@@ -23,3 +24,4 @@ pub use handles::*;
 pub use quality::*;
 pub use server::*;
 pub use value::*;
+pub use write_batch::*;

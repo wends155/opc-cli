@@ -171,13 +171,13 @@ opc-cli/
 - **Mock Availability**: N/A (pure domain types).
 
 ### `opc-da-client::errors` (Domain Error Hierarchy)
-- **Owns**: Canonical `OpcError` enum across 8 structured variants: `Com`, `Connection`, `Server`, `Conversion`, `InvalidState`, `NotImplemented`, `Timeout(Duration)`, and `Internal`. Provides `is_connection_error`, `friendly_hint`, `OpcOperation`, and `log_opc_err!`.
+- **Owns**: Canonical `OpcError` enum across 9 structured variants: `Com`, `Connection`, `Server`, `Conversion`, `IntConversion`, `InvalidState`, `NotImplemented`, `Timeout(Duration)`, and `Internal`. Provides `is_connection_error`, `friendly_hint`, `OpcOperation`, and `log_opc_err!`.
 - **Does NOT Own**: UI error formatting or transport retries.
 - **Trait Interfaces**: `std::error::Error`, `thiserror`.
 - **Mock Availability**: N/A (pure error definitions).
 
 ### `opc-da-client::com::client` (Public Client Implementation)
-- **Owns**: Public concrete `OpcDaClient<C, State>` struct implementing `OpcProvider`, fluent builder `OpcDaClientBuilder` (`builder()`), typestate transitions (`bind`, `bind_remote`, `unbind`), eager connection constructors (`connect`, `connect_remote`, `connect_eager`), inherent async readers and writers (`read_tag_values`, `read_tag_value`, `read_f64`, `read_i32`, `read_bool`, `read_string`, `write`, `write_batch`, `browse`), remote server discovery (`list_servers_on`), Layer 2 subscription polling stream (`subscribe` with zero-allocation shareable batch clones), request dispatch channel management (`mpsc::Sender<ComRequest>`), and public constructors (`OpcDaClient::new`).
+- **Owns**: Public concrete `OpcDaClient<C, State>` struct implementing `OpcProvider`, fluent builder `OpcDaClientBuilder` (`builder()`), typestate transitions (`bind`, `bind_remote`, `unbind`), eager connection constructors (`connect`, `connect_remote`, `connect_eager`), inherent async readers and writers sealed to `Bound` (`read_tag_values`, `read_tag_value`, `read_f64`, `read_i32`, `read_bool`, `read_string`, `write`, `write_batch`, `browse`, `subscribe`), remote server discovery (`list_servers_on`), Layer 2 subscription polling stream (`subscribe` with zero-allocation shareable batch clones), request dispatch channel management (`mpsc::Sender<ComRequest>`), and public constructors (`OpcDaClient::new`).
 - **Does NOT Own**: In-apartment Win32 COM operations, unmanaged memory pointers, or direct FFI calls (all delegated across channels to `ComWorker`).
 - **Trait Interfaces**: Implements `OpcProvider`, `ServerDiscovery`, `TagBrowser`, `TagReader`, `TagWriter`.
 - **Mock Availability**: `MockOpcDaClient` alias available under `all(feature = "test-support", feature = "opc-da-backend")`.
@@ -320,7 +320,7 @@ The project uses a unified dual-interface build system:
 
 ## 8. Error Handling Strategy
 
-- **Library Domain Errors**: `OpcError` (defined in `opc-da-client`) handles domain failures via `thiserror` across 8 structured variants: `Com`, `Connection`, `Server`, `Conversion`, `InvalidState`, `NotImplemented`, `Timeout(Duration)`, and `Internal`.
+- **Library Domain Errors**: `OpcError` (defined in `opc-da-client`) handles domain failures via `thiserror` across 9 structured variants: `Com`, `Connection`, `Server`, `Conversion`, `IntConversion`, `InvalidState`, `NotImplemented`, `Timeout(Duration)`, and `Internal`.
 - **Connection Failure Factory & Predicates**: `OpcError::connection_failed(source)` constructs actionable connection failures, while `OpcError::is_connection_error(&self)` identifies recoverable transport/RPC dropouts.
 - **Friendly Hint Engine**: `OpcError::friendly_hint(&self)` and `raw::hresult::friendly_hresult_hint` map technical HRESULT codes (e.g. `0x800706BA` RPC Unavailable, `0x80070005` DCOM Access Denied) to actionable plain-English text.
 - **Coherent Tag Outcomes (`TagValue`)**: `TagValue` encapsulates reading outcomes as `Result<OpcValue, OpcError>`, accessed via `.outcome()`, `.value()`, and `.error()` accessors, completely eradicating invalid states (such as simultaneous `Some(val)` and `Some(err)` or both `None`).

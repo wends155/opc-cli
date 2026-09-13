@@ -187,25 +187,26 @@ fn variant_to_string_bounded(variant: &VARIANT, depth: usize) -> String {
     }
 }
 
-/// Convert an OLE Automation date (f64) to a local datetime string.
+/// Convert an OLE Automation date (f64) to a formatted datetime string in UTC.
 /// OLE date epoch is 1899-12-30; integer part = days, fraction = time-of-day.
 #[allow(
     clippy::cast_precision_loss,
     clippy::cast_possible_truncation,
-    clippy::cast_possible_wrap
+    clippy::cast_possible_wrap,
+    clippy::many_single_char_names
 )]
 fn ole_date_to_string(ole_date: f64) -> String {
+    if !ole_date.is_finite() {
+        return format!("{ole_date:.6}");
+    }
     // OLE epoch: 1899-12-30 00:00:00
     const OLE_EPOCH_DAYS: i64 = 25569; // days from 1899-12-30 to 1970-01-01
-    let total_secs = (ole_date - OLE_EPOCH_DAYS as f64) * 86400.0;
-    chrono::DateTime::from_timestamp(total_secs as i64, 0).map_or_else(
-        || format!("{ole_date:.6}"),
-        |utc| {
-            utc.with_timezone(&chrono::Local)
-                .format("%Y-%m-%d %H:%M:%S")
-                .to_string()
-        },
-    )
+    let total_secs = ((ole_date - OLE_EPOCH_DAYS as f64) * 86400.0).round() as i64;
+    let (y, m, d, h, min, s) = crate::types::value::secs_to_civil(total_secs);
+    if !(0..=9999).contains(&y) {
+        return format!("{ole_date:.6}");
+    }
+    format!("{y:04}-{m:02}-{d:02} {h:02}:{min:02}:{s:02}")
 }
 
 /// Extracts a scalar value from a COM [`VARIANT`] into [`OpcValue`] if the `vt` represents a scalar type.

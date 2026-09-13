@@ -22,7 +22,7 @@ See **[opc-da-client architecture.md](./opc-da-client/architecture.md)** for the
 - **Hierarchical Browsing**: Recursive exploration of complex server namespaces with cooperative cancellation and partial-result harvesting on timeout.
 - **Real-time Monitoring & Active Group Caching**: Live tag value updates with 1-second auto-refresh backed by active OPC group pooling (>75% lower DCOM RPC latency).
 - **Zero-Allocation Batch Reads & Typed Values**: Universal `IntoTags` tag batches and rich `TagValues` collection with generic typed extraction (`get_as<T>`), numeric getters (`get_f64`, `get_f32`, `get_i32`, `get_i64`, `get_u32`, `get_u64`, `get_bool`, `get_str`), and `TagResult` projection.
-- **Single & Batch Write Support**: Native atomic batch writes (`write_batch`, `write_tags`) and individual typed tag writes (`write`, `write_tag`).
+- **Single & Batch Write Support (`WriteBatch`)**: Native atomic zero-allocation batch writes (`write_batch`, `write_tags`) via polymorphic `WriteBatch` (`Single`, `Shared`, `Owned`) and individual typed tag writes (`write`, `write_tag`).
 - **Streaming Subscriptions**: Non-blocking Layer 2 subscription streams yielding `TagValues` updates over Tokio `mpsc` channels with automatic drop cancellation.
 - **Search & Filter**: Substring search with `Tab`/`Shift+Tab` cycling through matches.
 - **Rich Error Hints**: Human-readable explanations for cryptic Windows COM/DCOM HRESULT codes.

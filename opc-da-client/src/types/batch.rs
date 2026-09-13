@@ -82,10 +82,7 @@ impl TagBatch {
         match self {
             Self::Static(slice) => Self::Static(slice),
             Self::StaticSingle(s) => Self::StaticSingle(s),
-            Self::InlineSingle(buf, len) => {
-                let s = std::str::from_utf8(&buf[..len as usize]).unwrap_or_default();
-                Self::Shared(Arc::from(vec![s.to_string()].into_boxed_slice()))
-            }
+            Self::InlineSingle(buf, len) => Self::InlineSingle(buf, len),
             Self::Shared(slice) => Self::Shared(slice),
             Self::Owned(vec) => Self::Shared(Arc::from(vec.into_boxed_slice())),
             Self::OwnedSingle(s) => Self::Shared(Arc::from(vec![s].into_boxed_slice())),

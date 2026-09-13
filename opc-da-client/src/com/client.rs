@@ -18,7 +18,8 @@ use crate::provider::{
     WriteResult,
 };
 use crate::types::{
-    IntoTags, OpcServerEndpoint, OpcServerInfo, ServerIdentifier, TagBatch, TagValues,
+    IntoTags, IntoWriteBatch, OpcServerEndpoint, OpcServerInfo, ServerIdentifier, TagBatch,
+    TagValues,
 };
 use async_trait::async_trait;
 use std::sync::Arc;
@@ -578,86 +579,6 @@ impl<C: ServerConnector + 'static> OpcDaClient<C, Bound> {
         )
     }
 
-    /// Reads a single tag and returns its full [`TagValue`].
-    ///
-    /// # Arguments
-    ///
-    /// * `tag` - Tag identifier string to read.
-    ///
-    /// # Returns
-    ///
-    /// A [`TagValue`] containing the read outcome, quality, and timestamp.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`OpcError`] on transport, timeout, or COM failure.
-    pub async fn read_tag(&self, tag: &str) -> OpcResult<TagValue> {
-        self.read_tag_value(tag).await
-    }
-
-    /// Reads a batch of tags and returns their [`TagValues`].
-    ///
-    /// # Arguments
-    ///
-    /// * `tags` - A collection of tags convertible via [`IntoTags`].
-    ///
-    /// # Returns
-    ///
-    /// A [`TagValues`] collection holding results for all requested tags.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`OpcError`] on transport, timeout, or COM failure.
-    pub async fn read_tags(&self, tags: impl IntoTags) -> OpcResult<TagValues> {
-        self.read_tag_values(tags).await
-    }
-
-    /// Writes a typed value to a tag on the bound server.
-    ///
-    /// # Arguments
-    ///
-    /// * `tag` - Tag identifier string to write to.
-    /// * `value` - The value to write, convertible into [`OpcValue`].
-    ///
-    /// # Returns
-    ///
-    /// A [`WriteResult`] indicating success or write failure.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`OpcError`] on transport, timeout, or COM failure.
-    pub async fn write_tag(&self, tag: &str, value: impl Into<OpcValue>) -> OpcResult<WriteResult> {
-        self.write(tag, value).await
-    }
-
-    /// Writes a batch of tag-value pairs to the bound server.
-    ///
-    /// # Arguments
-    ///
-    /// * `writes` - A vector of `(tag_name, opc_value)` pairs.
-    ///
-    /// # Returns
-    ///
-    /// A vector of [`WriteResult`] outcomes matching the input order.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`OpcError`] on transport, timeout, or COM failure.
-    pub async fn write_tags(&self, writes: Vec<(String, OpcValue)>) -> OpcResult<Vec<WriteResult>> {
-        self.write_batch(writes).await
-    }
-}
-
-impl<C: ServerConnector + 'static, State: Send + Sync + 'static> OpcDaClient<C, State> {
-    /// Returns the configured operation timeout, if any.
-    ///
-    /// # Returns
-    ///
-    /// `Some(Duration)` configured on this client instance, or `None` if default is used.
-    #[must_use]
-    pub fn timeout(&self) -> Option<std::time::Duration> {
-        self.timeout
-    }
     /// Eagerly verifies active connectivity and reachability to the configured OPC DA server.
     ///
     /// Dispatches an initial probe request to the COM worker thread to verify that
@@ -669,27 +590,11 @@ impl<C: ServerConnector + 'static, State: Send + Sync + 'static> OpcDaClient<C, 
     ///
     /// # Errors
     ///
-    /// Returns [`OpcError::InvalidState`] if the client is not bound to a server endpoint.
     /// Returns [`OpcError::Connection`] if connecting or communicating with the server fails.
+    #[tracing::instrument(level = "info", skip(self), err)]
     pub async fn connect_eager(&self) -> OpcResult<()> {
         let _ = self.read_tag_values(TagBatch::default()).await?;
         Ok(())
-    }
-
-    /// Dispatches a request to the COM worker thread, applying timeout if configured.
-    pub(crate) async fn dispatch_request<F, R>(&self, req_builder: F) -> OpcResult<R>
-    where
-        F: FnOnce(tokio::sync::oneshot::Sender<OpcResult<R>>) -> ComRequest,
-    {
-        let fut = self.worker.send_request(req_builder);
-        if let Some(dur) = self.timeout {
-            match tokio::time::timeout(dur, fut).await {
-                Ok(res) => res,
-                Err(_) => Err(OpcError::Timeout(dur)),
-            }
-        } else {
-            fut.await
-        }
     }
 
     /// Asynchronously reads current values, quality, and timestamps for a batch of tags.
@@ -707,8 +612,7 @@ impl<C: ServerConnector + 'static, State: Send + Sync + 'static> OpcDaClient<C, 
     ///
     /// # Errors
     ///
-    /// * [`OpcError::InvalidState`] - Client is not bound to a server.
-    /// * [`OpcError::Connection`] - DCOM connection failure or server disconnect.
+    /// Returns [`OpcError::Connection`] if DCOM communication fails.
     ///
     /// # Examples
     ///
@@ -724,12 +628,7 @@ impl<C: ServerConnector + 'static, State: Send + Sync + 'static> OpcDaClient<C, 
     /// ```
     #[tracing::instrument(level = "info", skip(self, tags), err)]
     pub async fn read_tag_values(&self, tags: impl IntoTags) -> OpcResult<TagValues> {
-        let endpoint = self.endpoint.as_ref().ok_or_else(|| {
-            OpcError::InvalidState(
-                "Client is not bound to a server. Use OpcDaClient::builder().server(...) or OpcProvider::read_tag_values"
-                    .into(),
-            )
-        })?.clone();
+        let endpoint = self.endpoint().clone();
         let batch = tags.into_tag_batch();
         self.dispatch_request(|reply| ComRequest::ReadTagValues {
             endpoint,
@@ -775,6 +674,7 @@ impl<C: ServerConnector + 'static, State: Send + Sync + 'static> OpcDaClient<C, 
     /// # Ok(())
     /// # }
     /// ```
+    #[tracing::instrument(level = "info", skip(self), err)]
     pub async fn read_f64(&self, tag: &str) -> OpcResult<f64> {
         self.read_single_typed(tag, TagValues::get_f64).await
     }
@@ -805,6 +705,7 @@ impl<C: ServerConnector + 'static, State: Send + Sync + 'static> OpcDaClient<C, 
     /// # Ok(())
     /// # }
     /// ```
+    #[tracing::instrument(level = "info", skip(self), err)]
     pub async fn read_i32(&self, tag: &str) -> OpcResult<i32> {
         self.read_single_typed(tag, TagValues::get_i32).await
     }
@@ -835,6 +736,7 @@ impl<C: ServerConnector + 'static, State: Send + Sync + 'static> OpcDaClient<C, 
     /// # Ok(())
     /// # }
     /// ```
+    #[tracing::instrument(level = "info", skip(self), err)]
     pub async fn read_bool(&self, tag: &str) -> OpcResult<bool> {
         self.read_single_typed(tag, TagValues::get_bool).await
     }
@@ -865,6 +767,7 @@ impl<C: ServerConnector + 'static, State: Send + Sync + 'static> OpcDaClient<C, 
     /// # Ok(())
     /// # }
     /// ```
+    #[tracing::instrument(level = "info", skip(self), err)]
     pub async fn read_string(&self, tag: &str) -> OpcResult<String> {
         self.read_single_typed(tag, |v, t| v.get_str(t).map(ToString::to_string))
             .await
@@ -882,13 +785,50 @@ impl<C: ServerConnector + 'static, State: Send + Sync + 'static> OpcDaClient<C, 
     ///
     /// # Errors
     ///
-    /// Returns [`OpcError`] if the read fails or the client is not bound to a server.
+    /// Returns [`OpcError`] if the read fails.
+    #[tracing::instrument(level = "info", skip(self), err)]
     pub async fn read_tag_value(&self, tag: &str) -> OpcResult<TagValue> {
         let batch = TagBatch::from_str_lenient(tag);
         let values = self.read_tag_values(batch).await?;
-        values.into_vec().pop().ok_or_else(|| {
+        values.into_iter().next().ok_or_else(|| {
             OpcError::Internal(format!("Tag '{tag}' returned no response from server"))
         })
+    }
+
+    /// Reads a single tag and returns its full [`TagValue`].
+    ///
+    /// # Arguments
+    ///
+    /// * `tag` - Tag identifier string to read.
+    ///
+    /// # Returns
+    ///
+    /// A [`TagValue`] containing the read outcome, quality, and timestamp.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`OpcError`] on transport, timeout, or COM failure.
+    #[tracing::instrument(level = "info", skip(self), err)]
+    pub async fn read_tag(&self, tag: &str) -> OpcResult<TagValue> {
+        self.read_tag_value(tag).await
+    }
+
+    /// Reads a batch of tags and returns their [`TagValues`].
+    ///
+    /// # Arguments
+    ///
+    /// * `tags` - A collection of tags convertible via [`IntoTags`].
+    ///
+    /// # Returns
+    ///
+    /// A [`TagValues`] collection holding results for all requested tags.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`OpcError`] on transport, timeout, or COM failure.
+    #[tracing::instrument(level = "info", skip(self, tags), err)]
+    pub async fn read_tags(&self, tags: impl IntoTags) -> OpcResult<TagValues> {
+        self.read_tag_values(tags).await
     }
 
     /// Asynchronously writes a typed value to a tag.
@@ -904,8 +844,7 @@ impl<C: ServerConnector + 'static, State: Send + Sync + 'static> OpcDaClient<C, 
     ///
     /// # Errors
     ///
-    /// * [`OpcError::InvalidState`] - Client is not bound to a server.
-    /// * [`OpcError::Connection`] - DCOM connection failure.
+    /// Returns [`OpcError`] on transport, timeout, or COM failure.
     ///
     /// # Examples
     ///
@@ -921,11 +860,7 @@ impl<C: ServerConnector + 'static, State: Send + Sync + 'static> OpcDaClient<C, 
     /// ```
     #[tracing::instrument(level = "info", skip(self, value), err)]
     pub async fn write(&self, tag: &str, value: impl Into<OpcValue>) -> OpcResult<WriteResult> {
-        let endpoint = self
-            .endpoint
-            .as_ref()
-            .ok_or_else(|| OpcError::InvalidState("Client is not bound to a server".into()))?
-            .clone();
+        let endpoint = self.endpoint().clone();
         self.dispatch_request(|reply| ComRequest::WriteTagValue {
             endpoint,
             tag_id: tag.to_string(),
@@ -933,6 +868,25 @@ impl<C: ServerConnector + 'static, State: Send + Sync + 'static> OpcDaClient<C, 
             reply,
         })
         .await
+    }
+
+    /// Writes a typed value to a tag on the bound server.
+    ///
+    /// # Arguments
+    ///
+    /// * `tag` - Tag identifier string to write to.
+    /// * `value` - The value to write, convertible into [`OpcValue`].
+    ///
+    /// # Returns
+    ///
+    /// A [`WriteResult`] indicating success or write failure.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`OpcError`] on transport, timeout, or COM failure.
+    #[tracing::instrument(level = "info", skip(self, value), err)]
+    pub async fn write_tag(&self, tag: &str, value: impl Into<OpcValue>) -> OpcResult<WriteResult> {
+        self.write(tag, value).await
     }
 
     /// Asynchronously writes a batch of tag-value pairs in a single operation.
@@ -949,8 +903,7 @@ impl<C: ServerConnector + 'static, State: Send + Sync + 'static> OpcDaClient<C, 
     ///
     /// # Errors
     ///
-    /// * [`OpcError::InvalidState`] - Client is not bound to a server.
-    /// * [`OpcError::Connection`] - DCOM connection failure.
+    /// Returns [`OpcError`] on transport, timeout, or COM failure.
     ///
     /// # Examples
     ///
@@ -973,27 +926,31 @@ impl<C: ServerConnector + 'static, State: Send + Sync + 'static> OpcDaClient<C, 
         &self,
         writes: Vec<(String, OpcValue)>,
     ) -> OpcResult<Vec<WriteResult>> {
-        let endpoint = self
-            .endpoint
-            .as_ref()
-            .ok_or_else(|| OpcError::InvalidState("Client is not bound to a server".into()))?
-            .clone();
+        let endpoint = self.endpoint().clone();
         self.dispatch_request(|reply| ComRequest::WriteTagValues {
             endpoint,
-            writes,
+            writes: writes.into_write_batch(),
             reply,
         })
         .await
     }
 
-    /// Lists available OPC servers on a remote (or local) host.
+    /// Writes a batch of tag-value pairs to the bound server.
     ///
-    /// # Deprecated
+    /// # Arguments
     ///
-    /// Prefer calling [`ServerDiscovery::list_servers`] or [`crate::provider::OpcProvider::list_servers`].
-    #[deprecated(since = "0.2.1", note = "use ServerDiscovery::list_servers instead")]
-    pub async fn list_servers_on(&self, host: &str) -> OpcResult<Vec<String>> {
-        self.list_servers(host).await
+    /// * `writes` - A vector of `(tag_name, opc_value)` pairs.
+    ///
+    /// # Returns
+    ///
+    /// A vector of [`WriteResult`] outcomes matching the input order.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`OpcError`] on transport, timeout, or COM failure.
+    #[tracing::instrument(level = "info", skip(self, writes), err)]
+    pub async fn write_tags(&self, writes: Vec<(String, OpcValue)>) -> OpcResult<Vec<WriteResult>> {
+        self.write_batch(writes).await
     }
 
     /// Subscribes to a stream of periodic tag value reads, returning an asynchronous [`tokio::sync::mpsc::Receiver`].
@@ -1026,6 +983,7 @@ impl<C: ServerConnector + 'static, State: Send + Sync + 'static> OpcDaClient<C, 
     /// # Ok(())
     /// # }
     /// ```
+    #[tracing::instrument(level = "info", skip(self, tags))]
     pub fn subscribe(
         &self,
         tags: impl IntoTags,
@@ -1042,6 +1000,9 @@ impl<C: ServerConnector + 'static, State: Send + Sync + 'static> OpcDaClient<C, 
 
             loop {
                 timer.tick().await;
+                if tx.is_closed() {
+                    break;
+                }
                 match client.read_tag_values(tags_batch.clone()).await {
                     Ok(values) => {
                         if tx.send(values).await.is_err() {
@@ -1050,7 +1011,7 @@ impl<C: ServerConnector + 'static, State: Send + Sync + 'static> OpcDaClient<C, 
                     }
                     Err(err) => {
                         tracing::warn!(error = ?err, "Subscription polling tick failed");
-                        if tx.is_closed() {
+                        if tx.is_closed() || err.is_connection_error() {
                             break;
                         }
                     }
@@ -1073,16 +1034,10 @@ impl<C: ServerConnector + 'static, State: Send + Sync + 'static> OpcDaClient<C, 
     ///
     /// # Errors
     ///
-    /// * [`OpcError::InvalidState`] - Client is not bound to a server.
-    /// * [`OpcError::Connection`] - DCOM connection failure.
+    /// Returns [`OpcError`] on transport, timeout, or COM failure.
     #[tracing::instrument(level = "info", skip(self, collector), err)]
     pub async fn browse(&self, collector: TagCollector) -> OpcResult<Vec<String>> {
-        let endpoint = self.endpoint.as_ref().ok_or_else(|| {
-            OpcError::InvalidState(
-                "Client is not bound to a server. Use OpcDaClient::builder().server(...) or OpcProvider::browse_tags"
-                    .into(),
-            )
-        })?.clone();
+        let endpoint = self.endpoint().clone();
         self.dispatch_request(|reply| ComRequest::BrowseTags {
             endpoint,
             collector,
@@ -1090,18 +1045,59 @@ impl<C: ServerConnector + 'static, State: Send + Sync + 'static> OpcDaClient<C, 
         })
         .await
     }
+}
+
+impl<C: ServerConnector + 'static, State: Send + Sync + 'static> OpcDaClient<C, State> {
+    /// Returns the configured operation timeout, if any.
+    ///
+    /// # Returns
+    ///
+    /// `Some(Duration)` configured on this client instance, or `None` if default is used.
+    #[must_use]
+    pub fn timeout(&self) -> Option<std::time::Duration> {
+        self.timeout
+    }
+
+    /// Dispatches a request to the COM worker thread, applying timeout if configured.
+    pub(crate) async fn dispatch_request<F, R>(&self, req_builder: F) -> OpcResult<R>
+    where
+        F: FnOnce(tokio::sync::oneshot::Sender<OpcResult<R>>) -> ComRequest,
+    {
+        let fut = self.worker.send_request(req_builder);
+        if let Some(dur) = self.timeout {
+            match tokio::time::timeout(dur, fut).await {
+                Ok(res) => res,
+                Err(_) => Err(OpcError::Timeout(dur)),
+            }
+        } else {
+            fut.await
+        }
+    }
+
+    /// Lists available OPC servers on a remote (or local) host.
+    ///
+    /// # Deprecated
+    ///
+    /// Prefer calling [ServerDiscovery::list_servers] or [crate::provider::OpcProvider::list_servers].
+    #[deprecated(since = "0.2.1", note = "use ServerDiscovery::list_servers instead")]
+    pub async fn list_servers_on(&self, host: &str) -> OpcResult<Vec<String>> {
+        self.list_servers(host).await
+    }
 
     /// Lists available OPC DA servers registered on the specified host.
+    #[tracing::instrument(level = "info", skip(self), err)]
     pub async fn list_servers(&self, host: &str) -> OpcResult<Vec<String>> {
         ServerDiscovery::list_servers(self, host).await
     }
 
     /// Lists available OPC DA servers with rich metadata registered on the specified host.
+    #[tracing::instrument(level = "info", skip(self), err)]
     pub async fn list_server_details(&self, host: &str) -> OpcResult<Vec<OpcServerInfo>> {
         ServerDiscovery::list_server_details(self, host).await
     }
 
     /// Discovers available tag identifiers on a specified target server namespace.
+    #[tracing::instrument(level = "info", skip(self, collector), err)]
     pub async fn browse_tags(
         &self,
         server: &str,
@@ -1111,6 +1107,7 @@ impl<C: ServerConnector + 'static, State: Send + Sync + 'static> OpcDaClient<C, 
     }
 
     /// Asynchronously writes a typed value to a tag on the specified target server.
+    #[tracing::instrument(level = "info", skip(self, value), err)]
     pub async fn write_tag_value(
         &self,
         server: &str,
@@ -1120,7 +1117,19 @@ impl<C: ServerConnector + 'static, State: Send + Sync + 'static> OpcDaClient<C, 
         TagWriter::write_tag_value(self, server, tag_id, value).await
     }
 
+    /// Asynchronously writes multiple tag values in a batch to the specified target server using [crate::types::WriteBatch].
+    #[tracing::instrument(level = "info", skip(self, writes), err)]
+    pub async fn write_tag_batch(
+        &self,
+        server: &str,
+        writes: crate::types::WriteBatch,
+    ) -> OpcResult<Vec<WriteResult>> {
+        TagWriter::write_tag_batch(self, server, writes).await
+    }
+
     /// Asynchronously writes multiple tag values in a batch to the specified target server.
+    #[deprecated(since = "0.2.0", note = "Use write_tag_batch instead")]
+    #[allow(deprecated)]
     pub async fn write_tag_values(
         &self,
         server: &str,
@@ -1197,7 +1206,7 @@ impl<C: ServerConnector + 'static, State: Send + Sync + 'static> TagReader
                 reply,
             })
             .await?;
-        values.into_vec().pop().ok_or_else(|| {
+        values.into_iter().next().ok_or_else(|| {
             OpcError::Internal(format!("Tag '{tag_id}' returned no response from server"))
         })
     }
@@ -1226,19 +1235,29 @@ impl<C: ServerConnector + 'static, State: Send + Sync + 'static> TagWriter
     }
 
     #[tracing::instrument(level = "info", skip(self, writes), fields(write_count = writes.len()), err)]
+    async fn write_tag_batch(
+        &self,
+        server: &str,
+        writes: crate::types::WriteBatch,
+    ) -> OpcResult<Vec<WriteResult>> {
+        let endpoint = crate::types::OpcServerEndpoint::from(server);
+        self.dispatch_request(|reply| ComRequest::WriteTagValues {
+            endpoint,
+            writes,
+            reply,
+        })
+        .await
+    }
+
+    #[allow(deprecated)]
+    #[tracing::instrument(level = "info", skip(self, writes), fields(write_count = writes.len()), err)]
     async fn write_tag_values(
         &self,
         server: &str,
         writes: &[(String, OpcValue)],
     ) -> OpcResult<Vec<WriteResult>> {
-        let endpoint = crate::types::OpcServerEndpoint::from(server);
-        let writes_vec = writes.to_vec();
-        self.dispatch_request(|reply| ComRequest::WriteTagValues {
-            endpoint,
-            writes: writes_vec,
-            reply,
-        })
-        .await
+        self.write_tag_batch(server, writes.into_write_batch())
+            .await
     }
 }
 
@@ -1325,7 +1344,7 @@ mod tests {
             .server("Mock.Server.1")
             .timeout(std::time::Duration::from_millis(50))
             .with_connector(connector)
-            .build()
+            .build_bound()
             .unwrap();
 
         assert_eq!(client.timeout(), Some(std::time::Duration::from_millis(50)));
@@ -1403,7 +1422,7 @@ mod tests {
         let client = OpcDaClient::builder()
             .server("Matrikon.OPC.Simulation.1")
             .with_connector(connector)
-            .build()
+            .build_bound()
             .expect("client build");
 
         // Test inherent read_tag_values with static array
@@ -1465,7 +1484,7 @@ mod tests {
         let client = OpcDaClient::builder()
             .server("Matrikon.OPC.Simulation.1")
             .with_connector(connector)
-            .build()
+            .build_bound()
             .expect("client build");
 
         let mut rx = client.subscribe(["Random.Int4"], std::time::Duration::from_millis(20));
@@ -1486,7 +1505,7 @@ mod tests {
         let client = OpcDaClient::builder()
             .server("Matrikon.OPC.Simulation.1")
             .with_connector(connector)
-            .build()
+            .build_bound()
             .expect("client build");
 
         let rx = client.subscribe(["Random.Int4"], std::time::Duration::from_millis(10));
@@ -1500,22 +1519,20 @@ mod tests {
         let state = std::sync::Arc::new(crate::com::connector::mock::MockState::default());
         let connector = MockServerConnector::with_state(state.clone());
 
-        let client = OpcDaClient::new(connector).unwrap();
+        let client = OpcDaClient::new(connector.clone()).unwrap();
 
-        // Calling connect_eager on unbound client fails with InvalidState
-        assert!(matches!(
-            client.connect_eager().await,
-            Err(OpcError::InvalidState(_))
-        ));
+        // Binding to a server endpoint transitions to Bound, enabling connect_eager
+        let bound = client.bind("Matrikon.OPC.Simulation.1");
+        assert!(bound.connect_eager().await.is_ok());
 
-        // Binding to a server endpoint succeeds locally
-        let bound = OpcDaClient::builder()
+        // Constructing via build_bound directly transitions to Bound
+        let bound_builder = OpcDaClient::builder()
             .server("Matrikon.OPC.Simulation.1")
             .with_connector(MockServerConnector::with_state(state.clone()))
-            .build()
+            .build_bound()
             .unwrap();
 
-        assert!(bound.connect_eager().await.is_ok());
+        assert!(bound_builder.connect_eager().await.is_ok());
     }
 
     #[tokio::test]

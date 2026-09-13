@@ -211,150 +211,17 @@ impl TagValue {
         }
     }
 
-    /// Returns a human-readable formatted local timestamp string (or `"N/A"` if missing).
+    /// Returns a human-readable formatted UTC timestamp string (or `"N/A"` if missing).
     ///
     /// For zero-allocation formatting into a formatter or stream, prefer using
     /// [`SystemTimeOptionExt::display`] or [`SystemTimeOptionExt::display_or`] on [`TagValue::timestamp`].
     ///
     /// # Returns
     ///
-    /// A [`String`] formatted as `"YYYY-MM-DD HH:MM:SS"` in local time, or `"N/A"` if missing or epoch.
+    /// A [`String`] formatted as `"YYYY-MM-DD HH:MM:SS"` in UTC, or `"N/A"` if missing or epoch.
     #[must_use]
     pub fn formatted_timestamp(&self) -> String {
         self.timestamp.display().to_string()
-    }
-
-    /// Converts this `TagValue` into a strongly-typed [`TagResult`].
-    ///
-    /// If an error is present or value is missing, returns `Err(TagFailure)`.
-    /// Otherwise returns `Ok(TagSuccess)`.
-    ///
-    /// # Returns
-    ///
-    /// A [`TagResult`] indicating success or failure.
-    pub fn into_result(self) -> TagResult {
-        match self.outcome {
-            Ok(val) => Ok(TagSuccess {
-                tag_id: self.tag_id,
-                value: val,
-                quality: self.quality,
-                timestamp: self.timestamp,
-            }),
-            Err(err) => Err(TagFailure {
-                tag_id: self.tag_id,
-                quality: self.quality,
-                error: err,
-            }),
-        }
-    }
-
-    /// Converts a reference to this `TagValue` into a [`TagResult`].
-    ///
-    /// # Returns
-    ///
-    /// A [`TagResult`] indicating success or failure.
-    pub fn to_result(&self) -> TagResult {
-        match &self.outcome {
-            Ok(val) => Ok(TagSuccess {
-                tag_id: self.tag_id.clone(),
-                value: val.clone(),
-                quality: self.quality,
-                timestamp: self.timestamp,
-            }),
-            Err(err) => Err(TagFailure {
-                tag_id: self.tag_id.clone(),
-                quality: self.quality,
-                error: err.clone(),
-            }),
-        }
-    }
-}
-
-/// A successful tag read outcome.
-#[derive(Debug, Clone, PartialEq)]
-pub struct TagSuccess {
-    /// The fully qualified tag identifier.
-    pub tag_id: String,
-    /// The decoded value.
-    pub value: OpcValue,
-    /// OPC quality status.
-    pub quality: OpcQuality,
-    /// Timestamp of the last value change (UTC-based), or `None` if unavailable.
-    pub timestamp: Option<std::time::SystemTime>,
-}
-
-impl TagSuccess {
-    /// Creates a new `TagSuccess`.
-    #[must_use]
-    pub fn new(
-        tag_id: impl Into<String>,
-        value: OpcValue,
-        quality: OpcQuality,
-        timestamp: Option<std::time::SystemTime>,
-    ) -> Self {
-        Self {
-            tag_id: tag_id.into(),
-            value,
-            quality,
-            timestamp,
-        }
-    }
-}
-
-/// A failed tag read outcome.
-#[derive(Debug, Clone, PartialEq)]
-pub struct TagFailure {
-    /// The fully qualified tag identifier.
-    pub tag_id: String,
-    /// OPC quality status associated with the failure.
-    pub quality: OpcQuality,
-    /// Underlying error explaining the read failure.
-    pub error: OpcError,
-}
-
-impl TagFailure {
-    /// Creates a new `TagFailure`.
-    #[must_use]
-    pub fn new(tag_id: impl Into<String>, quality: OpcQuality, error: OpcError) -> Self {
-        Self {
-            tag_id: tag_id.into(),
-            quality,
-            error,
-        }
-    }
-}
-
-/// Strongly-typed canonical result for an individual tag read operation.
-pub type TagResult = Result<TagSuccess, TagFailure>;
-
-impl From<TagSuccess> for TagValue {
-    fn from(s: TagSuccess) -> Self {
-        Self {
-            tag_id: s.tag_id,
-            outcome: Ok(s.value),
-            quality: s.quality,
-            timestamp: s.timestamp,
-        }
-    }
-}
-
-impl From<TagFailure> for TagValue {
-    fn from(f: TagFailure) -> Self {
-        Self {
-            tag_id: f.tag_id,
-            outcome: Err(f.error),
-            quality: f.quality,
-            timestamp: None,
-        }
-    }
-}
-
-impl From<TagResult> for TagValue {
-    fn from(res: TagResult) -> Self {
-        match res {
-            Ok(s) => s.into(),
-            Err(f) => f.into(),
-        }
     }
 }
 
@@ -617,8 +484,19 @@ impl TagValues {
     /// let values = TagValues::new(vec![TagValue::new("Sensor.Temp", Some(OpcValue::Float(98.6)), OpcQuality::GOOD, None)]);
     /// assert_eq!(values.get_f64("sensor.temp").unwrap(), 98.6);
     /// ```
+    #[allow(clippy::cast_precision_loss)]
     pub fn get_f64(&self, tag: &str) -> Result<f64, TagExtractError> {
-        self.get_as::<f64>(tag)
+        let val = self.get_value_checked(tag)?;
+        match val {
+            OpcValue::Float(f) => Ok(*f),
+            OpcValue::Int(i) => Ok(*i as f64),
+            OpcValue::UInt(u) => Ok(*u as f64),
+            _ => Err(TagExtractError::TypeMismatch {
+                tag: tag.to_string(),
+                value: val.to_string(),
+                expected: "f64",
+            }),
+        }
     }
 
     /// Extracts a 32-bit floating point value for the given tag,
@@ -647,8 +525,25 @@ impl TagValues {
     /// let values = TagValues::new(vec![TagValue::new("Sensor.Pres", Some(OpcValue::Float(14.7)), OpcQuality::GOOD, None)]);
     /// assert_eq!(values.get_f32("sensor.pres").unwrap(), 14.7f32);
     /// ```
+    #[allow(clippy::cast_precision_loss, clippy::cast_possible_truncation)]
     pub fn get_f32(&self, tag: &str) -> Result<f32, TagExtractError> {
-        self.get_as::<f32>(tag)
+        let val = self.get_value_checked(tag)?;
+        match val {
+            OpcValue::Float(f)
+                if f.is_nan()
+                    || f.is_infinite()
+                    || (*f >= f64::from(f32::MIN) && *f <= f64::from(f32::MAX)) =>
+            {
+                Ok(*f as f32)
+            }
+            OpcValue::Int(i) => Ok(*i as f32),
+            OpcValue::UInt(u) => Ok(*u as f32),
+            _ => Err(TagExtractError::TypeMismatch {
+                tag: tag.to_string(),
+                value: val.to_string(),
+                expected: "f32",
+            }),
+        }
     }
 
     /// Extracts a 32-bit signed integer value for the given tag,
@@ -677,8 +572,35 @@ impl TagValues {
     /// let values = TagValues::new(vec![TagValue::new("Counter", Some(OpcValue::Int(100)), OpcQuality::GOOD, None)]);
     /// assert_eq!(values.get_i32("counter").unwrap(), 100);
     /// ```
+    #[allow(
+        clippy::cast_possible_truncation,
+        clippy::cast_precision_loss,
+        clippy::cast_lossless
+    )]
     pub fn get_i32(&self, tag: &str) -> Result<i32, TagExtractError> {
-        self.get_as::<i32>(tag)
+        let val = self.get_value_checked(tag)?;
+        match val {
+            OpcValue::Int(i) => i32::try_from(*i).map_err(|_| TagExtractError::TypeMismatch {
+                tag: tag.to_string(),
+                value: val.to_string(),
+                expected: "i32",
+            }),
+            OpcValue::UInt(u) => i32::try_from(*u).map_err(|_| TagExtractError::TypeMismatch {
+                tag: tag.to_string(),
+                value: val.to_string(),
+                expected: "i32",
+            }),
+            OpcValue::Float(f)
+                if f.fract() == 0.0 && *f >= i32::MIN as f64 && *f <= f64::from(i32::MAX) =>
+            {
+                Ok(*f as i32)
+            }
+            _ => Err(TagExtractError::TypeMismatch {
+                tag: tag.to_string(),
+                value: val.to_string(),
+                expected: "i32",
+            }),
+        }
     }
 
     /// Extracts a 64-bit signed integer value for the given tag,
@@ -707,8 +629,31 @@ impl TagValues {
     /// let values = TagValues::new(vec![TagValue::new("BigCounter", Some(OpcValue::Int(1_000_000_000)), OpcQuality::GOOD, None)]);
     /// assert_eq!(values.get_i64("bigcounter").unwrap(), 1_000_000_000i64);
     /// ```
+    #[allow(
+        clippy::cast_possible_truncation,
+        clippy::cast_precision_loss,
+        clippy::cast_lossless
+    )]
     pub fn get_i64(&self, tag: &str) -> Result<i64, TagExtractError> {
-        self.get_as::<i64>(tag)
+        let val = self.get_value_checked(tag)?;
+        match val {
+            OpcValue::Int(i) => Ok(*i),
+            OpcValue::UInt(u) => i64::try_from(*u).map_err(|_| TagExtractError::TypeMismatch {
+                tag: tag.to_string(),
+                value: val.to_string(),
+                expected: "i64",
+            }),
+            OpcValue::Float(f)
+                if f.fract() == 0.0 && *f >= i64::MIN as f64 && *f < i64::MAX as f64 =>
+            {
+                Ok(*f as i64)
+            }
+            _ => Err(TagExtractError::TypeMismatch {
+                tag: tag.to_string(),
+                value: val.to_string(),
+                expected: "i64",
+            }),
+        }
     }
 
     /// Extracts a 32-bit unsigned integer value for the given tag,
@@ -737,8 +682,34 @@ impl TagValues {
     /// let values = TagValues::new(vec![TagValue::new("UIntVal", Some(OpcValue::UInt(42)), OpcQuality::GOOD, None)]);
     /// assert_eq!(values.get_u32("uintval").unwrap(), 42u32);
     /// ```
+    #[allow(
+        clippy::cast_possible_truncation,
+        clippy::cast_precision_loss,
+        clippy::cast_lossless,
+        clippy::cast_sign_loss
+    )]
     pub fn get_u32(&self, tag: &str) -> Result<u32, TagExtractError> {
-        self.get_as::<u32>(tag)
+        let val = self.get_value_checked(tag)?;
+        match val {
+            OpcValue::UInt(u) => u32::try_from(*u).map_err(|_| TagExtractError::TypeMismatch {
+                tag: tag.to_string(),
+                value: val.to_string(),
+                expected: "u32",
+            }),
+            OpcValue::Int(i) => u32::try_from(*i).map_err(|_| TagExtractError::TypeMismatch {
+                tag: tag.to_string(),
+                value: val.to_string(),
+                expected: "u32",
+            }),
+            OpcValue::Float(f) if f.fract() == 0.0 && *f >= 0.0 && *f <= f64::from(u32::MAX) => {
+                Ok(*f as u32)
+            }
+            _ => Err(TagExtractError::TypeMismatch {
+                tag: tag.to_string(),
+                value: val.to_string(),
+                expected: "u32",
+            }),
+        }
     }
 
     /// Extracts a 64-bit unsigned integer value for the given tag,
@@ -767,8 +738,30 @@ impl TagValues {
     /// let values = TagValues::new(vec![TagValue::new("BigUIntVal", Some(OpcValue::UInt(5_000_000_000)), OpcQuality::GOOD, None)]);
     /// assert_eq!(values.get_u64("biguintval").unwrap(), 5_000_000_000u64);
     /// ```
+    #[allow(
+        clippy::cast_possible_truncation,
+        clippy::cast_precision_loss,
+        clippy::cast_lossless,
+        clippy::cast_sign_loss
+    )]
     pub fn get_u64(&self, tag: &str) -> Result<u64, TagExtractError> {
-        self.get_as::<u64>(tag)
+        let val = self.get_value_checked(tag)?;
+        match val {
+            OpcValue::UInt(u) => Ok(*u),
+            OpcValue::Int(i) => u64::try_from(*i).map_err(|_| TagExtractError::TypeMismatch {
+                tag: tag.to_string(),
+                value: val.to_string(),
+                expected: "u64",
+            }),
+            OpcValue::Float(f) if f.fract() == 0.0 && *f >= 0.0 && *f < u64::MAX as f64 => {
+                Ok(*f as u64)
+            }
+            _ => Err(TagExtractError::TypeMismatch {
+                tag: tag.to_string(),
+                value: val.to_string(),
+                expected: "u64",
+            }),
+        }
     }
 
     /// Extracts a boolean value for the given tag.
@@ -797,7 +790,17 @@ impl TagValues {
     /// assert_eq!(values.get_bool("pump.status").unwrap(), true);
     /// ```
     pub fn get_bool(&self, tag: &str) -> Result<bool, TagExtractError> {
-        self.get_as::<bool>(tag)
+        let val = self.get_value_checked(tag)?;
+        match val {
+            OpcValue::Bool(b) => Ok(*b),
+            OpcValue::Int(i) => Ok(*i != 0),
+            OpcValue::UInt(u) => Ok(*u != 0),
+            _ => Err(TagExtractError::TypeMismatch {
+                tag: tag.to_string(),
+                value: val.to_string(),
+                expected: "bool",
+            }),
+        }
     }
 
     /// Extracts a borrowed string slice for the given tag.
@@ -892,15 +895,6 @@ impl TagValues {
     /// ```
     pub fn iter(&self) -> std::slice::Iter<'_, TagValue> {
         self.items.iter()
-    }
-
-    /// Returns an iterator yielding strongly-typed [`TagResult`] outcomes for each tag.
-    ///
-    /// # Returns
-    ///
-    /// An iterator yielding [`TagResult`] values for each item in the collection.
-    pub fn iter_results(&self) -> impl Iterator<Item = TagResult> + '_ {
-        self.items.iter().map(TagValue::to_result)
     }
 
     /// Looks up a tag value by numeric index in the collection.

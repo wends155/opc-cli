@@ -62,19 +62,6 @@ impl<S: ConnectedServer> Drop for PooledServer<S> {
     }
 }
 
-impl<S: ConnectedServer> std::ops::Deref for PooledServer<S> {
-    type Target = S;
-    fn deref(&self) -> &Self::Target {
-        &self.server
-    }
-}
-
-impl<S: ConnectedServer> std::ops::DerefMut for PooledServer<S> {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.server
-    }
-}
-
 impl<S: ConnectedServer> ConnectedServer for PooledServer<S> {
     type Group = S::Group;
 
