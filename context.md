@@ -1,5 +1,31 @@
 # Project Context Summary
 
+## 2026-09-13: Block 4 (Wave 3: `com/` Subsystem Internals, SPI Segregation & Visibility Fencing) Completed (`opc-da-client`)
+> 📝 **Context Update:**
+> * **Feature:** Execution of Block 4 of the 0.3.0 modularity refactoring roadmap (`review_report.md` Findings 13–15), establishing internal worker & connection pool visibility fencing, SPI trait segregation (`ServerCatalogDiscovery`, `ServerConnector`, `ServerBackend`), implementor & client facade bounds migration, and symmetric re-exports.
+> * **Changes:**
+>   - **Worker Visibility Fencing (`com::worker`):**
+>     - Restricted internal worker types and helpers (`RegisteredItemGroup`, `register_item_group`, `generate_group_name`, `elapsed_ms`) from `pub` to `pub(crate)` in `src/com/worker.rs`.
+>     - Added deterministic, zero-sleep unit test `test_elapsed_ms_calculation` in `src/com/worker/tests.rs`.
+>   - **Pool Visibility Fencing (`com::worker::pool`):**
+>     - Restricted `CachedGroup`, `PooledServer`, `ConnectionPool`, `dispatch_with_retry`, and their inner caching fields/methods to `pub(crate)` in `src/com/worker/pool.rs`, eliminating module scope leaks and preventing `E0446` private-in-public errors.
+>     - Maintained narrowed bound `C: ServerConnector + 'static` on `dispatch_with_retry`, cleanly decoupling connection pooling from catalog enumeration.
+>   - **SPI Trait Segregation (`com::connector::traits`):**
+>     - Segregated `ServerConnector` into dedicated catalog discovery (`ServerCatalogDiscovery`) and connection lifecycle (`ServerConnector`).
+>     - Provided composite SPI `ServerBackend: ServerConnector + ServerCatalogDiscovery` with blanket implementation for all matching implementors.
+>   - **Implementor & Consumer Migration:**
+>     - Split `ComConnector` (`src/com/connector/server.rs`) and `MockServerConnector` (`src/com/connector/mock.rs`) into separate `impl ServerCatalogDiscovery` and `impl ServerConnector` blocks.
+>     - Added unit test `test_server_catalog_discovery_segregated_contract` in `src/com/connector/mock.rs`.
+>     - Bound `ComWorker`, `Drop for ComWorker`, `run_worker_thread`, and `handle_request` in `src/com/worker.rs` to `C: ServerBackend + 'static`.
+>     - Bound `OpcDaClient`, `OpcDaClientBuilder`, and `with_connector` in `src/com/client.rs` to `C: ServerBackend + 'static`. Pruned unused imports to maintain zero warnings under `-D warnings`.
+>   - **Public Re-exports & Workspace Lints:**
+>     - Re-exported `ServerCatalogDiscovery` and `ServerBackend` in `com::connector`, `com::`, and crate root `src/lib.rs`.
+>     - Added `redundant_pub_crate = "allow"` under `[workspace.lints.clippy]` in root `Cargo.toml` to support intentional crate-level visibility scoping inside internal modules.
+>   - **Quality Verification:**
+>     - Passed all 9 gates of `pwsh scripts/verify.ps1` with exit code 0, 100% tests passing, zero warnings, and clean AST-grep rules.
+> * **New Constraints:** Internal worker and pool cache structures are sealed to `pub(crate)`. Connection retry pool only bounds to `ServerConnector`. High-level client and background worker thread require composite `ServerBackend`.
+> * **Pruned:** Overexposed `pub` visibility on internal worker and pool types (`RegisteredItemGroup`, `CachedGroup`, `PooledServer`, `ConnectionPool`); coupled catalog enumeration methods from `ServerConnector`.
+
 ## 2026-09-13: Block 3 (Wave 2B: Pure 128-Bit `Clsid` Domain Type & Platform Leak Severing) Completed (`opc-da-client`)
 > 📝 **Context Update:**
 > * **Feature:** Execution of Block 3 of the 0.3.0 modularity refactoring roadmap (`review_report.md` Findings 10–12), establishing a pure self-contained 128-bit `Clsid` domain type, severing Win32 COM `GUID` and `windows::core::BOOL` platform leaks from public domain and connector types, gating `windows` behind optional feature `opc-da-backend`, and achieving clean headless non-Windows mock compilation (`cargo check -p opc-da-client --no-default-features`).

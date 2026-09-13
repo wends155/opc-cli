@@ -194,12 +194,12 @@ opc-cli/
 
 ### `opc-da-client::com::connector` (Modular COM Connector SPI)
 - **Owns**: Slim coordinator facade (`connector.rs`) and modular single-responsibility submodules:
-  - `com::connector::traits`: Core abstraction traits (`ServerConnector` with unidirectional `connect_endpoint`, `ConnectedServer`, `ConnectedGroup`) and pure-Rust DTOs (`GroupItemDef`, `GroupItemResult`, `GroupItemState`, `DataSource`, `GroupConfig::ephemeral`, `CreatedGroup`).
+  - `com::connector::traits`: Core abstraction traits (`ServerCatalogDiscovery` for server discovery, `ServerConnector` with unidirectional `connect_endpoint`, composite SPI `ServerBackend: ServerConnector + ServerCatalogDiscovery`, `ConnectedServer`, `ConnectedGroup`) and pure-Rust DTOs (`GroupItemDef`, `GroupItemResult`, `GroupItemState`, `DataSource`, `GroupConfig::ephemeral`, `CreatedGroup`).
   - `com::connector::server`: Win32 COM server connection (`ComConnector`), namespace navigation (`ComServer`), direct CLSID and remote DCOM instantiation (`connect_server_endpoint` with `CoCreateInstanceEx`, `COSERVERINFO`, `COAUTHINFO`, and proxy blanketing).
   - `com::connector::group`: Win32 COM group item registration and synchronous read/write (`ComGroup`) protected by RAII memory safety guards (`ItemResultsBlobGuard`).
   - `com::connector::mock`: Pure-Rust mock suite (`MockServerConnector`, `MockConnectedServer`, `MockConnectedGroup`, `MockState`, handler aliases `MockAddItemsFn`, `MockReadFn`, `MockWriteFn`) with fluent test builders and observability counters.
 - **Does NOT Own**: Channel communication, connection caching (owned by `com::worker::pool`), or low-level unmanaged allocations.
-- **Trait Interfaces**: `ServerConnector`, `ConnectedServer`, `ConnectedGroup`.
+- **Trait Interfaces**: `ServerCatalogDiscovery`, `ServerConnector`, `ServerBackend`, `ConnectedServer`, `ConnectedGroup`.
 - **Mock Availability**: `MockServerConnector`, `MockConnectedServer`, `MockConnectedGroup` (exported under `feature = "test-support"`).
 
 ### `opc-da-client::com::discovery` (Server Catalog & Dual-View Registry)

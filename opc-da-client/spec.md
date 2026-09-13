@@ -574,14 +574,14 @@ Implemented for any type `T: Into<WriteBatch>`.
 | `server` | `pub fn server(mut self, server: impl Into<ServerIdentifier>) -> Self` | Configures target OPC DA server identifier (ProgID or CLSID). |
 | `timeout` | `pub fn timeout(mut self, timeout: Duration) -> Self` | Configures request timeout duration (default: 5s). |
 | `with_legacy_dcom` | `pub fn with_legacy_dcom(mut self, legacy: bool) -> Self` | Configures DCOM packet authentication (`true` for `CONNECT` level on legacy NT 6.1 hosts; `false` for post-KB5004442 `PKT_INTEGRITY`). |
-| `with_connector` | `pub fn with_connector<C2: ServerConnector + 'static>(self, connector: C2) -> OpcDaClientBuilder<C2>` | Transitions builder to custom or mock connector type. |
+| `with_connector` | `pub fn with_connector<C2: ServerBackend + 'static>(self, connector: C2) -> OpcDaClientBuilder<C2>` | Transitions builder to custom or mock connector type. |
 | `build_with_connector` | `pub fn build_with_connector(self, connector: C) -> OpcResult<OpcDaClient<C, Unbound>>` | Builds unbound client using an explicit connector instance. |
 | `build` | `pub fn build(self) -> OpcResult<OpcDaClient<C, Unbound>>` | Builds unbound client gateway with default connector. |
 | `build_bound` | `pub fn build_bound(self) -> OpcResult<OpcDaClient<C, Bound>>` | Builds server-bound client session. Returns `OpcError::InvalidConfiguration` if server identifier is unset. |
 
 ---
 
-##### `struct OpcDaClient<C = ComConnector, State = Unbound>`
+##### `struct OpcDaClient<C: ServerBackend + 'static = ComConnector, State = Unbound>`
 
 **Typestates:**
 * `Unbound`: Compile-time typestate representing an unbound multi-server gateway. Suitable for catalog discovery, listing servers, and dynamic ad-hoc operations.
@@ -850,7 +850,9 @@ Before calling `browse_recursive`, `browse_tags` attempts `browse_opc_item_ids(B
 **Purpose:** Pure-Rust facade traits, DTOs, and concrete Win32 COM / mock implementations partitioned into cohesive single-responsibility submodules:
 
 * `com::connector::traits`:
-  - `ServerConnector`: Discovers servers via `enumerate_servers(host: &str) -> OpcResult<Vec<String>>` and `enumerate_server_details(host: &str) -> OpcResult<Vec<OpcServerInfo>>`, and connects via `connect_endpoint(&OpcServerEndpoint)` (primary required method), `connect_identifier(&ServerIdentifier)`, and `connect(name)`. Implemented by `ComConnector` and `MockServerConnector`.
+  - `ServerCatalogDiscovery`: Discovers servers via `enumerate_servers(host: &str) -> OpcResult<Vec<String>>` and `enumerate_server_details(host: &str) -> OpcResult<Vec<OpcServerInfo>>`. Implemented by `ComConnector` and `MockServerConnector`.
+  - `ServerConnector`: Connects via `connect_endpoint(&OpcServerEndpoint)` (primary required method), `connect_identifier(&ServerIdentifier)`, and `connect(name)`. Implemented by `ComConnector` and `MockServerConnector`.
+  - `ServerBackend: ServerConnector + ServerCatalogDiscovery`: Composite SPI trait combining connection lifecycle and catalog discovery, with blanket implementation for any type implementing both traits.
   - `ConnectedServer`: Introspects server namespace and adds/removes groups using `GroupConfig`, `CreatedGroup`, `ServerGroupHandle`, and `GroupRemovalMode`. Implemented by `ComServer` and `MockConnectedServer`. Supports in-memory tag browsing via `StringIterator::from_vec`.
   - `ConnectedGroup`: Pure-Rust facade over OPC DA groups:
     - `add_items(&self, items: &[GroupItemDef]) -> OpcResult<Vec<GroupItemResult>>`
