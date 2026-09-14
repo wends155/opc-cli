@@ -1,5 +1,30 @@
 # Project Context Summary
 
+## 2026-09-14: Block 2 (API Ergonomics & Developer Experience) Completed (`opc-da-client`)
+> 📝 **Context Update:**
+> * **Feature:** Execution of Block 2 of the post-review reliability refactoring roadmap (`review_report.md` Findings 6, 7, 14, 15, 16, 17, 18, 22, 23, 24 in `opc-da-client`), establishing lossless tag extraction error taxonomy, generic batch write API (`impl IntoWriteBatch`), inherent read forwarders on generic state, typed numeric accessors (`read_f32`, `read_i64`, `read_u32`, `read_u64`), comprehensive session method doc-tests, and documentation precision.
+> * **Changes:**
+>   - **Lossless Tag Error Taxonomy (`errors/conversion.rs`, `types/collection.rs`):**
+>     - Added `ConversionError::TagNotRequested(String)` and `ConversionError::TagNoValue(String)`.
+>     - Mapped `From<TagExtractError> for OpcError` losslessly to preserve tag identifiers without dropping error fidelity.
+>   - **Generic Batch Write API (`com/client.rs`):**
+>     - Updated `write_tags` to accept `impl IntoWriteBatch` (supporting arrays, slices, and vectors).
+>     - Deprecated legacy `write` and `write_batch` with migration guidance.
+>   - **Inherent Read Forwarders on Generic State (`com/client.rs`):**
+>     - Added 2-arg `read_tag_values(&self, server, tags)` and `read_tag_value(&self, server, tag)` on `OpcDaClient<C, State>` routing directly to `TagReader`.
+>     - Removed deprecated 1-arg readers from `Bound` to eliminate method shadowing and compiler collisions (`E0592`).
+>   - **Typed Numeric Accessors (`com/client.rs`):**
+>     - Added inherent numeric getters `read_f32`, `read_i64`, `read_u32`, and `read_u64` to `OpcDaClient<Bound>`.
+>   - **API Documentation & Precision (`provider.rs`, `com/client.rs`, `types/batch.rs`, `README.md`):**
+>     - Documented `list_server_details` on `ServerDiscovery` with runnable doctests using `MockOpcProvider`.
+>     - Added compile-checked doc-tests to all inherent session methods (`read_tag`, `read_tags`, `write_tag`, `write_tags`, `browse`, `list_server_details`).
+>     - Clarified `TagBatch` and `IntoTags` allocation semantics (borrowed slice zero-allocations vs array-by-value allocations).
+>     - Aligned `README.md` with `client.connect_eager().await?` instance method and `write_tags` API.
+>   - **Universal Quality Verification:**
+>     - All 9 gates of `pwsh scripts/verify.ps1` pass cleanly with exit code 0 across 105 doc-tests and 379 tests.
+> * **New Constraints:** Batch writes on `Bound` client accept `impl IntoWriteBatch`. Tag extraction errors preserve tag identities via `ConversionError::TagNotRequested` and `TagNoValue`. Inherent session reads on bound clients use `read_tags` and `read_tag`. Array-by-value `[&'static str; N]` in `IntoTags` allocates owned `String`s; zero-allocation requires borrowed slice `&["Tag1", "Tag2"]`.
+> * **Pruned:** Rigid `Vec<(String, OpcValue)>` batch writes; method collision on `read_tag_values`/`read_tag_value` between `Bound` and `TagReader`; `ConversionError::Other` diagnostic loss for missing tags.
+
 ## 2026-09-14: Block 1 (Worker Reliability & Correctness) Completed (`opc-da-client`)
 > 📝 **Context Update:**
 > * **Feature:** Execution of Block 1 of the post-review reliability refactoring roadmap (`review_report.md` Findings 1, 2, 3, 8, 9, 10 in `opc-da-client`), establishing eager server liveness ping, active group cache invalidation with single-attempt retry, vector length parity assertions, worker thread panic queue drainage, fault-tolerant recursive browsing, and configuration error classification.
