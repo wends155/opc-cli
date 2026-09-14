@@ -1,5 +1,32 @@
 # Project Context Summary
 
+## 2026-09-14: Block 3 (Internal Decoupling & Test Cleanliness) Completed (`opc-da-client`)
+> 📝 **Context Update:**
+> * **Feature:** Execution of Block 3 of the post-review reliability refactoring roadmap (`review_report.md` Findings 4, 5, 11, 12, 13, 19, 20, 21 in `opc-da-client`), establishing associated `ItemIterator` SPI abstraction, pure-Rust Tier 2 SPI connector extraction (`src/connector/`), domain test isolation with zero raw FFI leakage, standalone provider role mocks, FIFO `TagReader` default method, and deterministic `ComWorker` RAII thread lifecycle.
+> * **Changes:**
+>   - **Associated `ItemIterator` SPI Abstraction (`connector/traits.rs`, `com/connector/server.rs`, `com/worker/pool.rs`, `connector/mock.rs`):**
+>     - Decoupled `ConnectedServer::browse_opc_item_ids` from concrete `StringIterator` via associated type `type ItemIterator: Iterator<Item = OpcResult<String>>;`.
+>     - Bound `ItemIterator = StringIterator` on `ComServer`, forwarded `ItemIterator = S::ItemIterator` on `PooledServer<S>`, and bound `std::vec::IntoIter<OpcResult<String>>` on `MockConnectedServer`.
+>   - **Pure-Rust Tier 2 SPI Module Extraction (`src/connector/`, `src/lib.rs`, `com/connector.rs`):**
+>     - Extracted pure SPI traits and mock doubles to `opc-da-client/src/connector/`, enabling compilation and offline test mocking without requiring `feature = "opc-da-backend"` or Win32 COM SDK types.
+>     - Re-exported unconditionally via `opc_da_client::connector::*` and maintained 100% backward compatibility via re-exports in `opc_da_client::com::connector::*`.
+>   - **Domain Test Isolation & FFI Decoupling (`errors.rs`, `errors/hresult.rs`, `types/tests.rs`, `connector/mock.rs`):**
+>     - Exported `pub const E_FAIL: HRESULT` in `src/errors/hresult.rs`.
+>     - Replaced inverted `crate::raw::hresult` import in `src/errors.rs` tests with `crate::errors::hresult`.
+>     - Replaced `windows::core::GUID::zeroed()` in `types/tests.rs` with domain `Clsid::zeroed()`.
+>     - Purged Win32 SDK imports in `connector/mock.rs` using `VT_BSTR`, `E_FAIL`, and `windows_core::Error`.
+>   - **FIFO Default `TagReader::read_tag_value` (`provider.rs`):**
+>     - Changed `.pop()` to `results.into_iter().next()`, preserving return-to-normal FIFO value ordering.
+>   - **Standalone Provider Role Mocks (`provider.rs`, `lib.rs`):**
+>     - Generated and re-exported `MockServerDiscovery`, `MockTagBrowser`, `MockTagReader`, and `MockTagWriter` under `#[cfg(feature = "test-support")]`.
+>   - **Deterministic `ComWorker` Lifecycle (`worker.rs`, `worker/tests.rs`):**
+>     - Refactored `ComWorker` to hold `Option<sender>` and `Option<handle>`, exposing `sender(&self) -> Option<&mpsc::Sender<ComRequest>>`.
+>     - Implemented explicit channel close and `.join()` with panic logging in `ComWorker::drop`, preventing thread leak hazards.
+>   - **Universal Quality Verification:**
+>     - All 9 gates of `pwsh scripts/verify.ps1` pass cleanly with exit code 0 across 105 doc-tests, 2 compile_fail tests, and 381 workspace tests.
+> * **New Constraints:** `ConnectedServer` browse operations return `Self::ItemIterator`. Offline Tier 2 SPI mocking uses `opc_da_client::connector::*`. Tests outside `raw/` must not import `raw::hresult` or raw Win32 SDK types. `ComWorker::drop` deterministically joins the worker thread.
+> * **Pruned:** Concrete `StringIterator` dependency on `ConnectedServer`; inverted `crate::raw` imports in `errors.rs`; Win32 SDK types in Tier 2 SPI mocks; `.pop()` reverse ordering in default `read_tag_value`.
+
 ## 2026-09-14: Block 2 (API Ergonomics & Developer Experience) Completed (`opc-da-client`)
 > 📝 **Context Update:**
 > * **Feature:** Execution of Block 2 of the post-review reliability refactoring roadmap (`review_report.md` Findings 6, 7, 14, 15, 16, 17, 18, 22, 23, 24 in `opc-da-client`), establishing lossless tag extraction error taxonomy, generic batch write API (`impl IntoWriteBatch`), inherent read forwarders on generic state, typed numeric accessors (`read_f32`, `read_i64`, `read_u32`, `read_u64`), comprehensive session method doc-tests, and documentation precision.
