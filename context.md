@@ -1,5 +1,18 @@
 # Project Context Summary
 
+## 2026-09-14: Remote OPC DA (DCOM) Status, 0.3.0 Boundaries & Architecture Guidance (`README.md`, `opc-da-client`, `long_term_todo.md`)
+> 📝 **Context Update:**
+> * **Feature:** Documentation update and architectural boundary definition for Remote OPC DA (DCOM) across `README.md`, `opc-da-client/README.md`, `opc-da-client/spec.md`, and `long_term_todo.md`.
+> * **Changes:**
+>   - Explicitly clarified in `README.md` and `opc-da-client/README.md` that full Remote DCOM is on the roadmap (Phase 5) and is NOT supported for production in 0.3.0.
+>   - Established architecture recommendation: modern OPC UA is strongly preferred for remote industrial communications over standard TCP/IP (port 4840) to avoid DCOM security and firewall fragility (KB5004442). For OPC DA, local on-machine operation is recommended.
+>   - Documented the exact boundary of what works in 0.3.0 (local COM operation, remote catalog discovery via OPCEnum, and direct CLSID activation `\\host\{CLSID}`) versus what does not work (remote ProgID resolution, TUI remote host retention, remote enumerator blanketing, and custom credentials).
+>   - Updated `opc-da-client/spec.md` (§1.8.1) with the formal 0.3.0 Remote DCOM implementation boundary contract.
+>   - Documented Phase 5 tasks in `long_term_todo.md` with explicit guidance for legacy air-gapped systems where OPC UA wrappers cannot be deployed.
+>   - Verified all 9 gates of `pwsh scripts/verify.ps1`: 112 passed doctests, 2 compile-fail tests, and 381 unit tests.
+> * **New Constraints:** Remote DCOM in 0.3.0 is experimental and requires direct CLSID syntax; remote ProgID resolution over network OPCEnum and TUI UNC propagation are deferred to Phase 5. OPC UA is the documented recommendation for distributed deployments.
+> * **Pruned:** Ambiguity regarding remote DCOM readiness in 0.3.0.
+
 ## 2026-09-14: Documentation Sync for 0.3.0 Modernization & Deprecation Schedule (`opc-da-client` & Workspace Root)
 > 📝 **Context Update:**
 > * **Feature:** Documentation sync for 0.3.0 modernization across workspace (`opc-da-client/README.md`, workspace root `README.md`, and `opc-da-client/spec.md`).
