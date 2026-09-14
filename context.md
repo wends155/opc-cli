@@ -1,5 +1,18 @@
 # Project Context Summary
 
+## 2026-09-14: Documentation Sync for 0.3.0 Modernization & Deprecation Schedule (`opc-da-client` & Workspace Root)
+> 📝 **Context Update:**
+> * **Feature:** Documentation sync for 0.3.0 modernization across workspace (`opc-da-client/README.md`, workspace root `README.md`, and `opc-da-client/spec.md`).
+> * **Changes:**
+>   - Synchronized `opc-da-client/README.md` with 0.3.0 feature additions: `connect_eager()`, inherent numeric scalar reads (`read_f32`, `read_i64`, `read_u32`, `read_u64`), transparent active group recovery, pure Tier 2 SPI (`opc_da_client::connector::*`), lossless `ConversionError`, standalone role mocks (`MockServerDiscovery`, `MockTagBrowser`, `MockTagReader`, `MockTagWriter`), and deterministic thread teardown.
+>   - Added comprehensive Migration Guide (0.2.x -> 0.3.0) and Deprecation Schedule with formal removal timelines for 0.4.0 and 1.0.0.
+>   - Added compile-checked doc examples for `connect_eager`, scalar reads, and static generic dispatch testing with `MockTagReader`.
+>   - Updated workspace root `README.md` to reflect 0.3.0 client capabilities and pure SPI traits while preserving badges and custom sentinels.
+>   - Updated `opc-da-client/spec.md` with commit hash `3828f93`, documenting `TagReader::read_tag_value` FIFO default, standalone role mocks under `test-support`, `ConversionError` taxonomy, `CO_E_CLASSSTRING` HRESULT hint, inherent numeric readers, and pure SPI item iterator decoupling.
+>   - Verified full 9-gate verification pipeline (`pwsh scripts/verify.ps1`): all 111 doc-tests + 2 `compile_fail` tests and 381 unit tests passed with exit code 0.
+> * **New Constraints:** Trait methods with AFIT return-position `impl Future + Send` are not dyn-compatible; doc examples and testing patterns must use static generic monomorphization (`&impl TagReader`) or concrete mocks. Batch writes on bound clients use `write_tags` and `write_tag`.
+> * **Pruned:** Stale references to deprecated `write_batch` and single-argument `read_tag_values` on bound sessions in README and spec contracts.
+
 ## 2026-09-14: Post-Review Multi-Block Refactoring Audit Completed (Blocks 1–3) (`opc-da-client`)
 > 📝 **Context Update:**
 > * **Feature:** Comprehensive multi-block post-review refactoring audit across all 24 findings from `review_report.md` in `opc-da-client`, validating full implementation fidelity across Block 1 (Worker Reliability & Correctness), Block 2 (API Ergonomics & Developer Experience), and Block 3 (Internal Decoupling & Test Cleanliness).
