@@ -32,6 +32,14 @@ pub enum ConversionError {
     /// Other arbitrary data conversion failure.
     #[error("Data conversion failed: {0}")]
     Other(String),
+
+    /// Tag was not requested in the read batch.
+    #[error("Tag '{0}' was not requested in this read batch")]
+    TagNotRequested(String),
+
+    /// Tag value was null or missing in the read batch.
+    #[error("Tag '{0}' returned no value (null or missing)")]
+    TagNoValue(String),
 }
 
 impl From<&str> for ConversionError {
@@ -43,5 +51,25 @@ impl From<&str> for ConversionError {
 impl From<String> for ConversionError {
     fn from(s: String) -> Self {
         Self::Other(s)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_conversion_error_tag_variants() {
+        let err_not_req = ConversionError::TagNotRequested("Simulation.Item1".to_string());
+        assert_eq!(
+            err_not_req.to_string(),
+            "Tag 'Simulation.Item1' was not requested in this read batch"
+        );
+
+        let err_no_val = ConversionError::TagNoValue("Simulation.Item2".to_string());
+        assert_eq!(
+            err_no_val.to_string(),
+            "Tag 'Simulation.Item2' returned no value (null or missing)"
+        );
     }
 }
