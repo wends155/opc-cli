@@ -17,11 +17,11 @@ OPC DA is deeply coupled to Windows COM/DCOM, which poses significant architectu
 ## Features
 
 - **Compile-Time Typestate Client (`OpcDaClient<C, State>`)**: Zero-cost typestates `Unbound` (gateway for discovery) and `Bound` (session for reading/writing), guaranteeing infallible endpoint access during active sessions via `.endpoint(&self)`.
-- **Fluent Client API & Direct Connect**: Ergonomic `OpcDaClient::builder()`, direct local shortcut `OpcDaClient::connect(server)`, eager validation shortcut `OpcDaClient::connect_eager(server)`, remote DCOM shortcut `OpcDaClient::connect_remote(host, server)`, and typestate builder `build_bound()`.
+- **Fluent Client API & Direct Connect**: Ergonomic `OpcDaClient::builder()`, direct local shortcut `OpcDaClient::connect(server)`, eager validation probe `client.connect_eager().await?`, remote DCOM shortcut `OpcDaClient::connect_remote(host, server)`, and typestate builder `build_bound()`.
 - **Zero-Allocation Batch Reads (`TagBatch` & `IntoTags`)**: Bound `read_tags` and `read_tag` accept static slices (`&["Tag1", "Tag2"]`), fixed-size arrays (`["Tag1", "Tag2"]`), single tag strings, or owned vectors (`Vec<String>`) with zero intermediate allocations.
 - **High-Productivity Typed Getters (`TagValues`)**: Safely unwrap typed values (`values.get_f64("Tag")?`, `get_f32`, `get_i32`, `get_i64`, `get_u32`, `get_u64`, `get_bool`, `get_str`) or use generic extraction (`values.get_as::<f64>("Tag")?`) with case-insensitive lookups, preserved diagnostics, and lenient numeric coercion.
 - **Active Group Caching**: Automatically pools active OPC groups and item handles on repeated read cycles, reducing DCOM round-trip overhead by >75%.
-- **Native Zero-Allocation Batch Writes (`WriteBatch` & `IntoWriteBatch`)**: Perform multiple tag writes in a single COM atomic `SyncIO::Write` operation via `client.write_batch(...)` or bound `client.write_tags(...)` without channel heap allocations.
+- **Native Zero-Allocation Batch Writes (`WriteBatch` & `IntoWriteBatch`)**: Perform single or multiple tag writes in a single COM atomic `SyncIO::Write` operation via `client.write_tag(...)` or bound `client.write_tags(...)` accepting arrays, slices, or vectors without channel heap allocations.
 - **Non-Blocking Subscription Streams**: Stream periodic tag readings via `client.subscribe(tags, interval)` returning an asynchronous Tokio `mpsc::Receiver<TagValues>` with RAII drop cancellation.
 - **Hardened Remote DCOM (KB5004442)**: Automatically enforces `RPC_C_AUTHN_LEVEL_PKT_INTEGRITY` on remote DCOM proxy blankets, with configurable `with_legacy_dcom(true)` for legacy Windows 7 / Server 2008 R2 hosts.
 - **Native Rust 2024 Async Traits**: Built on `tokio` with native async trait methods (`impl Future<Output = ...> + Send`), completely eliminating `async-trait` heap allocations while providing segregated role traits (`ServerDiscovery`, `TagBrowser`, `TagReader`, `TagWriter`) and composite `OpcProvider` for straightforward test mocking.
@@ -95,7 +95,7 @@ async fn main() -> OpcResult<()> {
 
 ### Native Batch Writes
 
-Write multiple typed values atomically in a single DCOM roundtrip:
+Write multiple typed values atomically in a single DCOM roundtrip using arrays, slices, or vectors:
 
 ```rust,no_run
 use opc_da_client::{OpcDaClient, OpcResult, OpcValue};
@@ -104,13 +104,11 @@ use opc_da_client::{OpcDaClient, OpcResult, OpcValue};
 async fn main() -> OpcResult<()> {
     let client = OpcDaClient::connect("Matrikon.OPC.Simulation.1")?;
 
-    let writes = vec![
-        ("Bucket Brigade.Int4".to_string(), OpcValue::Int(100)),
-        ("Bucket Brigade.Real8".to_string(), OpcValue::Float(99.5)),
-    ];
-
     // Single COM group and single atomic SyncIO::Write roundtrip
-    let results = client.write_batch(writes).await?;
+    let results = client.write_tags([
+        ("Bucket Brigade.Int4", OpcValue::Int(100)),
+        ("Bucket Brigade.Real8", OpcValue::Float(99.5)),
+    ]).await?;
     for res in results {
         if res.is_success() {
             println!("✓ Wrote tag '{}'", res.tag_id);

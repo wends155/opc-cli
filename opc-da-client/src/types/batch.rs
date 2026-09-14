@@ -3,7 +3,15 @@
 use std::sync::Arc;
 
 /// Represents a batch of OPC tag names, enabling zero-allocation conversion
-/// across static literals, fixed-size arrays, borrowed string slices, and owned collections.
+/// across static literals, borrowed string slices, and owned collections.
+///
+/// # Allocation Semantics
+///
+/// * **Zero-Allocation**: Borrowed static slices `&["Tag1", "Tag2"]` (`&'static [&'static str]`) or
+///   references to fixed-size arrays `&["Tag1", "Tag2"]` map directly to [`TagBatch::Static`] without heap allocation.
+/// * **Heap Allocation**: Passing fixed-size arrays by value `["Tag1", "Tag2"]` (`[&'static str; N]`)
+///   allocates owned [`String`] instances in [`TagBatch::Owned`]. When optimal throughput is required in hot loops,
+///   prefer passing borrowed slice references `&["Tag1", "Tag2"]`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TagBatch {
     /// Borrowed slice of static string slices (e.g. `&["Random.Int4", "Random.Real8"]`).
@@ -244,6 +252,10 @@ impl<const N: usize> IntoTags for &'static [&'static str; N] {
     }
 }
 
+/// Converts a fixed-size array by value into a [`TagBatch::Owned`].
+///
+/// Note: This performs heap allocations to allocate owned [`String`] elements.
+/// For zero-allocation batch reads, pass a borrowed slice reference instead (e.g. `&["Tag1", "Tag2"]`).
 impl<const N: usize> IntoTags for [&'static str; N] {
     #[inline]
     fn into_tag_batch(self) -> TagBatch {

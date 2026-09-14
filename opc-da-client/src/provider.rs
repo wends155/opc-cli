@@ -46,6 +46,45 @@ pub trait ServerDiscovery: Send + Sync {
         host: &str,
     ) -> impl std::future::Future<Output = OpcResult<Vec<String>>> + Send;
 
+    /// Discover detailed information for all registered OPC DA servers on the target host.
+    ///
+    /// Queries the server list using [`ServerDiscovery::list_servers`] and returns structured
+    /// [`OpcServerInfo`] records with normalized host names.
+    ///
+    /// # Arguments
+    ///
+    /// * `host` - Hostname, IP address, or `"localhost"`.
+    ///
+    /// # Returns
+    ///
+    /// A vector of [`OpcServerInfo`] records containing ProgIDs and server metadata.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`crate::errors::OpcError`] if COM library initialization fails,
+    /// OPC Enum cannot be instantiated on the target host, or server enumeration fails.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// # #[tokio::main]
+    /// # async fn main() -> opc_da_client::OpcResult<()> {
+    /// # let mut mock = opc_da_client::MockOpcProvider::new();
+    /// # mock.expect_list_server_details().returning(|host| Ok(vec![opc_da_client::OpcServerInfo {
+    /// #     prog_id: "Matrikon.OPC.Simulation.1".into(),
+    /// #     clsid: opc_da_client::Clsid::zeroed(),
+    /// #     user_type: None,
+    /// #     host: Some(host.to_string()),
+    /// # }]));
+    /// # let client = &mock;
+    /// use opc_da_client::{OpcProvider, OpcResult, ServerDiscovery};
+    ///
+    /// let servers = client.list_server_details("localhost").await?;
+    /// assert_eq!(servers.len(), 1);
+    /// assert_eq!(servers[0].prog_id, "Matrikon.OPC.Simulation.1");
+    /// # Ok(())
+    /// # }
+    /// ```
     fn list_server_details(
         &self,
         host: &str,

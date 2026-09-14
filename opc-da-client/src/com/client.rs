@@ -869,6 +869,20 @@ impl<C: ServerBackend + 'static> OpcDaClient<C, Bound> {
     /// # Errors
     ///
     /// Returns [`OpcError`] on transport, timeout, or COM failure.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,no_run
+    /// # #[tokio::main]
+    /// # async fn main() -> opc_da_client::OpcResult<()> {
+    /// use opc_da_client::OpcDaClient;
+    ///
+    /// let client = OpcDaClient::connect("Matrikon.OPC.Simulation.1")?;
+    /// let val = client.read_tag("Random.Int4").await?;
+    /// assert!(val.is_good());
+    /// # Ok(())
+    /// # }
+    /// ```
     #[tracing::instrument(level = "info", skip(self), err)]
     pub async fn read_tag(&self, tag: &str) -> OpcResult<TagValue> {
         let batch = TagBatch::from_str_lenient(tag);
@@ -891,6 +905,20 @@ impl<C: ServerBackend + 'static> OpcDaClient<C, Bound> {
     /// # Errors
     ///
     /// Returns [`OpcError`] on transport, timeout, or COM failure.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,no_run
+    /// # #[tokio::main]
+    /// # async fn main() -> opc_da_client::OpcResult<()> {
+    /// use opc_da_client::OpcDaClient;
+    ///
+    /// let client = OpcDaClient::connect("Matrikon.OPC.Simulation.1")?;
+    /// let values = client.read_tags(["Random.Int4", "Random.Real8"]).await?;
+    /// assert_eq!(values.len(), 2);
+    /// # Ok(())
+    /// # }
+    /// ```
     #[tracing::instrument(level = "info", skip(self, tags), err)]
     pub async fn read_tags(&self, tags: impl IntoTags) -> OpcResult<TagValues> {
         let endpoint = self.endpoint().clone();
@@ -960,6 +988,20 @@ impl<C: ServerBackend + 'static> OpcDaClient<C, Bound> {
     /// # Errors
     ///
     /// Returns [`OpcError`] on transport, timeout, or COM failure.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,no_run
+    /// # #[tokio::main]
+    /// # async fn main() -> opc_da_client::OpcResult<()> {
+    /// use opc_da_client::OpcDaClient;
+    ///
+    /// let client = OpcDaClient::connect("Matrikon.OPC.Simulation.1")?;
+    /// let res = client.write_tag("Bucket Brigade.Int4", 100).await?;
+    /// assert!(res.is_success());
+    /// # Ok(())
+    /// # }
+    /// ```
     #[tracing::instrument(level = "info", skip(self, value), err)]
     pub async fn write_tag(&self, tag: &str, value: impl Into<OpcValue>) -> OpcResult<WriteResult> {
         let endpoint = self.endpoint().clone();
@@ -1033,6 +1075,23 @@ impl<C: ServerBackend + 'static> OpcDaClient<C, Bound> {
     /// # Errors
     ///
     /// Returns [`OpcError`] on transport, timeout, or COM failure.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,no_run
+    /// # #[tokio::main]
+    /// # async fn main() -> opc_da_client::OpcResult<()> {
+    /// use opc_da_client::{OpcDaClient, OpcValue};
+    ///
+    /// let client = OpcDaClient::connect("Matrikon.OPC.Simulation.1")?;
+    /// let results = client.write_tags([
+    ///     ("Bucket Brigade.Int4", OpcValue::Int(100)),
+    ///     ("Bucket Brigade.Real8", OpcValue::Float(99.5)),
+    /// ]).await?;
+    /// assert_eq!(results.len(), 2);
+    /// # Ok(())
+    /// # }
+    /// ```
     #[tracing::instrument(level = "info", skip(self, writes), err)]
     pub async fn write_tags(&self, writes: impl IntoWriteBatch) -> OpcResult<Vec<WriteResult>> {
         let endpoint = self.endpoint().clone();
@@ -1126,6 +1185,20 @@ impl<C: ServerBackend + 'static> OpcDaClient<C, Bound> {
     /// # Errors
     ///
     /// Returns [`OpcError`] on transport, timeout, or COM failure.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,no_run
+    /// # #[tokio::main]
+    /// # async fn main() -> opc_da_client::OpcResult<()> {
+    /// use opc_da_client::{OpcDaClient, TagCollector};
+    ///
+    /// let client = OpcDaClient::connect("Matrikon.OPC.Simulation.1")?;
+    /// let tags = client.browse(TagCollector::new(100)).await?;
+    /// assert!(!tags.is_empty());
+    /// # Ok(())
+    /// # }
+    /// ```
     #[tracing::instrument(level = "info", skip(self, collector), err)]
     pub async fn browse(&self, collector: TagCollector) -> OpcResult<Vec<String>> {
         let endpoint = self.endpoint().clone();
@@ -1182,6 +1255,20 @@ impl<C: ServerBackend + 'static, State: Send + Sync + 'static> OpcDaClient<C, St
     }
 
     /// Lists available OPC DA servers with rich metadata registered on the specified host.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,no_run
+    /// # #[tokio::main]
+    /// # async fn main() -> opc_da_client::OpcResult<()> {
+    /// use opc_da_client::OpcDaClient;
+    ///
+    /// let client = OpcDaClient::builder().build()?;
+    /// let details = client.list_server_details("localhost").await?;
+    /// assert!(!details.is_empty());
+    /// # Ok(())
+    /// # }
+    /// ```
     #[tracing::instrument(level = "info", skip(self), err)]
     pub async fn list_server_details(&self, host: &str) -> OpcResult<Vec<OpcServerInfo>> {
         ServerDiscovery::list_server_details(self, host).await
