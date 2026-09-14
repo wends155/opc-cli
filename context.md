@@ -1,5 +1,32 @@
 # Project Context Summary
 
+## 2026-09-14: Block 4 (Layer 2 Pure-Rust SPI & Resource Lifecycle Guards) Completed (`opc-da-client`)
+> 📝 **Context Update:**
+> * **Feature:** Execution of Block 4 of the 7-block modernization roadmap (`review_report.md` Findings 13 and 14 in `opc-da-client`), establishing the pure-Rust `VarType` domain abstraction and migrating resource lifecycle guards (`GroupGuard`, `BrowsePositionGuard`) into the decoupled Tier 2 SPI connector layer with double-panic protection.
+> * **Changes:**
+>   - **Pure-Rust `VarType` & `BaseVarType` (`types/vartype.rs`):**
+>     - Implemented `#[repr(transparent)] pub struct VarType(u16)` and exhaustive 18-variant `BaseVarType` enum.
+>     - Added bitmask query methods (`is_array()`, `is_byref()`, `is_vector()`), scalar base extraction (`base_type()`, `base_raw()`), uppercase 4-digit hex display formatting (`VT_ARRAY | VT_UI1`), and conditional Win32 `VARENUM` conversions under `#[cfg(feature = "opc-da-backend")]`.
+>     - Re-exported from `types.rs` and crate root `lib.rs` (Resolves Finding 14).
+>   - **Pure-Rust Resource Lifecycle Guards (`connector/guard.rs`):**
+>     - Extracted `GroupGuard<'a, S: ConnectedServer>` and `BrowsePositionGuard<'a, S: ConnectedServer>` from `com/guard.rs` into `connector/guard.rs` as pure-Rust SPI primitives with zero COM dependencies.
+>     - Hardened `Drop` cleanup against secondary panics during active unwinds using `std::panic::catch_unwind(AssertUnwindSafe(...))` per `spec.md § 678`.
+>     - Re-exported in `connector.rs` and root SPI `lib.rs`. Routed legacy `com/guard.rs` to re-export from `connector/guard.rs` (Resolves Finding 13).
+>   - **Raw Discriminant Elimination in SPI Traits (`connector/traits.rs`):**
+>     - Changed `GroupItemResult.canonical_type` from `u16` to `VarType`.
+>     - Changed `ConnectedServer::browse_opc_item_ids` parameter `data_type` from `u16` to `VarType`.
+>   - **Mock Infrastructure & Call Site Normalization:**
+>     - Removed `pub const VT_BSTR: u16 = 8` from `connector/mock.rs`.
+>     - Added browse position tracking and simulated failure hooks to `MockState`.
+>     - Updated `MockConnectedGroup`, `MockConnectedServer`, `Arc<MockConnectedServer>`, and `ComServer` to accept and produce `VarType`.
+>     - Migrated all call sites across `com/connector/group.rs`, `com/connector/server.rs`, `com/worker/pool.rs`, `com/worker/browse.rs`, `com/worker/write.rs`, `com/worker/tests.rs`, and `com/client.rs`.
+>     - Purged duplicate guard unit tests and obsolete imports in `com/worker/tests.rs`.
+>   - **Quality Gate Verification:**
+>     - Verified full 9-gate quality pipeline (`pwsh scripts/verify.ps1`): all 116 doc-tests, 2 compile-fail tests, and 438 unit/integration tests passed with exit code 0.
+>     - Verified headless / non-Windows compilation via `cargo check -p opc-da-client --no-default-features` (exit code 0).
+> * **New Constraints:** SPI traits and structs must never use raw `u16` COM `VARENUM` discriminants; use `VarType` and `BaseVarType`. Resource lifecycle guards (`GroupGuard`, `BrowsePositionGuard`) must remain pure Rust and must never import Win32 COM headers. RAII drop guards must wrap cleanup operations in `catch_unwind` to prevent double-panic process aborts during thread unwinds.
+> * **Pruned:** Raw `u16` COM discriminants in SPI traits and mock methods; redundant `VT_BSTR: u16` constant; redundant `GroupGuard` and `BrowsePositionGuard` definitions in `com/guard.rs`; duplicate guard tests in `com/worker/tests.rs`.
+
 ## 2026-09-14: Block 3 (Layer 1 Collection & Module Path Normalization) Completed (`opc-da-client`)
 > 📝 **Context Update:**
 > * **Feature:** Execution of Block 3 of the 7-block modernization roadmap (`review_report.md` Findings 8, 9, 10, 11, 12 in `opc-da-client`), delivering zero-allocation tag error extraction, encapsulation of host normalization helpers, purge of dead `BrowseFilter`, removal of deprecated handle aliases, struct field encapsulation for `OpcServerInfo`, and module path normalization to `pub(crate) mod` across all 10 submodules of `types.rs`.
