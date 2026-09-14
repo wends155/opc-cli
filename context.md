@@ -1,5 +1,19 @@
 # Project Context Summary
 
+## 2026-09-14: Architecture Specification Sync for 0.3.0 (`architecture.md`, `opc-da-client/architecture.md`)
+> 📝 **Context Update:**
+> * **Feature:** Architecture documentation sync for 0.3.0 modernization across workspace root `architecture.md` and `opc-da-client/architecture.md`.
+> * **Changes:**
+>   - Synchronized Section 4 Project Layout in `architecture.md` and `opc-da-client/architecture.md` to document `src/connector.rs`, `src/connector/` (`traits.rs` with associated `type ItemIterator`, `mock.rs`), and `src/types/write_batch.rs`.
+>   - Added dedicated boundary entry for `opc-da-client::connector` (Pure-Rust Tier 2 SPI Connector) in Section 5 Module Boundaries, documenting decoupled traits and cross-platform offline testability.
+>   - Added `opc-da-client::connector` to Section 6 Dependency Direction Rules table.
+>   - Updated Section 10 Testing Strategy to reflect current test metrics (381 compiled unit/integration tests, 115 doc-tests, total 496 tests).
+>   - Updated Section 13 Architecture Diagrams: added `WriteBatch` to Tier 1 Public Domain and associated `ItemIterator` to Tier 2 `ConnectedServer`.
+>   - Synchronized `opc-da-client/architecture.md`: purged obsolete `async-trait` references in favor of native Rust 2024 AFIT (`impl Future<Output = ...> + Send`), updated target release to `0.3.0-dev`, and aligned layout with pure SPI extraction.
+>   - Verified full 9-gate verification pipeline (`pwsh scripts/verify.ps1`): all 113 doc-tests, 2 compile-fail tests, and 381 unit tests passed with exit code 0.
+> * **New Constraints:** Architectural documentation must track pure SPI extraction outside `com/` and reflect native AFIT traits without dynamic heap boxing.
+> * **Pruned:** Stale test metrics (339 -> 496 tests) and legacy `async-trait` references in crate architecture.
+
 ## 2026-09-14: Documentation Sync & Clarifications for 0.3.0 (`opc-da-client/README.md`, `opc-da-client/spec.md`)
 > 📝 **Context Update:**
 > * **Feature:** Documentation update and ergonomic clarity for `opc-da-client` based on developer interview clarifications.
