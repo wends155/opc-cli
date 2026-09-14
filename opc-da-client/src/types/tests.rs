@@ -600,7 +600,7 @@ fn test_host_normalization_and_remote_detection() {
 
     let info = OpcServerInfo::new(
         "Test.Server",
-        windows::core::GUID::zeroed(),
+        Clsid::zeroed(),
         Some("Test Title".to_string()),
         Some("localhost".to_string()),
     );

@@ -3,6 +3,7 @@
 use windows_core::HRESULT;
 
 pub const E_POINTER: HRESULT = HRESULT(0x8000_4003_u32.cast_signed());
+pub const E_FAIL: HRESULT = HRESULT(0x8000_4005_u32.cast_signed());
 pub const E_ACCESSDENIED: HRESULT = HRESULT(0x8007_0005_u32.cast_signed());
 pub const RPC_S_SERVER_UNAVAILABLE: HRESULT = HRESULT(0x8007_06BA_u32.cast_signed());
 pub const RPC_S_CALL_FAILED: HRESULT = HRESULT(0x8007_06BE_u32.cast_signed());
@@ -40,6 +41,7 @@ pub fn friendly_hresult_hint(hr: HRESULT) -> Option<&'static str> {
         RPC_S_CALL_FAILED_DNE => Some("COM marshalling error — try restarting the OPC server"),
         REGDB_E_CLASSNOTREG => Some("Server is not registered on this machine"),
         E_POINTER => Some("Invalid pointer (E_POINTER)"),
+        E_FAIL => Some("Unspecified failure (E_FAIL)"),
         OPC_E_BADRIGHTS => {
             Some("Server rejected write — the item may be read-only (OPC_E_BADRIGHTS)")
         }
@@ -92,6 +94,10 @@ mod tests {
         assert_eq!(
             friendly_hresult_hint(E_POINTER),
             Some("Invalid pointer (E_POINTER)")
+        );
+        assert_eq!(
+            friendly_hresult_hint(E_FAIL),
+            Some("Unspecified failure (E_FAIL)")
         );
         assert_eq!(
             friendly_hresult_hint(RPC_S_SERVER_UNAVAILABLE),

@@ -509,13 +509,12 @@ mod tests {
 
         #[cfg(feature = "opc-da-backend")]
         {
-            use crate::raw::hresult::RPC_S_SERVER_UNAVAILABLE;
+            use crate::errors::hresult::{E_POINTER, RPC_S_SERVER_UNAVAILABLE};
             let rpc_err = OpcError::Com {
                 source: windows_core::Error::from_hresult(RPC_S_SERVER_UNAVAILABLE),
             };
             assert!(rpc_err.is_connection_error());
 
-            use crate::errors::hresult::E_POINTER;
             let pointer_err = OpcError::Com {
                 source: windows_core::Error::from_hresult(E_POINTER),
             };
@@ -527,7 +526,7 @@ mod tests {
     fn test_com_error_display_formatting() {
         #[cfg(feature = "opc-da-backend")]
         {
-            use crate::raw::hresult::RPC_S_SERVER_UNAVAILABLE;
+            use crate::errors::hresult::{E_POINTER, RPC_S_SERVER_UNAVAILABLE};
             let rpc_err = OpcError::Com {
                 source: windows_core::Error::from_hresult(RPC_S_SERVER_UNAVAILABLE),
             };
@@ -535,7 +534,6 @@ mod tests {
             assert!(formatted.contains("The RPC server is unavailable"));
             assert!(!formatted.contains("No hint available"));
 
-            use crate::errors::hresult::E_POINTER;
             let pointer_err = OpcError::Com {
                 source: windows_core::Error::from_hresult(E_POINTER),
             };
