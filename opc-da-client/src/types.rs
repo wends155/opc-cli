@@ -3,16 +3,16 @@
 //! Provides type-safe representations of handles, group states, server statuses,
 //! namespace browsing types, and OPC DA quality flags.
 
-pub mod batch;
-pub mod browse;
-pub mod clsid;
-pub mod collection;
-pub mod collector;
-pub mod handles;
-pub mod quality;
-pub mod server;
-pub mod value;
-pub mod write_batch;
+pub(crate) mod batch;
+pub(crate) mod browse;
+pub(crate) mod clsid;
+pub(crate) mod collection;
+pub(crate) mod collector;
+pub(crate) mod handles;
+pub(crate) mod quality;
+pub(crate) mod server;
+pub(crate) mod value;
+pub(crate) mod write_batch;
 
 #[cfg(test)]
 mod tests;

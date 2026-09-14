@@ -163,7 +163,10 @@ async fn test_standalone_role_mocks() {
         .await
         .unwrap();
     assert_eq!(details.len(), 1);
-    assert_eq!(details[0].prog_id, "Isolated.Server.1");
+    assert_eq!(details[0].prog_id(), "Isolated.Server.1");
+    assert_eq!(details[0].clsid(), opc_da_client::Clsid::zeroed());
+    assert_eq!(details[0].user_type(), Some("Isolated Server"));
+    assert_eq!(details[0].host(), None);
 
     // 2. Verify MockTagBrowser in complete isolation
     let mut browser_mock = MockTagBrowser::new();

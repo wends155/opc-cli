@@ -19,12 +19,11 @@ pub use provider::{
     OpcValueOptionExt, QualityLimit, QualityMajor, QualitySubstatus, ServerDiscovery,
     SystemTimeOptionExt, TagBrowser, TagCollector, TagReader, TagValue, TagWriter, WriteResult,
 };
-#[allow(deprecated)]
 pub use types::{
-    BrowseDirection, BrowseType, ClientGroupHandle, ClientItemHandle, Clsid, GroupHandle, IntoTags,
-    IntoWriteBatch, ItemHandle, OpcServerEndpoint, OpcServerInfo, ParseClsidError,
-    ParseQualityError, ServerGroupHandle, ServerIdentifier, ServerItemHandle, TagBatch,
-    TagBatchIter, TagExtractError, TagValues, WriteBatch, WriteBatchIntoIter, WriteBatchIter,
+    BrowseDirection, BrowseType, ClientGroupHandle, ClientItemHandle, Clsid, IntoTags,
+    IntoWriteBatch, OpcServerEndpoint, OpcServerInfo, ParseClsidError, ParseQualityError,
+    ServerGroupHandle, ServerIdentifier, ServerItemHandle, TagBatch, TagBatchIter, TagExtractError,
+    TagValues, WriteBatch, WriteBatchIntoIter, WriteBatchIter,
 };
 
 // Tier 2 Service Provider Interface (SPI)

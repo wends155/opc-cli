@@ -1,4 +1,6 @@
-use opc_da_client::{MockServerConnector, MockState, OpcDaClient, OpcProvider, OpcValue};
+use opc_da_client::{
+    MockServerConnector, MockState, OpcDaClient, OpcProvider, OpcServerEndpoint, OpcValue,
+};
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 
@@ -23,12 +25,14 @@ async fn test_opc_provider_batch_write_atomic() {
     let results = client
         .write_tag_batch("Mock.Server.1", writes.into())
         .await
-        .expect("batch write should succeed");
+        .expect("write_tag_batch should succeed");
 
     assert_eq!(results.len(), 3);
-    for (i, res) in results.iter().enumerate() {
+    assert_eq!(results[0].tag_id, "Tag1");
+    assert_eq!(results[1].tag_id, "Tag2");
+    assert_eq!(results[2].tag_id, "Tag3");
+    for res in &results {
         assert!(res.is_success());
-        assert_eq!(res.tag_id, format!("Tag{}", i + 1));
     }
 
     assert_eq!(
@@ -44,7 +48,7 @@ async fn test_client_write_tags_accepts_array_slice_and_vector() {
     let connector = MockServerConnector::with_state(state.clone());
     let client = OpcDaClient::new(connector)
         .expect("client must initialize")
-        .bind("Mock.Server.BatchWrite");
+        .bind(OpcServerEndpoint::local("Mock.Server.BatchWrite"));
 
     // 1. Array of pairs
     let array_res = client

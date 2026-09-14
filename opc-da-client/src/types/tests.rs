@@ -164,33 +164,33 @@ fn test_server_identifier_conversions_and_display() {
 
 #[test]
 fn test_opc_server_info_display_name_and_endpoint() {
-    let info_with_user_type = OpcServerInfo {
-        prog_id: "Matrikon.OPC.Simulation.1".into(),
-        clsid: Clsid::zeroed(),
-        user_type: Some("Matrikon Simulation Server".into()),
-        host: None,
-    };
+    let info_with_user_type = OpcServerInfo::new(
+        "Matrikon.OPC.Simulation.1",
+        Clsid::zeroed(),
+        Some("Matrikon Simulation Server".into()),
+        None,
+    );
     assert_eq!(
         info_with_user_type.display_name(),
         "Matrikon Simulation Server"
     );
     assert_eq!(
-        info_with_user_type.endpoint().identifier,
-        ServerIdentifier::ProgId("Matrikon.OPC.Simulation.1".into())
+        info_with_user_type.endpoint().identifier(),
+        &ServerIdentifier::ProgId("Matrikon.OPC.Simulation.1".into())
     );
 
-    let info_without_user_type = OpcServerInfo {
-        prog_id: "Kepware.KEPServerEX.V6".into(),
-        clsid: Clsid::zeroed(),
-        user_type: None,
-        host: Some("192.168.1.10".into()),
-    };
+    let info_without_user_type = OpcServerInfo::new(
+        "Kepware.KEPServerEX.V6",
+        Clsid::zeroed(),
+        None,
+        Some("192.168.1.10".into()),
+    );
     assert_eq!(
         info_without_user_type.display_name(),
         "Kepware.KEPServerEX.V6"
     );
     assert_eq!(
-        info_without_user_type.endpoint().host.as_deref(),
+        info_without_user_type.endpoint().host(),
         Some("192.168.1.10")
     );
 }
@@ -302,9 +302,11 @@ fn test_tag_batch_into_tags_conversions() {
 
 #[test]
 fn test_tag_batch_into_shareable() {
+    use crate::types::batch::TagBatchRepr;
+
     let owned_batch = vec!["TagA".to_string(), "TagB".to_string()].into_tag_batch();
     let shareable = owned_batch.into_shareable();
-    assert!(matches!(shareable, TagBatch::Shared(_)));
+    assert!(matches!(shareable.repr, TagBatchRepr::Shared(_)));
     assert_eq!(shareable.len(), 2);
     assert_eq!(
         shareable.iter_str().collect::<Vec<_>>(),
@@ -562,6 +564,27 @@ fn test_tag_values_deref() {
 
 #[test]
 fn test_host_normalization_and_remote_detection() {
+    assert_eq!(normalize_host_str(None), None);
+    assert_eq!(normalize_host_str(Some("")), None);
+    assert_eq!(normalize_host_str(Some("   \t\r\n")), None);
+    assert_eq!(normalize_host_str(Some("localhost")), None);
+    assert_eq!(normalize_host_str(Some("LocalHost")), None);
+    assert_eq!(normalize_host_str(Some("LOCALHOST")), None);
+    assert_eq!(normalize_host_str(Some("127.0.0.1")), None);
+    assert_eq!(normalize_host_str(Some("::1")), None);
+    assert_eq!(
+        normalize_host_str(Some("192.168.1.50")),
+        Some("192.168.1.50")
+    );
+    assert_eq!(
+        normalize_host_str(Some("  remote-plc  ")),
+        Some("remote-plc")
+    );
+    assert_eq!(
+        normalize_host_str(Some("scada-node-01")),
+        Some("scada-node-01")
+    );
+
     assert_eq!(normalize_host(None), None);
     assert_eq!(normalize_host(Some("")), None);
     assert_eq!(normalize_host(Some("   ")), None);
@@ -604,7 +627,7 @@ fn test_host_normalization_and_remote_detection() {
         Some("Test Title".to_string()),
         Some("localhost".to_string()),
     );
-    assert_eq!(info.host, None);
+    assert_eq!(info.host(), None);
     assert_eq!(info.display_name(), "Test Title");
     let ep = info.endpoint();
     assert!(!ep.is_remote());
@@ -805,26 +828,26 @@ fn test_endpoint_unc_parsing_roundtrip() {
 
     // Windows UNC backslash path
     let ep1 = OpcServerEndpoint::from_str(r"\\192.168.1.50\Matrikon.OPC.Simulation").unwrap();
-    assert_eq!(ep1.host.as_deref(), Some("192.168.1.50"));
-    assert_eq!(ep1.identifier.to_string(), "Matrikon.OPC.Simulation");
+    assert_eq!(ep1.host(), Some("192.168.1.50"));
+    assert_eq!(ep1.identifier().to_string(), "Matrikon.OPC.Simulation");
     assert!(ep1.is_remote());
     assert_eq!(ep1.to_string(), r"\\192.168.1.50\Matrikon.OPC.Simulation");
 
     // Unix-style forward slash path
     let ep2 = OpcServerEndpoint::from_str("//192.168.1.50/Matrikon.OPC.Simulation").unwrap();
-    assert_eq!(ep2.host.as_deref(), Some("192.168.1.50"));
-    assert_eq!(ep2.identifier.to_string(), "Matrikon.OPC.Simulation");
+    assert_eq!(ep2.host(), Some("192.168.1.50"));
+    assert_eq!(ep2.identifier().to_string(), "Matrikon.OPC.Simulation");
     assert!(ep2.is_remote());
 
     // Localhost UNC normalized to local
     let ep_local = OpcServerEndpoint::from_str(r"\\localhost\Matrikon.OPC.Simulation").unwrap();
-    assert_eq!(ep_local.host, None);
+    assert_eq!(ep_local.host(), None);
     assert!(!ep_local.is_remote());
     assert_eq!(ep_local.to_string(), "Matrikon.OPC.Simulation");
 
     // Plain server name without host
     let ep_plain = OpcServerEndpoint::from_str("Matrikon.OPC.Simulation").unwrap();
-    assert_eq!(ep_plain.host, None);
+    assert_eq!(ep_plain.host(), None);
     assert!(!ep_plain.is_remote());
     assert_eq!(ep_plain.to_string(), "Matrikon.OPC.Simulation");
 
@@ -1023,4 +1046,546 @@ fn test_clsid_windows_guid_conversion() {
 
     let to_into: windows_core::GUID = clsid.into();
     assert_eq!(to_into, guid);
+}
+
+#[test]
+fn test_parse_errors_display_and_traits() {
+    use crate::types::clsid::Clsid;
+    use crate::types::server::{ParseEndpointError, ParseServerIdError};
+    use std::str::FromStr;
+
+    // 1. ParseServerIdError variants & display
+    let err_empty_id = ParseServerIdError::Empty;
+    assert_eq!(
+        format!("{err_empty_id}"),
+        "Server identifier cannot be empty"
+    );
+
+    let err_too_long = ParseServerIdError::ProgIdTooLong(256);
+    assert_eq!(
+        format!("{err_too_long}"),
+        "ProgID length 256 exceeds maximum allowed 255 characters"
+    );
+
+    let err_invalid_prog = ParseServerIdError::InvalidProgId("Invalid..ProgID".to_string());
+    assert_eq!(
+        format!("{err_invalid_prog}"),
+        "Invalid characters or syntax in ProgID: 'Invalid..ProgID'"
+    );
+
+    let clsid_err = Clsid::from_str("not-a-guid").unwrap_err();
+    let err_clsid = ParseServerIdError::InvalidClsid(clsid_err);
+    assert!(format!("{err_clsid}").contains("Invalid CLSID GUID string: 'not-a-guid'"));
+
+    // 2. ParseEndpointError variants & display
+    let err_ep_empty = ParseEndpointError::Empty;
+    assert_eq!(format!("{err_ep_empty}"), "Server endpoint cannot be empty");
+
+    let err_ep_format = ParseEndpointError::InvalidFormat("bad-endpoint".to_string());
+    assert_eq!(
+        format!("{err_ep_format}"),
+        "Invalid endpoint syntax: 'bad-endpoint'"
+    );
+
+    let err_ep_missing = ParseEndpointError::MissingServer(r"\\host\".to_string());
+    assert_eq!(
+        format!("{err_ep_missing}"),
+        r"Missing server identifier in endpoint path: '\\host\'"
+    );
+
+    let err_ep_nested = ParseEndpointError::from(err_empty_id.clone());
+    assert_eq!(
+        format!("{err_ep_nested}"),
+        "Invalid server identifier in endpoint: Server identifier cannot be empty"
+    );
+
+    // 3. std::error::Error source checking
+    let std_err: &dyn std::error::Error = &err_ep_nested;
+    assert!(std_err.source().is_some());
+    let source = std_err.source().unwrap();
+    assert_eq!(format!("{source}"), format!("{err_empty_id}"));
+}
+
+#[test]
+fn test_prog_id_validation_boundaries() {
+    use crate::types::server::{ParseServerIdError, validate_prog_id};
+
+    // Valid boundaries: length 1 and 255
+    assert!(validate_prog_id("A").is_ok());
+    assert!(validate_prog_id("A.B").is_ok());
+
+    let prog_id_255 = "A".repeat(255);
+    assert!(validate_prog_id(&prog_id_255).is_ok());
+
+    let prog_id_dot_255 = format!("{}.{}", "A".repeat(127), "B".repeat(127));
+    assert_eq!(prog_id_dot_255.len(), 255);
+    assert!(validate_prog_id(&prog_id_dot_255).is_ok());
+
+    // Boundary: length 0 (empty) and length 256
+    assert_eq!(validate_prog_id(""), Err(ParseServerIdError::Empty));
+    assert_eq!(validate_prog_id("   "), Err(ParseServerIdError::Empty));
+
+    let prog_id_256 = "A".repeat(256);
+    assert_eq!(
+        validate_prog_id(&prog_id_256),
+        Err(ParseServerIdError::ProgIdTooLong(256))
+    );
+
+    // Syntax rejection: leading or trailing dots
+    assert!(matches!(
+        validate_prog_id(".Server.Prog"),
+        Err(ParseServerIdError::InvalidProgId(_))
+    ));
+    assert!(matches!(
+        validate_prog_id("Server.Prog."),
+        Err(ParseServerIdError::InvalidProgId(_))
+    ));
+
+    // Syntax rejection: consecutive dots
+    assert!(matches!(
+        validate_prog_id("Server..Prog"),
+        Err(ParseServerIdError::InvalidProgId(_))
+    ));
+
+    // Syntax rejection: special characters & spaces
+    let invalid_chars = [
+        "Server Name",
+        "Server@1",
+        "Server#Tag",
+        "Server$Val",
+        "Server/1",
+        "Server\\1",
+        "Server:1",
+    ];
+    for invalid in invalid_chars {
+        assert!(
+            matches!(
+                validate_prog_id(invalid),
+                Err(ParseServerIdError::InvalidProgId(_))
+            ),
+            "Expected '{invalid}' to fail ProgID validation"
+        );
+    }
+}
+
+#[test]
+fn test_server_identifier_from_str_valid_and_invalid() {
+    use crate::types::server::{ParseServerIdError, ServerIdentifier};
+    use std::str::FromStr;
+
+    // 1. Valid ProgID
+    let id_prog = ServerIdentifier::from_str("Matrikon.OPC.Simulation.1").unwrap();
+    assert_eq!(id_prog.as_prog_id(), Some("Matrikon.OPC.Simulation.1"));
+    assert!(id_prog.is_prog_id());
+    assert!(!id_prog.is_clsid());
+
+    // 2. Valid Bracketed CLSID
+    let clsid_str = "{28E68F9A-8D75-11D1-8DC3-3C302A000000}";
+    let id_clsid = ServerIdentifier::from_str(clsid_str).unwrap();
+    assert!(id_clsid.is_clsid());
+    assert_eq!(
+        id_clsid.to_string().to_uppercase(),
+        clsid_str.to_uppercase()
+    );
+
+    // 3. From<&str>
+    let id_from = ServerIdentifier::from("Kepware.KEPServerEX.V6");
+    assert_eq!(id_from.as_prog_id(), Some("Kepware.KEPServerEX.V6"));
+
+    // 4. Invalid cases
+    assert_eq!(
+        ServerIdentifier::from_str(""),
+        Err(ParseServerIdError::Empty)
+    );
+    assert_eq!(
+        ServerIdentifier::from_str("   "),
+        Err(ParseServerIdError::Empty)
+    );
+
+    assert!(matches!(
+        ServerIdentifier::from_str("{not-a-valid-guid}"),
+        Err(ParseServerIdError::InvalidClsid(_))
+    ));
+
+    assert!(matches!(
+        ServerIdentifier::from_str("Invalid Server Identifier"),
+        Err(ParseServerIdError::InvalidProgId(_))
+    ));
+}
+
+#[test]
+fn test_endpoint_from_str_comprehensive_schemes() {
+    use crate::types::server::OpcServerEndpoint;
+    use std::str::FromStr;
+
+    // Windows UNC
+    let ep_unc = OpcServerEndpoint::from_str(r"\\192.168.1.50\Matrikon.OPC.Simulation.1").unwrap();
+    assert_eq!(ep_unc.host.as_deref(), Some("192.168.1.50"));
+    assert_eq!(ep_unc.identifier.to_string(), "Matrikon.OPC.Simulation.1");
+    assert!(ep_unc.is_remote());
+    assert_eq!(
+        ep_unc.to_string(),
+        r"\\192.168.1.50\Matrikon.OPC.Simulation.1"
+    );
+
+    // Unix forward slash
+    let ep_unix = OpcServerEndpoint::from_str("//192.168.1.50/Matrikon.OPC.Simulation.1").unwrap();
+    assert_eq!(ep_unix.host.as_deref(), Some("192.168.1.50"));
+    assert_eq!(ep_unix.identifier.to_string(), "Matrikon.OPC.Simulation.1");
+    assert!(ep_unix.is_remote());
+
+    // URI scheme: opc://
+    let ep_uri =
+        OpcServerEndpoint::from_str("opc://192.168.1.50/Matrikon.OPC.Simulation.1").unwrap();
+    assert_eq!(ep_uri.host.as_deref(), Some("192.168.1.50"));
+    assert_eq!(ep_uri.identifier.to_string(), "Matrikon.OPC.Simulation.1");
+    assert!(ep_uri.is_remote());
+
+    // URI scheme: opc.da://
+    let ep_da_uri =
+        OpcServerEndpoint::from_str("opc.da://192.168.1.50/Matrikon.OPC.Simulation.1").unwrap();
+    assert_eq!(ep_da_uri.host.as_deref(), Some("192.168.1.50"));
+    assert_eq!(
+        ep_da_uri.identifier.to_string(),
+        "Matrikon.OPC.Simulation.1"
+    );
+    assert!(ep_da_uri.is_remote());
+
+    // Raw slash
+    let ep_raw_slash =
+        OpcServerEndpoint::from_str("192.168.1.50/Matrikon.OPC.Simulation.1").unwrap();
+    assert_eq!(ep_raw_slash.host.as_deref(), Some("192.168.1.50"));
+    assert_eq!(
+        ep_raw_slash.identifier.to_string(),
+        "Matrikon.OPC.Simulation.1"
+    );
+    assert!(ep_raw_slash.is_remote());
+
+    // Standalone local ProgID
+    let ep_local_prog = OpcServerEndpoint::from_str("Matrikon.OPC.Simulation.1").unwrap();
+    assert_eq!(ep_local_prog.host, None);
+    assert!(!ep_local_prog.is_remote());
+    assert_eq!(
+        ep_local_prog.identifier.to_string(),
+        "Matrikon.OPC.Simulation.1"
+    );
+
+    // Standalone local CLSID
+    let clsid_str = "{28E68F9A-8D75-11D1-8DC3-3C302A000000}";
+    let ep_local_clsid = OpcServerEndpoint::from_str(clsid_str).unwrap();
+    assert_eq!(ep_local_clsid.host, None);
+    assert!(!ep_local_clsid.is_remote());
+    assert!(ep_local_clsid.identifier.is_clsid());
+}
+
+#[test]
+fn test_endpoint_from_str_localhost_normalization() {
+    use crate::types::server::OpcServerEndpoint;
+    use std::str::FromStr;
+
+    let local_inputs = [
+        r"\\localhost\Matrikon.OPC.Simulation.1",
+        r"\\LOCALHOST\Matrikon.OPC.Simulation.1",
+        r"\\127.0.0.1\Matrikon.OPC.Simulation.1",
+        r"\\::1\Matrikon.OPC.Simulation.1",
+        "//localhost/Matrikon.OPC.Simulation.1",
+        "//127.0.0.1/Matrikon.OPC.Simulation.1",
+        "opc://localhost/Matrikon.OPC.Simulation.1",
+        "opc.da://localhost/Matrikon.OPC.Simulation.1",
+        "opc://127.0.0.1/Matrikon.OPC.Simulation.1",
+        "localhost/Matrikon.OPC.Simulation.1",
+    ];
+
+    for input in local_inputs {
+        let ep = OpcServerEndpoint::from_str(input).unwrap();
+        assert_eq!(
+            ep.host, None,
+            "Host in '{input}' should be normalized to None"
+        );
+        assert!(!ep.is_remote(), "Endpoint '{input}' should not be remote");
+        assert_eq!(ep.identifier.to_string(), "Matrikon.OPC.Simulation.1");
+    }
+}
+
+#[test]
+fn test_endpoint_from_str_negative_syntax_cases() {
+    use crate::types::server::{OpcServerEndpoint, ParseEndpointError, ParseServerIdError};
+    use std::str::FromStr;
+
+    assert_eq!(
+        OpcServerEndpoint::from_str(""),
+        Err(ParseEndpointError::Empty)
+    );
+    assert_eq!(
+        OpcServerEndpoint::from_str("   "),
+        Err(ParseEndpointError::Empty)
+    );
+
+    assert!(matches!(
+        OpcServerEndpoint::from_str(r"\\host\"),
+        Err(ParseEndpointError::MissingServer(_))
+    ));
+    assert_eq!(
+        OpcServerEndpoint::from_str("//host"),
+        Err(ParseEndpointError::InvalidFormat(
+            "Expected host and server separated by delimiter in '//host'".into()
+        ))
+    );
+    assert!(matches!(
+        OpcServerEndpoint::from_str("opc://host/"),
+        Err(ParseEndpointError::MissingServer(_))
+    ));
+    assert!(matches!(
+        OpcServerEndpoint::from_str("opc.da://host/"),
+        Err(ParseEndpointError::MissingServer(_))
+    ));
+
+    assert!(matches!(
+        OpcServerEndpoint::from_str(r"\\192.168.1.50\Invalid Prog@ID"),
+        Err(ParseEndpointError::InvalidServerId(
+            ParseServerIdError::InvalidProgId(_)
+        ))
+    ));
+}
+
+#[test]
+fn test_endpoint_deprecated_from_str_behavior() {
+    use crate::types::server::OpcServerEndpoint;
+    use std::str::FromStr;
+
+    #[allow(deprecated)]
+    let ep: OpcServerEndpoint = r"\\192.168.1.50\Matrikon.OPC.Simulation.1".into();
+    assert_eq!(ep.host.as_deref(), Some("192.168.1.50"));
+    assert_eq!(ep.identifier.to_string(), "Matrikon.OPC.Simulation.1");
+
+    let res = OpcServerEndpoint::from_str(r"\\192.168.1.50\Matrikon.OPC.Simulation.1");
+    assert!(res.is_ok());
+
+    let err_res = OpcServerEndpoint::from_str("");
+    assert!(err_res.is_err());
+}
+
+#[test]
+fn test_tag_batch_encapsulation_methods() {
+    use crate::types::batch::TagBatch;
+    use std::sync::Arc;
+
+    static TAGS: &[&str] = &["Tag1", "Tag2"];
+    let batch_static = TagBatch::from_static(TAGS);
+    assert_eq!(batch_static.len(), 2);
+    assert!(!batch_static.is_empty());
+    assert_eq!(
+        batch_static.iter().collect::<Vec<_>>(),
+        vec!["Tag1", "Tag2"]
+    );
+    assert_eq!(
+        batch_static.iter_str().collect::<Vec<_>>(),
+        vec!["Tag1", "Tag2"]
+    );
+    assert_eq!(batch_static.as_static_slice(), Some(TAGS));
+    assert_eq!(batch_static.as_slice(), None);
+
+    let vec_tags = vec!["TagA".to_string(), "TagB".to_string()];
+    let batch_owned = TagBatch::from(vec_tags);
+    assert_eq!(batch_owned.len(), 2);
+    assert_eq!(batch_owned.as_slice().unwrap(), &["TagA", "TagB"]);
+    assert_eq!(batch_owned.as_static_slice(), None);
+
+    let shared_tags: Arc<[String]> =
+        Arc::from(vec!["S1".to_string(), "S2".to_string()].into_boxed_slice());
+    let batch_shared = TagBatch::from(shared_tags);
+    assert_eq!(batch_shared.len(), 2);
+    assert_eq!(batch_shared.as_slice().unwrap(), &["S1", "S2"]);
+    assert_eq!(batch_shared.as_static_slice(), None);
+
+    let shareable_static = batch_static.into_shareable();
+    assert_eq!(shareable_static.as_static_slice(), Some(TAGS));
+
+    let shareable_owned = batch_owned.into_shareable();
+    assert_eq!(shareable_owned.len(), 2);
+    assert_eq!(shareable_owned.as_slice().unwrap(), &["TagA", "TagB"]);
+
+    let empty = TagBatch::empty();
+    assert_eq!(empty.len(), 0);
+    assert!(empty.is_empty());
+    assert_eq!(empty.as_static_slice(), Some(&[][..]));
+}
+
+#[test]
+fn test_tag_batch_value_equality() {
+    use crate::types::batch::TagBatch;
+
+    static TAGS: &[&str] = &["Tag1", "Tag2"];
+    let b_static = TagBatch::from_static(TAGS);
+    let b_owned = TagBatch::from(vec!["Tag1".to_string(), "Tag2".to_string()]);
+    let b_sso = TagBatch::from_str_lenient("Tag1");
+    let b_sso_owned = TagBatch::from(vec!["Tag1".to_string()]);
+
+    assert_eq!(
+        b_static, b_owned,
+        "Static and Owned batches with identical items must be equal"
+    );
+    assert_eq!(
+        b_sso, b_sso_owned,
+        "SSO inline and OwnedSingle with identical items must be equal"
+    );
+    assert_ne!(b_static, b_sso);
+}
+
+#[test]
+fn test_tag_batch_from_iterator() {
+    use crate::types::batch::TagBatch;
+
+    let strings = vec!["Tag1".to_string(), "Tag2".to_string()];
+    let batch_owned: TagBatch = strings.into_iter().collect();
+    assert_eq!(batch_owned.len(), 2);
+    assert_eq!(
+        batch_owned.iter_str().collect::<Vec<_>>(),
+        vec!["Tag1", "Tag2"]
+    );
+
+    let slices = ["TagA", "TagB", "TagC"];
+    let batch_slices: TagBatch = slices.into_iter().collect();
+    assert_eq!(batch_slices.len(), 3);
+    assert_eq!(
+        batch_slices.iter_str().collect::<Vec<_>>(),
+        vec!["TagA", "TagB", "TagC"]
+    );
+
+    let empty_batch: TagBatch = std::iter::empty::<String>().collect();
+    assert_eq!(empty_batch.len(), 0);
+    assert!(empty_batch.is_empty());
+}
+
+#[test]
+fn test_tag_batch_sso_boundary_and_multibyte_safety() {
+    use crate::types::batch::TagBatch;
+
+    // 0-byte empty string
+    let batch_empty = TagBatch::from_str_lenient("");
+    assert_eq!(batch_empty.len(), 1);
+    assert_eq!(batch_empty.iter_str().collect::<Vec<_>>(), vec![""]);
+    assert_eq!(batch_empty.into_vec(), vec![""]);
+
+    // Exactly 31-byte string
+    let s31 = "1234567890123456789012345678901";
+    assert_eq!(s31.len(), 31);
+    let batch_31 = TagBatch::from_str_lenient(s31);
+    assert_eq!(batch_31.len(), 1);
+    assert_eq!(batch_31.iter_str().next(), Some(s31));
+    assert_eq!(batch_31.into_vec(), vec![s31.to_string()]);
+
+    // Exactly 32-byte string
+    let s32 = "12345678901234567890123456789012";
+    assert_eq!(s32.len(), 32);
+    let batch_32 = TagBatch::from_str_lenient(s32);
+    assert_eq!(batch_32.len(), 1);
+    assert_eq!(batch_32.iter_str().next(), Some(s32));
+    assert_eq!(batch_32.into_vec(), vec![s32.to_string()]);
+
+    // Multibyte UTF-8: Japanese
+    let jp = "タグ１２３";
+    assert_eq!(jp.len(), 15);
+    let batch_jp = TagBatch::from_str_lenient(jp);
+    assert_eq!(batch_jp.len(), 1);
+    assert_eq!(batch_jp.iter_str().next(), Some(jp));
+    assert_eq!(batch_jp.into_vec(), vec![jp.to_string()]);
+
+    // Multibyte UTF-8: Emoji
+    let emoji = "🚀🏭⚡";
+    assert_eq!(emoji.len(), 11);
+    let batch_emoji = TagBatch::from_str_lenient(emoji);
+    assert_eq!(batch_emoji.len(), 1);
+    assert_eq!(batch_emoji.iter_str().next(), Some(emoji));
+
+    // 33-byte multibyte fallback
+    let s33 = format!("{}タグ", "A".repeat(27));
+    assert_eq!(s33.len(), 33);
+    let batch_33 = TagBatch::from_str_lenient(&s33);
+    assert_eq!(batch_33.iter_str().next(), Some(s33.as_str()));
+}
+
+#[test]
+fn test_tag_extract_error_tag_accessor() {
+    let err_not_req = TagExtractError::NotRequested("Sensor.Temperature".to_string());
+    assert_eq!(err_not_req.tag(), "Sensor.Temperature");
+
+    let err_read_failed = TagExtractError::ReadFailed {
+        tag: "Sensor.Pressure".to_string(),
+        source: crate::errors::OpcError::Connection("DCOM RPC disconnected".into()),
+    };
+    assert_eq!(err_read_failed.tag(), "Sensor.Pressure");
+
+    let err_no_val = TagExtractError::NoValue("Sensor.FlowRate".to_string());
+    assert_eq!(err_no_val.tag(), "Sensor.FlowRate");
+
+    let err_type_mismatch = TagExtractError::TypeMismatch {
+        tag: "Sensor.StatusFlag".to_string(),
+        value: "active".to_string(),
+        expected: "bool",
+    };
+    assert_eq!(err_type_mismatch.tag(), "Sensor.StatusFlag");
+
+    // Borrow verification: returns &str without heap reallocation
+    let borrowed: &str = err_not_req.tag();
+    assert_eq!(borrowed, "Sensor.Temperature");
+}
+
+#[test]
+fn test_opc_server_info_getters_and_encapsulation() {
+    let clsid = Clsid::from_u128(0x28E6_8F9A_8D75_11D1_8DC3_3C30_2A00_0000);
+    let info = OpcServerInfo::new(
+        "Matrikon.OPC.Simulation.1",
+        clsid,
+        Some("Matrikon Simulation Server".to_string()),
+        Some("192.168.1.50".to_string()),
+    );
+
+    assert_eq!(info.prog_id(), "Matrikon.OPC.Simulation.1");
+    assert_eq!(info.clsid(), clsid);
+    assert_eq!(info.user_type(), Some("Matrikon Simulation Server"));
+    assert_eq!(info.host(), Some("192.168.1.50"));
+    assert_eq!(info.display_name(), "Matrikon Simulation Server");
+
+    let ep = info.endpoint();
+    assert!(ep.is_remote());
+    assert_eq!(ep.host(), Some("192.168.1.50"));
+    assert_eq!(
+        ep.identifier(),
+        &ServerIdentifier::ProgId("Matrikon.OPC.Simulation.1".into())
+    );
+
+    // Consuming accessor verification
+    assert_eq!(info.into_prog_id(), "Matrikon.OPC.Simulation.1");
+
+    // Fallback display name and localhost normalization to None
+    let local_info = OpcServerInfo::new(
+        "Kepware.KEPServerEX.V6",
+        Clsid::zeroed(),
+        None,
+        Some("localhost".to_string()),
+    );
+
+    assert_eq!(local_info.prog_id(), "Kepware.KEPServerEX.V6");
+    assert_eq!(local_info.clsid(), Clsid::zeroed());
+    assert_eq!(local_info.user_type(), None);
+    assert_eq!(local_info.host(), None);
+    assert_eq!(local_info.display_name(), "Kepware.KEPServerEX.V6");
+
+    let local_ep = local_info.endpoint();
+    assert!(!local_ep.is_remote());
+    assert_eq!(local_ep.host(), None);
+    assert_eq!(
+        local_ep.identifier(),
+        &ServerIdentifier::ProgId("Kepware.KEPServerEX.V6".into())
+    );
+
+    // Whitespace host normalization to None
+    let trimmed_info = OpcServerInfo::new(
+        "Yokogawa.Exaopc.1",
+        Clsid::zeroed(),
+        Some("Yokogawa Server".to_string()),
+        Some("   ".to_string()),
+    );
+    assert_eq!(trimmed_info.host(), None);
 }

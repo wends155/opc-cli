@@ -1,40 +1,76 @@
-#![allow(deprecated)]
+use std::collections::HashSet;
 
-use opc_da_client::{ClientItemHandle, GroupHandle, ItemHandle, ServerItemHandle};
+use opc_da_client::{ClientGroupHandle, ClientItemHandle, ServerGroupHandle, ServerItemHandle};
 
 #[test]
 fn test_handle_type_safety_representations() {
-    let client_h = ClientItemHandle::new(101);
-    let server_h = ServerItemHandle::new(202);
-    let group_h = GroupHandle::new(303);
+    let client_g = ClientGroupHandle::new(101);
+    let server_g = ServerGroupHandle::new(202);
+    let client_i = ClientItemHandle::new(303);
+    let server_i = ServerItemHandle::new(404);
 
-    assert_eq!(client_h.as_raw(), 101);
-    assert_eq!(server_h.as_raw(), 202);
-    assert_eq!(group_h.as_raw(), 303);
+    assert_eq!(client_g.as_raw(), 101);
+    assert_eq!(server_g.as_raw(), 202);
+    assert_eq!(client_i.as_raw(), 303);
+    assert_eq!(server_i.as_raw(), 404);
 
-    assert_eq!(u32::from(client_h), 101);
-    assert_eq!(u32::from(server_h), 202);
-    assert_eq!(u32::from(group_h), 303);
+    assert_eq!(u32::from(client_g), 101);
+    assert_eq!(u32::from(server_g), 202);
+    assert_eq!(u32::from(client_i), 303);
+    assert_eq!(u32::from(server_i), 404);
 
-    assert_eq!(format!("{client_h}"), "101");
-    assert_eq!(format!("{server_h}"), "202");
-    assert_eq!(format!("{group_h}"), "303");
+    assert_eq!(ClientGroupHandle::from(101), client_g);
+    assert_eq!(ServerGroupHandle::from(202), server_g);
+    assert_eq!(ClientItemHandle::from(303), client_i);
+    assert_eq!(ServerItemHandle::from(404), server_i);
+
+    assert_eq!(format!("{client_g}"), "101");
+    assert_eq!(format!("{server_g}"), "202");
+    assert_eq!(format!("{client_i}"), "303");
+    assert_eq!(format!("{server_i}"), "404");
+
+    assert_eq!(ClientGroupHandle::default().as_raw(), 0);
+    assert_eq!(ServerGroupHandle::default().as_raw(), 0);
+    assert_eq!(ClientItemHandle::default().as_raw(), 0);
+    assert_eq!(ServerItemHandle::default().as_raw(), 0);
 }
 
-#[test]
-#[allow(deprecated)]
-fn test_legacy_item_handle_alias_compatibility() {
-    let legacy_h: ItemHandle = ItemHandle::new(999);
-    let server_h: ServerItemHandle = legacy_h;
-    assert_eq!(server_h.as_raw(), 999);
+fn requires_server_group(handle: ServerGroupHandle) -> u32 {
+    handle.as_raw()
 }
 
-fn requires_server_handle(handle: ServerItemHandle) -> u32 {
+fn requires_server_item(handle: ServerItemHandle) -> u32 {
+    handle.as_raw()
+}
+
+fn requires_client_group(handle: ClientGroupHandle) -> u32 {
+    handle.as_raw()
+}
+
+fn requires_client_item(handle: ClientItemHandle) -> u32 {
     handle.as_raw()
 }
 
 #[test]
-fn test_type_enforcement_accepts_server_handle() {
-    let server_h = ServerItemHandle::new(55);
-    assert_eq!(requires_server_handle(server_h), 55);
+fn test_type_enforcement_accepts_correct_handles() {
+    let server_g = ServerGroupHandle::new(11);
+    let client_g = ClientGroupHandle::new(22);
+    let server_i = ServerItemHandle::new(33);
+    let client_i = ClientItemHandle::new(44);
+
+    assert_eq!(requires_server_group(server_g), 11);
+    assert_eq!(requires_client_group(client_g), 22);
+    assert_eq!(requires_server_item(server_i), 33);
+    assert_eq!(requires_client_item(client_i), 44);
+}
+
+#[test]
+fn test_handle_hash_and_equality() {
+    let mut set = HashSet::new();
+    set.insert(ServerItemHandle::new(100));
+    set.insert(ServerItemHandle::new(100));
+    set.insert(ServerItemHandle::new(200));
+    assert_eq!(set.len(), 2);
+    assert!(set.contains(&ServerItemHandle::new(100)));
+    assert!(!set.contains(&ServerItemHandle::new(300)));
 }

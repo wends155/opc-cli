@@ -270,6 +270,28 @@ pub enum TagExtractError {
     },
 }
 
+impl TagExtractError {
+    /// Returns the tag identifier associated with this extraction error.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use opc_da_client::TagExtractError;
+    ///
+    /// let err = TagExtractError::NotRequested("Sensor.Speed".to_string());
+    /// assert_eq!(err.tag(), "Sensor.Speed");
+    /// ```
+    #[must_use]
+    pub fn tag(&self) -> &str {
+        match self {
+            Self::NotRequested(tag)
+            | Self::NoValue(tag)
+            | Self::ReadFailed { tag, .. }
+            | Self::TypeMismatch { tag, .. } => tag.as_str(),
+        }
+    }
+}
+
 impl From<TagExtractError> for OpcError {
     fn from(err: TagExtractError) -> Self {
         match err {

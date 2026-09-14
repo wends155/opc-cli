@@ -1,5 +1,60 @@
 # Project Context Summary
 
+## 2026-09-14: Block 3 (Layer 1 Collection & Module Path Normalization) Completed (`opc-da-client`)
+> 📝 **Context Update:**
+> * **Feature:** Execution of Block 3 of the 7-block modernization roadmap (`review_report.md` Findings 8, 9, 10, 11, 12 in `opc-da-client`), delivering zero-allocation tag error extraction, encapsulation of host normalization helpers, purge of dead `BrowseFilter`, removal of deprecated handle aliases, struct field encapsulation for `OpcServerInfo`, and module path normalization to `pub(crate) mod` across all 10 submodules of `types.rs`.
+> * **Changes:**
+>   - **Collection Error Ergonomics (`types/collection.rs`):**
+>     - Implemented `TagExtractError::tag(&self) -> &str` borrowing tag identifiers across all four variants (`NotRequested`, `NoValue`, `ReadFailed`, `TypeMismatch`) with zero heap reallocations.
+>     - Validated via unit tests in `types/tests.rs` and doc-tests.
+>   - **Host Helper Encapsulation (`types/server.rs`):**
+>     - Scoped `normalize_host_str`, `normalize_host`, and `is_remote_host` to `pub(crate)`, hiding internal mechanics from external crate consumers.
+>   - **Dead Code Elimination (`types/browse.rs`):**
+>     - Purged unused `enum BrowseFilter` (Resolves Finding 10).
+>   - **Strict Handle Typestate Separation (`types/handles.rs`, `lib.rs`, `tests/`):**
+>     - Deleted legacy `GroupHandle` and `ItemHandle` type aliases from `types/handles.rs` and removed re-exports from `lib.rs`.
+>     - Hardened `tests/handle_type_safety_test.rs` to assert strict distinction between `ServerGroupHandle`, `ClientGroupHandle`, `ServerItemHandle`, and `ClientItemHandle` (Resolves Finding 11).
+>   - **`OpcServerInfo` Encapsulation & Field Accessors (`types/server.rs`):**
+>     - Added safe accessors: `prog_id(&self) -> &str`, `into_prog_id(self) -> String`, `clsid(&self) -> Clsid`, `user_type(&self) -> Option<&str>`, and `host(&self) -> Option<&str>` with `# Examples` doctests.
+>     - Migrated all direct field accesses and struct literal constructions across 8 files (`provider.rs`, `README.md`, `com/connector/server.rs`, `com/discovery.rs`, `com/client.rs`, `connector/mock.rs`, `com/worker/tests.rs`, `tests/mock_contract_stability_test.rs`).
+>     - Narrowed all `OpcServerInfo` struct fields to private (Resolves Finding 12).
+>   - **Module Path Normalization (`types.rs`):**
+>     - Scoped all 10 submodules (`batch`, `browse`, `clsid`, `collection`, `collector`, `handles`, `quality`, `server`, `value`, `write_batch`) to `pub(crate) mod`, ensuring external consumers access types through normalized top-level and `types::` exports (Resolves Finding 9).
+>   - **Quality Gate Verification:**
+>     - Ran full 9-gate quality pipeline (`pwsh scripts/verify.ps1`): all 116 doc-tests, 2 compile-fail tests, and 433 unit/integration tests passed with exit code 0. Zero clippy warnings under `-D warnings`.
+> * **New Constraints:** `OpcServerInfo` fields are fully encapsulated; access strictly via getters (`prog_id()`, `clsid()`, `user_type()`, `host()`) and construct via `OpcServerInfo::new(...)`. All 10 submodules in `types.rs` are `pub(crate)`; external consumers must import types via `opc_da_client::types::{TypeName}` or root `opc_da_client::{TypeName}` rather than submodule paths.
+> * **Pruned:** Dead code `BrowseFilter`; deprecated type aliases `GroupHandle` and `ItemHandle`; direct struct field access on `OpcServerInfo`; redundant deep module paths in `types/`.
+
+## 2026-09-14: Block 2 (Layer 1 Server & Batch Types) Completed (`opc-da-client`)
+> 📝 **Context Update:**
+> * **Feature:** Execution of Block 2 of the 7-block modernization roadmap (`review_report.md` Findings across Layer 1 Server and Batch Types in `opc-da-client`), establishing structured endpoint & identifier error types, strict ProgID syntax validation, by-value `clsid()` accessor, comprehensive `FromStr` endpoint parsing with automatic localhost normalization, `TagBatch` struct encapsulation with zero-panic multibyte UTF-8 SSO safety, sequence-based semantic equality, `WriteBatch` contiguous slice projection, and internal migration from deprecated `From<&str>`.
+> * **Changes:**
+>   - **Structured Endpoint & Server ID Errors (`types/server.rs`):**
+>     - Introduced `ParseEndpointError` (`Empty`, `MissingServer`, `InvalidFormat`, `InvalidServerId`) and `ParseServerIdError` (`Empty`, `ProgIdTooLong`, `InvalidProgId`, `InvalidClsid`) implementing `Display`, `std::error::Error`, and converted into `ConversionError`/`OpcError`.
+>   - **ProgID Validation & By-Value CLSID (`types/server.rs`):**
+>     - Implemented `validate_prog_id` enforcing 1..=255 ASCII characters, `[a-zA-Z0-9._-]`, no leading/trailing/consecutive dots.
+>     - Added `ServerIdentifier::clsid(&self) -> Option<Clsid>` by value while preserving `as_clsid` for backward compatibility.
+>     - Implemented `FromStr` and `TryFrom<&str>` on `ServerIdentifier`.
+>   - **Comprehensive Endpoint Parsing & Normalization (`types/server.rs`):**
+>     - Implemented `FromStr for OpcServerEndpoint` parsing UNC (`\\`, `//`), URI schemes (`opc://`, `opc.da://`), and raw slash paths.
+>     - Normalized `"localhost"`, `"127.0.0.1"`, `"::1"`, and empty strings to `None`.
+>     - Deprecated `<OpcServerEndpoint as From<&str>>::from` and `From<String>`, migrating all internal call sites in `com/client.rs`, `com/worker/pool.rs`, `com/worker/tests.rs`, and integration tests to `OpcServerEndpoint::local(...)`.
+>   - **`TagBatch` Encapsulation & Memory Safety (`types/batch.rs`):**
+>     - Encapsulated `TagBatch` into an opaque struct wrapping private `TagBatchRepr`.
+>     - Implemented semantic sequence `PartialEq` (`self.len() == other.len() && self.iter_str().eq(other.iter_str())`).
+>     - Hardened inline SSO buffer slicing in `inline_as_str` with `valid_up_to` fallback on partial multibyte UTF-8 boundaries to guarantee zero panics.
+>     - Added `from_static()`, `as_static_slice()`, `as_slice()`, and generic `FromIterator<S: Into<String>>`.
+>   - **`WriteBatch` Projections (`types/write_batch.rs`):**
+>     - Added `as_slice(&self) -> Option<&[(String, OpcValue)]>` and generic `FromIterator<(S, OpcValue)>`.
+>   - **Client Host Normalization & Error Propagation (`com/client.rs`):**
+>     - Hardened `build_internal`, `bind_remote`, and `connect_remote` to normalize `"localhost"` to `None`.
+>     - Standardized role traits (`read_tag_values`, `read_tag_value`, `write_tag_value`, `write_tag_batch`, `browse_tags`) to propagate endpoint parse errors via `server.parse()?`.
+>   - **Test Synchronization & Verification:**
+>     - Added 14 unit tests across `types/tests.rs`, `types/write_batch.rs`, and `com/client.rs`.
+>     - Verified full 9-gate verification pipeline (`pwsh scripts/verify.ps1`): all 113 doc-tests, 2 compile-fail tests, and 395 workspace tests passed with exit code 0.
+> * **New Constraints:** `OpcServerEndpoint` fields are encapsulated; access via `.host()` and `.identifier()`. Internal code must construct local endpoints via `OpcServerEndpoint::local(...)` rather than `From<&str>`. Fallible endpoint parsing uses `s.parse::<OpcServerEndpoint>()`. `TagBatch` matching is disallowed outside `types/batch.rs`; access via inherent methods.
+> * **Pruned:** Leaky enum matching on `TagBatch`; silent fallback on malformed UNC endpoints; unvalidated ProgID string acceptance; unnormalized localhost endpoints in client builder.
+>
 ## 2026-09-14: Architecture Specification Sync for 0.3.0 (`architecture.md`, `opc-da-client/architecture.md`)
 > 📝 **Context Update:**
 > * **Feature:** Architecture documentation sync for 0.3.0 modernization across workspace root `architecture.md` and `opc-da-client/architecture.md`.

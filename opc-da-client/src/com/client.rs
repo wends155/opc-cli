@@ -213,13 +213,14 @@ impl<C: ServerBackend + 'static> OpcDaClientBuilder<C> {
     /// * `connector` - Connector instance to use.
     fn build_internal(
         connector: C,
-        host: Option<String>,
+        host: Option<&str>,
         server: Option<ServerIdentifier>,
         timeout: Option<std::time::Duration>,
     ) -> OpcResult<OpcDaClient<C, Unbound>> {
         let mut client = OpcDaClient::new(connector)?;
         client.timeout = timeout;
         if let Some(server) = server {
+            let host = crate::types::normalize_host(host);
             client.endpoint = Some(OpcServerEndpoint {
                 host,
                 identifier: server,
@@ -242,7 +243,7 @@ impl<C: ServerBackend + 'static> OpcDaClientBuilder<C> {
     ///
     /// Returns [`OpcError::Connection`] if worker thread initialization fails.
     pub fn build_with_connector(self, connector: C) -> OpcResult<OpcDaClient<C, Unbound>> {
-        Self::build_internal(connector, self.host, self.server, self.timeout)
+        Self::build_internal(connector, self.host.as_deref(), self.server, self.timeout)
     }
 }
 
@@ -269,7 +270,7 @@ impl<C: ServerBackend + Default + 'static> OpcDaClientBuilder<C> {
     /// ```
     pub fn build(self) -> OpcResult<OpcDaClient<C, Unbound>> {
         let connector = self.connector.unwrap_or_default();
-        Self::build_internal(connector, self.host, self.server, self.timeout)
+        Self::build_internal(connector, self.host.as_deref(), self.server, self.timeout)
     }
 
     /// Builds the `OpcDaClient` directly in the [`Bound`] typestate.
@@ -414,10 +415,7 @@ impl OpcDaClient<ComConnector, Unbound> {
         host: impl Into<String>,
         server: impl Into<ServerIdentifier>,
     ) -> OpcResult<OpcDaClient<ComConnector, Bound>> {
-        let endpoint = OpcServerEndpoint {
-            host: Some(host.into()),
-            identifier: server.into(),
-        };
+        let endpoint = OpcServerEndpoint::remote(host, server);
         let client = Self::new(ComConnector::new())?;
         Ok(client.bind(endpoint))
     }
@@ -470,10 +468,11 @@ impl<C: ServerBackend + 'static> OpcDaClient<C, Unbound> {
     /// # Examples
     ///
     /// ```rust,no_run
+    /// use opc_da_client::types::OpcServerEndpoint;
     /// use opc_da_client::OpcDaClient;
     ///
     /// let unbound = OpcDaClient::builder().build()?;
-    /// let bound = unbound.bind("Matrikon.OPC.Simulation.1");
+    /// let bound = unbound.bind(OpcServerEndpoint::local("Matrikon.OPC.Simulation.1"));
     /// # Ok::<(), opc_da_client::OpcError>(())
     /// ```
     #[must_use]
@@ -513,10 +512,7 @@ impl<C: ServerBackend + 'static> OpcDaClient<C, Unbound> {
         host: impl Into<String>,
         server: impl Into<ServerIdentifier>,
     ) -> OpcDaClient<C, Bound> {
-        self.bind(OpcServerEndpoint {
-            host: Some(host.into()),
-            identifier: server.into(),
-        })
+        self.bind(OpcServerEndpoint::remote(host, server))
     }
 }
 
@@ -1362,7 +1358,7 @@ impl<C: ServerBackend + 'static, State: Send + Sync + 'static> TagBrowser
 {
     #[tracing::instrument(level = "info", skip(self, collector), err)]
     async fn browse_tags(&self, server: &str, collector: TagCollector) -> OpcResult<Vec<String>> {
-        let endpoint = crate::types::OpcServerEndpoint::from(server);
+        let endpoint = server.parse()?;
         self.dispatch_request(|reply| ComRequest::BrowseTags {
             endpoint,
             collector,
@@ -1375,7 +1371,7 @@ impl<C: ServerBackend + 'static, State: Send + Sync + 'static> TagBrowser
 impl<C: ServerBackend + 'static, State: Send + Sync + 'static> TagReader for OpcDaClient<C, State> {
     #[tracing::instrument(level = "info", skip(self, tags), fields(tag_count = tags.len()), err)]
     async fn read_tag_values(&self, server: &str, tags: TagBatch) -> OpcResult<TagValues> {
-        let endpoint = crate::types::OpcServerEndpoint::from(server);
+        let endpoint = server.parse()?;
         self.dispatch_request(|reply| ComRequest::ReadTagValues {
             endpoint,
             tags,
@@ -1386,7 +1382,7 @@ impl<C: ServerBackend + 'static, State: Send + Sync + 'static> TagReader for Opc
 
     #[tracing::instrument(level = "info", skip(self), err)]
     async fn read_tag_value(&self, server: &str, tag_id: &str) -> OpcResult<TagValue> {
-        let endpoint = crate::types::OpcServerEndpoint::from(server);
+        let endpoint = server.parse()?;
         let tags = TagBatch::from_str_lenient(tag_id);
         let values = self
             .dispatch_request(|reply| ComRequest::ReadTagValues {
@@ -1409,7 +1405,7 @@ impl<C: ServerBackend + 'static, State: Send + Sync + 'static> TagWriter for Opc
         tag_id: &str,
         value: OpcValue,
     ) -> OpcResult<WriteResult> {
-        let endpoint = crate::types::OpcServerEndpoint::from(server);
+        let endpoint = server.parse()?;
         let tag_id_owned = tag_id.to_string();
         self.dispatch_request(|reply| ComRequest::WriteTagValue {
             endpoint,
@@ -1426,7 +1422,7 @@ impl<C: ServerBackend + 'static, State: Send + Sync + 'static> TagWriter for Opc
         server: &str,
         writes: crate::types::WriteBatch,
     ) -> OpcResult<Vec<WriteResult>> {
-        let endpoint = crate::types::OpcServerEndpoint::from(server);
+        let endpoint = server.parse()?;
         self.dispatch_request(|reply| ComRequest::WriteTagValues {
             endpoint,
             writes,
@@ -1456,16 +1452,16 @@ mod tests {
 
     #[tokio::test]
     async fn test_client_list_server_details() {
-        let connector = MockServerConnector::new().with_server_details(vec![OpcServerInfo {
-            prog_id: "Test.Server.1".into(),
-            clsid: crate::types::Clsid::zeroed(),
-            user_type: Some("Test OPC Server".into()),
-            host: None,
-        }]);
+        let connector = MockServerConnector::new().with_server_details(vec![OpcServerInfo::new(
+            "Test.Server.1",
+            crate::types::Clsid::zeroed(),
+            Some("Test OPC Server".into()),
+            None,
+        )]);
         let client = OpcDaClient::new(connector).unwrap();
         let details = client.list_server_details("localhost").await.unwrap();
         assert_eq!(details.len(), 1);
-        assert_eq!(details[0].prog_id, "Test.Server.1");
+        assert_eq!(details[0].prog_id(), "Test.Server.1");
         assert_eq!(details[0].display_name(), "Test OPC Server");
     }
 
@@ -1728,7 +1724,7 @@ mod tests {
         let client = OpcDaClient::new(connector.clone()).unwrap();
 
         // Binding to a server endpoint transitions to Bound, enabling connect_eager
-        let bound = client.bind("Matrikon.OPC.Simulation.1");
+        let bound = client.bind(OpcServerEndpoint::local("Matrikon.OPC.Simulation.1"));
         assert!(bound.connect_eager().await.is_ok());
 
         // Constructing via build_bound directly transitions to Bound
@@ -1796,7 +1792,7 @@ mod tests {
             .with_connector(connector)
             .build()
             .unwrap()
-            .bind("Mock.Server.1");
+            .bind(OpcServerEndpoint::local("Mock.Server.1"));
 
         // Test inherent read_tags (1 argument: tags)
         let values = client.read_tags(vec!["Tag1".to_string()]).await.unwrap();
@@ -1839,7 +1835,7 @@ mod tests {
         };
         OpcDaClient::new(connector)
             .expect("client initialization must succeed")
-            .bind(OpcServerEndpoint::from("Mock.Server.Numerics"))
+            .bind(OpcServerEndpoint::local("Mock.Server.Numerics"))
     }
 
     #[tokio::test]
@@ -1897,7 +1893,7 @@ mod tests {
         };
         let client = OpcDaClient::new(connector)
             .expect("client must initialize")
-            .bind(OpcServerEndpoint::from("Mock.Server.Forwarders"));
+            .bind(OpcServerEndpoint::local("Mock.Server.Forwarders"));
 
         let vals = client
             .read_tag_values("Mock.Server.Forwarders", &["Tag1", "Tag2"])
@@ -1910,5 +1906,45 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(val.tag_id, "Tag1");
+    }
+
+    #[test]
+    fn test_client_bind_remote_localhost_normalization() {
+        let connector = MockServerConnector::new();
+        let client = OpcDaClient::new(connector).unwrap();
+
+        let bound_localhost = client.bind_remote("localhost", "Matrikon.OPC.Simulation.1");
+        assert_eq!(bound_localhost.endpoint().host(), None);
+        assert!(!bound_localhost.endpoint().is_remote());
+        assert_eq!(bound_localhost.server_id(), "Matrikon.OPC.Simulation.1");
+
+        let (unbound, _) = bound_localhost.unbind();
+        let bound_loopback = unbound.bind_remote("127.0.0.1", "Matrikon.OPC.Simulation.1");
+        assert_eq!(bound_loopback.endpoint().host(), None);
+        assert!(!bound_loopback.endpoint().is_remote());
+
+        let (unbound, _) = bound_loopback.unbind();
+        let bound_ipv6 = unbound.bind_remote("::1", "Matrikon.OPC.Simulation.1");
+        assert_eq!(bound_ipv6.endpoint().host(), None);
+        assert!(!bound_ipv6.endpoint().is_remote());
+
+        let (unbound, _) = bound_ipv6.unbind();
+        let bound_remote = unbound.bind_remote("192.168.1.50", "Matrikon.OPC.Simulation.1");
+        assert_eq!(bound_remote.endpoint().host(), Some("192.168.1.50"));
+        assert!(bound_remote.endpoint().is_remote());
+    }
+
+    #[test]
+    fn test_client_builder_localhost_normalization() {
+        let connector = MockServerConnector::new();
+        let client = OpcDaClient::builder()
+            .with_connector(connector)
+            .host("localhost")
+            .server("Matrikon.OPC.Simulation.1")
+            .build()
+            .unwrap();
+
+        assert_eq!(client.endpoint().and_then(|ep| ep.host()), None);
+        assert!(!client.endpoint().is_some_and(OpcServerEndpoint::is_remote));
     }
 }

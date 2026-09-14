@@ -97,17 +97,6 @@ const _: () = assert!(BrowseDirection::Up as u32 == 1);
 const _: () = assert!(BrowseDirection::Down as u32 == 2);
 const _: () = assert!(BrowseDirection::To as u32 == 3);
 
-/// Granular filter for enumeration results.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum BrowseFilter {
-    /// Enumerate all available nodes regardless of type.
-    All,
-    /// Enumerate only branch (container) nodes.
-    Branches,
-    /// Enumerate only leaf (tag item) nodes.
-    Items,
-}
-
 /// Typology of the server's address space.
 #[repr(u32)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]

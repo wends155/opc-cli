@@ -561,8 +561,8 @@ impl OpcServerListCatalog {
             }
         }
 
-        servers.sort_by(|a, b| a.prog_id.cmp(&b.prog_id));
-        servers.dedup_by(|a, b| a.prog_id == b.prog_id);
+        servers.sort_by(|a, b| a.prog_id().cmp(b.prog_id()));
+        servers.dedup_by(|a, b| a.prog_id() == b.prog_id());
         Ok(servers)
     }
 }

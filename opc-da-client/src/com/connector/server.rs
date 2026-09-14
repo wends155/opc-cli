@@ -207,7 +207,10 @@ impl ServerCatalogDiscovery for ComConnector {
     #[tracing::instrument(level = "info", skip(self), err)]
     fn enumerate_servers(&self, host: &str) -> OpcResult<Vec<String>> {
         let details = self.enumerate_server_details(host)?;
-        let mut servers: Vec<String> = details.into_iter().map(|d| d.prog_id).collect();
+        let mut servers: Vec<String> = details
+            .into_iter()
+            .map(OpcServerInfo::into_prog_id)
+            .collect();
         servers.sort();
         servers.dedup();
         Ok(servers)

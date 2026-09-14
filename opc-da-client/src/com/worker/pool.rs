@@ -311,7 +311,7 @@ mod tests {
         let state = Arc::new(MockState::default());
         let connector = Arc::new(MockServerConnector::with_state(state.clone()));
         let mut pool = ConnectionPool::new();
-        let endpoint = OpcServerEndpoint::from("Matrikon.OPC.Simulation.1");
+        let endpoint = OpcServerEndpoint::local("Matrikon.OPC.Simulation.1");
 
         // First call: cache miss, connect_count becomes 1
         let res1 = dispatch_with_retry(&mut pool, &connector, &endpoint, |_| Ok(42));
@@ -330,7 +330,7 @@ mod tests {
         let state = Arc::new(MockState::default());
         let connector = Arc::new(MockServerConnector::with_state(state.clone()));
         let mut pool = ConnectionPool::new();
-        let endpoint = OpcServerEndpoint::from("Matrikon.OPC.Simulation.1");
+        let endpoint = OpcServerEndpoint::local("Matrikon.OPC.Simulation.1");
 
         // First connect
         let _ = dispatch_with_retry(&mut pool, &connector, &endpoint, |_| Ok(()));
@@ -361,7 +361,7 @@ mod tests {
         let state = Arc::new(MockState::default());
         let connector = Arc::new(MockServerConnector::with_state(state.clone()));
         let mut pool = ConnectionPool::new();
-        let endpoint = OpcServerEndpoint::from("Matrikon.OPC.Simulation.1");
+        let endpoint = OpcServerEndpoint::local("Matrikon.OPC.Simulation.1");
 
         let _ = dispatch_with_retry(&mut pool, &connector, &endpoint, |_| Ok(()));
         assert_eq!(state.connect_count.load(Ordering::SeqCst), 1);
@@ -383,7 +383,7 @@ mod tests {
         let state = Arc::new(MockState::default());
         let connector = Arc::new(MockServerConnector::with_state(state.clone()));
         let mut pool = ConnectionPool::new();
-        let endpoint = OpcServerEndpoint::from("Matrikon.OPC.Simulation.1");
+        let endpoint = OpcServerEndpoint::local("Matrikon.OPC.Simulation.1");
 
         let tags_a = vec!["Tag1".to_string(), "Tag2".to_string()];
         let tags_b = vec!["Tag3".to_string()];
@@ -495,8 +495,8 @@ mod tests {
         let state = Arc::new(MockState::default());
         let connector = Arc::new(MockServerConnector::with_state(state.clone()));
         let mut pool = ConnectionPool::new();
-        let dead_endpoint = OpcServerEndpoint::from("Dead.Server.1");
-        let live_endpoint = OpcServerEndpoint::from("Live.Server.1");
+        let dead_endpoint = OpcServerEndpoint::local("Dead.Server.1");
+        let live_endpoint = OpcServerEndpoint::local("Live.Server.1");
 
         // Phase 1: Initial connection failure enters 5s cooldown
         state.should_fail_connect.store(true, Ordering::SeqCst);
@@ -542,7 +542,7 @@ mod tests {
         let state = Arc::new(MockState::default());
         let connector = Arc::new(MockServerConnector::with_state(state.clone()));
         let mut pool = ConnectionPool::new();
-        let endpoint = OpcServerEndpoint::from("Matrikon.OPC.Simulation.1");
+        let endpoint = OpcServerEndpoint::local("Matrikon.OPC.Simulation.1");
 
         // Connect and create active group
         let _ = dispatch_with_retry(&mut pool, &connector, &endpoint, |pooled| {
@@ -579,7 +579,7 @@ mod tests {
         let mut pool: ConnectionPool<<MockServerConnector as ServerConnector>::Server> =
             ConnectionPool::new();
         for i in 0..=MAX_COOLDOWNS + 5 {
-            let ep = OpcServerEndpoint::from(format!("Server.{i}").as_str());
+            let ep = OpcServerEndpoint::local(format!("Server.{i}"));
             pool.record_failure(ep);
         }
         assert!(pool.failure_cooldowns.len() <= MAX_COOLDOWNS);

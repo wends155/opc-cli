@@ -484,12 +484,12 @@ impl Default for MockServerConnector {
             state: state.clone(),
             ..Default::default()
         });
-        let default_details = vec![OpcServerInfo {
-            prog_id: "Matrikon.OPC.Simulation.1".to_string(),
-            clsid: Clsid::zeroed(),
-            user_type: Some("Matrikon OPC Simulation Server".to_string()),
-            host: None,
-        }];
+        let default_details = vec![OpcServerInfo::new(
+            "Matrikon.OPC.Simulation.1",
+            Clsid::zeroed(),
+            Some("Matrikon OPC Simulation Server".to_string()),
+            None,
+        )];
         Self {
             server,
             state,
@@ -523,12 +523,12 @@ impl MockServerConnector {
             state: state.clone(),
             ..Default::default()
         });
-        let default_details = vec![OpcServerInfo {
-            prog_id: "Mock.Server.1".to_string(),
-            clsid: Clsid::zeroed(),
-            user_type: Some("Mock Server 1".to_string()),
-            host: None,
-        }];
+        let default_details = vec![OpcServerInfo::new(
+            "Mock.Server.1",
+            Clsid::zeroed(),
+            Some("Mock Server 1".to_string()),
+            None,
+        )];
         Self {
             server,
             state,
@@ -559,12 +559,7 @@ impl MockServerConnector {
     pub fn with_servers(self, servers: Vec<String>) -> Self {
         let synthesized: Vec<OpcServerInfo> = servers
             .iter()
-            .map(|s| OpcServerInfo {
-                prog_id: s.clone(),
-                clsid: Clsid::zeroed(),
-                user_type: None,
-                host: None,
-            })
+            .map(|s| OpcServerInfo::new(s.clone(), Clsid::zeroed(), None, None))
             .collect();
         if let Ok(mut guard) = self.servers.lock() {
             *guard = servers;
@@ -583,7 +578,7 @@ impl MockServerConnector {
     /// * `details` - Vector of [`OpcServerInfo`] records.
     #[must_use]
     pub fn with_server_details(self, details: Vec<OpcServerInfo>) -> Self {
-        let prog_ids: Vec<String> = details.iter().map(|d| d.prog_id.clone()).collect();
+        let prog_ids: Vec<String> = details.iter().map(|d| d.prog_id().to_string()).collect();
         if let Ok(mut guard) = self.server_details.lock() {
             *guard = details;
         }
@@ -963,12 +958,12 @@ mod tests {
     #[test]
     fn test_mock_server_connector_server_details() {
         use crate::types::OpcServerInfo;
-        let mock = MockServerConnector::new().with_server_details(vec![OpcServerInfo {
-            prog_id: "Custom.Mock.1".into(),
-            clsid: Clsid::zeroed(),
-            user_type: Some("Custom Mock Title".into()),
-            host: None,
-        }]);
+        let mock = MockServerConnector::new().with_server_details(vec![OpcServerInfo::new(
+            "Custom.Mock.1",
+            Clsid::zeroed(),
+            Some("Custom Mock Title".into()),
+            None,
+        )]);
         let details = mock.enumerate_server_details("localhost").unwrap();
         assert_eq!(details.len(), 1);
         assert_eq!(details[0].display_name(), "Custom Mock Title");
@@ -1246,7 +1241,7 @@ mod tests {
         assert_eq!(servers, vec!["Offline.Server.1"]);
         let details = connector.enumerate_server_details("localhost").unwrap();
         assert_eq!(details.len(), 1);
-        assert_eq!(details[0].prog_id, "Offline.Server.1");
+        assert_eq!(details[0].prog_id(), "Offline.Server.1");
 
         // 3. Connect endpoint offline
         let server = connector

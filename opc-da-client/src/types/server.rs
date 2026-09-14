@@ -3,7 +3,6 @@
 use std::fmt;
 use std::str::FromStr;
 
-use crate::errors::OpcError;
 use crate::types::clsid::Clsid;
 
 /// Normalizes a host string slice, returning `None` if it represents the local machine.
@@ -18,19 +17,8 @@ use crate::types::clsid::Clsid;
 /// # Returns
 ///
 /// Returns `Some(&str)` containing the trimmed remote host, or `None` if the host represents localhost.
-///
-/// # Examples
-///
-/// ```
-/// use opc_da_client::types::normalize_host_str;
-///
-/// assert_eq!(normalize_host_str(Some("localhost")), None);
-/// assert_eq!(normalize_host_str(Some("127.0.0.1")), None);
-/// assert_eq!(normalize_host_str(Some("  ")), None);
-/// assert_eq!(normalize_host_str(Some("192.168.1.50")), Some("192.168.1.50"));
-/// ```
 #[must_use]
-pub fn normalize_host_str(host: Option<&str>) -> Option<&str> {
+pub(crate) fn normalize_host_str(host: Option<&str>) -> Option<&str> {
     let h = host?.trim();
     if h.is_empty() || h.eq_ignore_ascii_case("localhost") || h == "127.0.0.1" || h == "::1" {
         None
@@ -51,17 +39,8 @@ pub fn normalize_host_str(host: Option<&str>) -> Option<&str> {
 /// # Returns
 ///
 /// Returns `Some(String)` containing the trimmed remote host, or `None` if the host represents localhost.
-///
-/// # Examples
-///
-/// ```
-/// use opc_da_client::types::normalize_host;
-///
-/// assert_eq!(normalize_host(Some("localhost")), None);
-/// assert_eq!(normalize_host(Some("scada-node-01")), Some("scada-node-01".to_string()));
-/// ```
 #[must_use]
-pub fn normalize_host(host: Option<&str>) -> Option<String> {
+pub(crate) fn normalize_host(host: Option<&str>) -> Option<String> {
     normalize_host_str(host).map(str::to_string)
 }
 
@@ -76,20 +55,68 @@ pub fn normalize_host(host: Option<&str>) -> Option<String> {
 /// # Returns
 ///
 /// Returns `true` if `host` represents a remote address, `false` otherwise.
-///
-/// # Examples
-///
-/// ```
-/// use opc_da_client::types::is_remote_host;
-///
-/// assert!(!is_remote_host(None));
-/// assert!(!is_remote_host(Some("localhost")));
-/// assert!(is_remote_host(Some("192.168.1.10")));
-/// ```
 #[inline]
 #[must_use]
-pub fn is_remote_host(host: Option<&str>) -> bool {
+pub(crate) fn is_remote_host(host: Option<&str>) -> bool {
     normalize_host_str(host).is_some()
+}
+
+/// Error returned when parsing a [`ServerIdentifier`] from an invalid string representation.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum ParseServerIdError {
+    /// Input string was empty or whitespace-only.
+    #[error("Server identifier cannot be empty")]
+    Empty,
+    /// ProgID exceeded the maximum allowed length of 255 characters.
+    #[error("ProgID length {0} exceeds maximum allowed 255 characters")]
+    ProgIdTooLong(usize),
+    /// ProgID contained invalid syntax, characters, or dot placement.
+    #[error("Invalid characters or syntax in ProgID: '{0}'")]
+    InvalidProgId(String),
+    /// CLSID parsing failed.
+    #[error("Invalid CLSID syntax: {0}")]
+    InvalidClsid(#[from] crate::types::clsid::ParseClsidError),
+}
+
+/// Error returned when parsing an [`OpcServerEndpoint`] from an invalid string representation.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum ParseEndpointError {
+    /// Input string was empty or whitespace-only.
+    #[error("Server endpoint cannot be empty")]
+    Empty,
+    /// Missing server identifier in endpoint path.
+    #[error("Missing server identifier in endpoint path: '{0}'")]
+    MissingServer(String),
+    /// Malformed endpoint URI or path syntax.
+    #[error("Invalid endpoint syntax: '{0}'")]
+    InvalidFormat(String),
+    /// Server identifier in endpoint failed validation.
+    #[error("Invalid server identifier in endpoint: {0}")]
+    InvalidServerId(#[from] ParseServerIdError),
+}
+
+impl From<ParseEndpointError> for crate::errors::ConversionError {
+    fn from(err: ParseEndpointError) -> Self {
+        Self::InvalidEndpoint(err.to_string())
+    }
+}
+
+impl From<ParseEndpointError> for crate::errors::OpcError {
+    fn from(err: ParseEndpointError) -> Self {
+        Self::Conversion(crate::errors::ConversionError::from(err))
+    }
+}
+
+impl From<ParseServerIdError> for crate::errors::ConversionError {
+    fn from(err: ParseServerIdError) -> Self {
+        ParseEndpointError::from(err).into()
+    }
+}
+
+impl From<ParseServerIdError> for crate::errors::OpcError {
+    fn from(err: ParseServerIdError) -> Self {
+        Self::Conversion(crate::errors::ConversionError::from(err))
+    }
 }
 
 /// Strongly-typed identifier for an OPC DA server.
@@ -142,6 +169,64 @@ impl ServerIdentifier {
     pub fn is_prog_id(&self) -> bool {
         matches!(self, Self::ProgId(_))
     }
+
+    /// Returns the CLSID by value if this identifier is a [`ServerIdentifier::Clsid`].
+    ///
+    /// # Returns
+    ///
+    /// `Some(Clsid)` containing a copy of the CLSID, or `None` if this identifier is a ProgID.
+    #[must_use]
+    pub const fn clsid(&self) -> Option<Clsid> {
+        match self {
+            Self::Clsid(clsid) => Some(*clsid),
+            Self::ProgId(_) => None,
+        }
+    }
+}
+
+/// Validates that a string slice conforms to OPC DA Programmatic Identifier (ProgID) rules.
+///
+/// A valid ProgID:
+/// - Must have length between 1 and 255 characters inclusive.
+/// - Must contain only ASCII alphanumeric characters, dots (`.`), underscores (`_`), or hyphens (`-`).
+/// - Cannot begin or end with a dot.
+/// - Cannot contain consecutive dots (`..`).
+/// - Cannot be empty or whitespace-only.
+pub(crate) fn validate_prog_id(s: &str) -> Result<(), ParseServerIdError> {
+    if s.is_empty() || s.chars().all(char::is_whitespace) {
+        return Err(ParseServerIdError::Empty);
+    }
+    if s.len() > 255 {
+        return Err(ParseServerIdError::ProgIdTooLong(s.len()));
+    }
+    if s.starts_with('.') || s.ends_with('.') || s.contains("..") {
+        return Err(ParseServerIdError::InvalidProgId(s.to_string()));
+    }
+    for b in s.bytes() {
+        if !(b.is_ascii_alphanumeric() || b == b'.' || b == b'_' || b == b'-') {
+            return Err(ParseServerIdError::InvalidProgId(s.to_string()));
+        }
+    }
+    Ok(())
+}
+
+impl FromStr for ServerIdentifier {
+    type Err = ParseServerIdError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let trimmed = s.trim();
+        if trimmed.is_empty() {
+            return Err(ParseServerIdError::Empty);
+        }
+
+        if trimmed.starts_with('{') || trimmed.contains('-') {
+            let clsid = Clsid::from_str(trimmed).map_err(ParseServerIdError::InvalidClsid)?;
+            Ok(Self::Clsid(clsid))
+        } else {
+            validate_prog_id(trimmed)?;
+            Ok(Self::ProgId(trimmed.to_string()))
+        }
+    }
 }
 
 /// Formats a 128-bit COM GUID into a bracketed registry/DCOM string:
@@ -193,13 +278,13 @@ impl From<String> for ServerIdentifier {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OpcServerInfo {
     /// Programmatic Identifier of the server (e.g., `"Matrikon.OPC.Simulation.1"`).
-    pub prog_id: String,
+    prog_id: String,
     /// 128-bit COM Class ID of the server.
-    pub clsid: Clsid,
+    clsid: Clsid,
     /// Human-readable server title from catalog metadata, or `None` if absent.
-    pub user_type: Option<String>,
+    user_type: Option<String>,
     /// Target host machine (or `None` for localhost).
-    pub host: Option<String>,
+    host: Option<String>,
 }
 
 impl OpcServerInfo {
@@ -218,6 +303,91 @@ impl OpcServerInfo {
             user_type,
             host: normalize_host(host.as_deref()),
         }
+    }
+
+    /// Returns the server Programmatic Identifier (ProgID).
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use opc_da_client::{Clsid, OpcServerInfo};
+    ///
+    /// let info = OpcServerInfo::new("Matrikon.OPC.Simulation.1", Clsid::zeroed(), None, None);
+    /// assert_eq!(info.prog_id(), "Matrikon.OPC.Simulation.1");
+    /// ```
+    #[must_use]
+    pub fn prog_id(&self) -> &str {
+        &self.prog_id
+    }
+
+    /// Consumes the server metadata, returning its owned Programmatic Identifier (ProgID).
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use opc_da_client::{Clsid, OpcServerInfo};
+    ///
+    /// let info = OpcServerInfo::new("Matrikon.OPC.Simulation.1", Clsid::zeroed(), None, None);
+    /// assert_eq!(info.into_prog_id(), "Matrikon.OPC.Simulation.1");
+    /// ```
+    #[must_use]
+    pub fn into_prog_id(self) -> String {
+        self.prog_id
+    }
+
+    /// Returns the 128-bit COM Class ID (`Clsid`) of the server.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use opc_da_client::{Clsid, OpcServerInfo};
+    ///
+    /// let info = OpcServerInfo::new("Matrikon.OPC.Simulation.1", Clsid::zeroed(), None, None);
+    /// assert_eq!(info.clsid(), Clsid::zeroed());
+    /// ```
+    #[must_use]
+    pub const fn clsid(&self) -> Clsid {
+        self.clsid
+    }
+
+    /// Returns the human-readable server title from catalog metadata, or `None` if absent.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use opc_da_client::{Clsid, OpcServerInfo};
+    ///
+    /// let info = OpcServerInfo::new(
+    ///     "Matrikon.OPC.Simulation.1",
+    ///     Clsid::zeroed(),
+    ///     Some("Matrikon".into()),
+    ///     None,
+    /// );
+    /// assert_eq!(info.user_type(), Some("Matrikon"));
+    /// ```
+    #[must_use]
+    pub fn user_type(&self) -> Option<&str> {
+        self.user_type.as_deref()
+    }
+
+    /// Returns the target host machine name or IP address, or `None` if targeting localhost.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use opc_da_client::{Clsid, OpcServerInfo};
+    ///
+    /// let info = OpcServerInfo::new(
+    ///     "Matrikon.OPC.Simulation.1",
+    ///     Clsid::zeroed(),
+    ///     None,
+    ///     Some("192.168.1.50".into()),
+    /// );
+    /// assert_eq!(info.host(), Some("192.168.1.50"));
+    /// ```
+    #[must_use]
+    pub fn host(&self) -> Option<&str> {
+        self.host.as_deref()
     }
 
     /// Returns the user-friendly title if available, otherwise falls back to [`OpcServerInfo::prog_id`].
@@ -240,9 +410,9 @@ impl OpcServerInfo {
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct OpcServerEndpoint {
     /// Target machine hostname or IP address (`None` or `"localhost"` for local connection).
-    pub host: Option<String>,
+    pub(crate) host: Option<String>,
     /// Strongly-typed server identifier (ProgID or CLSID).
-    pub identifier: ServerIdentifier,
+    pub(crate) identifier: ServerIdentifier,
 }
 
 impl OpcServerEndpoint {
@@ -285,7 +455,7 @@ impl OpcServerEndpoint {
     ///
     /// let ep = OpcServerEndpoint::remote("192.168.1.10", "Matrikon.OPC.Simulation.1");
     /// assert!(ep.is_remote());
-    /// assert_eq!(ep.host.as_deref(), Some("192.168.1.10"));
+    /// assert_eq!(ep.host(), Some("192.168.1.10"));
     /// ```
     #[must_use]
     pub fn remote(host: impl Into<String>, identifier: impl Into<ServerIdentifier>) -> Self {
@@ -294,6 +464,18 @@ impl OpcServerEndpoint {
             host: normalize_host(Some(&host_str)),
             identifier: identifier.into(),
         }
+    }
+
+    /// Returns a borrowed reference to the target host if configured, or `None` if targeting the local machine.
+    #[must_use]
+    pub fn host(&self) -> Option<&str> {
+        self.host.as_deref()
+    }
+
+    /// Returns a borrowed reference to the [`ServerIdentifier`].
+    #[must_use]
+    pub const fn identifier(&self) -> &ServerIdentifier {
+        &self.identifier
     }
 
     /// Returns `true` if this endpoint targets a remote machine.
@@ -333,8 +515,9 @@ impl From<ServerIdentifier> for OpcServerEndpoint {
 
 /// Parses an endpoint from a string slice.
 ///
-/// Supports UNC syntax (`r"\\<host>\<server>"` or `"//<host>/<server>"`) as well as
-/// standalone server identifiers (local connection).
+/// Supports UNC syntax (`r"\\<host>\<server>"` or `"//<host>/<server>"`), URI schemes
+/// (`opc://<host>/<server>`, `opc.da://<host>/<server>`), raw slash syntax (`"<host>/<server>"`),
+/// as well as standalone server identifiers (local connection).
 ///
 /// # Examples
 ///
@@ -343,24 +526,38 @@ impl From<ServerIdentifier> for OpcServerEndpoint {
 ///
 /// let ep: OpcServerEndpoint = r"\\192.168.1.50\Matrikon.OPC.Simulation.1".parse().unwrap();
 /// assert!(ep.is_remote());
-/// assert_eq!(ep.host.as_deref(), Some("192.168.1.50"));
+/// assert_eq!(ep.host(), Some("192.168.1.50"));
 ///
 /// let local_ep: OpcServerEndpoint = "Matrikon.OPC.Simulation.1".parse().unwrap();
 /// assert!(!local_ep.is_remote());
 /// ```
 impl FromStr for OpcServerEndpoint {
-    type Err = OpcError;
+    type Err = ParseEndpointError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         let trimmed = s.trim();
         if trimmed.is_empty() {
-            return Err(OpcError::Conversion(
-                crate::errors::ConversionError::InvalidEndpoint(
-                    "Server identifier cannot be empty".into(),
-                ),
-            ));
+            return Err(ParseEndpointError::Empty);
         }
 
+        // Check for URI scheme: <scheme>://<host>/<server>
+        if let Some(pos) = trimmed.find("://") {
+            let after_scheme = &trimmed[pos + 3..];
+            if let Some((raw_host, raw_server)) = after_scheme.split_once('/') {
+                let server = raw_server.trim();
+                if server.is_empty() {
+                    return Err(ParseEndpointError::MissingServer(trimmed.to_string()));
+                }
+                let host = normalize_host_str(Some(raw_host)).map(str::to_string);
+                let identifier = ServerIdentifier::from_str(server)?;
+                return Ok(Self { host, identifier });
+            }
+            return Err(ParseEndpointError::InvalidFormat(format!(
+                "Expected host and server separated by delimiter in '{trimmed}'"
+            )));
+        }
+
+        // Check for UNC prefix: \\host\server or //host/server
         if let Some(rest) = trimmed
             .strip_prefix(r"\\")
             .or_else(|| trimmed.strip_prefix("//"))
@@ -368,33 +565,38 @@ impl FromStr for OpcServerEndpoint {
             if let Some(sep_idx) = rest.find(['\\', '/']) {
                 let raw_host = &rest[..sep_idx];
                 let raw_server = &rest[sep_idx + 1..];
-                let host = normalize_host_str(Some(raw_host));
                 let server = raw_server.trim();
                 if server.is_empty() {
-                    return Err(OpcError::Conversion(
-                        crate::errors::ConversionError::InvalidEndpoint(
-                            "Missing server identifier in endpoint UNC path".into(),
-                        ),
-                    ));
+                    return Err(ParseEndpointError::MissingServer(trimmed.to_string()));
                 }
-                Ok(Self {
-                    host: host.map(str::to_string),
-                    identifier: ServerIdentifier::from(server),
-                })
-            } else {
-                Err(OpcError::Conversion(
-                    crate::errors::ConversionError::InvalidEndpoint(
-                        "Invalid endpoint UNC path: expected host and server separated by '\\'"
-                            .into(),
-                    ),
-                ))
+                let host = normalize_host_str(Some(raw_host)).map(str::to_string);
+                let identifier = ServerIdentifier::from_str(server)?;
+                return Ok(Self { host, identifier });
             }
-        } else {
-            Ok(Self {
-                host: None,
-                identifier: ServerIdentifier::from(trimmed),
-            })
+            return Err(ParseEndpointError::InvalidFormat(format!(
+                "Expected host and server separated by delimiter in '{trimmed}'"
+            )));
         }
+
+        // Check for raw slash separating host and server: host/server or host\server
+        if let Some(sep_idx) = trimmed.find(['\\', '/']) {
+            let raw_host = &trimmed[..sep_idx];
+            let raw_server = &trimmed[sep_idx + 1..];
+            let server = raw_server.trim();
+            if server.is_empty() {
+                return Err(ParseEndpointError::MissingServer(trimmed.to_string()));
+            }
+            let host = normalize_host_str(Some(raw_host)).map(str::to_string);
+            let identifier = ServerIdentifier::from_str(server)?;
+            return Ok(Self { host, identifier });
+        }
+
+        // Standalone local server identifier
+        let identifier = ServerIdentifier::from_str(trimmed)?;
+        Ok(Self {
+            host: None,
+            identifier,
+        })
     }
 }
 

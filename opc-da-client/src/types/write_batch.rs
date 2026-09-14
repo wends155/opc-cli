@@ -152,6 +152,16 @@ impl WriteBatch {
         self.len() == 0
     }
 
+    /// Returns a borrowed slice of items if backed by a contiguous heap allocation (`Owned` or `Shared`).
+    #[must_use]
+    pub fn as_slice(&self) -> Option<&[(String, OpcValue)]> {
+        match self {
+            Self::Owned(vec) => Some(vec.as_slice()),
+            Self::Shared(slice) => Some(slice),
+            Self::Single(_, _) => None,
+        }
+    }
+
     /// Converts this batch into an efficiently cloneable representation.
     ///
     /// Ensures repeated clones (such as across thread or channel boundaries)
@@ -379,6 +389,12 @@ impl<const N: usize> From<[(&str, OpcValue); N]> for WriteBatch {
     }
 }
 
+impl<S: Into<String>> FromIterator<(S, OpcValue)> for WriteBatch {
+    fn from_iter<I: IntoIterator<Item = (S, OpcValue)>>(iter: I) -> Self {
+        Self::Owned(iter.into_iter().map(|(t, v)| (t.into(), v)).collect())
+    }
+}
+
 /// Trait for types that can be converted into a [`WriteBatch`].
 ///
 /// Enables flexible arguments for batch write methods, accepting single writes,
@@ -437,5 +453,24 @@ mod tests {
         assert_eq!(items.len(), 2);
         assert_eq!(items[0].0, "Tag1");
         assert_eq!(items[1].0, "Tag2");
+    }
+
+    #[test]
+    fn test_write_batch_slice_and_from_iterator() {
+        let items = vec![
+            ("Tag1".to_string(), OpcValue::Int(1)),
+            ("Tag2".to_string(), OpcValue::Int(2)),
+        ];
+        let batch: WriteBatch = items.clone().into_iter().collect();
+        assert_eq!(batch.len(), 2);
+        assert_eq!(batch.as_slice(), Some(items.as_slice()));
+
+        let slices = [
+            ("TagA", OpcValue::Float(1.5)),
+            ("TagB", OpcValue::Float(2.5)),
+        ];
+        let batch_slices: WriteBatch = slices.into_iter().collect();
+        assert_eq!(batch_slices.len(), 2);
+        assert_eq!(batch_slices.as_slice().unwrap()[0].0, "TagA");
     }
 }

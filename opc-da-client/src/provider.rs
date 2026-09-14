@@ -70,18 +70,18 @@ pub trait ServerDiscovery: Send + Sync {
     /// # #[tokio::main]
     /// # async fn main() -> opc_da_client::OpcResult<()> {
     /// # let mut mock = opc_da_client::MockOpcProvider::new();
-    /// # mock.expect_list_server_details().returning(|host| Ok(vec![opc_da_client::OpcServerInfo {
-    /// #     prog_id: "Matrikon.OPC.Simulation.1".into(),
-    /// #     clsid: opc_da_client::Clsid::zeroed(),
-    /// #     user_type: None,
-    /// #     host: Some(host.to_string()),
-    /// # }]));
+    /// # mock.expect_list_server_details().returning(|host| Ok(vec![opc_da_client::OpcServerInfo::new(
+    /// #     "Matrikon.OPC.Simulation.1",
+    /// #     opc_da_client::Clsid::zeroed(),
+    /// #     None,
+    /// #     Some(host.to_string()),
+    /// # )]));
     /// # let client = &mock;
     /// use opc_da_client::{OpcProvider, OpcResult, ServerDiscovery};
     ///
     /// let servers = client.list_server_details("localhost").await?;
     /// assert_eq!(servers.len(), 1);
-    /// assert_eq!(servers[0].prog_id, "Matrikon.OPC.Simulation.1");
+    /// assert_eq!(servers[0].prog_id(), "Matrikon.OPC.Simulation.1");
     /// # Ok(())
     /// # }
     /// ```
@@ -94,11 +94,13 @@ pub trait ServerDiscovery: Send + Sync {
             let host_opt = crate::types::normalize_host(Some(host));
             Ok(servers
                 .into_iter()
-                .map(|prog_id| OpcServerInfo {
-                    prog_id,
-                    clsid: crate::types::Clsid::zeroed(),
-                    user_type: None,
-                    host: host_opt.clone(),
+                .map(|prog_id| {
+                    OpcServerInfo::new(
+                        prog_id,
+                        crate::types::Clsid::zeroed(),
+                        None,
+                        host_opt.clone(),
+                    )
                 })
                 .collect())
         }
@@ -718,10 +720,10 @@ mod tests {
         let p = TestProvider;
         let details = p.list_server_details("localhost").await.unwrap();
         assert_eq!(details.len(), 2);
-        assert_eq!(details[0].prog_id, "Server.A");
-        assert_eq!(details[0].clsid, crate::types::Clsid::zeroed());
-        assert_eq!(details[0].user_type, None);
-        assert_eq!(details[0].host, None);
+        assert_eq!(details[0].prog_id(), "Server.A");
+        assert_eq!(details[0].clsid(), crate::types::Clsid::zeroed());
+        assert_eq!(details[0].user_type(), None);
+        assert_eq!(details[0].host(), None);
     }
 
     #[tokio::test]

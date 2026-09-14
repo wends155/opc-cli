@@ -248,8 +248,8 @@ async fn main() -> OpcResult<()> {
     // Query structured server information (ProgID, CLSID, and human-readable title)
     let server_details = client.list_server_details("localhost").await?;
     for info in server_details {
-        println!("Server: {} ({})", info.display_name(), info.prog_id);
-        println!("  ↳ CLSID: {:?}", info.clsid);
+        println!("Server: {} ({})", info.display_name(), info.prog_id());
+        println!("  ↳ CLSID: {:?}", info.clsid());
         println!("  ↳ Endpoint: {}", info.endpoint());
     }
 

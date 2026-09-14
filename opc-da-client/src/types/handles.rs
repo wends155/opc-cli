@@ -107,15 +107,6 @@ impl fmt::Display for ServerGroupHandle {
     }
 }
 
-/// Legacy type alias for [`ServerGroupHandle`].
-///
-/// Deprecated in favor of explicit [`ServerGroupHandle`] or [`ClientGroupHandle`] to ensure type safety.
-#[deprecated(
-    since = "0.2.1",
-    note = "Use ServerGroupHandle or ClientGroupHandle for type-safe handle domain separation"
-)]
-pub type GroupHandle = ServerGroupHandle;
-
 /// Type-safe client-assigned item handle.
 ///
 /// In OPC DA COM interfaces, `hClient` is provided by the client application to identify an item
@@ -221,12 +212,3 @@ impl fmt::Display for ServerItemHandle {
         write!(f, "{}", self.0)
     }
 }
-
-/// Legacy type alias for [`ServerItemHandle`].
-///
-/// Deprecated in favor of explicit [`ServerItemHandle`] or [`ClientItemHandle`] to ensure type safety.
-#[deprecated(
-    since = "0.2.0",
-    note = "Use ServerItemHandle or ClientItemHandle for type-safe handle domain separation"
-)]
-pub type ItemHandle = ServerItemHandle;
