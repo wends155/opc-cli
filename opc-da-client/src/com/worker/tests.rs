@@ -787,3 +787,343 @@ fn test_elapsed_ms_calculation() {
         "expected at least 25ms elapsed, got {elapsed}ms"
     );
 }
+
+#[tokio::test]
+async fn test_connect_eager_ping_success_and_cached_failure() {
+    use std::sync::atomic::Ordering;
+    let state = Arc::new(MockState::default());
+    let connector = MockServerConnector::with_state(state.clone());
+    let client = crate::com::client::OpcDaClient::new(connector)
+        .expect("client initialization must succeed")
+        .bind(OpcServerEndpoint::from("Mock.Server.Ping"));
+
+    // 1. Initial eager connect succeeds when ping() returns Ok(())
+    let ping_res = client.connect_eager().await;
+    assert!(
+        ping_res.is_ok(),
+        "connect_eager must succeed when server ping returns Ok: got {ping_res:?}"
+    );
+
+    // 2. Server connection is now retained in PooledServer.
+    // Configure ping to fail on the cached connection via MockState
+    state.should_fail_ping.store(true, Ordering::Relaxed);
+
+    // 3. Subsequent eager connect must fail on the cached server connection
+    let err = client.connect_eager().await.unwrap_err();
+    assert!(
+        matches!(err, OpcError::Com { .. }),
+        "Expected OpcError::Com when ping fails on cached connection, got: {err:?}"
+    );
+}
+
+#[tokio::test]
+async fn test_active_group_cache_invalidation_and_retry_on_handle_error() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let read_counter = Arc::new(AtomicUsize::new(0));
+    let read_counter_clone = read_counter.clone();
+    let state = Arc::new(MockState::default());
+
+    // Group fails specifically on the 2nd read invocation with OPC_E_INVALIDHANDLE (0xC0040001)
+    let group = MockConnectedGroup {
+        state: state.clone(),
+        ..Default::default()
+    }
+    .with_read_fn(move |_source, handles| {
+        let count = read_counter_clone.fetch_add(1, Ordering::Relaxed);
+        if count == 1 {
+            return Err(OpcError::Com {
+                source: windows::core::Error::from_hresult(windows_core::HRESULT(
+                    0xC004_0001_u32.cast_signed(),
+                )),
+            });
+        }
+        Ok(handles
+            .iter()
+            .enumerate()
+            .map(|(i, &h)| {
+                Ok(GroupItemState {
+                    client_handle: ClientItemHandle::new(h.as_raw()),
+                    value: OpcValue::Int(42 + i64::try_from(i).unwrap_or(0)),
+                    quality: OpcQuality::GOOD,
+                    timestamp: std::time::SystemTime::UNIX_EPOCH,
+                })
+            })
+            .collect())
+    });
+
+    let server = Arc::new(MockConnectedServer {
+        group: Arc::new(group),
+        state: state.clone(),
+        ..Default::default()
+    });
+    let connector = Arc::new(MockServerConnector {
+        server,
+        state: state.clone(),
+        ..Default::default()
+    });
+    let worker = tokio::task::spawn_blocking(move || ComWorker::start(connector).unwrap())
+        .await
+        .unwrap();
+
+    let endpoint = OpcServerEndpoint::from("Mock.Server.GroupRetry");
+    let tags = TagBatch::from(vec!["Tag1".to_string(), "Tag2".to_string()]);
+
+    // 1st read: establishes initial active group
+    let res1 = worker
+        .send_request(|reply| ComRequest::ReadTagValues {
+            endpoint: endpoint.clone(),
+            tags: tags.clone(),
+            reply,
+        })
+        .await
+        .expect("1st read must establish active group and succeed");
+    assert_eq!(res1.len(), 2);
+    assert_eq!(state.add_items_count.load(Ordering::Relaxed), 1);
+    assert_eq!(read_counter.load(Ordering::Relaxed), 1);
+
+    // 2nd read: encounters OPC_E_INVALIDHANDLE on cached group -> clears active_group
+    // -> falls through to cache-miss -> invokes add_items -> retry read succeeds!
+    let res2 = worker
+        .send_request(|reply| ComRequest::ReadTagValues {
+            endpoint: endpoint.clone(),
+            tags: tags.clone(),
+            reply,
+        })
+        .await
+        .expect("2nd read must invalidate stale active group, auto-retry, and succeed");
+    assert_eq!(res2.len(), 2);
+    assert_eq!(
+        state.add_items_count.load(Ordering::Relaxed),
+        2,
+        "add_items must be called again following active group cache invalidation"
+    );
+    assert_eq!(
+        read_counter.load(Ordering::Relaxed),
+        3,
+        "Read count must be 3 (initial read, failing cached read, recovery read)"
+    );
+}
+
+#[tokio::test]
+async fn test_handle_read_vector_length_mismatch_returns_internal_error() {
+    // Mock returns only 1 state for 2 requested valid tags
+    let group = MockConnectedGroup::default().with_read_fn(|_source, _handles| {
+        Ok(vec![Ok(GroupItemState {
+            client_handle: ClientItemHandle::new(0),
+            value: OpcValue::Int(100),
+            quality: OpcQuality::GOOD,
+            timestamp: std::time::SystemTime::UNIX_EPOCH,
+        })])
+    });
+
+    let state = Arc::new(MockState::default());
+    let server = Arc::new(MockConnectedServer {
+        group: Arc::new(group),
+        state: state.clone(),
+        ..Default::default()
+    });
+    let connector = Arc::new(MockServerConnector {
+        server,
+        state: state.clone(),
+        ..Default::default()
+    });
+    let worker = tokio::task::spawn_blocking(move || ComWorker::start(connector).unwrap())
+        .await
+        .unwrap();
+
+    let endpoint = OpcServerEndpoint::from("Mock.Server.MismatchRead");
+    let tags = TagBatch::from(vec!["Tag1".to_string(), "Tag2".to_string()]);
+
+    let err = worker
+        .send_request(|reply| ComRequest::ReadTagValues {
+            endpoint,
+            tags,
+            reply,
+        })
+        .await
+        .unwrap_err();
+
+    assert!(
+        matches!(err, OpcError::Internal(ref msg) if msg.contains("mismatched read result array size")),
+        "Expected OpcError::Internal with mismatch message, got: {err:?}"
+    );
+}
+
+#[tokio::test]
+async fn test_handle_write_batch_vector_length_mismatch_returns_internal_error() {
+    // Mock write returns only 1 result for 2 requested valid tags
+    let group = MockConnectedGroup::default().with_write_fn(|_items| Ok(vec![Ok(())]));
+
+    let state = Arc::new(MockState::default());
+    let server = Arc::new(MockConnectedServer {
+        group: Arc::new(group),
+        state: state.clone(),
+        ..Default::default()
+    });
+    let connector = Arc::new(MockServerConnector {
+        server,
+        state: state.clone(),
+        ..Default::default()
+    });
+    let worker = tokio::task::spawn_blocking(move || ComWorker::start(connector).unwrap())
+        .await
+        .unwrap();
+
+    let endpoint = OpcServerEndpoint::from("Mock.Server.MismatchWrite");
+    let writes = vec![
+        ("Tag1".to_string(), OpcValue::Int(1)),
+        ("Tag2".to_string(), OpcValue::Int(2)),
+    ];
+
+    let err = worker
+        .send_request(|reply| ComRequest::WriteTagValues {
+            endpoint,
+            writes: writes.into_write_batch(),
+            reply,
+        })
+        .await
+        .unwrap_err();
+
+    assert!(
+        matches!(err, OpcError::Internal(ref msg) if msg.contains("mismatched write result array size")),
+        "Expected OpcError::Internal with mismatch message, got: {err:?}"
+    );
+}
+
+#[tokio::test]
+async fn test_priority_request_queue_clear_drops_senders() {
+    use crate::com::worker::{ComRequest, PriorityRequestQueue};
+    let mut queue = PriorityRequestQueue::default();
+    let (tx1, rx1) = tokio::sync::oneshot::channel();
+    let (tx2, rx2) = tokio::sync::oneshot::channel();
+
+    queue.push(ComRequest::Ping {
+        endpoint: OpcServerEndpoint::from("Mock.Server.Q1"),
+        reply: tx1,
+    });
+    queue.push(ComRequest::Ping {
+        endpoint: OpcServerEndpoint::from("Mock.Server.Q2"),
+        reply: tx2,
+    });
+
+    assert!(!queue.is_empty());
+    queue.clear();
+    assert!(queue.is_empty());
+
+    // Dropping queued requests must close their oneshot reply channels
+    assert!(
+        rx1.await.is_err(),
+        "rx1 must receive RecvError after queue.clear()"
+    );
+    assert!(
+        rx2.await.is_err(),
+        "rx2 must receive RecvError after queue.clear()"
+    );
+}
+
+#[tokio::test]
+async fn test_browse_recursive_resilient_to_get_item_id_failure() {
+    use std::sync::atomic::Ordering;
+    let state = Arc::new(MockState::default());
+    let server = Arc::new(
+        MockConnectedServer::default().with_get_item_id_fn(|item_name| {
+            if item_name == "FailingTag" {
+                Err(OpcError::Com {
+                    source: windows::core::Error::from_hresult(
+                        windows_core::HRESULT(0x8000_4005_u32.cast_signed()), // E_FAIL
+                    ),
+                })
+            } else {
+                Ok(format!("Resolved.{item_name}"))
+            }
+        }),
+    );
+    server.organization.store(1, Ordering::Relaxed); // Hierarchical
+    server.supports_flat_browse.store(false, Ordering::Relaxed); // Force browse_recursive
+
+    *server.tags.lock().unwrap() = vec![
+        "FailingTag".to_string(),
+        "GoodTag1".to_string(),
+        "GoodTag2".to_string(),
+    ];
+    *server.branch_tags.lock().unwrap() = vec![];
+
+    let connector = Arc::new(MockServerConnector {
+        server,
+        state: state.clone(),
+        ..Default::default()
+    });
+    let worker = tokio::task::spawn_blocking(move || ComWorker::start(connector).unwrap())
+        .await
+        .unwrap();
+
+    let endpoint = OpcServerEndpoint::from("Mock.Server.BrowseResilient");
+
+    let result = worker
+        .send_request(|reply| ComRequest::BrowseTags {
+            endpoint,
+            collector: TagCollector::new(10),
+            reply,
+        })
+        .await
+        .expect("browse must succeed despite single leaf failure");
+
+    assert_eq!(result.len(), 2, "Must collect 2 valid sibling leaf tags");
+    assert!(result.contains(&"Resolved.GoodTag1".to_string()));
+    assert!(result.contains(&"Resolved.GoodTag2".to_string()));
+    assert!(!result.iter().any(|t| t.contains("FailingTag")));
+}
+
+#[tokio::test]
+async fn test_progid_resolution_error_mapping_not_connection_error() {
+    use crate::errors::hresult::CO_E_CLASSSTRING;
+    let err = OpcError::Com {
+        source: windows::core::Error::from_hresult(CO_E_CLASSSTRING),
+    };
+    assert!(
+        !err.is_connection_error(),
+        "CO_E_CLASSSTRING must NOT be classified as connection error"
+    );
+}
+
+#[tokio::test]
+async fn test_progid_resolution_failure_does_not_engage_circuit_breaker() {
+    use std::sync::atomic::Ordering;
+    let state = Arc::new(MockState::default());
+    let connector = Arc::new(MockServerConnector {
+        state: state.clone(),
+        ..Default::default()
+    });
+    let worker = tokio::task::spawn_blocking(move || ComWorker::start(connector).unwrap())
+        .await
+        .unwrap();
+
+    let endpoint = OpcServerEndpoint::from("NonExistent.ProgID.Invalid");
+
+    // Configure mock to fail with CO_E_CLASSSTRING
+    state.should_fail_progid.store(true, Ordering::Relaxed);
+
+    // 1st request fails with COM error
+    let err1 = worker
+        .send_request(|reply| ComRequest::Ping {
+            endpoint: endpoint.clone(),
+            reply,
+        })
+        .await
+        .unwrap_err();
+    assert!(matches!(err1, OpcError::Com { .. }));
+
+    // 2nd request immediately following must NOT fail with CooldownActive
+    let err2 = worker
+        .send_request(|reply| ComRequest::Ping {
+            endpoint: endpoint.clone(),
+            reply,
+        })
+        .await
+        .unwrap_err();
+
+    assert!(
+        !matches!(err2, OpcError::Connection(ref msg) if msg.contains("circuit breaker cooldown")),
+        "Subsequent call must not be blocked by circuit breaker cooldown: got {err2}"
+    );
+}

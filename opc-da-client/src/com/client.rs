@@ -590,8 +590,11 @@ impl<C: ServerBackend + 'static> OpcDaClient<C, Bound> {
     /// Returns [`OpcError::Connection`] if connecting or communicating with the server fails.
     #[tracing::instrument(level = "info", skip(self), err)]
     pub async fn connect_eager(&self) -> OpcResult<()> {
-        let _ = self.read_tags(TagBatch::default()).await?;
-        Ok(())
+        self.dispatch_request(|reply| ComRequest::Ping {
+            endpoint: self.endpoint().clone(),
+            reply,
+        })
+        .await
     }
 
     /// Asynchronously reads current values, quality, and timestamps for a batch of tags.

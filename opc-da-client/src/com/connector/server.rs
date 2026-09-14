@@ -42,7 +42,7 @@ pub(crate) fn connect_endpoint(
                         server = %server_name,
                         "Failed to resolve ProgID to CLSID"
                     );
-                    return Err(OpcError::connection_failed(server_name, e));
+                    return Err(OpcError::Com { source: e });
                 }
             }
         }

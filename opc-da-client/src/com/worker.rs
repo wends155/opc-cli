@@ -171,6 +171,13 @@ pub enum ComRequest {
         /// One-shot channel to send back the complete tag discovery list.
         reply: oneshot::Sender<OpcResult<Vec<String>>>,
     },
+    /// Request to ping an endpoint to verify server liveness and apartment responsiveness.
+    Ping {
+        /// Target OPC server endpoint.
+        endpoint: OpcServerEndpoint,
+        /// One-shot channel to send back the ping result.
+        reply: oneshot::Sender<OpcResult<()>>,
+    },
 }
 
 /// Dedicated background worker thread manager handling COM MTA apartment thread affinity.
@@ -293,7 +300,8 @@ impl<C: ServerBackend + 'static> Drop for ComWorker<C> {
 fn is_high_priority(req: &ComRequest) -> bool {
     matches!(
         req,
-        ComRequest::ReadTagValues { .. }
+        ComRequest::Ping { .. }
+            | ComRequest::ReadTagValues { .. }
             | ComRequest::WriteTagValue { .. }
             | ComRequest::WriteTagValues { .. }
     )
@@ -329,7 +337,6 @@ impl PriorityRequestQueue {
         self.high.is_empty() && self.low.is_empty()
     }
 
-    #[allow(dead_code)]
     pub fn clear(&mut self) {
         self.high.clear();
         self.low.clear();
@@ -405,9 +412,10 @@ fn run_worker_thread<C, I, S>(
                 let msg = extract_panic_message(&*payload);
                 tracing::error!(
                     panic = %msg,
-                    "Unhandled panic in COM worker loop; resetting pool and continuing"
+                    "Unhandled panic in COM worker loop; resetting pool and queue, then continuing"
                 );
                 pool.clear();
+                queue.clear();
             }
         }
     }
@@ -599,6 +607,17 @@ fn handle_request<C: ServerBackend + 'static>(
                 OpcOperation::BrowseTags,
                 reply,
                 |opc_server| browse::handle_browse(&endpoint.identifier, &collector, opc_server),
+            );
+        }
+
+        ComRequest::Ping { endpoint, reply } => {
+            dispatch_pooled_request(
+                pool,
+                connector,
+                &endpoint,
+                OpcOperation::Ping,
+                reply,
+                |server| server.ping(),
             );
         }
     }

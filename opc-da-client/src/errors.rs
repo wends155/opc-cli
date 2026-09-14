@@ -228,6 +228,7 @@ pub(crate) enum OpcOperation {
     WriteAddItemsRejected,
     WriteSync,
     WriteEmptyWriteErrors,
+    WriteMismatchedResults,
     WriteServerRejected,
     BrowseQueryOrganization,
     BrowseFlatLeaves,
@@ -242,6 +243,7 @@ pub(crate) enum OpcOperation {
     BrowseRecursiveChildBranch,
     BrowseRecursiveChangePositionUp,
     BrowseTags,
+    Ping,
 }
 
 impl std::fmt::Display for OpcOperation {
@@ -266,6 +268,7 @@ impl std::fmt::Display for OpcOperation {
             Self::WriteAddItemsRejected => "write_tag_value:add_items_rejected",
             Self::WriteSync => "write_tag_value:group_write",
             Self::WriteEmptyWriteErrors => "write_tag_value:empty_write_errors",
+            Self::WriteMismatchedResults => "write_tag_value:mismatched_results",
             Self::WriteServerRejected => "write_tag_value:server_rejected",
             Self::BrowseQueryOrganization => "browse_tags:query_organization",
             Self::BrowseFlatLeaves => "browse_tags:flat_leaves",
@@ -280,6 +283,7 @@ impl std::fmt::Display for OpcOperation {
             Self::BrowseRecursiveChildBranch => "browse_recursive:child_branch",
             Self::BrowseRecursiveChangePositionUp => "browse_recursive:change_position_up",
             Self::BrowseTags => "browse_tags",
+            Self::Ping => "ping",
         };
         write!(f, "{op_str}")
     }

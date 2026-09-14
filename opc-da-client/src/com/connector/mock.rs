@@ -44,6 +44,10 @@ pub struct MockState {
     pub should_fail_connection: std::sync::atomic::AtomicBool,
     /// Simulates RPC server unavailable error (0x800706BA) triggering connection eviction.
     pub should_fail_with_connection_error: std::sync::atomic::AtomicBool,
+    /// Injects failure on server ping.
+    pub should_fail_ping: std::sync::atomic::AtomicBool,
+    /// Injects ProgID resolution failure (CO_E_CLASSSTRING).
+    pub should_fail_progid: std::sync::atomic::AtomicBool,
     /// Simulates worker thread panic on request handling.
     pub should_panic_on_request: std::sync::atomic::AtomicBool,
     /// Number of times remove_group has been invoked.
@@ -252,6 +256,9 @@ impl ConnectedGroup for std::sync::Arc<MockConnectedGroup> {
     }
 }
 
+/// Pure-Rust mock closure for [`ConnectedServer::get_item_id`] overrides.
+pub type MockGetItemIdFn = dyn Fn(&str) -> OpcResult<String> + Send + Sync;
+
 /// Pure-Rust mock implementation of [`ConnectedServer`] for testing.
 ///
 /// Supports in-memory tag browsing via [`StringIterator::from_vec`] and configurable group handling.
@@ -268,6 +275,10 @@ pub struct MockConnectedServer {
     pub branch_tags: std::sync::Arc<std::sync::Mutex<Vec<String>>>,
     /// Namespace organization type (1 = Hierarchical, 2 = Flat).
     pub organization: std::sync::atomic::AtomicU32,
+    /// Custom resolver for [`ConnectedServer::get_item_id`].
+    pub get_item_id_fn: Option<std::sync::Arc<MockGetItemIdFn>>,
+    /// Controls whether `BrowseType::Flat` is supported (default true).
+    pub supports_flat_browse: std::sync::atomic::AtomicBool,
 }
 
 impl Default for MockConnectedServer {
@@ -290,12 +301,45 @@ impl Default for MockConnectedServer {
                 "Simulation".to_string(),
             ])),
             organization: std::sync::atomic::AtomicU32::new(1),
+            get_item_id_fn: None,
+            supports_flat_browse: std::sync::atomic::AtomicBool::new(true),
         }
+    }
+}
+
+impl MockConnectedServer {
+    /// Attach a custom `get_item_id` resolution closure for testing leaf error handling.
+    #[must_use]
+    pub fn with_get_item_id_fn<F>(mut self, f: F) -> Self
+    where
+        F: Fn(&str) -> OpcResult<String> + Send + Sync + 'static,
+    {
+        self.get_item_id_fn = Some(std::sync::Arc::new(f));
+        self
     }
 }
 
 impl ConnectedServer for MockConnectedServer {
     type Group = std::sync::Arc<MockConnectedGroup>;
+
+    fn ping(&self) -> OpcResult<()> {
+        if self
+            .state
+            .should_fail_ping
+            .load(std::sync::atomic::Ordering::Relaxed)
+            || self
+                .state
+                .should_fail_connection
+                .load(std::sync::atomic::Ordering::Relaxed)
+        {
+            return Err(OpcError::Com {
+                source: windows::core::Error::from_hresult(
+                    crate::errors::hresult::RPC_S_SERVER_UNAVAILABLE,
+                ),
+            });
+        }
+        Ok(())
+    }
 
     fn query_organization(&self) -> OpcResult<NamespaceType> {
         let val = self.organization.load(std::sync::atomic::Ordering::Relaxed);
@@ -313,6 +357,13 @@ impl ConnectedServer for MockConnectedServer {
         _data_type: u16,
         _access_rights: u32,
     ) -> OpcResult<StringIterator> {
+        if browse_type == BrowseType::Flat
+            && !self
+                .supports_flat_browse
+                .load(std::sync::atomic::Ordering::Relaxed)
+        {
+            return Err(OpcError::NotImplemented("OPC_FLAT not supported".into()));
+        }
         let items = match browse_type {
             BrowseType::Branch => {
                 let branches = self.branch_tags.lock()?;
@@ -331,6 +382,9 @@ impl ConnectedServer for MockConnectedServer {
     }
 
     fn get_item_id(&self, item_name: &str) -> OpcResult<String> {
+        if let Some(ref f) = self.get_item_id_fn {
+            return f(item_name);
+        }
         Ok(item_name.to_string())
     }
 
@@ -634,6 +688,18 @@ impl ServerConnector for MockServerConnector {
             return Err(OpcError::Connection("Mock connection failed".into()));
         }
 
+        if self
+            .state
+            .should_fail_progid
+            .load(std::sync::atomic::Ordering::Relaxed)
+        {
+            return Err(OpcError::Com {
+                source: windows::core::Error::from_hresult(
+                    crate::errors::hresult::CO_E_CLASSSTRING,
+                ),
+            });
+        }
+
         self.state
             .connect_count
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -663,12 +729,28 @@ impl ServerConnector for MockServerConnector {
             ));
         }
 
+        if self
+            .state
+            .should_fail_progid
+            .load(std::sync::atomic::Ordering::Relaxed)
+        {
+            return Err(OpcError::Com {
+                source: windows::core::Error::from_hresult(
+                    crate::errors::hresult::CO_E_CLASSSTRING,
+                ),
+            });
+        }
+
         Ok(self.server.clone())
     }
 }
 
 impl ConnectedServer for std::sync::Arc<MockConnectedServer> {
     type Group = std::sync::Arc<MockConnectedGroup>;
+
+    fn ping(&self) -> OpcResult<()> {
+        (**self).ping()
+    }
 
     fn query_organization(&self) -> OpcResult<NamespaceType> {
         (**self).query_organization()

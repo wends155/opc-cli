@@ -87,6 +87,22 @@ pub fn handle_write_batch<S: ConnectedServer>(
             );
         })?;
 
+        if server_write_results.len() != valid_indices.len() {
+            let err = OpcError::Internal(format!(
+                "server returned mismatched write result array size: expected {}, got {}",
+                valid_indices.len(),
+                server_write_results.len()
+            ));
+            log_opc_err!(
+                &err,
+                OpcOperation::WriteMismatchedResults,
+                server = %server_id,
+                expected = valid_indices.len(),
+                actual = server_write_results.len()
+            );
+            return Err(err);
+        }
+
         for (res, &orig_idx) in server_write_results.into_iter().zip(&valid_indices) {
             let (tag_id, _) = items[orig_idx];
             write_results[orig_idx] = match res {

@@ -10,6 +10,7 @@ pub const RPC_S_SERVER_TOO_BUSY: HRESULT = HRESULT(0x8007_06BF_u32.cast_signed()
 pub const RPC_S_CALL_FAILED_DNE: HRESULT = HRESULT(0x8007_06F4_u32.cast_signed());
 pub const CLASS_E_NOTLICENSED: HRESULT = HRESULT(0x8004_0112_u32.cast_signed());
 pub const REGDB_E_CLASSNOTREG: HRESULT = HRESULT(0x8004_0154_u32.cast_signed());
+pub const CO_E_CLASSSTRING: HRESULT = HRESULT(0x8004_01F3_u32.cast_signed());
 pub const CO_E_SERVER_EXEC_FAILURE: HRESULT = HRESULT(0x8008_0005_u32.cast_signed());
 pub const OPC_E_BADRIGHTS: HRESULT = HRESULT(0xC004_0004_u32.cast_signed());
 pub const OPC_E_BADTYPE: HRESULT = HRESULT(0xC004_0006_u32.cast_signed());
@@ -22,6 +23,9 @@ pub const OPC_E_DUPLICATENAME: HRESULT = HRESULT(0xC004_000C_u32.cast_signed());
 pub fn friendly_hresult_hint(hr: HRESULT) -> Option<&'static str> {
     match hr {
         CLASS_E_NOTLICENSED => Some("Server license does not permit OPC client connections"),
+        CO_E_CLASSSTRING => {
+            Some("Class string / ProgID is invalid or not registered in the COM registry")
+        }
         CO_E_SERVER_EXEC_FAILURE => {
             Some("Server process failed to start — check if it is installed and running")
         }

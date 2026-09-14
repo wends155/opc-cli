@@ -1,5 +1,29 @@
 # Project Context Summary
 
+## 2026-09-14: Block 1 (Worker Reliability & Correctness) Completed (`opc-da-client`)
+> 📝 **Context Update:**
+> * **Feature:** Execution of Block 1 of the post-review reliability refactoring roadmap (`review_report.md` Findings 1, 2, 3, 8, 9, 10 in `opc-da-client`), establishing eager server liveness ping, active group cache invalidation with single-attempt retry, vector length parity assertions, worker thread panic queue drainage, fault-tolerant recursive browsing, and configuration error classification.
+> * **Changes:**
+>   - **Liveness Probe & Eager Ping (`client.rs`, `worker.rs`, `traits.rs`, `mock.rs`, `pool.rs`):**
+>     - Added `ConnectedServer::ping(&self) -> OpcResult<()>` trait method defaulting to `self.query_organization()`.
+>     - Implemented `ping()` delegation on `PooledServer` and configurable failure atomic `MockState.should_fail_ping` on `MockConnectedServer`.
+>     - Introduced high-priority `ComRequest::Ping` dispatched through connection pool.
+>     - Replaced empty tag read short-circuit in `OpcDaClient::connect_eager()` with explicit `ComRequest::Ping` probe.
+>   - **Active Group Invalidation & Auto-Retry (`read.rs`, `pool.rs`):**
+>     - In `handle_read`, non-connection read errors on cached active groups log structured warnings, evict the stale group via `pooled.clear_active_group()`, and fall through to fresh group re-registration with a single retry.
+>   - **Array Length Parity Enforcement (`read.rs`, `write.rs`):**
+>     - `populate_item_states` and `handle_write_batch` assert that server-returned results match `valid_indices.len()`, rejecting malformed arrays with `OpcError::Internal`.
+>   - **Worker Panic Queue Drainage (`worker.rs`):**
+>     - Unchecked worker panic handler invokes `queue.clear()` alongside `pool.clear()`, cleanly failing pending caller reply channels and preventing re-execution of poison requests.
+>   - **Resilient Recursive Browse (`browse.rs`):**
+>     - Replaced fail-fast `?` in `browse_recursive` leaf item loop with structured error logging (`log_opc_err!`), allowing traversal to continue and collect valid sibling leaves.
+>   - **ProgID Resolution Error Mapping (`server.rs`, `hresult.rs`):**
+>     - Added `CO_E_CLASSSTRING` constant and friendly hint; mapped `CLSIDFromProgID` failures to `OpcError::Com { source: e }` (`is_connection_error() == false`), preventing spurious 5-second circuit breaker cooldowns.
+>   - **Universal Quality Verification:**
+>     - Added 8 unit tests in `src/com/worker/tests.rs`; all 9 gates of `pwsh scripts/verify.ps1` pass cleanly with exit code 0.
+> * **New Constraints:** `connect_eager()` must always contact the server via `ConnectedServer::ping()`. COM arrays returned from `IOPCItemMgt::Read` or `Write` must strictly match valid handle lengths. Worker panic recovery must drain pending queues. Invalid ProgID errors are configuration errors and must not engage connection cooldowns.
+> * **Pruned:** Short-circuiting empty tag read in `connect_eager`; dead code warning on `PriorityRequestQueue::clear`; silent zip truncation in read/write workers.
+
 ## 2026-09-14: Documentation Sync for 0.3.0 Modernization (`opc-da-client/spec.md`, `README.md`)
 > 📝 **Context Update:**
 > * **Feature:** Documentation sync for workspace (`opc-da-client/spec.md`, `opc-da-client/README.md`, `README.md`).

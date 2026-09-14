@@ -264,6 +264,14 @@ pub trait ConnectedServer {
     /// The group facade type returned by [`Self::add_group`].
     type Group: ConnectedGroup;
 
+    /// Ping the server to verify active liveness and apartment responsiveness.
+    ///
+    /// # Errors
+    /// Returns an [`OpcError`] if the server is unreachable or unresponsive.
+    fn ping(&self) -> OpcResult<()> {
+        self.query_organization().map(|_| ())
+    }
+
     /// Query the server's namespace organization type.
     ///
     /// # Errors

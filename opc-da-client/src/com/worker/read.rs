@@ -41,55 +41,77 @@ pub fn handle_read<S: ConnectedServer>(
     let start = std::time::Instant::now();
 
     // Check active group cache hit
-    if let Some(cached) = pooled.active_group.as_ref()
-        && cached.tags.len() == tags.len()
-        && cached.tags.iter().zip(tags.iter_str()).all(|(a, b)| a == b)
-    {
-        let mut tag_values: Vec<TagValue> = cached
-            .tags
-            .iter()
-            .map(|tag_id| TagValue {
-                tag_id: tag_id.clone(),
-                outcome: Err(OpcError::Internal("Not read".into())),
-                quality: OpcQuality::BAD_CONFIG_ERROR,
-                timestamp: None,
-            })
-            .collect();
+    let is_cache_hit = pooled.active_group.as_ref().is_some_and(|cached| {
+        cached.tags.len() == tags.len()
+            && cached.tags.iter().zip(tags.iter_str()).all(|(a, b)| a == b)
+    });
 
-        // Populate remembered errors for items that were rejected during add_items
-        for &(idx, ref err) in &cached.rejected_errors {
-            tag_values[idx].quality = OpcQuality::BAD_CONFIG_ERROR;
-            tag_values[idx].outcome = Err(err.clone());
-        }
+    if is_cache_hit {
+        let read_res = if let Some(cached) = pooled.active_group.as_ref()
+            && !cached.server_item_handles.is_empty()
+        {
+            Some(
+                cached
+                    .group
+                    .read(DataSource::Device, &cached.server_item_handles),
+            )
+        } else {
+            None
+        };
 
-        if !cached.server_item_handles.is_empty() {
-            let item_states = cached
-                .group
-                .read(DataSource::Device, &cached.server_item_handles)
-                .inspect_err(|e| {
-                    log_opc_err!(
-                        e,
-                        OpcOperation::ReadSync,
-                        server = %endpoint.identifier,
-                        handle_count = cached.server_item_handles.len()
-                    );
-                })?;
+        let states_opt = match read_res {
+            Some(Ok(states)) => Some(Some(states)),
+            None => Some(None),
+            Some(Err(e)) if e.is_connection_error() => return Err(e),
+            Some(Err(e)) => {
+                log_opc_err!(
+                    &e,
+                    OpcOperation::ReadSync,
+                    server = %endpoint.identifier,
+                    "Cached active group read failed with non-connection error; invalidating group and retrying via fresh registration"
+                );
+                pooled.clear_active_group();
+                None // Evicts group and falls through to cache-miss registration below
+            }
+        };
 
-            populate_item_states(
-                item_states,
-                &cached.valid_indices,
-                &cached.tags,
-                &endpoint.identifier,
-                &mut tag_values,
+        if let Some(states) = states_opt
+            && let Some(cached) = &pooled.active_group
+        {
+            let mut tag_values: Vec<TagValue> = cached
+                .tags
+                .iter()
+                .map(|tag_id| TagValue {
+                    tag_id: tag_id.clone(),
+                    outcome: Err(OpcError::Internal("Not read".into())),
+                    quality: OpcQuality::BAD_CONFIG_ERROR,
+                    timestamp: None,
+                })
+                .collect();
+
+            // Populate remembered errors for items that were rejected during add_items
+            for &(idx, ref err) in &cached.rejected_errors {
+                tag_values[idx].quality = OpcQuality::BAD_CONFIG_ERROR;
+                tag_values[idx].outcome = Err(err.clone());
+            }
+
+            if let Some(item_states) = states {
+                populate_item_states(
+                    item_states,
+                    &cached.valid_indices,
+                    &cached.tags,
+                    &endpoint.identifier,
+                    &mut tag_values,
+                )?;
+            }
+
+            tracing::info!(
+                count = tag_values.len(),
+                elapsed_ms = super::elapsed_ms(start),
+                "read_tag_values (cache hit) completed"
             );
+            return Ok(TagValues::new(tag_values));
         }
-
-        tracing::info!(
-            count = tag_values.len(),
-            elapsed_ms = super::elapsed_ms(start),
-            "read_tag_values (cache hit) completed"
-        );
-        return Ok(TagValues::new(tag_values));
     }
 
     // Cache miss: remove previous active group
@@ -139,7 +161,7 @@ pub fn handle_read<S: ConnectedServer>(
             &tag_ids,
             &endpoint.identifier,
             &mut tag_values,
-        );
+        )?;
     }
 
     let server_handle = group_guard.disarm();
@@ -200,7 +222,23 @@ fn populate_item_states(
     tag_ids: &[String],
     server_id: &ServerIdentifier,
     tag_values: &mut [TagValue],
-) {
+) -> OpcResult<()> {
+    if item_states.len() != valid_indices.len() {
+        let err = OpcError::Internal(format!(
+            "server returned mismatched read result array size: expected {}, got {}",
+            valid_indices.len(),
+            item_states.len()
+        ));
+        log_opc_err!(
+            &err,
+            OpcOperation::ReadMismatchedResults,
+            server = %server_id,
+            expected = valid_indices.len(),
+            actual = item_states.len()
+        );
+        return Err(err);
+    }
+
     for (state_res, &idx) in item_states.into_iter().zip(valid_indices) {
         match state_res {
             Ok(state) => {
@@ -221,6 +259,7 @@ fn populate_item_states(
             }
         }
     }
+    Ok(())
 }
 
 #[cfg(test)]

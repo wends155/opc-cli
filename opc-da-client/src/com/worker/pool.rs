@@ -65,6 +65,10 @@ impl<S: ConnectedServer> Drop for PooledServer<S> {
 impl<S: ConnectedServer> ConnectedServer for PooledServer<S> {
     type Group = S::Group;
 
+    fn ping(&self) -> OpcResult<()> {
+        self.server.ping()
+    }
+
     fn query_organization(&self) -> OpcResult<NamespaceType> {
         self.server.query_organization()
     }

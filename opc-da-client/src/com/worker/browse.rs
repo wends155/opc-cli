@@ -139,17 +139,25 @@ fn browse_recursive<S: ConnectedServer>(
         if collector.is_cancelled() || collector.is_full() {
             break;
         }
-        let leaf_name = leaf_res.inspect_err(|e| {
-            log_opc_err!(e, OpcOperation::BrowseRecursiveLeafItem, depth = depth);
-        })?;
-        let item_id = server.get_item_id(&leaf_name).inspect_err(|e| {
-            log_opc_err!(
-                e,
-                OpcOperation::BrowseRecursiveGetItemId,
-                depth = depth,
-                leaf = %leaf_name
-            );
-        })?;
+        let leaf_name = match leaf_res {
+            Ok(name) => name,
+            Err(err) => {
+                log_opc_err!(&err, OpcOperation::BrowseRecursiveLeafItem, depth = depth);
+                continue;
+            }
+        };
+        let item_id = match server.get_item_id(&leaf_name) {
+            Ok(id) => id,
+            Err(err) => {
+                log_opc_err!(
+                    &err,
+                    OpcOperation::BrowseRecursiveGetItemId,
+                    depth = depth,
+                    leaf = %leaf_name
+                );
+                continue;
+            }
+        };
         leaf_ids.push(item_id);
     }
 
