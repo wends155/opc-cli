@@ -994,6 +994,10 @@ impl<C: ServerBackend + 'static> OpcDaClient<C, Bound> {
     /// # Ok(())
     /// # }
     /// ```
+    #[deprecated(
+        since = "0.3.1",
+        note = "Use write_tag instead. write will be removed in a future release."
+    )]
     #[tracing::instrument(level = "info", skip(self, value), err)]
     pub async fn write(&self, tag: &str, value: impl Into<OpcValue>) -> OpcResult<WriteResult> {
         let endpoint = self.endpoint().clone();
@@ -1022,7 +1026,14 @@ impl<C: ServerBackend + 'static> OpcDaClient<C, Bound> {
     /// Returns [`OpcError`] on transport, timeout, or COM failure.
     #[tracing::instrument(level = "info", skip(self, value), err)]
     pub async fn write_tag(&self, tag: &str, value: impl Into<OpcValue>) -> OpcResult<WriteResult> {
-        self.write(tag, value).await
+        let endpoint = self.endpoint().clone();
+        self.dispatch_request(|reply| ComRequest::WriteTagValue {
+            endpoint,
+            tag_id: tag.to_string(),
+            value: value.into(),
+            reply,
+        })
+        .await
     }
 
     /// Asynchronously writes a batch of tag-value pairs in a single operation.
@@ -1057,25 +1068,27 @@ impl<C: ServerBackend + 'static> OpcDaClient<C, Bound> {
     /// # Ok(())
     /// # }
     /// ```
+    #[deprecated(
+        since = "0.3.1",
+        note = "Use write_tags instead. write_batch will be removed in a future release."
+    )]
     #[tracing::instrument(level = "info", skip(self, writes), err)]
     pub async fn write_batch(
         &self,
         writes: Vec<(String, OpcValue)>,
     ) -> OpcResult<Vec<WriteResult>> {
-        let endpoint = self.endpoint().clone();
-        self.dispatch_request(|reply| ComRequest::WriteTagValues {
-            endpoint,
-            writes: writes.into_write_batch(),
-            reply,
-        })
-        .await
+        self.write_tags(writes).await
     }
 
     /// Writes a batch of tag-value pairs to the bound server.
     ///
+    /// Accepts any collection convertible into [`WriteBatch`] via [`IntoWriteBatch`],
+    /// including fixed-size arrays `[("Tag", value)]`, borrowed slices `&[("Tag", value)]`,
+    /// or owned `Vec<(String, OpcValue)>`.
+    ///
     /// # Arguments
     ///
-    /// * `writes` - A vector of `(tag_name, opc_value)` pairs.
+    /// * `writes` - A batch of `(tag_name, opc_value)` pairs.
     ///
     /// # Returns
     ///
@@ -1085,8 +1098,14 @@ impl<C: ServerBackend + 'static> OpcDaClient<C, Bound> {
     ///
     /// Returns [`OpcError`] on transport, timeout, or COM failure.
     #[tracing::instrument(level = "info", skip(self, writes), err)]
-    pub async fn write_tags(&self, writes: Vec<(String, OpcValue)>) -> OpcResult<Vec<WriteResult>> {
-        self.write_batch(writes).await
+    pub async fn write_tags(&self, writes: impl IntoWriteBatch) -> OpcResult<Vec<WriteResult>> {
+        let endpoint = self.endpoint().clone();
+        self.dispatch_request(|reply| ComRequest::WriteTagValues {
+            endpoint,
+            writes: writes.into_write_batch(),
+            reply,
+        })
+        .await
     }
 
     /// Subscribes to a stream of periodic tag value reads, returning an asynchronous [`tokio::sync::mpsc::Receiver`].
@@ -1482,6 +1501,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::too_many_lines)]
     async fn test_inherent_async_reads_and_writes_on_client() {
         let state = std::sync::Arc::new(crate::com::connector::mock::MockState::default());
         let group = crate::com::connector::mock::MockConnectedGroup {
@@ -1573,17 +1593,36 @@ mod tests {
             .expect("read_string");
         assert_eq!(s_val, "mock_string");
 
-        // Test inherent write
-        let write_res = client.write("Random.Int4", 100).await.expect("write");
+        // Test inherent write_tag
+        let write_res = client
+            .write_tag("Random.Int4", 100)
+            .await
+            .expect("write_tag");
         assert!(write_res.is_success());
 
-        // Test inherent write_batch
+        // Test inherent write_tags
         let batch_res = client
-            .write_batch(vec![("Random.Int4".to_string(), OpcValue::Int(200))])
+            .write_tags(vec![("Random.Int4".to_string(), OpcValue::Int(200))])
             .await
-            .expect("write_batch");
+            .expect("write_tags");
         assert_eq!(batch_res.len(), 1);
         assert!(batch_res[0].is_success());
+
+        #[allow(deprecated)]
+        {
+            let legacy_write = client
+                .write("Random.Int4", 100)
+                .await
+                .expect("legacy write");
+            assert!(legacy_write.is_success());
+
+            let legacy_batch = client
+                .write_batch(vec![("Random.Int4".to_string(), OpcValue::Int(200))])
+                .await
+                .expect("legacy write_batch");
+            assert_eq!(legacy_batch.len(), 1);
+            assert!(legacy_batch[0].is_success());
+        }
     }
 
     #[tokio::test]
