@@ -417,6 +417,28 @@ fn test_tag_values_collection_and_lenient_coercion() {
 }
 
 #[test]
+fn test_tag_extract_error_conversion_fidelity() {
+    use crate::errors::{ConversionError, OpcError};
+    use crate::types::TagExtractError;
+
+    let err_not_req: OpcError = TagExtractError::NotRequested("Sensor.Temp".to_string()).into();
+    match err_not_req {
+        OpcError::Conversion(ConversionError::TagNotRequested(tag)) => {
+            assert_eq!(tag, "Sensor.Temp");
+        }
+        other => panic!("Expected ConversionError::TagNotRequested, got: {other:?}"),
+    }
+
+    let err_no_val: OpcError = TagExtractError::NoValue("Sensor.Pressure".to_string()).into();
+    match err_no_val {
+        OpcError::Conversion(ConversionError::TagNoValue(tag)) => {
+            assert_eq!(tag, "Sensor.Pressure");
+        }
+        other => panic!("Expected ConversionError::TagNoValue, got: {other:?}"),
+    }
+}
+
+#[test]
 fn test_tag_values_coercion_overflow_and_null_edge_cases() {
     let items = vec![
         TagValue::new(

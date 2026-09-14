@@ -281,14 +281,10 @@ impl From<TagExtractError> for OpcError {
                 expected,
             }),
             TagExtractError::NotRequested(tag) => {
-                Self::Conversion(crate::errors::ConversionError::Other(format!(
-                    "Tag '{tag}' was not requested in this read batch"
-                )))
+                Self::Conversion(crate::errors::ConversionError::TagNotRequested(tag))
             }
             TagExtractError::NoValue(tag) => {
-                Self::Conversion(crate::errors::ConversionError::Other(format!(
-                    "Tag '{tag}' returned no value (null or missing)"
-                )))
+                Self::Conversion(crate::errors::ConversionError::TagNoValue(tag))
             }
         }
     }
