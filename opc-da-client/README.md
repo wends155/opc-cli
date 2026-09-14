@@ -17,25 +17,28 @@ OPC DA is deeply coupled to Windows COM/DCOM, which poses significant architectu
 ## Features
 
 - **Compile-Time Typestate Client (`OpcDaClient<C, State>`)**: Zero-cost typestates `Unbound` (gateway for discovery) and `Bound` (session for reading/writing), guaranteeing infallible endpoint access during active sessions via `.endpoint(&self)`.
-- **Fluent Client API & Direct Connect**: Ergonomic `OpcDaClient::builder()`, direct local shortcut `OpcDaClient::connect(server)`, eager validation probe `client.connect_eager().await?`, remote DCOM shortcut `OpcDaClient::connect_remote(host, server)`, and typestate builder `build_bound()`.
+- **Fluent Client API & Direct Connect**: Ergonomic `OpcDaClient::builder()`, direct local shortcut `OpcDaClient::connect(server)`, remote DCOM shortcut `OpcDaClient::connect_remote(host, server)`, and typestate builder `build_bound()`.
+- **Eager Server Liveness Probe (`connect_eager`)**: Actively probes remote server responsiveness on connection via `ConnectedServer::ping()` and high-priority `ComRequest::Ping`, detecting unreachable servers upfront before entering cyclic polling loops.
 - **Zero-Allocation Batch Reads (`TagBatch` & `IntoTags`)**: Bound `read_tags` and `read_tag` accept static slices (`&["Tag1", "Tag2"]`), fixed-size arrays (`["Tag1", "Tag2"]`), single tag strings, or owned vectors (`Vec<String>`) with zero intermediate allocations.
-- **High-Productivity Typed Getters (`TagValues`)**: Safely unwrap typed values (`values.get_f64("Tag")?`, `get_f32`, `get_i32`, `get_i64`, `get_u32`, `get_u64`, `get_bool`, `get_str`) or use generic extraction (`values.get_as::<f64>("Tag")?`) with case-insensitive lookups, preserved diagnostics, and lenient numeric coercion.
-- **Active Group Caching**: Automatically pools active OPC groups and item handles on repeated read cycles, reducing DCOM round-trip overhead by >75%.
-- **Native Zero-Allocation Batch Writes (`WriteBatch` & `IntoWriteBatch`)**: Perform single or multiple tag writes in a single COM atomic `SyncIO::Write` operation via `client.write_tag(...)` or bound `client.write_tags(...)` accepting arrays, slices, or vectors without channel heap allocations.
+- **Inherent Typed Numeric Accessors**: Read individual scalar tags directly on `OpcDaClient<Bound>` without manual `Variant` unpacking (`read_f32`, `read_i64`, `read_u32`, `read_u64`, `read_f64`, `read_i32`, `read_bool`, `read_string`).
+- **High-Productivity Typed Getters (`TagValues`)**: Safely unwrap typed values on collections (`values.get_f64("Tag")?`, `get_f32`, `get_i32`, `get_i64`, `get_u32`, `get_u64`, `get_bool`, `get_str`) or use generic extraction (`values.get_as::<f64>("Tag")?`) with case-insensitive lookups, preserved diagnostics, and lenient numeric coercion.
+- **Active Group Caching & Auto-Retry**: Automatically pools active OPC groups and item handles on repeated read cycles, reducing DCOM round-trip overhead by >75%. Automatically evicts stale groups and retries once upon server-side group invalidations.
+- **Native Zero-Allocation Batch Writes (`WriteBatch` & `IntoWriteBatch`)**: Perform single or multiple tag writes in a single COM atomic `SyncIO::Write` operation via `client.write_tag(...)` or bound `client.write_tags(...)` accepting arrays (`[("Tag", val), ...]`), slices (`&[...]`), or vectors without channel heap allocations.
 - **Non-Blocking Subscription Streams**: Stream periodic tag readings via `client.subscribe(tags, interval)` returning an asynchronous Tokio `mpsc::Receiver<TagValues>` with RAII drop cancellation.
 - **Hardened Remote DCOM (KB5004442)**: Automatically enforces `RPC_C_AUTHN_LEVEL_PKT_INTEGRITY` on remote DCOM proxy blankets, with configurable `with_legacy_dcom(true)` for legacy Windows 7 / Server 2008 R2 hosts.
 - **Native Rust 2024 Async Traits**: Built on `tokio` with native async trait methods (`impl Future<Output = ...> + Send`), completely eliminating `async-trait` heap allocations while providing segregated role traits (`ServerDiscovery`, `TagBrowser`, `TagReader`, `TagWriter`) and composite `OpcProvider` for straightforward test mocking.
 - **Structured Server Discovery & UNC Endpoints**: Enumerate servers with rich catalog metadata (`OpcServerInfo`, `ProgID`, `CLSID`, user-friendly title) via `list_server_details`. Full support for UNC paths (`\\host\server`) via `OpcServerEndpoint` with automatic localhost normalization.
-- **Pure-Rust Connector Facade**: Strict isolation of low-level Win32 COM and FFI types behind the `ConnectedServer` and `ConnectedGroup` traits, keeping raw COM types and unsafe memory handling strictly internal.
-- **Transparent COM & Thread Management**: Automatically spawns and manages a dedicated MTA worker thread, maintaining strict thread affinity, connection pooling with synchronized eviction on reconnects, and RAII group teardown (`GroupGuard`) ensuring deterministic server cleanup across all return paths and panics.
+- **Pure-Rust Tier 2 SPI Connector (`opc_da_client::connector::*`)**: Strict isolation of low-level Win32 COM and FFI types behind pure-Rust trait interfaces (`ServerConnector`, `ConnectedServer`, `ConnectedGroup`) with associated `type ItemIterator`, compiling and enabling full offline test mocking on any platform without requiring Windows COM runtimes or the `opc-da-backend` feature flag.
+- **Transparent COM & Thread Management**: Automatically spawns and manages a dedicated MTA worker thread, maintaining strict thread affinity, connection pooling with synchronized eviction on reconnects, deterministic RAII thread join on `Drop`, and RAII group teardown (`GroupGuard`) ensuring clean server cleanup across all return paths and panics.
 - **Strongly-Typed Domain Models & Tag Outcomes**: `TagValue` encapsulates reading outcomes as `Result<OpcValue, OpcError>`, quality (`OpcQuality`), and UTC timestamp, with ergonomic accessors (`value()`, `error()`, `outcome()`).
+- **Lossless Error Taxonomy**: Structured `ConversionError::TagNotRequested` and `ConversionError::TagNoValue` variants preserve tag identities on collection extraction failures without dropping error diagnostics.
 - **Zero-Allocation Display Adapters**: `DisplayOptionOpcValue` and `DisplayOptionTimestamp` adapters with extension traits `OpcValueOptionExt` and `SystemTimeOptionExt` enable zero-allocation formatted streaming with width-padded table alignment.
 - **Canonical Display Formatting**: `TagValue` implements `std::fmt::Display` rendering `"{tag_id} = {value} [{quality}] @ {timestamp}"` for clean, single-line logging and diagnostics.
 - **16-Bit Quality Decomposition**: Zero-allocation `OpcQuality` struct decomposes raw OPC DA quality words into major status, substatus, and limit states with rich, human-readable diagnostics.
 - **Native Windows Backend**: Implemented natively with `windows-rs` — eliminates heavy legacy C++ binaries and external OPC crate dependencies.
 - **Context-Rich Error Handling**: Domain-specific `OpcError` via `thiserror` with inherent `.friendly_hint()` method for actionable HRESULT troubleshooting, native `From` conversions for standard channel and sync errors, and RAII unmanaged memory management.
 - **Thread-Safe Tag Collection & Cancellation**: `TagCollector` encapsulates bounded accumulation (`max_tags`), lock-free atomic length monitoring, and cooperative cancellation tokens to eliminate worker thread starvation.
-- **First-Class Test Support**: Includes pure-Rust mock implementations (`MockServerConnector`, `MockConnectedServer`, `MockConnectedGroup`) and an optional `MockOpcProvider` via the `test-support` feature flag.
+- **First-Class Test Support & Role Mocks**: Includes pure-Rust mock implementations (`MockServerConnector`, `MockConnectedServer`, `MockConnectedGroup`, `MockState`) and granular role mocks (`MockServerDiscovery`, `MockTagBrowser`, `MockTagReader`, `MockTagWriter`, as well as composite `MockOpcProvider`) via the `test-support` feature flag.
 
 ## Feature Flags
 
@@ -89,6 +92,51 @@ async fn main() -> OpcResult<()> {
     let temp: f64 = values.get_f64("Random.Real8")?;
     let status: &str = values.get_str("Random.String")?;
     println!("Int: {count}, Float: {temp}, Status: {status}");
+    Ok(())
+}
+```
+
+### Eager Server Connection & Liveness Verification
+
+Probe remote server responsiveness immediately on connection via explicit DCOM liveness ping (`ConnectedServer::ping()`), catching unreachable servers upfront:
+
+```rust,no_run
+use opc_da_client::{OpcDaClient, OpcResult};
+
+#[tokio::main]
+async fn main() -> OpcResult<()> {
+    // 1. Bind to server
+    let client = OpcDaClient::connect("Matrikon.OPC.Simulation.1")?;
+
+    // 2. Actively probe server liveness via high-priority ComRequest::Ping
+    client.connect_eager().await?;
+    println!("✓ Successfully connected and verified server liveness");
+    Ok(())
+}
+```
+
+### Inherent Typed Numeric Reads
+
+Directly read individual scalar tags on active bound sessions with automatic type validation without manual `OpcValue` variant extraction:
+
+```rust,no_run
+use opc_da_client::{OpcDaClient, OpcResult};
+
+#[tokio::main]
+async fn main() -> OpcResult<()> {
+    let client = OpcDaClient::connect("Matrikon.OPC.Simulation.1")?;
+
+    // Direct scalar reads on bound session:
+    let temp_f32: f32 = client.read_f32("Random.Real4").await?;
+    let temp_f64: f64 = client.read_f64("Random.Real8").await?;
+    let count_i32: i32 = client.read_i32("Random.Int4").await?;
+    let count_i64: i64 = client.read_i64("Random.Int8").await?;
+    let uint_32: u32 = client.read_u32("Random.UInt4").await?;
+    let uint_64: u64 = client.read_u64("Random.UInt8").await?;
+    let flag: bool = client.read_bool("Random.Boolean").await?;
+    let text: String = client.read_string("Random.String").await?;
+
+    println!("Temp: {temp_f32}°C (f64: {temp_f64}), Count: {count_i32}, u64: {uint_64}, Flag: {flag}");
     Ok(())
 }
 ```
@@ -297,6 +345,40 @@ async fn main() -> OpcResult<()> {
 
 Verify downstream business logic on any platform without requiring Windows COM runtimes:
 
+#### Granular Role Mocking with `MockTagReader`
+
+Under `#[cfg(feature = "test-support")]`, tests can mock individual segregated role traits rather than the entire client:
+
+```rust
+use opc_da_client::{MockTagReader, OpcQuality, OpcResult, OpcValue, TagReader, TagValue};
+
+async fn read_temperature(reader: &impl TagReader) -> OpcResult<TagValue> {
+    reader.read_tag_value("SimulatedServer", "Sensor.Temp").await
+}
+
+#[tokio::main]
+async fn main() -> OpcResult<()> {
+    let mut mock = MockTagReader::new();
+    mock.expect_read_tag_value()
+        .times(1)
+        .returning(|_server, tag| {
+            Ok(TagValue::new(
+                tag,
+                Some(OpcValue::Float(98.6)),
+                OpcQuality::GOOD,
+                Some(std::time::SystemTime::UNIX_EPOCH),
+            ))
+        });
+
+    let val = read_temperature(&mock).await?;
+    assert_eq!(val.display_value(), "98.6");
+    assert!(val.is_good());
+    Ok(())
+}
+```
+
+#### Composite Mocking with `MockOpcProvider`
+
 ```rust
 use opc_da_client::{
     MockOpcProvider, OpcProvider, OpcQuality, OpcResult, OpcValue, TagReader, TagValue,
@@ -334,11 +416,117 @@ async fn main() -> OpcResult<()> {
 }
 ```
 
+## Migration Guide (0.2.x → 0.3.0)
+
+Version `0.3.0` modernizes client ergonomics, standardizes batch write syntax, decouples the Tier 2 SPI into pure Rust, and eliminates method shadowing between bound client sessions and role traits.
+
+### Summary of Breaking & Deprecated Changes
+
+| Old API (0.2.x) | New Recommended API (0.3.0) | Status | Details |
+|:---|:---|:---:|:---|
+| `client.write(tag, val)` | `client.write_tag(tag, val)` | ⚠️ Deprecated | Disambiguates single-tag write on `Bound` client. |
+| `client.write_batch(writes)` | `client.write_tags(writes)` | ⚠️ Deprecated | Accepts `impl IntoWriteBatch` (`[("T", v)]`, `&[...]`, `Vec<...>`). |
+| `client.read_tag_values(tags)` on `Bound` | `client.read_tags(tags)` | ❌ Removed on `Bound` | Eliminates compiler collision (`E0592`) with `TagReader::read_tag_values`. |
+| `client.read_tag_value(tag)` on `Bound` | `client.read_tag(tag)` | ❌ Removed on `Bound` | Eliminates compiler collision (`E0592`) with `TagReader::read_tag_value`. |
+| `use opc_da_client::com::connector::*` | `use opc_da_client::connector::*` | ⚠️ Re-exported | Pure SPI moved to `opc_da_client::connector::*` (no Windows COM dependency). |
+| `ConnectedServer::browse_opc_item_ids` returning `StringIterator` | Returns `Self::ItemIterator: Iterator<Item = OpcResult<String>>` | 🔄 Refactored | Decoupled from concrete Win32 BSTR iterator via associated type. |
+| `MockOpcProvider` (monolithic only) | `MockTagReader`, `MockTagWriter`, `MockTagBrowser`, `MockServerDiscovery` | ✨ Added | Granular segregated role mocks available under `test-support`. |
+| `ConversionError::Other` on missing tag | `ConversionError::TagNotRequested(tag)` / `TagNoValue(tag)` | ✨ Added | Lossless error taxonomy preserving tag identification on lookup failure. |
+
+### Upgrading Tag Writes
+
+In 0.2.x, batch writes used `write_batch` and single writes used `write`. In 0.3.0, the API has been harmonized to `write_tags` and `write_tag`:
+
+```rust,no_run
+use opc_da_client::{OpcDaClient, OpcResult, OpcValue};
+
+#[tokio::main]
+async fn main() -> OpcResult<()> {
+    let client = OpcDaClient::connect("Matrikon.OPC.Simulation.1")?;
+
+    // 0.2.x (Deprecated):
+    // client.write("Tag1", OpcValue::Int(10)).await?;
+    // client.write_batch(vec![("Tag1".into(), OpcValue::Int(10))]).await?;
+
+    // 0.3.0 (Recommended):
+    client.write_tag("Tag1", OpcValue::Int(10)).await?;
+    // write_tags accepts arrays, slices, and vectors with zero heap overhead:
+    client.write_tags([
+        ("Tag1", OpcValue::Int(10)),
+        ("Tag2", OpcValue::Float(20.5)),
+    ]).await?;
+
+    Ok(())
+}
+```
+
+### Upgrading Tag Reads on Bound Sessions
+
+In 0.2.x, `OpcDaClient<C, Bound>` exposed 1-argument `read_tag_values` and `read_tag_value`. When `TagReader` was imported, Rust's method resolution encountered `E0592` (duplicate method definitions). In 0.3.0:
+- Use `client.read_tags(tags)` for batch reads on bound sessions.
+- Use `client.read_tag(tag)` for single-tag reads on bound sessions.
+- Use `client.read_f32(tag)`, `client.read_i64(tag)`, `client.read_u32(tag)`, `client.read_u64(tag)`, `client.read_f64(tag)`, `client.read_i32(tag)`, `client.read_bool(tag)`, `client.read_string(tag)` for direct typed numeric scalar reads.
+- Inherent 2-argument `client.read_tag_values(server, tags)` and `client.read_tag_value(server, tag)` on `OpcDaClient<C, State>` cleanly forward to the `TagReader` role trait.
+
+### Migrating Tier 2 SPI Imports
+
+If your application or test suite directly references the Tier 2 Service Provider Interface (SPI):
+
+```rust
+// 0.2.x:
+// use opc_da_client::com::connector::{ServerConnector, ConnectedServer, ConnectedGroup};
+
+// 0.3.0:
+use opc_da_client::connector::{ServerConnector, ConnectedServer, ConnectedGroup};
+```
+
+The pure SPI traits and mock doubles in `opc_da_client::connector::*` can now be compiled and tested on any platform (macOS, Linux, Windows) without enabling `feature = "opc-da-backend"` and without linking Windows SDK headers.
+
+### Granular Test Mocking with Role Mocks
+
+Instead of mocking the entire composite `MockOpcProvider`, unit tests can now mock only the role traits they consume (`MockTagReader`, `MockTagWriter`, `MockTagBrowser`, `MockServerDiscovery`):
+
+```rust
+use opc_da_client::{MockTagWriter, OpcResult, OpcValue, TagWriter, WriteResult};
+
+async fn send_command(writer: &impl TagWriter) -> OpcResult<WriteResult> {
+    writer.write_tag_value("Server", "Tag1", OpcValue::Int(10)).await
+}
+
+#[tokio::main]
+async fn main() -> OpcResult<()> {
+    let mut mock_writer = MockTagWriter::new();
+    mock_writer
+        .expect_write_tag_value()
+        .returning(|_server, tag, _val| Ok(WriteResult::success(tag)));
+
+    let res = send_command(&mock_writer).await?;
+    assert!(res.is_success());
+    Ok(())
+}
+```
+
+### Deprecation Schedule
+
+| Feature / Method | Deprecated In | Removal Target | Replacement |
+|:---|:---:|:---:|:---|
+| `OpcDaClient::write` | 0.3.0 | 0.4.0 / 1.0.0 | `OpcDaClient::write_tag` |
+| `OpcDaClient::write_batch` | 0.3.0 | 0.4.0 / 1.0.0 | `OpcDaClient::write_tags` |
+| `OpcDaClient::list_servers_on` | 0.2.1 | 0.4.0 / 1.0.0 | `ServerDiscovery::list_servers` |
+| `TagWriter::write_tag_values` | 0.2.0 | 0.4.0 / 1.0.0 | `TagWriter::write_tag_batch` |
+| `opc_da_client::com::connector::*` re-exports | 0.3.0 | 0.4.0 / 1.0.0 | `opc_da_client::connector::*` |
+
+Deprecated items will trigger compiler warnings starting in `0.3.0` and will remain backward-compatible throughout the `0.3.x` release lifecycle before being removed in `0.4.0`.
+
 ## API Surface
 
 | Type / Trait | Kind | Purpose |
 |:---|:---|:---|
-| `OpcProvider` | `pub trait` | Async trait for OPC DA operations (`list_servers`, `list_server_details`, `browse_tags`, `read_tag_values`, `read_tag_value`, `write_tag_value`, `write_tag_values`). |
+| `OpcProvider` | `pub trait` | Composite async trait for OPC DA operations (`list_servers`, `list_server_details`, `browse_tags`, `read_tag_values`, `read_tag_value`, `write_tag_value`, `write_tag_batch`). |
+| `ServerDiscovery` | `pub trait` | Segregated role trait for server discovery (`list_servers`, `list_server_details`). |
+| `TagBrowser` | `pub trait` | Segregated role trait for namespace navigation (`browse_tags`). |
+| `TagReader` | `pub trait` | Segregated role trait for reading tag values (`read_tag_values`, `read_tag_value`). |
+| `TagWriter` | `pub trait` | Segregated role trait for writing tag values (`write_tag_value`, `write_tag_batch`, deprecated `write_tag_values`). |
 | `OpcDaClient<C, State>` | `pub struct` | Primary client facade parameterized by state (`Unbound` gateway vs `Bound` session) with inherent session methods (`read_tag`, `read_tags`, `write_tag`, `write_tags`, `subscribe`). |
 | `Unbound` | `pub struct` | Typestate marker representing an unbound multi-server gateway. |
 | `Bound` | `pub struct` | Typestate marker representing a server-bound active session with infallible `endpoint(&self)`. |
@@ -347,6 +535,7 @@ async fn main() -> OpcResult<()> {
 | `IntoTags` | `pub trait` | Universal conversion trait converting static string slices, arrays, single strings, and owned vectors into `TagBatch`. |
 | `TagValues` | `pub struct` | Collection of read tag values providing case-insensitive lookups, generic extraction (`get_as<T>`), and typed getters (`get_f64`, `get_f32`, `get_i32`, `get_i64`, `get_u32`, `get_u64`, `get_bool`, `get_str`). |
 | `TagExtractError` | `pub enum` | Domain error enum returned by `TagValues` getters (`NotRequested`, `ReadFailed`, `NoValue`, `TypeMismatch`). Preserves root COM error provenance. |
+| `ConversionError` | `pub enum` | Lossless tag value conversion errors (`TagNotRequested`, `TagNoValue`, `TypeMismatch`, `Other`) preserving tag identifiers. |
 | `ServerIdentifier` | `pub enum` | Strongly-typed server identifier (`ProgId` vs `Clsid`) with automatic GUID syntax parsing. |
 | `OpcServerInfo` | `pub struct` | Rich catalog metadata record (`prog_id`, `clsid`, `user_type`, `host`) with `display_name()` and `endpoint()`. |
 | `OpcServerEndpoint` | `pub struct` | Endpoint binding target `host` with `identifier: ServerIdentifier`. Formats as UNC path (`\\host\server`) and implements `FromStr`. |
@@ -376,10 +565,20 @@ async fn main() -> OpcResult<()> {
 | `OpcError::friendly_hint` | `pub fn` | Inherent method translating Win32 COM and OPC HRESULT codes into actionable human-readable explanations. |
 | `OpcError::connection_failed` | `pub fn` | Inherent constructor producing an `OpcError::Connection` indicating CLSID resolution failure for a ProgID. |
 | `OpcError::is_connection_error` | `pub fn` | Predicate determining whether an error was caused by transport/connection failure for reconnection logic. |
+| `ServerConnector` | `pub trait` | Pure Tier 2 SPI connector trait (`connect_endpoint`). In `opc_da_client::connector`. |
+| `ServerCatalogDiscovery` | `pub trait` | Pure Tier 2 SPI catalog trait (`enumerate_servers`, `enumerate_server_details`). In `opc_da_client::connector`. |
+| `ServerBackend` | `pub trait` | Composite Tier 2 SPI trait (`ServerConnector + ServerCatalogDiscovery`). In `opc_da_client::connector`. |
+| `ConnectedServer` | `pub trait` | Pure Tier 2 SPI active server trait with associated `type ItemIterator` and `ping()`. In `opc_da_client::connector`. |
+| `ConnectedGroup` | `pub trait` | Pure Tier 2 SPI active group trait (`add_items`, `read`, `write`). In `opc_da_client::connector`. |
 | `MockOpcProvider` | `pub struct` | Pure-Rust mock implementation of `OpcProvider` generated via `mockall` (under `feature = "test-support"`). |
-| `MockServerConnector` | `pub struct` | Pure-Rust mock implementation of `ServerConnector` providing simulated server enumeration and tag browsing (under `feature = "test-support"`). |
-| `MockConnectedServer` | `pub struct` | Pure-Rust mock implementation of `ConnectedServer` with in-memory namespace and group registration (under `feature = "test-support"`). |
-| `MockConnectedGroup` | `pub struct` | Pure-Rust mock implementation of `ConnectedGroup` with configurable handlers for item registration and read/write I/O (under `feature = "test-support"`). |
+| `MockServerDiscovery` | `pub struct` | Pure-Rust mock implementation of `ServerDiscovery` generated via `mockall` (under `feature = "test-support"`). |
+| `MockTagBrowser` | `pub struct` | Pure-Rust mock implementation of `TagBrowser` generated via `mockall` (under `feature = "test-support"`). |
+| `MockTagReader` | `pub struct` | Pure-Rust mock implementation of `TagReader` generated via `mockall` (under `feature = "test-support"`). |
+| `MockTagWriter` | `pub struct` | Pure-Rust mock implementation of `TagWriter` generated via `mockall` (under `feature = "test-support"`). |
+| `MockServerConnector` | `pub struct` | Pure-Rust mock implementation of `ServerConnector` providing simulated server enumeration and tag browsing (under `feature = "test-support"`). In `connector::mock`. |
+| `MockConnectedServer` | `pub struct` | Pure-Rust mock implementation of `ConnectedServer` with in-memory namespace, `ping()` simulation, and group registration (under `feature = "test-support"`). In `connector::mock`. |
+| `MockConnectedGroup` | `pub struct` | Pure-Rust mock implementation of `ConnectedGroup` with configurable handlers for item registration and read/write I/O (under `feature = "test-support"`). In `connector::mock`. |
+| `MockState` | `pub struct` | Pure-Rust mock observability state tracking add/remove counts and configurable failure flags (under `feature = "test-support"`). In `connector::mock`. |
 | `MockOpcDaClient` | `pub type` | Type alias for an `OpcDaClient` instantiated with `MockServerConnector` (under `feature = "test-support"` and `feature = "opc-da-backend"`). |
 
 <!-- custom:start -->

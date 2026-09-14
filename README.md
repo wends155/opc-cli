@@ -18,16 +18,16 @@ See **[opc-da-client architecture.md](./opc-da-client/architecture.md)** for the
 ## ✨ Features
 
 - **Server Discovery & UNC Endpoints**: Enumerate OPC DA servers on local or remote hosts with rich catalog metadata; supports UNC endpoint syntax (`\\host\server`).
-- **Typestate Client & Remote DCOM**: Zero-cost compile-time `Unbound` (gateway) and `Bound` (session) typestates with direct `connect` / `connect_remote` / `build_bound` shortcuts and automatic Windows KB5004442 `RPC_C_AUTHN_LEVEL_PKT_INTEGRITY` security blanketing.
+- **Typestate Client, Remote DCOM & Liveness Ping**: Zero-cost compile-time `Unbound` (gateway) and `Bound` (session) typestates with direct `connect` / `connect_remote` / `build_bound` shortcuts, eager liveness probe (`connect_eager`), and automatic Windows KB5004442 `RPC_C_AUTHN_LEVEL_PKT_INTEGRITY` security blanketing.
 - **Hierarchical Browsing**: Recursive exploration of complex server namespaces with cooperative cancellation and partial-result harvesting on timeout.
-- **Real-time Monitoring & Active Group Caching**: Live tag value updates with 1-second auto-refresh backed by active OPC group pooling (>75% lower DCOM RPC latency).
-- **Zero-Allocation Batch Reads & Typed Values**: Universal `IntoTags` tag batches and rich `TagValues` collection with generic typed extraction (`get_as<T>`), numeric getters (`get_f64`, `get_f32`, `get_i32`, `get_i64`, `get_u32`, `get_u64`, `get_bool`, `get_str`), and encapsulated `TagValue` read outcomes.
-- **Single & Batch Write Support (`WriteBatch`)**: Native atomic zero-allocation batch writes (`write_batch`, `write_tags`) via polymorphic `WriteBatch` (`Single`, `Shared`, `Owned`) and individual typed tag writes (`write`, `write_tag`).
+- **Real-time Monitoring & Active Group Caching**: Live tag value updates with 1-second auto-refresh backed by active OPC group pooling (>75% lower DCOM RPC latency) and auto-recovery on group invalidations.
+- **Zero-Allocation Batch Reads & Typed Values**: Universal `IntoTags` tag batches (`read_tags`, `read_tag`), inherent numeric accessors (`read_f32`, `read_i64`, `read_u32`, `read_u64`), rich `TagValues` collection with generic typed extraction (`get_as<T>`), numeric getters, and encapsulated `TagValue` read outcomes.
+- **Single & Batch Write Support (`WriteBatch`)**: Native atomic zero-allocation batch writes (`write_tags`) via polymorphic `WriteBatch` (`Single`, `Shared`, `Owned`) and individual typed tag writes (`write_tag`).
 - **Streaming Subscriptions**: Non-blocking Layer 2 subscription streams yielding `TagValues` updates over Tokio `mpsc` channels with automatic drop cancellation.
 - **Search & Filter**: Substring search with `Tab`/`Shift+Tab` cycling through matches.
-- **Rich Error Hints**: Human-readable explanations for cryptic Windows COM/DCOM HRESULT codes.
-- **Transparent COM Management**: COM initialization, MTA apartment affinity, and stale proxy eviction handled automatically by a dedicated background worker thread.
-- **Mockable Backend**: Unit-test the TUI on any OS without a live OPC server.
+- **Rich Error Hints & Lossless Diagnostics**: Human-readable explanations for cryptic Windows COM/DCOM HRESULT codes and structured tag attribution errors.
+- **Transparent COM Management**: COM initialization, MTA apartment affinity, stale proxy eviction, and deterministic thread teardown handled automatically by a dedicated background worker thread.
+- **Mockable Backend & Pure-Rust SPI**: Unit-test the TUI on any OS without a live OPC server using segregated role mocks (`MockTagReader`, etc.) or the pure-Rust Tier 2 SPI connector (`opc_da_client::connector::*`).
 
 ## 🚀 Getting Started
 

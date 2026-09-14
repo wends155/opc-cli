@@ -3,7 +3,7 @@
 > **Behavioral Source of Truth** for the `opc-da-client` library crate.
 > Defines *what* each module should do — independent of current implementation.
 >
-> Last verified against: 8332d89
+> Last verified against: 3828f93
 
 ---
 
@@ -34,7 +34,7 @@ All methods use native Rust 2024 async trait methods returning `impl Future<Outp
 | Method | Signature | Description |
 | :--- | :--- | :--- |
 | `read_tag_values` | `fn read_tag_values(&self, server: &str, tag_ids: TagBatch) -> impl Future<Output = OpcResult<TagValues>> + Send` | Read current value, quality, and timestamp for the given tag IDs, returning a rich `TagValues` collection. |
-| `read_tag_value` | `fn read_tag_value(&self, server: &str, tag_id: &str) -> impl Future<Output = OpcResult<TagValue>> + Send` | Convenience helper to read a single tag on `server`. Default implementation delegates to `read_tag_values`. |
+| `read_tag_value` | `fn read_tag_value(&self, server: &str, tag_id: &str) -> impl Future<Output = OpcResult<TagValue>> + Send` | Convenience helper to read a single tag on `server`. Default implementation delegates to `read_tag_values` and returns the first element preserving FIFO order. |
 
 ###### `trait TagWriter: Send + Sync`
 | Method | Signature | Description |
@@ -45,6 +45,14 @@ All methods use native Rust 2024 async trait methods returning `impl Future<Outp
 
 ###### `trait OpcProvider: ServerDiscovery + TagBrowser + TagReader + TagWriter + Send + Sync`
 Composite marker trait representing the full OPC DA client capability set. A blanket implementation is provided for any type implementing all four segregated role traits.
+
+###### Standalone Role Mocks (under `feature = "test-support"`)
+Pure-Rust mock structs generated via `mockall` for targeted unit testing without implementing or configuring irrelevant methods:
+* `MockServerDiscovery`: Mocks `ServerDiscovery` (`list_servers`, `list_server_details`).
+* `MockTagBrowser`: Mocks `TagBrowser` (`browse_tags`).
+* `MockTagReader`: Mocks `TagReader` (`read_tag_values`, `read_tag_value`).
+* `MockTagWriter`: Mocks `TagWriter` (`write_tag_value`, `write_tag_batch`, `write_tag_values`).
+* `MockOpcProvider`: Monolithic mock implementing composite `OpcProvider`.
 
 **Error Conditions:**
 
@@ -492,6 +500,7 @@ Implemented for any type `T: Into<WriteBatch>`.
 | `0x800706BF` | `RPC_S_SERVER_TOO_BUSY` | RPC server is too busy to complete this operation |
 | `0x800706F4` | `RPC_S_CALL_FAILED_DNE` | COM marshalling error — try restarting the OPC server |
 | `0x80040154` | `REGDB_E_CLASSNOTREG` | Server is not registered on this machine |
+| `0x800401F3` | `CO_E_CLASSSTRING` | Class string / ProgID not registered in COM registry |
 | `0x80004003` | `E_POINTER` | Invalid pointer (E_POINTER) |
 | `0xC0040004` | `OPC_E_BADRIGHTS` | Server rejected write — the item may be read-only (OPC_E_BADRIGHTS) |
 | `0xC0040006` | `OPC_E_BADTYPE` | Data type mismatch — server cannot convert the written value (OPC_E_BADTYPE) |
@@ -501,6 +510,16 @@ Implemented for any type `T: Into<WriteBatch>`.
 **Invariants:**
 *   Pure method — no side effects, no I/O, no panics.
 *   Returns `None` for all non-`Com` variants (`ConnectFailed`, `GroupAddFailed`, `ItemAddFailed`, `TypeMismatch`, `Internal`).
+
+##### `enum ConversionError`
+
+Structured error enum returned when converting or extracting tag values from collections:
+* `TagNotRequested(String)`: The requested tag was not present in the query batch (preserves tag ID).
+* `TagNoValue(String)`: The requested tag was returned without a valid value (e.g. read failure or bad quality).
+* `TypeMismatch`: The value cannot be coerced into the requested target type.
+* `Other(String)`: Arbitrary conversion error.
+
+`From<TagExtractError> for OpcError` maps `NotRequested` and `NoValue` losslessly to `ConversionError`, ensuring tag identifiers are preserved across error layers.
 
 ##### `OpcError::connection_failed(server: impl std::fmt::Display, err: impl std::fmt::Display) -> Self`
 
@@ -521,6 +540,7 @@ Implemented for any type `T: Into<WriteBatch>`.
 | `std::sync::PoisonError<T>` | `OpcError::Worker(WorkerError::LockPoisoned)` | `"Synchronization lock poisoned: {err}"` |
 | `tokio::task::JoinError` | `OpcError::Worker(WorkerError::TaskJoin)` | `"Async task join failed: {err}"` |
 | `std::num::TryFromIntError` | `OpcError::IntConversion` | Lossless integer conversion failure |
+| `ConversionError` | `OpcError::Conversion` | Lossless tag value conversion failure |
 
 ---
 
@@ -612,22 +632,29 @@ Implemented for any type `T: Into<WriteBatch>`.
 | `connect_eager(&self)` | `pub async fn connect_eager(&self) -> OpcResult<()>` | Eagerly connects to the bound server endpoint and probes server liveness via high-priority `ComRequest::Ping` / `ConnectedServer::ping()`, verifying live connectivity upfront. |
 | `read_tag(&self, tag: &str)` | `pub async fn read_tag(&self, tag: &str) -> OpcResult<TagValue>` | Reads a single tag and returns full `TagValue` with outcome, quality, and timestamp. |
 | `read_tags(&self, tags: impl IntoTags)` | `pub async fn read_tags(&self, tags: impl IntoTags) -> OpcResult<TagValues>` | Reads a batch of tags and returns rich `TagValues` collection. |
-| `read_tag_values(&self, tags: impl IntoTags)` | `pub async fn read_tag_values(&self, tags: impl IntoTags) -> OpcResult<TagValues>` | *(Deprecated since 0.3.0, prefer `read_tags`)* Zero-allocation batch read returning a rich `TagValues` collection. Deprecated to avoid method collision with `TagReader::read_tag_values`. |
-| `read_tag_value(&self, tag: &str)` | `pub async fn read_tag_value(&self, tag: &str) -> OpcResult<TagValue>` | *(Deprecated since 0.3.0, prefer `read_tag`)* Reads a single tag returning `TagValue`. Deprecated to avoid method collision with `TagReader::read_tag_value`. |
+| `read_f32(&self, tag: &str)` | `pub async fn read_f32(&self, tag: &str) -> OpcResult<f32>` | Reads a single tag and coerces value to `f32`. |
 | `read_f64(&self, tag: &str)` | `pub async fn read_f64(&self, tag: &str) -> OpcResult<f64>` | Reads a single tag and coerces value to `f64`. |
 | `read_i32(&self, tag: &str)` | `pub async fn read_i32(&self, tag: &str) -> OpcResult<i32>` | Reads a single tag and coerces value to `i32`. |
+| `read_i64(&self, tag: &str)` | `pub async fn read_i64(&self, tag: &str) -> OpcResult<i64>` | Reads a single tag and coerces value to `i64`. |
+| `read_u32(&self, tag: &str)` | `pub async fn read_u32(&self, tag: &str) -> OpcResult<u32>` | Reads a single tag and coerces value to `u32`. |
+| `read_u64(&self, tag: &str)` | `pub async fn read_u64(&self, tag: &str) -> OpcResult<u64>` | Reads a single tag and coerces value to `u64`. |
 | `read_bool(&self, tag: &str)` | `pub async fn read_bool(&self, tag: &str) -> OpcResult<bool>` | Reads a single tag and coerces value to `bool`. |
 | `read_string(&self, tag: &str)` | `pub async fn read_string(&self, tag: &str) -> OpcResult<String>` | Reads a single tag as a `String`. |
 | `write_tag(&self, tag: &str, value: impl Into<OpcValue>) -> OpcResult<WriteResult>` | `pub async fn write_tag(&self, tag: &str, value: impl Into<OpcValue>) -> OpcResult<WriteResult>` | Writes a single typed value to a tag. |
 | `write_tags(&self, writes: impl IntoWriteBatch) -> OpcResult<Vec<WriteResult>>` | `pub async fn write_tags(&self, writes: impl IntoWriteBatch) -> OpcResult<Vec<WriteResult>>` | Writes multiple tags in a single native DCOM batch operation. |
-| `write(&self, tag: &str, value: impl Into<OpcValue>) -> OpcResult<WriteResult>` | `pub async fn write(&self, tag: &str, value: impl Into<OpcValue>) -> OpcResult<WriteResult>` | Writes a single value to a tag, returning a `WriteResult`. |
-| `write_batch(&self, writes: impl IntoWriteBatch) -> OpcResult<Vec<WriteResult>>` | `pub async fn write_batch(&self, writes: impl IntoWriteBatch) -> OpcResult<Vec<WriteResult>>` | Writes multiple tags in a single native DCOM batch operation using `IntoWriteBatch`. |
+| `write(&self, tag: &str, value: impl Into<OpcValue>) -> OpcResult<WriteResult>` | `pub async fn write(&self, tag: &str, value: impl Into<OpcValue>) -> OpcResult<WriteResult>` | *(Deprecated since 0.3.0, prefer `write_tag`)* Writes a single value to a tag. |
+| `write_batch(&self, writes: impl IntoWriteBatch) -> OpcResult<Vec<WriteResult>>` | `pub async fn write_batch(&self, writes: impl IntoWriteBatch) -> OpcResult<Vec<WriteResult>>` | *(Deprecated since 0.3.0, prefer `write_tags`)* Writes multiple tags in a single native DCOM batch operation. |
 | `browse(&self, filter: BrowseFilter) -> OpcResult<TagCollector>` | `pub async fn browse(&self, filter: BrowseFilter) -> OpcResult<TagCollector>` | Browses the address space of the bound server. |
 | `subscribe(&self, tags: impl IntoTags, interval: Duration)` | `pub fn subscribe(&self, tags: impl IntoTags, interval: Duration) -> tokio::sync::mpsc::Receiver<TagValues>` | Starts a Layer 2 non-blocking polling stream yielding `TagValues` periodically. Terminates on channel close or connection error. |
 
 **General & Compatibility Methods on `OpcDaClient<C, State>`:**
 | Method | Signature | Description |
 | :--- | :--- | :--- |
+| `read_tag_values(&self, server: &str, tags: impl IntoTags)` | `pub async fn read_tag_values(&self, server: &str, tags: impl IntoTags) -> OpcResult<TagValues>` | Inherent 2-argument forwarder routing directly to `TagReader::read_tag_values`. |
+| `read_tag_value(&self, server: &str, tag_id: &str)` | `pub async fn read_tag_value(&self, server: &str, tag_id: &str) -> OpcResult<TagValue>` | Inherent 2-argument forwarder routing directly to `TagReader::read_tag_value`. |
+| `write_tag_value(&self, server: &str, tag_id: &str, value: OpcValue)` | `pub async fn write_tag_value(&self, server: &str, tag_id: &str, value: OpcValue) -> OpcResult<WriteResult>` | Inherent 3-argument forwarder routing to `TagWriter::write_tag_value`. |
+| `write_tag_batch(&self, server: &str, writes: WriteBatch)` | `pub async fn write_tag_batch(&self, server: &str, writes: WriteBatch) -> OpcResult<Vec<WriteResult>>` | Inherent 2-argument forwarder routing to `TagWriter::write_tag_batch`. |
+| `write_tag_values(&self, server: &str, writes: &[(String, OpcValue)])` | `pub async fn write_tag_values(&self, server: &str, writes: &[(String, OpcValue)]) -> OpcResult<Vec<WriteResult>>` | *(Deprecated since 0.2.0, prefer `write_tag_batch`)* Forwarder routing to `TagWriter::write_tag_values`. |
 | `endpoint(&self)` | `pub fn endpoint(&self) -> Option<&OpcServerEndpoint>` | Returns `Some(&OpcServerEndpoint)` if bound, `None` if unbound. |
 | `is_bound(&self)` | `pub fn is_bound(&self) -> bool` | Checks whether this client instance is bound to a server. |
 | `list_servers_on(&self, host: &str)` | `pub async fn list_servers_on(&self, host: &str) -> OpcResult<Vec<String>>` | *(Deprecated since 0.2.1)* Discovers OPC servers on a host. Prefer `ServerDiscovery::list_servers`. |
@@ -636,6 +663,7 @@ Implements `OpcProvider` for all five trait methods (`list_servers`, `list_serve
 
 **Invariants:**
 *   All COM work runs on a dedicated, long-lived `ComWorker` thread, avoiding repeated initialization overhead and solving COM thread-affinity constraints.
+*   **Deterministic Thread Join on Drop:** `ComWorker::drop` closes the request mpsc channel (`drop(self.sender.take())`) and joins the worker thread handle (`handle.join()`) with panic logging, ensuring clean RAII thread teardown without leaking background threads.
 *   **Dual-Tier `PriorityRequestQueue`**: Request dispatch employs a dual-tier priority queue (`high` and `low` `VecDeque` queues) where interactive reads, writes, liveness pings, and state queries are enqueued with high priority and preempt background/recursive tag browsing requests without worker starvation.
 *   **Two-tier `catch_unwind` panic resilience:** Individual request handling is wrapped in `std::panic::catch_unwind` (tier 1) so driver panics return structured `OpcError::Internal` without terminating the worker thread. The outer thread loop is also protected (tier 2) to maintain client liveness. Upon tier 2 panic recovery, `queue.clear()` drains pending requests to fail-fast callers and prevent poison requests from executing against the reinitialized connection pool.
 *   **Active Group Caching & Invalidation:** Connection pool in `pool.rs` embeds `PooledServer<S>` which caches active OPC groups and item handles on identical tag sets, reducing round-trip RPC overhead during cyclic polling by over 75%. Tag set changes or connection drops transparently recreate or evict the cached group. Non-connection read errors on cached active groups evict the stale group and auto-retry once via fresh group registration.
@@ -847,34 +875,32 @@ Before calling `browse_recursive`, `browse_tags` attempts `browse_opc_item_ids(B
 
 ---
 
-### 1.8 `com::connector` — Pure-Rust Connector Facade & Modular Submodules
+### 1.8 `connector` & `com::connector` — Pure-Rust SPI & Windows COM Implementation
 
-**Purpose:** Pure-Rust facade traits, DTOs, and concrete Win32 COM / mock implementations partitioned into cohesive single-responsibility submodules:
+**Purpose:** Pure-Rust Service Provider Interface (SPI) traits, DTOs, and concrete Win32 COM / mock implementations partitioned into cohesive single-responsibility modules:
 
-* `com::connector::traits`:
+* `opc_da_client::connector` (Pure Tier 2 SPI):
   - `ServerCatalogDiscovery`: Discovers servers via `enumerate_servers(host: &str) -> OpcResult<Vec<String>>` and `enumerate_server_details(host: &str) -> OpcResult<Vec<OpcServerInfo>>`. Implemented by `ComConnector` and `MockServerConnector`.
   - `ServerConnector`: Connects via `connect_endpoint(&OpcServerEndpoint)` (primary required method), `connect_identifier(&ServerIdentifier)`, and `connect(name)`. Implemented by `ComConnector` and `MockServerConnector`.
   - `ServerBackend: ServerConnector + ServerCatalogDiscovery`: Composite SPI trait combining connection lifecycle and catalog discovery, with blanket implementation for any type implementing both traits.
-  - `ConnectedServer`: Introspects server namespace, performs server liveness probes (`ping(&self) -> OpcResult<()>`), and adds/removes groups using `GroupConfig`, `CreatedGroup`, `ServerGroupHandle`, and `GroupRemovalMode`. Implemented by `ComServer` and `MockConnectedServer`. Supports in-memory tag browsing via `StringIterator::from_vec`.
+  - `ConnectedServer`: Introspects server namespace, performs server liveness probes (`ping(&self) -> OpcResult<()>`), and adds/removes groups using `GroupConfig`, `CreatedGroup`, `ServerGroupHandle`, and `GroupRemovalMode`. Associated type `type ItemIterator: Iterator<Item = OpcResult<String>>;` decouples namespace enumeration from concrete COM memory iterators. Implemented by `ComServer`, `PooledServer<S>`, and `MockConnectedServer`.
   - `ConnectedGroup`: Pure-Rust facade over OPC DA groups:
     - `add_items(&self, items: &[GroupItemDef]) -> OpcResult<Vec<GroupItemResult>>`
     - `read(&self, source: DataSource, server_handles: &[ServerItemHandle]) -> OpcResult<Vec<Result<GroupItemState, OpcError>>>`
     - `write(&self, items: &[ItemWrite]) -> OpcResult<Vec<Result<(), OpcError>>>`
   - DTOs: `GroupItemDef`, `GroupItemResult`, `GroupItemState`, `ItemWrite`, `DataSource`, `GroupConfig`, `CreatedGroup`, `GroupRemovalMode`.
+  - Pure-Rust Mock Suite (`connector::mock` under `feature = "test-support"`): `MockConnectedGroup`, `MockConnectedServer`, `MockServerConnector`, `MockState` (with `should_fail_ping`, `should_fail_progid`, and call counters). Fully functional offline and on non-Windows platforms without `opc-da-backend`.
 * `com::connector::server`:
   - `ComConnector`: Connects to local and remote servers via `connect_server_endpoint` and enumerates servers via Component Categories catalog and `CLSID_OPC_SERVER_LIST`.
-  - `ComServer`: Wraps native `IOPCServer` and `IOPCBrowseServerAddressSpace`, managing namespace queries and group creation.
+  - `ComServer`: Wraps native `IOPCServer` and `IOPCBrowseServerAddressSpace`, managing namespace queries and group creation. Binds `ItemIterator = StringIterator`.
   - `connect_server_endpoint(endpoint: &OpcServerEndpoint, legacy_dcom: bool) -> OpcResult<IOPCServer>`: For local servers, calls `CoCreateInstance` (directly using CLSID if `ServerIdentifier::Clsid`, or resolving ProgID). For remote servers, issues `CoCreateInstanceEx` with `COSERVERINFO` and `COAUTHINFO` (enforcing KB5004442 `RPC_C_AUTHN_LEVEL_PKT_INTEGRITY` unless `legacy_dcom` is enabled), and applies `apply_proxy_blanket` on `IOPCServer` and child groups.
 * `com::connector::group`:
   - `ComGroup`: Wraps native group COM interfaces (`IOPCItemMgt`, `IOPCSyncIO`, `IOPCGroupStateMgt`, etc.).
   - Protected by `ScopedVariant` on synchronous write paths and `ItemStatesGuard` on synchronous read paths, guaranteeing zero `VARIANT` memory leaks.
-* `com::connector::mock`:
-  - `MockConnectedGroup`, `MockConnectedServer`, and `MockServerConnector`: Reusable pure-Rust mocks (under `#[cfg(any(test, feature = "test-support"))]` and exported at crate root under `test-support`) supporting pluggable closures, failure injection (`MockState` with `add_group_count`, `remove_group_count`, `read_count`, `write_count`, `connect_count`, `should_fail_ping`, `should_fail_progid`), simulated structured server details (`server_details: Arc<Mutex<Vec<OpcServerInfo>>>`, `with_server_details`), bidirectional ProgID/detail sync, and simulated tag browsing without native COM allocators or unsafe blocks.
-  - Mock handler type aliases: `MockAddItemsFn`, `MockReadFn`, `MockWriteFn`.
-* `com::connector` (Facade):
-  - Slim coordinator facade re-exporting all submodule items with zero blanket `#![allow(...)]` headers.
+* `com::connector` (Facade & Re-exports):
+  - Slim coordinator facade re-exporting all submodule items and re-exporting all items from `connector` for 100% backward compatibility.
 * Crate Root Re-Export:
-  - `pub type MockOpcDaClient = com::client::OpcDaClient<com::connector::MockServerConnector>;` exported under `#[cfg(all(feature = "test-support", feature = "opc-da-backend"))]`.
+  - `pub type MockOpcDaClient = com::client::OpcDaClient<connector::MockServerConnector>;` exported under `#[cfg(all(feature = "test-support", feature = "opc-da-backend"))]`.
 
 ---
 
