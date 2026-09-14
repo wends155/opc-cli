@@ -9,7 +9,7 @@ use crate::com::connector::traits::{
 use crate::com::variant::{ItemStatesGuard, ScopedVariant};
 use crate::errors::{OpcError, OpcResult};
 use crate::raw::memory::RemoteArray;
-use crate::types::{ClientItemHandle, OpcQuality, ServerItemHandle};
+use crate::types::{ClientItemHandle, OpcQuality, ServerItemHandle, VarType};
 use windows::core::Interface;
 
 fn to_wide_null(s: &str) -> Vec<u16> {
@@ -145,7 +145,7 @@ impl ConnectedGroup for ComGroup {
             };
             group_results.push(GroupItemResult {
                 server_handle: ServerItemHandle::new(res.hServer),
-                canonical_type: res.vtCanonicalDataType,
+                canonical_type: VarType::from_raw(res.vtCanonicalDataType),
                 error: err,
             });
         }

@@ -12,11 +12,8 @@ use crate::errors::hresult::{CO_E_CLASSSTRING, E_FAIL, RPC_S_SERVER_UNAVAILABLE}
 use crate::errors::{OpcError, OpcResult};
 use crate::types::{
     BrowseDirection, BrowseType, ClientItemHandle, Clsid, NamespaceType, OpcQuality, OpcServerInfo,
-    OpcValue, ServerGroupHandle, ServerIdentifier, ServerItemHandle,
+    OpcValue, ServerGroupHandle, ServerIdentifier, ServerItemHandle, VarType,
 };
-
-/// Canonical COM VARIANT type discriminant for BSTR (`VT_BSTR`).
-pub const VT_BSTR: u16 = 8;
 
 /// Type alias for mock `add_items` closure.
 pub type MockAddItemsFn =
@@ -66,6 +63,12 @@ pub struct MockState {
     pub last_connected_endpoint: std::sync::Mutex<Option<crate::types::OpcServerEndpoint>>,
     /// Last host passed to enumerate_servers / enumerate_server_details.
     pub last_enumerated_host: std::sync::Mutex<Option<String>>,
+    /// Number of times change_browse_position has been invoked.
+    pub change_browse_position_count: std::sync::atomic::AtomicUsize,
+    /// Last direction passed to change_browse_position.
+    pub last_browse_direction: std::sync::Mutex<Option<crate::types::BrowseDirection>>,
+    /// Injects failure on change_browse_position.
+    pub should_fail_browse_position: std::sync::atomic::AtomicBool,
 }
 
 /// Pure-Rust mock implementation of [`ConnectedGroup`] for testing.
@@ -149,7 +152,7 @@ impl ConnectedGroup for MockConnectedGroup {
                 let handle_val = u32::try_from(i + 1).unwrap_or(u32::MAX);
                 GroupItemResult {
                     server_handle: ServerItemHandle::new(handle_val),
-                    canonical_type: VT_BSTR,
+                    canonical_type: VarType::BSTR,
                     error: None,
                 }
             })
@@ -365,7 +368,7 @@ impl ConnectedServer for MockConnectedServer {
         &self,
         browse_type: BrowseType,
         _filter: Option<&str>,
-        _data_type: u16,
+        _data_type: VarType,
         _access_rights: u32,
     ) -> OpcResult<Self::ItemIterator> {
         if browse_type == BrowseType::Flat
@@ -394,7 +397,22 @@ impl ConnectedServer for MockConnectedServer {
         Ok(items.into_iter().map(Ok).collect::<Vec<_>>().into_iter())
     }
 
-    fn change_browse_position(&self, _direction: BrowseDirection, _name: &str) -> OpcResult<()> {
+    fn change_browse_position(&self, direction: BrowseDirection, _name: &str) -> OpcResult<()> {
+        self.state
+            .change_browse_position_count
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        if let Ok(mut lock) = self.state.last_browse_direction.lock() {
+            *lock = Some(direction);
+        }
+        if self
+            .state
+            .should_fail_browse_position
+            .load(std::sync::atomic::Ordering::Relaxed)
+        {
+            return Err(crate::errors::OpcError::Internal(
+                "Simulated browse position failure".into(),
+            ));
+        }
         Ok(())
     }
 
@@ -775,7 +793,7 @@ impl ConnectedServer for std::sync::Arc<MockConnectedServer> {
         &self,
         browse_type: BrowseType,
         filter: Option<&str>,
-        data_type: u16,
+        data_type: VarType,
         access_rights: u32,
     ) -> OpcResult<Self::ItemIterator> {
         (**self).browse_opc_item_ids(browse_type, filter, data_type, access_rights)
@@ -885,7 +903,7 @@ mod tests {
                 .iter()
                 .map(|d| GroupItemResult {
                     server_handle: ServerItemHandle::new(d.client_handle.as_raw()),
-                    canonical_type: VT_BSTR,
+                    canonical_type: VarType::BSTR,
                     error: None,
                 })
                 .collect())
@@ -949,7 +967,7 @@ mod tests {
     fn test_mock_connector_browse() {
         let server = MockConnectedServer::default();
         let iter = server
-            .browse_opc_item_ids(BrowseType::Leaf, None, 0, 0)
+            .browse_opc_item_ids(BrowseType::Leaf, None, VarType::EMPTY, 0)
             .expect("MockConnectedServer should support browse");
         let tags: Vec<String> = iter.collect::<Result<Vec<_>, _>>().unwrap();
         assert!(!tags.is_empty(), "Mock browse should return simulated tags");
@@ -990,7 +1008,7 @@ mod tests {
     fn test_mock_browse_branch_vs_leaf() {
         let server = MockConnectedServer::default();
         let branch_iter = server
-            .browse_opc_item_ids(BrowseType::Branch, None, 0, 0)
+            .browse_opc_item_ids(BrowseType::Branch, None, VarType::EMPTY, 0)
             .unwrap();
         let branches: Vec<String> = branch_iter.collect::<Result<Vec<_>, _>>().unwrap();
         assert_eq!(
@@ -999,7 +1017,7 @@ mod tests {
         );
 
         let leaf_iter = server
-            .browse_opc_item_ids(BrowseType::Leaf, None, 0, 0)
+            .browse_opc_item_ids(BrowseType::Leaf, None, VarType::EMPTY, 0)
             .unwrap();
         let leaves: Vec<String> = leaf_iter.collect::<Result<Vec<_>, _>>().unwrap();
         assert_eq!(
@@ -1131,7 +1149,7 @@ mod tests {
                     .iter()
                     .map(|_item| GroupItemResult {
                         server_handle: ServerItemHandle::new(999),
-                        canonical_type: 8,
+                        canonical_type: VarType::BSTR,
                         error: None,
                     })
                     .collect())
@@ -1213,13 +1231,13 @@ mod tests {
         fn assert_item_iterator<I: Iterator<Item = OpcResult<String>>>(_iter: I) {}
 
         let iter = server
-            .browse_opc_item_ids(BrowseType::Leaf, None, 0, 0)
+            .browse_opc_item_ids(BrowseType::Leaf, None, VarType::EMPTY, 0)
             .expect("browse_opc_item_ids should succeed");
         assert_item_iterator(iter);
 
         // Verify that ConnectedServer::ItemIterator associated type can be consumed generically
         fn browse_all<S: ConnectedServer>(s: &S) -> OpcResult<Vec<String>> {
-            let iter = s.browse_opc_item_ids(BrowseType::Leaf, None, 0, 0)?;
+            let iter = s.browse_opc_item_ids(BrowseType::Leaf, None, VarType::EMPTY, 0)?;
             iter.collect()
         }
 
@@ -1255,7 +1273,7 @@ mod tests {
 
         // 4. In-memory tag browsing
         let leaves: Vec<String> = server
-            .browse_opc_item_ids(BrowseType::Leaf, None, 0, 0)
+            .browse_opc_item_ids(BrowseType::Leaf, None, VarType::EMPTY, 0)
             .unwrap()
             .collect::<Result<Vec<_>, _>>()
             .unwrap();
@@ -1297,5 +1315,46 @@ mod tests {
         server
             .remove_group(ServerGroupHandle::new(1), GroupRemovalMode::Force)
             .unwrap();
+    }
+
+    #[test]
+    fn test_mock_server_change_browse_position_tracking() {
+        use crate::connector::traits::ConnectedServer;
+        use crate::types::BrowseDirection;
+        use std::sync::atomic::Ordering;
+
+        let server = MockConnectedServer::default();
+        assert_eq!(
+            server
+                .state
+                .change_browse_position_count
+                .load(Ordering::Relaxed),
+            0
+        );
+
+        server
+            .change_browse_position(BrowseDirection::Down, "Branch1")
+            .unwrap();
+        assert_eq!(
+            server
+                .state
+                .change_browse_position_count
+                .load(Ordering::Relaxed),
+            1
+        );
+        assert_eq!(
+            *server.state.last_browse_direction.lock().unwrap(),
+            Some(BrowseDirection::Down)
+        );
+
+        server
+            .state
+            .should_fail_browse_position
+            .store(true, Ordering::Relaxed);
+        assert!(
+            server
+                .change_browse_position(BrowseDirection::Up, "")
+                .is_err()
+        );
     }
 }

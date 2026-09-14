@@ -3,11 +3,10 @@ use crate::com::connector::{
     GroupItemResult, GroupItemState, MockConnectedGroup, MockConnectedServer, MockServerConnector,
     MockState,
 };
-use crate::com::guard::GroupGuard;
 use crate::errors::{OpcError, WorkerError};
 use crate::types::{
-    ClientItemHandle, IntoWriteBatch, OpcQuality, OpcServerEndpoint, OpcValue, ServerGroupHandle,
-    ServerItemHandle, TagBatch, TagCollector,
+    ClientItemHandle, IntoWriteBatch, OpcQuality, OpcServerEndpoint, OpcValue, ServerItemHandle,
+    TagBatch, TagCollector, VarType,
 };
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
@@ -354,7 +353,7 @@ async fn test_worker_read_tag_values_quality_decoding() {
                     if i == 4 {
                         GroupItemResult {
                             server_handle: ServerItemHandle::new(0),
-                            canonical_type: 0,
+                            canonical_type: VarType::EMPTY,
                             error: Some(OpcError::Com {
                                 source: windows::core::Error::from_hresult(
                                     windows::Win32::Foundation::E_FAIL,
@@ -365,7 +364,7 @@ async fn test_worker_read_tag_values_quality_decoding() {
                         GroupItemResult {
                             #[allow(clippy::cast_possible_truncation)]
                             server_handle: ServerItemHandle::new((i + 1) as u32),
-                            canonical_type: 8,
+                            canonical_type: VarType::BSTR,
                             error: None,
                         }
                     }
@@ -600,27 +599,6 @@ async fn test_worker_tracing_instrumentation_execution() {
         .await
         .expect("list servers");
     assert_eq!(servers, vec!["Matrikon.OPC.Simulation.1".to_string()]);
-}
-
-#[test]
-fn test_group_guard_cleanup_on_drop() {
-    let server = MockConnectedServer::default();
-    assert_eq!(server.state.remove_group_count.load(Ordering::Relaxed), 0);
-    {
-        let guard = GroupGuard::new(&server, ServerGroupHandle::new(42));
-        assert_eq!(guard.handle(), ServerGroupHandle::new(42));
-    }
-    assert_eq!(server.state.remove_group_count.load(Ordering::Relaxed), 1);
-}
-
-#[test]
-fn test_group_guard_disarm_prevents_cleanup() {
-    let server = MockConnectedServer::default();
-    {
-        let mut guard = GroupGuard::new(&server, ServerGroupHandle::new(42));
-        guard.disarm();
-    }
-    assert_eq!(server.state.remove_group_count.load(Ordering::Relaxed), 0);
 }
 
 #[tokio::test]

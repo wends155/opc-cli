@@ -1448,7 +1448,7 @@ mod tests {
     use super::*;
     use crate::com::connector::MockServerConnector;
     use crate::provider::OpcProvider;
-    use crate::types::{ClientItemHandle, OpcQuality, ServerItemHandle};
+    use crate::types::{ClientItemHandle, OpcQuality, ServerItemHandle, VarType};
 
     #[tokio::test]
     async fn test_client_list_server_details() {
@@ -1561,7 +1561,7 @@ mod tests {
                         reg.insert(h, it.item_id.clone());
                         crate::com::connector::traits::GroupItemResult {
                             server_handle: h,
-                            canonical_type: windows::Win32::System::Variant::VT_BSTR.0,
+                            canonical_type: VarType::BSTR,
                             error: None,
                         }
                     })

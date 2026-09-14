@@ -4,11 +4,13 @@
 //! [`ConnectedGroup`]) and their test doubles from Windows COM interfaces, allowing
 //! offline compilation and testing without `feature = "opc-da-backend"`.
 
+pub mod guard;
 pub mod traits;
 
 #[cfg(any(test, feature = "test-support"))]
 pub mod mock;
 
+pub use guard::{BrowsePositionGuard, GroupGuard};
 pub use traits::*;
 
 #[cfg(any(test, feature = "test-support"))]

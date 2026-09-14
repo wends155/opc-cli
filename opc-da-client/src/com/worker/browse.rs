@@ -4,7 +4,7 @@ use crate::com::connector::ConnectedServer;
 use crate::com::guard::BrowsePositionGuard;
 use crate::errors::OpcResult;
 use crate::log_opc_err;
-use crate::types::{BrowseType, NamespaceType, ServerIdentifier, TagCollector};
+use crate::types::{BrowseType, NamespaceType, ServerIdentifier, TagCollector, VarType};
 
 /// Maximum recursion depth allowed during depth-first namespace traversal.
 pub const DEFAULT_MAX_BROWSE_DEPTH: usize = 50;
@@ -45,7 +45,7 @@ pub fn handle_browse<S: ConnectedServer>(
 
     if org == NamespaceType::Flat {
         let string_iter = opc_server
-            .browse_opc_item_ids(BrowseType::Leaf, Some(""), 0, 0)
+            .browse_opc_item_ids(BrowseType::Leaf, Some(""), VarType::EMPTY, 0)
             .inspect_err(|e| {
                 log_opc_err!(
                     e,
@@ -66,7 +66,12 @@ pub fn handle_browse<S: ConnectedServer>(
             }
         }
     } else {
-        let use_flat = match opc_server.browse_opc_item_ids(BrowseType::Flat, Some(""), 0, 0) {
+        let use_flat = match opc_server.browse_opc_item_ids(
+            BrowseType::Flat,
+            Some(""),
+            VarType::EMPTY,
+            0,
+        ) {
             Ok(mut flat_enum) => match flat_enum.next() {
                 Some(Ok(first_tag)) => {
                     tracing::info!("OPC_FLAT browse supported — using fast flat enumeration");
@@ -129,7 +134,7 @@ fn browse_recursive<S: ConnectedServer>(
     }
 
     let leaf_iter = server
-        .browse_opc_item_ids(BrowseType::Leaf, Some(""), 0, 0)
+        .browse_opc_item_ids(BrowseType::Leaf, Some(""), VarType::EMPTY, 0)
         .inspect_err(|e| {
             log_opc_err!(e, "browse_recursive:leaves", depth = depth);
         })?;
@@ -169,7 +174,7 @@ fn browse_recursive<S: ConnectedServer>(
     }
 
     let branch_iter = server
-        .browse_opc_item_ids(BrowseType::Branch, Some(""), 0, 0)
+        .browse_opc_item_ids(BrowseType::Branch, Some(""), VarType::EMPTY, 0)
         .inspect_err(|e| {
             log_opc_err!(e, "browse_recursive:branches", depth = depth);
         })?;

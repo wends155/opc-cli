@@ -12,6 +12,7 @@ pub(crate) mod handles;
 pub(crate) mod quality;
 pub(crate) mod server;
 pub(crate) mod value;
+pub(crate) mod vartype;
 pub(crate) mod write_batch;
 
 #[cfg(test)]
@@ -26,4 +27,5 @@ pub use handles::*;
 pub use quality::*;
 pub use server::*;
 pub use value::*;
+pub use vartype::*;
 pub use write_batch::*;

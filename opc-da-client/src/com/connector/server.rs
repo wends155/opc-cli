@@ -17,7 +17,7 @@ use crate::raw::bindings::da::{
 use crate::raw::memory::LocalPointer;
 use crate::types::{
     BrowseDirection, BrowseType, NamespaceType, OpcServerInfo, ServerGroupHandle, ServerIdentifier,
-    is_remote_host,
+    VarType, is_remote_host,
 };
 use windows::Win32::System::Com::{CLSCTX_ALL, CLSIDFromProgID, CoCreateInstance};
 use windows::core::Interface;
@@ -287,7 +287,7 @@ impl ConnectedServer for ComServer {
         &self,
         browse_type: BrowseType,
         filter: Option<&str>,
-        data_type: u16,
+        data_type: VarType,
         access_rights: u32,
     ) -> OpcResult<Self::ItemIterator> {
         let iface = self.browse_server_address_space.as_ref().ok_or_else(|| {
@@ -301,7 +301,12 @@ impl ConnectedServer for ComServer {
         };
         // SAFETY: Calling COM interface method BrowseOPCItemIDs with valid parameters.
         let output = unsafe {
-            iface.BrowseOPCItemIDs(raw_type, filter_ptr.as_pcwstr(), data_type, access_rights)?
+            iface.BrowseOPCItemIDs(
+                raw_type,
+                filter_ptr.as_pcwstr(),
+                data_type.raw(),
+                access_rights,
+            )?
         };
         Ok(StringIterator::new(output))
     }

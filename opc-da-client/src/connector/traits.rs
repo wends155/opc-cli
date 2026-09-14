@@ -7,7 +7,7 @@ use crate::errors::{OpcError, OpcResult};
 use crate::types::{
     BrowseDirection, BrowseType, ClientGroupHandle, ClientItemHandle, NamespaceType, OpcQuality,
     OpcServerEndpoint, OpcServerInfo, OpcValue, ServerGroupHandle, ServerIdentifier,
-    ServerItemHandle, normalize_host,
+    ServerItemHandle, VarType, normalize_host,
 };
 
 // ── Pure-Rust Data Transfer Objects ────────────────────────────────
@@ -80,7 +80,7 @@ pub struct GroupItemResult {
     /// Server-assigned handle for this item.
     pub server_handle: ServerItemHandle,
     /// Canonical data type reported by the server.
-    pub canonical_type: u16,
+    pub canonical_type: VarType,
     /// Error if adding this specific item failed.
     pub error: Option<OpcError>,
 }
@@ -288,7 +288,7 @@ pub trait ConnectedServer {
         &self,
         browse_type: BrowseType,
         filter: Option<&str>,
-        data_type: u16,
+        data_type: VarType,
         access_rights: u32,
     ) -> OpcResult<Self::ItemIterator>;
 

@@ -5,7 +5,9 @@ use crate::connector::traits::{
 };
 use crate::errors::{OpcError, OpcResult};
 use crate::log_opc_err;
-use crate::types::{NamespaceType, OpcServerEndpoint, ServerGroupHandle, ServerItemHandle};
+use crate::types::{
+    NamespaceType, OpcServerEndpoint, ServerGroupHandle, ServerItemHandle, VarType,
+};
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -80,7 +82,7 @@ impl<S: ConnectedServer> ConnectedServer for PooledServer<S> {
         &self,
         browse_type: crate::types::BrowseType,
         filter: Option<&str>,
-        data_type: u16,
+        data_type: VarType,
         access_rights: u32,
     ) -> OpcResult<Self::ItemIterator> {
         self.server

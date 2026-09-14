@@ -20,17 +20,17 @@ pub use provider::{
     SystemTimeOptionExt, TagBrowser, TagCollector, TagReader, TagValue, TagWriter, WriteResult,
 };
 pub use types::{
-    BrowseDirection, BrowseType, ClientGroupHandle, ClientItemHandle, Clsid, IntoTags,
+    BaseVarType, BrowseDirection, BrowseType, ClientGroupHandle, ClientItemHandle, Clsid, IntoTags,
     IntoWriteBatch, OpcServerEndpoint, OpcServerInfo, ParseClsidError, ParseQualityError,
     ServerGroupHandle, ServerIdentifier, ServerItemHandle, TagBatch, TagBatchIter, TagExtractError,
-    TagValues, WriteBatch, WriteBatchIntoIter, WriteBatchIter,
+    TagValues, VarType, WriteBatch, WriteBatchIntoIter, WriteBatchIter,
 };
 
 // Tier 2 Service Provider Interface (SPI)
 pub use connector::{
-    ConnectedGroup, ConnectedServer, CreatedGroup, DataSource, GroupConfig, GroupItemDef,
-    GroupItemResult, GroupItemState, GroupRemovalMode, ItemWrite, ServerBackend,
-    ServerCatalogDiscovery, ServerConnector,
+    BrowsePositionGuard, ConnectedGroup, ConnectedServer, CreatedGroup, DataSource, GroupConfig,
+    GroupGuard, GroupItemDef, GroupItemResult, GroupItemState, GroupRemovalMode, ItemWrite,
+    ServerBackend, ServerCatalogDiscovery, ServerConnector,
 };
 
 // Backend re-exports (conditional)

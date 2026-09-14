@@ -151,7 +151,7 @@ mod tests {
     use super::*;
     use crate::com::connector::GroupItemDef;
     use crate::com::connector::mock::MockConnectedServer;
-    use crate::types::{IntoWriteBatch, ServerItemHandle};
+    use crate::types::{IntoWriteBatch, ServerItemHandle, VarType};
 
     #[test]
     fn test_handle_write_success() {
@@ -180,7 +180,7 @@ mod tests {
                     if idx == 1 {
                         crate::com::connector::GroupItemResult {
                             server_handle: ServerItemHandle::new(0),
-                            canonical_type: 0,
+                            canonical_type: VarType::EMPTY,
                             error: Some(OpcError::InvalidState(
                                 "Tag2 rejected in add_items".into(),
                             )),
@@ -189,7 +189,7 @@ mod tests {
                         crate::com::connector::GroupItemResult {
                             #[allow(clippy::cast_possible_truncation)]
                             server_handle: ServerItemHandle::new((idx + 1) as u32),
-                            canonical_type: 0,
+                            canonical_type: VarType::EMPTY,
                             error: None,
                         }
                     }
