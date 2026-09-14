@@ -5,14 +5,14 @@
 | Field | Value |
 | :--- | :--- |
 | **Crate** | `opc-da-client` |
-| **Version** | `0.2.0` |
+| **Version** | `0.3.0` (in active development on `dev`) |
 | **Purpose** | Backend-agnostic Rust library for interacting with OPC DA (Data Access) servers |
 | **Spec** | [spec.md](file:///c:/Users/WSALIGAN/code/opc-cli/opc-da-client/spec.md) |
-| **Status** | ✅ 0.2.0 baseline (Crates.io) |
+| **Status** | 🚀 0.3.0 Architectural Modernization |
 
 The `opc-da-client` library provides an async, trait-based API that abstracts away the complexities of Windows COM/DCOM and legacy OPC Data Access 2.05a / 3.0 protocols. It follows a strict 3-tier decoupled architecture:
-1. **Public Domain API (`provider.rs`, `types.rs`)**: High-level async trait (`OpcProvider`), canonical identity types (`ServerIdentifier`, `OpcServerInfo`, `OpcServerEndpoint`), typed data models (`TagValue`, `OpcValue`, `WriteResult`, `TagCollector`), zero-allocation quality word (`OpcQuality`), and generic collection extractor `TagValues::get_as<T>`.
-2. **Pure-Rust Facade & Worker (`com::client`, `com::worker`, `com::connector`, `com::discovery`)**: Dedicated background COM worker thread with request/response channels, compile-time typestate client facade `OpcDaClient<C, State>` (`Unbound` gateway vs `Bound` session), connection pooling keyed by `ServerIdentifier` with synchronized group eviction, shared `register_item_group` worker engine deduplication, pure-Rust connector traits (`ConnectedServer`, `ConnectedGroup`), and 3-tier server catalog / registry discovery (`OpcServerListCatalog`, `inspect_local_registration`, `OpcServerRegistration`).
+1. **Public Domain API (`provider.rs`, `types.rs`)**: High-level async role traits (`ServerDiscovery`, `TagBrowser`, `TagReader`, `TagWriter`, `OpcProvider`) with native Rust 2024 AFIT, canonical identity types (`ServerIdentifier`, `OpcServerInfo`, `OpcServerEndpoint`), typed data models (`TagValue`, `OpcValue`, `WriteBatch`, `WriteResult`, `TagCollector`), zero-allocation quality word (`OpcQuality`), and generic collection extractor `TagValues::get_as<T>`.
+2. **Pure-Rust Tier 2 SPI & Facade (`connector/`, `com::client`, `com::worker`)**: Pure-Rust SPI traits (`ServerConnector`, `ConnectedServer` with associated `ItemIterator`, `ConnectedGroup`) in `src/connector/` enabling offline mock testing on any OS without Windows COM; dedicated background COM worker thread with priority request channels; compile-time typestate client facade `OpcDaClient<C, State>` (`Unbound` gateway vs `Bound` session); connection pooling keyed by `ServerIdentifier` with active group auto-recovery (`0xC0040001`); and 3-tier server catalog / registry discovery (`OpcServerListCatalog`, `inspect_local_registration`, `OpcServerRegistration`).
 3. **Crate-Internal Low-Level FFI Subsystem (`raw/`)**: Frozen Win32 COM bindings, unsafe COM allocators with arithmetic overflow prevention, and dormant bridge types sealed behind `pub(crate) mod raw;`.
 
 ---
@@ -20,23 +20,23 @@ The `opc-da-client` library provides an async, trait-based API that abstracts aw
 ## 2. Project Objectives & Key Features
 
 ### Primary Objectives
-- **Modern Rust Ergonomics**: Provide an async, type-safe, backend-agnostic Rust abstraction over legacy Windows OPC DA servers.
+- **Modern Rust Ergonomics**: Provide an async, type-safe, backend-agnostic Rust abstraction over legacy Windows OPC DA servers using native Rust 2024 AFIT.
 - **Strict Boundary Isolation**: Sever all raw Win32 COM pointers, `tagOPCITEMDEF` structs, and Win32 `VARIANT` buffers from public domain models and high-level worker logic.
 - **Industrial Telemetry Precision**: Deliver zero-allocation, decomposed 16-bit OPC DA quality inspection (`OpcQuality`) formatted with rich substatus and limit diagnostics.
-- **Robust Runtime Resilience**: Manage COM MTA apartments, thread affinity, and connection recovery transparently without leaking unsafe pointers to callers.
-- **Frictionless Mockability**: Enable full end-to-end testing of client logic and downstream applications without requiring physical Windows DCOM runtimes.
+- **Robust Runtime Resilience**: Manage COM MTA apartments, thread affinity, and transparent connection / group recovery without leaking unsafe pointers to callers.
+- **Frictionless Mockability**: Enable full offline end-to-end testing of client logic and downstream applications on any operating system (Linux, macOS, Windows) without requiring Windows COM runtimes.
 
 ### Key Features
-- **Async/Await Trait Abstraction**: Canonical `OpcProvider` trait built on `tokio` and `async-trait`.
+- **Async/Await Trait Abstraction**: Segregated role traits (`ServerDiscovery`, `TagBrowser`, `TagReader`, `TagWriter`, `OpcProvider`) built on `tokio` and native Rust 2024 AFIT (`impl Future<Output = ...> + Send`), completely eliminating `async-trait` heap allocations.
 - **Compile-Time Typestate Client**: `OpcDaClient<C, State>` with zero-cost `Unbound` (gateway) and `Bound` (session) states, guaranteeing infallible server endpoint access during active sessions.
 - **Structured Server Discovery**: Enumerate OPC DA servers with rich metadata (`ProgID`, `CLSID`, user-readable description) via `OpcServerListCatalog` (adapting `IOPCServerList2` and `IOPCServerList`) and `OpcProvider::list_server_details`.
 - **Direct CLSID Connectivity**: Seamlessly connect to OPC servers using either human-readable ProgIDs or direct 128-bit COM Class IDs via `ServerIdentifier`.
 - **Dual-View Windows Registry Diagnostics**: Deep diagnostic inspection of server registrations (`inspect_local_registration`) querying both native and 32-bit (`KEY_WOW64_32KEY`) registry views to identify executable vs DLL execution models (`OpcServerType`) and binary disk paths.
-- **Pure-Rust Connector Facade**: `ConnectedServer` and `ConnectedGroup` traits operating strictly on pure-Rust DTOs (`GroupItemDef`, `GroupItemResult`, `GroupItemState`, `DataSource`).
+- **Pure-Rust Connector Facade**: `ConnectedServer` (with associated `type ItemIterator`) and `ConnectedGroup` traits operating strictly on pure-Rust DTOs (`GroupItemDef`, `GroupItemResult`, `GroupItemState`, `DataSource`) isolated in `src/connector/`.
 - **Zero-Allocation 16-Bit Quality Word**: `OpcQuality` decomposes the full OPC DA 2.05a specification into `QualityMajor`, `QualitySubstatus`, `QualityLimit`, and raw bits with rich `Display` diagnostics.
-- **Typesafe Read & Write Domain Models**: `TagValue` encapsulates `Result<OpcValue, OpcError>`, quality, and timestamp, with generic lossless extraction via `TagValues::get_as<T>` and numeric getters (`get_u32`, `get_u64`, `get_i64`, `get_f32`, `get_f64`).
-- **Thread-Affinity & Connection Pooling**: Dedicated `ComWorker` thread maintains MTA apartment state and pools active server connections keyed by `ServerIdentifier` with automatic eviction and retry on stale proxies.
-- **Reusable Pure-Rust Mocks**: Built-in `MockConnectedServer`, `MockConnectedGroup`, and `MockServerConnector` (under `#[cfg(test)]`) supporting `with_server_details` and eliminating `CoTaskMemAlloc` and unsafe code from tests.
+- **Typesafe Read & Write Domain Models**: `TagValue` encapsulates `Result<OpcValue, OpcError>`, quality, and timestamp, with generic lossless extraction via `TagValues::get_as<T>`, numeric getters (`get_u32`, `get_u64`, `get_i64`, `get_f32`, `get_f64`), and polymorphic `WriteBatch` (`IntoWriteBatch`).
+- **Thread-Affinity & Connection Pooling**: Dedicated `ComWorker` thread maintains MTA apartment state and pools active server connections keyed by `ServerIdentifier` with automatic eviction, active group auto-recovery, and retry on stale proxies.
+- **Reusable Pure-Rust Mocks**: Standalone role mocks (`MockServerDiscovery`, `MockTagBrowser`, `MockTagReader`, `MockTagWriter`, `MockOpcProvider`) and SPI doubles (`MockServerConnector`, `MockConnectedServer`, `MockConnectedGroup`, `MockState`) under `feature = "test-support"`, eliminating `CoTaskMemAlloc` and unsafe code from tests.
 - **Self-Healing Enumeration**: Built-in null-PWSTR filtering and batch cache zeroing preventing phantom `E_POINTER` errors in `StringIterator`.
 
 ### Target Users / Audience
@@ -45,8 +45,8 @@ The `opc-da-client` library provides an async, trait-based API that abstracts aw
 - Application developers using the `opc-cli` TUI.
 
 ### Non-Goals
-- **Cross-Platform OPC DA**: OPC DA 2.05a / 3.0 is fundamentally coupled to Windows COM/DCOM; non-Windows OS targets cannot be supported.
-- **OPC Unified Architecture (OPC UA)**: Handled by dedicated OPC UA stacks (e.g. `opcua-client`); `opc-da-client` is strictly focused on classic OPC DA.
+- **Cross-Platform OPC DA Backend**: OPC DA 2.05a / 3.0 is fundamentally coupled to Windows COM/DCOM; native backend operations require Windows, though Tier 2 SPI mocks run cross-platform.
+- **OPC Unified Architecture (OPC UA)**: Handled by dedicated OPC UA stacks; `opc-da-client` is strictly focused on classic OPC DA.
 - **UI & Presentation Formatting**: Terminal rendering and user interaction are owned by consumer crates (such as `opc-cli`).
 
 ---
@@ -58,9 +58,9 @@ The `opc-da-client` library provides an async, trait-based API that abstracts aw
 | Language | Rust (2024 Edition) |
 | Minimum Supported Rust Version | `1.93.1` |
 | Async Runtime | `tokio` (features: `sync`, `time`, `rt`) |
-| Platform Target | **Windows-only** (`x86_64-pc-windows-msvc`, `i686-pc-windows-msvc`) |
+| Platform Target | Windows for native backend; Any OS (Linux/macOS/Windows) for pure SPI & test mocks |
 | COM Threading Model | Dedicated background Multi-Threaded Apartment (MTA) worker thread |
-| Trait Async | `async-trait` crate |
+| Trait Async | Native Rust 2024 AFIT (`impl Future<Output = ...> + Send`), zero heap allocations |
 
 ---
 
@@ -74,18 +74,18 @@ opc-da-client/
 ├── spec.md                 # Behavioral contracts — Behavioral Source of Truth
 └── src/
     ├── lib.rs              # Crate root: module declarations, public re-exports (zero unreachables, Default MockOpcDaClient)
-    ├── provider.rs         # OpcProvider trait (with read_tag_value & write_tag_values defaults), TagValue, WriteResult, TagCollector (re-exports OpcValue)
-    ├── types.rs            # Canonical domain types (OpcValue, OpcQuality with FromStr), handles (GroupHandle, ItemHandle), ServerIdentifier, browse enums
+    ├── provider.rs         # OpcProvider role traits (AFIT native async), TagValue, WriteResult, TagCollector
+    ├── types.rs            # Canonical domain types parent module
+    ├── types/              # Domain types: value, quality, handles, server, batch, collection, write_batch
     ├── errors.rs           # OpcError (is_connection_error), OpcResult, OpcOperation, inherent friendly_hint diagnostics
+    ├── errors/             # Hierarchical error modules (hresult, worker, conversion)
+    ├── connector.rs        # Pure-Rust Tier 2 SPI connector module root (unconditional re-exports)
+    ├── connector/          # Pure-Rust Tier 2 SPI connector subsystem (traits.rs with ItemIterator, mock.rs)
     ├── com/                # COM subsystem (feature-gated: opc-da-backend)
     │   ├── mod.rs          # Module declarations & internal re-exports
     │   ├── client.rs       # OpcDaClient<C, State>: compile-time typestate facade (Unbound vs Bound) & session helpers
     │   ├── connector.rs    # Slim coordinator facade (pure connector re-exports, zero raw::memory leak)
-    │   ├── connector/      # Dedicated single-responsibility connector submodules
-    │   │   ├── traits.rs   # Core traits (ServerConnector, ConnectedServer, ConnectedGroup), GroupConfig::ephemeral & pure-Rust DTOs
-    │   │   ├── server.rs   # Win32 COM server connection & namespace navigation (ComConnector, ComServer)
-    │   │   ├── group.rs    # Win32 COM group item registration & I/O (ComGroup) with RAII ItemResultsBlobGuard & VARIANT guards
-    │   │   └── mock.rs     # Pure-Rust mock infrastructure (MockServerConnector, MockConnectedServer, MockConnectedGroup) with fluent builders
+    │   ├── connector/      # Dedicated COM connector implementations & SPI re-exports (server.rs, group.rs)
     │   ├── discovery.rs    # 3-tier catalog adapter, dual-view registry inspection (OpcServerRegistration), guid_to_progid
     │   ├── guard.rs        # RAII COM initialization/teardown (ComGuard), group cleanup (GroupGuard), and browse cursor protection (BrowsePositionGuard)
     │   ├── iterator.rs     # Safe wrappers for IEnumString (with RAII drop memory cleanup) and IEnumGUID
