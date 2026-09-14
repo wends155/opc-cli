@@ -186,13 +186,20 @@ pub enum ComRequest {
 /// a persistent connection pool and transparently evicting stale connection handles on RPC errors.
 pub struct ComWorker<C: ServerBackend + 'static> {
     /// Channel sender for dispatching requests to the worker loop.
-    pub sender: mpsc::Sender<ComRequest>,
+    sender: Option<mpsc::Sender<ComRequest>>,
     /// Thread join handle for clean worker thread teardown.
-    pub handle: Option<std::thread::JoinHandle<()>>,
+    handle: Option<std::thread::JoinHandle<()>>,
     _phantom: std::marker::PhantomData<C>,
 }
 
 impl<C: ServerBackend + 'static> ComWorker<C> {
+    /// Returns a reference to the request sender channel if active.
+    #[allow(dead_code)]
+    #[must_use]
+    pub fn sender(&self) -> Option<&mpsc::Sender<ComRequest>> {
+        self.sender.as_ref()
+    }
+
     /// Starts the background COM worker thread with default MTA initialization.
     pub fn start(connector: Arc<C>) -> Result<Self, OpcError> {
         Self::start_with_initializer::<crate::com::guard::DefaultComInit>(connector)
@@ -220,7 +227,7 @@ impl<C: ServerBackend + 'static> ComWorker<C> {
         tracing::debug!("COM worker thread started");
 
         Ok(Self {
-            sender: tx,
+            sender: Some(tx),
             handle: Some(handle),
             _phantom: std::marker::PhantomData,
         })
@@ -255,7 +262,7 @@ impl<C: ServerBackend + 'static> ComWorker<C> {
         tracing::debug!("COM worker thread started asynchronously");
 
         Ok(Self {
-            sender: tx,
+            sender: Some(tx),
             handle: Some(handle),
             _phantom: std::marker::PhantomData,
         })
@@ -281,7 +288,13 @@ impl<C: ServerBackend + 'static> ComWorker<C> {
         let (tx, rx) = oneshot::channel();
         let req = req_builder(tx);
 
-        self.sender.send(req).await.inspect_err(
+        let sender = self.sender.as_ref().ok_or_else(|| {
+            OpcError::Worker(WorkerError::Panic(
+                "COM worker sender is not available".into(),
+            ))
+        })?;
+
+        sender.send(req).await.inspect_err(
             |e| tracing::error!(error = ?e, "COM worker channel closed (worker stopped)"),
         )?;
 
@@ -292,7 +305,16 @@ impl<C: ServerBackend + 'static> ComWorker<C> {
 
 impl<C: ServerBackend + 'static> Drop for ComWorker<C> {
     fn drop(&mut self) {
-        tracing::debug!("ComWorker dropping — channel closing, signaling thread shutdown");
+        tracing::debug!("ComWorker dropping — closing channel and joining worker thread");
+        // Drop sender first so rx.recv() returns None, signaling the worker loop to terminate
+        drop(self.sender.take());
+
+        // Explicitly join worker thread for deterministic teardown
+        if let Some(handle) = self.handle.take()
+            && let Err(e) = handle.join()
+        {
+            tracing::error!(panic = ?e, "Worker thread panicked during execution or teardown");
+        }
     }
 }
 

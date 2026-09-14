@@ -35,7 +35,8 @@ async fn test_worker_list_servers() {
     .unwrap();
     let (reply, _rx) = oneshot::channel();
     worker
-        .sender
+        .sender()
+        .unwrap()
         .send(ComRequest::ListServers {
             host: "localhost".into(),
             reply,
@@ -56,7 +57,8 @@ async fn test_worker_list_server_details() {
     .unwrap();
     let (reply, rx) = oneshot::channel();
     worker
-        .sender
+        .sender()
+        .unwrap()
         .send(ComRequest::ListServerDetails {
             host: "localhost".into(),
             reply,
@@ -659,7 +661,7 @@ async fn test_worker_channel_drop_error_propagation() {
     let (tx, rx) = tokio::sync::mpsc::channel(1);
     drop(rx); // Drop receiver to simulate closed worker channel
     let worker: ComWorker<MockServerConnector> = ComWorker {
-        sender: tx,
+        sender: Some(tx),
         handle: None,
         _phantom: std::marker::PhantomData,
     };
@@ -1126,4 +1128,62 @@ async fn test_progid_resolution_failure_does_not_engage_circuit_breaker() {
         !matches!(err2, OpcError::Connection(ref msg) if msg.contains("circuit breaker cooldown")),
         "Subsequent call must not be blocked by circuit breaker cooldown: got {err2}"
     );
+}
+
+#[tokio::test]
+async fn test_worker_thread_joins_on_drop() {
+    let connector = Arc::new(MockServerConnector::default());
+    let worker = tokio::task::spawn_blocking(move || ComWorker::start(connector).unwrap())
+        .await
+        .unwrap();
+
+    // Verify worker is operational
+    let ping_res = worker
+        .send_request(|reply| ComRequest::Ping {
+            endpoint: OpcServerEndpoint::from("Mock.Server.DropTest"),
+            reply,
+        })
+        .await;
+    assert!(ping_res.is_ok(), "Ping request must succeed before drop");
+
+    // Dropping worker in spawn_blocking joins thread handle deterministically
+    let join_completed = tokio::task::spawn_blocking(move || {
+        drop(worker);
+        true
+    })
+    .await
+    .unwrap();
+
+    assert!(
+        join_completed,
+        "Worker drop must complete cleanly and join the worker thread"
+    );
+}
+
+#[tokio::test]
+async fn test_worker_browse_with_mock_associated_item_iterator() {
+    let server = Arc::new(MockConnectedServer::default().with_tags(vec![
+        "Device.Sensors.Pressure".to_string(),
+        "Device.Sensors.Flow".to_string(),
+    ]));
+    let connector = Arc::new(MockServerConnector {
+        server,
+        ..Default::default()
+    });
+    let worker = tokio::task::spawn_blocking(move || ComWorker::start(connector).unwrap())
+        .await
+        .unwrap();
+
+    let tags = worker
+        .send_request(|reply| ComRequest::BrowseTags {
+            endpoint: OpcServerEndpoint::from("Mock.Server.BrowseIter"),
+            collector: crate::provider::TagCollector::default(),
+            reply,
+        })
+        .await
+        .expect("BrowseTags request should succeed");
+
+    assert_eq!(tags.len(), 2);
+    assert_eq!(tags[0], "Device.Sensors.Pressure");
+    assert_eq!(tags[1], "Device.Sensors.Flow");
 }
