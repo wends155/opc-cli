@@ -773,6 +773,130 @@ impl<C: ServerBackend + 'static> OpcDaClient<C, Bound> {
             .await
     }
 
+    /// Reads a single tag and unwraps its value as an `f32`.
+    ///
+    /// # Arguments
+    ///
+    /// * `tag` - Tag identifier string.
+    ///
+    /// # Returns
+    ///
+    /// Decoded `f32` value.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`OpcError`] if the read fails, the tag was not found, or the value cannot be converted to `f32`.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,no_run
+    /// # #[tokio::main]
+    /// # async fn main() -> opc_da_client::OpcResult<()> {
+    /// use opc_da_client::OpcDaClient;
+    ///
+    /// let client = OpcDaClient::connect("Matrikon.OPC.Simulation.1")?;
+    /// let temp = client.read_f32("Random.Real4").await?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[tracing::instrument(level = "info", skip(self), err)]
+    pub async fn read_f32(&self, tag: &str) -> OpcResult<f32> {
+        self.read_single_typed(tag, TagValues::get_f32).await
+    }
+
+    /// Reads a single tag and unwraps its value as an `i64`.
+    ///
+    /// # Arguments
+    ///
+    /// * `tag` - Tag identifier string.
+    ///
+    /// # Returns
+    ///
+    /// Decoded `i64` value.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`OpcError`] if the read fails, the tag was not found, or the value cannot be converted to `i64`.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,no_run
+    /// # #[tokio::main]
+    /// # async fn main() -> opc_da_client::OpcResult<()> {
+    /// use opc_da_client::OpcDaClient;
+    ///
+    /// let client = OpcDaClient::connect("Matrikon.OPC.Simulation.1")?;
+    /// let count = client.read_i64("Random.Int8").await?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[tracing::instrument(level = "info", skip(self), err)]
+    pub async fn read_i64(&self, tag: &str) -> OpcResult<i64> {
+        self.read_single_typed(tag, TagValues::get_i64).await
+    }
+
+    /// Reads a single tag and unwraps its value as a `u32`.
+    ///
+    /// # Arguments
+    ///
+    /// * `tag` - Tag identifier string.
+    ///
+    /// # Returns
+    ///
+    /// Decoded `u32` value.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`OpcError`] if the read fails, the tag was not found, or the value cannot be converted to `u32`.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,no_run
+    /// # #[tokio::main]
+    /// # async fn main() -> opc_da_client::OpcResult<()> {
+    /// use opc_da_client::OpcDaClient;
+    ///
+    /// let client = OpcDaClient::connect("Matrikon.OPC.Simulation.1")?;
+    /// let count = client.read_u32("Random.UInt4").await?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[tracing::instrument(level = "info", skip(self), err)]
+    pub async fn read_u32(&self, tag: &str) -> OpcResult<u32> {
+        self.read_single_typed(tag, TagValues::get_u32).await
+    }
+
+    /// Reads a single tag and unwraps its value as a `u64`.
+    ///
+    /// # Arguments
+    ///
+    /// * `tag` - Tag identifier string.
+    ///
+    /// # Returns
+    ///
+    /// Decoded `u64` value.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`OpcError`] if the read fails, the tag was not found, or the value cannot be converted to `u64`.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,no_run
+    /// # #[tokio::main]
+    /// # async fn main() -> opc_da_client::OpcResult<()> {
+    /// use opc_da_client::OpcDaClient;
+    ///
+    /// let client = OpcDaClient::connect("Matrikon.OPC.Simulation.1")?;
+    /// let count = client.read_u64("Random.UInt8").await?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[tracing::instrument(level = "info", skip(self), err)]
+    pub async fn read_u64(&self, tag: &str) -> OpcResult<u64> {
+        self.read_single_typed(tag, TagValues::get_u64).await
+    }
+
     /// Reads a single tag and returns its full [`TagValue`].
     ///
     /// # Arguments
@@ -1616,5 +1740,81 @@ mod tests {
             let legacy_val = client.read_tag_value("Tag1").await.unwrap();
             assert_eq!(legacy_val.tag_id, "Tag1");
         }
+    }
+
+    fn setup_mock_bound_client(
+        _tag: &str,
+        value: OpcValue,
+    ) -> OpcDaClient<crate::com::connector::mock::MockServerConnector, Bound> {
+        let state = std::sync::Arc::new(crate::com::connector::mock::MockState::default());
+        let group = crate::com::connector::mock::MockConnectedGroup::default().with_read_fn(
+            move |_source, handles| {
+                Ok(handles
+                    .iter()
+                    .map(|&h| {
+                        Ok(crate::com::connector::traits::GroupItemState {
+                            client_handle: ClientItemHandle::new(h.as_raw()),
+                            value: value.clone(),
+                            quality: OpcQuality::GOOD,
+                            timestamp: std::time::SystemTime::UNIX_EPOCH,
+                        })
+                    })
+                    .collect())
+            },
+        );
+        let server = std::sync::Arc::new(crate::com::connector::mock::MockConnectedServer {
+            group: std::sync::Arc::new(group),
+            state: state.clone(),
+            ..Default::default()
+        });
+        let connector = crate::com::connector::mock::MockServerConnector {
+            server,
+            state,
+            ..Default::default()
+        };
+        OpcDaClient::new(connector)
+            .expect("client initialization must succeed")
+            .bind(OpcServerEndpoint::from("Mock.Server.Numerics"))
+    }
+
+    #[tokio::test]
+    async fn test_client_read_f32() {
+        let client = setup_mock_bound_client("Test.F32", OpcValue::Float(12.5));
+        let val = client
+            .read_f32("Test.F32")
+            .await
+            .expect("read_f32 must succeed");
+        assert!((val - 12.5).abs() < 1e-5);
+    }
+
+    #[tokio::test]
+    async fn test_client_read_i64() {
+        let client = setup_mock_bound_client("Test.I64", OpcValue::Int(1_234_567_890_123));
+        let val = client
+            .read_i64("Test.I64")
+            .await
+            .expect("read_i64 must succeed");
+        assert_eq!(val, 1_234_567_890_123);
+    }
+
+    #[tokio::test]
+    async fn test_client_read_u32() {
+        let client = setup_mock_bound_client("Test.U32", OpcValue::UInt(4_294_967_290));
+        let val = client
+            .read_u32("Test.U32")
+            .await
+            .expect("read_u32 must succeed");
+        assert_eq!(val, 4_294_967_290);
+    }
+
+    #[tokio::test]
+    async fn test_client_read_u64() {
+        let client =
+            setup_mock_bound_client("Test.U64", OpcValue::UInt(18_446_744_073_709_551_610));
+        let val = client
+            .read_u64("Test.U64")
+            .await
+            .expect("read_u64 must succeed");
+        assert_eq!(val, 18_446_744_073_709_551_610);
     }
 }
