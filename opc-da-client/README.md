@@ -25,7 +25,7 @@ OPC DA is deeply coupled to Windows COM/DCOM, which poses significant architectu
 - **Active Group Caching & Auto-Retry**: Automatically pools active OPC groups and item handles on repeated read cycles, reducing DCOM round-trip overhead by >75%. Automatically evicts stale groups and retries once upon server-side group invalidations.
 - **Native Zero-Allocation Batch Writes (`WriteBatch` & `IntoWriteBatch`)**: Perform single or multiple tag writes in a single COM atomic `SyncIO::Write` operation via `client.write_tag(...)` or bound `client.write_tags(...)` accepting arrays (`[("Tag", val), ...]`), slices (`&[...]`), or vectors without channel heap allocations.
 - **Non-Blocking Subscription Streams**: Stream periodic tag readings via `client.subscribe(tags, interval)` returning an asynchronous Tokio `mpsc::Receiver<TagValues>` with RAII drop cancellation.
-- **Hardened Remote DCOM (KB5004442)**: Automatically enforces `RPC_C_AUTHN_LEVEL_PKT_INTEGRITY` on remote DCOM proxy blankets, with configurable `with_legacy_dcom(true)` for legacy Windows 7 / Server 2008 R2 hosts.
+- **Hardened DCOM Support (KB5004442)**: Enforces `RPC_C_AUTHN_LEVEL_PKT_INTEGRITY` on DCOM proxy blankets with configurable `with_legacy_dcom(true)`. *(Full remote DCOM is on the roadmap and not yet supported in 0.3.0; for remote communication, OPC UA is recommended).*
 - **Native Rust 2024 Async Traits**: Built on `tokio` with native async trait methods (`impl Future<Output = ...> + Send`), completely eliminating `async-trait` heap allocations while providing segregated role traits (`ServerDiscovery`, `TagBrowser`, `TagReader`, `TagWriter`) and composite `OpcProvider` for straightforward test mocking.
 - **Structured Server Discovery & UNC Endpoints**: Enumerate servers with rich catalog metadata (`OpcServerInfo`, `ProgID`, `CLSID`, user-friendly title) via `list_server_details`. Full support for UNC paths (`\\host\server`) via `OpcServerEndpoint` with automatic localhost normalization.
 - **Pure-Rust Tier 2 SPI Connector (`opc_da_client::connector::*`)**: Strict isolation of low-level Win32 COM and FFI types behind pure-Rust trait interfaces (`ServerConnector`, `ConnectedServer`, `ConnectedGroup`) with associated `type ItemIterator`, compiling and enabling full offline test mocking on any platform without requiring Windows COM runtimes or the `opc-da-backend` feature flag.
@@ -238,21 +238,35 @@ async fn main() -> OpcResult<()> {
 }
 ```
 
-### Remote DCOM Server Connection
+### Remote DCOM Server Connection (Experimental / Roadmap)
 
-When targeting a remote host over DCOM, `opc-da-client` supports UNC endpoints:
+> [!WARNING]
+> **DCOM Implementation Status (0.3.0):**
+> Full Remote DCOM operation is on the roadmap ([`long_term_todo.md`](../long_term_todo.md) Phase 5) and is **NOT yet supported for production in 0.3.0**.
+>
+> **For remote industrial connectivity, it is strongly recommended to use OPC UA** (via an OPC UA gateway or wrapper like Kepware, Matrikon OPC UA Tunneller, or Prosys OPC) rather than legacy DCOM. OPC UA communicates over standard TCP/IP (port 4840), traverses firewalls cleanly, and eliminates the brittle Windows security, RPC port exhaustion, and DCOM hardening (KB5004442) challenges inherent to remote COM.
+>
+> When using OPC DA, running `opc-da-client` locally on the server host delivers rock-solid, zero-configuration reliability.
+
+#### What Works in 0.3.0 vs What Does Not Work
+| Feature | Status | Notes |
+| :--- | :--- | :--- |
+| **Local OPC DA Connections** | ✅ **Supported** | 100% stable, hardened, fully tested local COM operation on the same machine. |
+| **Remote Catalog Discovery** | ✅ **Supported** | Queries `OPCEnum` (`IOPCServerList`/`IOPCServerList2`) on remote hosts via DCOM. |
+| **Direct CLSID Remote Connect** | ⚠️ **Experimental** | Works via explicit bracketed CLSID (`\\host\{CLSID}`) if DCOM security/firewall is configured. |
+| **Remote ProgID Resolution** | ❌ **Not in 0.3.0** | ProgID resolution queries local registry; fails with `CO_E_CLASSSTRING` if not locally installed. |
+| **TUI Remote Browsing (`opc-cli`)** | ❌ **Not in 0.3.0** | TUI screen transitions currently drop remote host context and revert to `localhost`. |
+| **Remote Enumerator Blanketing** | ❌ **Not in 0.3.0** | `BrowseOPCItemIDs` enumerator (`IEnumString`) lacks proxy blanketing. |
+
+When targeting a remote host over DCOM using direct CLSID:
 
 ```rust,no_run
 use opc_da_client::{OpcDaClient, OpcResult};
 
 #[tokio::main]
 async fn main() -> OpcResult<()> {
-    // Connect via UNC endpoint using bracketed CLSID (recommended for remote servers):
+    // Direct CLSID connection bypasses local ProgID registry lookup:
     let client = OpcDaClient::connect(r"\\192.168.1.50\{F8582CF2-88FB-11D0-B850-00C0F0104305}")?;
-    client.connect_eager().await?;
-
-    // Or connect via remote shortcut:
-    let client = OpcDaClient::connect_remote("192.168.1.50", "{F8582CF2-88FB-11D0-B850-00C0F0104305}")?;
     client.connect_eager().await?;
 
     let val = client.read_f64("Random.Real8").await?;
@@ -260,9 +274,6 @@ async fn main() -> OpcResult<()> {
     Ok(())
 }
 ```
-
-> [!NOTE]
-> **Remote ProgID vs CLSID**: Activating a remote server by ProgID (e.g. `\\192.168.1.50\Matrikon.OPC.Simulation.1`) queries the *local* registry for the ProgID-to-CLSID mapping. If the OPC server is installed only on the remote host, specify the server by its bracketed CLSID (`\\host\{CLSID}`). Remote ProgID resolution via `IOPCServerList::CLSIDFromProgID` on remote `OPCEnum` is tracked in `long_term_todo.md`.
 
 ### Reading Tags with Typed Values & Quality
 

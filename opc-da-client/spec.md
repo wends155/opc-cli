@@ -902,6 +902,20 @@ Before calling `browse_recursive`, `browse_tags` attempts `browse_opc_item_ids(B
 * Crate Root Re-Export:
   - `pub type MockOpcDaClient = com::client::OpcDaClient<connector::MockServerConnector>;` exported under `#[cfg(all(feature = "test-support", feature = "opc-da-backend"))]`.
 
+### 1.8.1 Remote DCOM Implementation Boundary (0.3.0 vs Roadmap)
+
+* **0.3.0 Supported Capabilities:**
+  - Remote server catalog discovery via `OPCEnum` (`IOPCServerList` / `IOPCServerList2`) over DCOM `CoCreateInstanceEx` with proxy blanketing.
+  - Low-level direct CLSID remote activation (`\\host\{CLSID}`) with Windows KB5004442 `RPC_C_AUTHN_LEVEL_PKT_INTEGRITY` packet integrity on primary server/group interfaces.
+* **0.3.0 Known Limitations (Deferred to Phase 5 Roadmap):**
+  - **Remote ProgID Resolution:** Resolving ProgIDs on remote hosts without local registration fails with `CO_E_CLASSSTRING`. Dynamic remote resolution via `IOPCServerList::CLSIDFromProgID` on remote `OPCEnum` is scheduled for Phase 5.
+  - **TUI Host Retention (`opc-cli`):** TUI screen transitions from server discovery drop remote host context and revert to `localhost`. Propagating UNC endpoints across all screens is scheduled for Phase 5.
+  - **Enumerator Blanketing:** `BrowseOPCItemIDs` returns an unblanketed `IEnumString`, which may trigger `E_ACCESSDENIED` (`0x80070005`) under hardened DCOM.
+  - **Custom Credentials:** No `COAUTHIDENTITY` support for custom Windows domain/local authentication.
+* **Architecture Recommendation:**
+  - For remote communications across network boundaries, **modern OPC UA is strongly recommended** over legacy DCOM.
+  - For OPC DA, running client applications locally on the server host delivers zero-configuration reliability without DCOM complexity.
+
 ---
 
 ### 1.9 `raw` — Crate-Internal Low-Level Win32/COM FFI Subsystem

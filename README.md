@@ -17,8 +17,8 @@ See **[opc-da-client architecture.md](./opc-da-client/architecture.md)** for the
 
 ## ✨ Features
 
-- **Server Discovery & UNC Endpoints**: Enumerate OPC DA servers on local or remote hosts with rich catalog metadata; supports UNC endpoint syntax (`\\host\server` or `\\host\{CLSID}`).
-- **Typestate Client, Remote DCOM & Liveness Ping**: Zero-cost compile-time `Unbound` (gateway) and `Bound` (session) typestates with direct `connect` / `connect_remote` / `build_bound` shortcuts, eager liveness probe (`connect_eager`), and automatic Windows KB5004442 `RPC_C_AUTHN_LEVEL_PKT_INTEGRITY` security blanketing.
+- **Server Discovery & UNC Endpoints**: Enumerate OPC DA servers on local hosts and remote OPCEnum catalogs via UNC syntax (`\\host\server` or `\\host\{CLSID}`). *(Full remote DCOM is on the roadmap and not yet supported in 0.3.0; see Remote OPC DA Status below).*
+- **Typestate Client, Liveness Ping & COM Isolation**: Zero-cost compile-time `Unbound` (gateway) and `Bound` (session) typestates with direct `connect` / `build_bound` shortcuts, eager liveness probe (`connect_eager`), dedicated MTA apartment worker thread, and automatic Windows KB5004442 packet integrity security blanketing.
 - **Hierarchical Browsing**: Recursive exploration of complex server namespaces with cooperative cancellation and partial-result harvesting on timeout.
 - **Real-time Monitoring & Active Group Caching**: Live tag value updates with 1-second auto-refresh backed by active OPC group pooling (>75% lower DCOM RPC latency) and auto-recovery on group invalidations.
 - **Zero-Allocation Batch Reads & Typed Values**: Universal `IntoTags` tag batches (`read_tags`, `read_tag`), inherent numeric accessors (`read_f32`, `read_i64`, `read_u32`, `read_u64`), rich `TagValues` collection with generic typed extraction (`get_as<T>`), numeric getters, and encapsulated `TagValue` read outcomes.
@@ -37,18 +37,26 @@ See **[opc-da-client architecture.md](./opc-da-client/architecture.md)** for the
 - **OPC Core Components**: Must be installed on the system to resolve OPC ProgIDs.
 - **Rust 1.93+**: Edition 2024.
 
-### 🌐 Remote OPC DA (DCOM) Status & Capabilities
+### 🌐 Remote OPC DA (DCOM) Status & Architecture Guidance
 
-The underlying `opc-da-client` crate provides native Windows DCOM transport support for distributed industrial automation architectures:
+> [!WARNING]
+> **DCOM Implementation Status (0.3.0):**
+> Full end-to-end Remote DCOM operation is on the roadmap ([`long_term_todo.md`](long_term_todo.md) Phase 5) and is **NOT yet supported for production in 0.3.0**.
+>
+> **For remote industrial connectivity today, it is strongly recommended to use OPC UA** (via an OPC UA gateway or wrapper like Kepware, Matrikon OPC UA Tunneller, or Prosys OPC) rather than legacy DCOM. OPC UA communicates over standard TCP/IP (port 4840), traverses firewalls natively, and eliminates the brittle Windows security, RPC port exhaustion, and DCOM hardening (KB5004442) challenges inherent to remote COM.
+>
+> When using OPC DA, running `opc-cli` directly on the Windows machine hosting the OPC DA server (local COM activation) is the recommended and fully supported deployment model.
 
-- **Remote Catalog Discovery**: Queries `OPCEnum` (`IOPCServerList`/`IOPCServerList2`) on remote hosts via DCOM `CoCreateInstanceEx` with proxy blanketing to enumerate available servers.
-- **Direct Remote Activation**: Activates remote OPC DA servers via `CoCreateInstanceEx` (`CLSCTX_REMOTE_SERVER`) with automatic Windows KB5004442 `RPC_C_AUTHN_LEVEL_PKT_INTEGRITY` packet integrity and proxy blanketing applied across server and group interfaces.
+#### What Works Today (0.3.0)
+- **Local OPC DA Connections**: 100% stable, hardened, fully tested local COM operation on the same machine.
+- **Remote Catalog Discovery**: Queries `OPCEnum` (`IOPCServerList`/`IOPCServerList2`) on remote hosts via DCOM `CoCreateInstanceEx` to enumerate available servers and CLSIDs.
+- **Direct CLSID Remote Activation**: Low-level library activation via `CoCreateInstanceEx` (`CLSCTX_REMOTE_SERVER`) when given an explicit bracketed CLSID (e.g. `\\host\{CLSID}`), applying Windows KB5004442 `RPC_C_AUTHN_LEVEL_PKT_INTEGRITY` packet integrity and proxy blanketing across primary server and group interfaces.
 
-> [!NOTE]
-> **Current Remote Status & Roadmap (Phase 5):**
-> 1. **ProgID vs CLSID**: When activating a remote server by ProgID (e.g. `\\host\Matrikon.OPC.Simulation.1`), Windows resolves the ProgID against the *local* registry. If the OPC server software is installed only on the remote host, specify the server by its bracketed CLSID directly (e.g. `\\host\{F8582CF2-88FB-11D0-B850-00C0F0104305}`). Remote ProgID resolution via `IOPCServerList::CLSIDFromProgID` on remote `OPCEnum` is tracked in [`long_term_todo.md`](long_term_todo.md).
-> 2. **TUI Host Retention**: In the interactive `opc-cli` TUI, server listing queries the remote host, but subsequent tag browsing and monitoring currently target the local machine. Full UNC host propagation through the TUI navigation stack is scheduled for Phase 5.
-> 3. **DCOM Prerequisites**: Remote activation requires network connectivity on RPC port 135 and dynamic DCOM ports, administrative DCOM launch/activation permissions configured via `dcomcnfg.exe`, and matching Windows credentials or Active Directory domain membership.
+#### What Does NOT Work Yet (Roadmap — Phase 5)
+- **Remote ProgID Resolution**: Connecting via remote ProgID (e.g. `\\host\Matrikon.OPC.Simulation.1`) queries the *local* registry for the ProgID-to-CLSID mapping. If the OPC server is not installed locally, resolution fails with `CO_E_CLASSSTRING` (`0x800401F3`). *(Phase 5 will add dynamic remote ProgID resolution via `IOPCServerList::CLSIDFromProgID` on remote `OPCEnum`)*.
+- **Interactive TUI Remote Browsing**: In `opc-cli`, remote host server listing works, but selecting a server drops the host context and attempts to browse/monitor tags on `localhost`. *(Phase 5 will propagate UNC host endpoints across all TUI screens)*.
+- **Remote Enumerator Proxy Blanketing**: `BrowseOPCItemIDs` returns an `IEnumString` that currently lacks DCOM proxy blanketing, which can trigger `E_ACCESSDENIED` (`0x80070005`) on hardened Windows systems.
+- **Custom Windows Credentials**: No CLI flags or dialogs to supply alternative domain/user credentials (`COAUTHIDENTITY`) for cross-machine authentication.
 
 ### Build & Run
 
