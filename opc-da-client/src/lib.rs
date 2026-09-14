@@ -1,6 +1,7 @@
 #![allow(unsafe_code)]
 #![doc = include_str!("../README.md")]
 
+pub mod connector;
 pub mod errors;
 mod provider;
 pub mod types;
@@ -26,14 +27,18 @@ pub use types::{
     TagBatchIter, TagExtractError, TagValues, WriteBatch, WriteBatchIntoIter, WriteBatchIter,
 };
 
+// Tier 2 Service Provider Interface (SPI)
+pub use connector::{
+    ConnectedGroup, ConnectedServer, CreatedGroup, DataSource, GroupConfig, GroupItemDef,
+    GroupItemResult, GroupItemState, GroupRemovalMode, ItemWrite, ServerBackend,
+    ServerCatalogDiscovery, ServerConnector,
+};
+
 // Backend re-exports (conditional)
 #[cfg(feature = "opc-da-backend")]
 pub use com::{
     client::{Bound, OpcDaClient, OpcDaClientBuilder, Unbound},
-    connector::{
-        ComConnector, ConnectedGroup, ConnectedServer, GroupRemovalMode, ItemWrite, ServerBackend,
-        ServerCatalogDiscovery, ServerConnector,
-    },
+    connector::ComConnector,
     discovery::{OpcServerRegistration, OpcServerType, inspect_local_registration},
 };
 
@@ -43,17 +48,17 @@ pub use provider::{
     MockOpcProvider, MockServerDiscovery, MockTagBrowser, MockTagReader, MockTagWriter,
 };
 
-#[cfg(all(feature = "test-support", feature = "opc-da-backend"))]
-pub use com::connector::{MockConnectedGroup, MockConnectedServer, MockServerConnector, MockState};
+#[cfg(feature = "test-support")]
+pub use connector::{MockConnectedGroup, MockConnectedServer, MockServerConnector, MockState};
 
 /// Type alias for an [`OpcDaClient`] instantiated with [`MockServerConnector`].
 #[cfg(all(feature = "test-support", feature = "opc-da-backend"))]
-pub type MockOpcDaClient = com::client::OpcDaClient<com::connector::MockServerConnector>;
+pub type MockOpcDaClient = com::client::OpcDaClient<connector::MockServerConnector>;
 
 #[cfg(all(feature = "test-support", feature = "opc-da-backend"))]
-impl Default for com::client::OpcDaClient<com::connector::MockServerConnector> {
+impl Default for com::client::OpcDaClient<connector::MockServerConnector> {
     fn default() -> Self {
-        match Self::new(com::connector::MockServerConnector::default()) {
+        match Self::new(connector::MockServerConnector::default()) {
             Ok(client) => client,
             Err(e) => unreachable!("mock client initializes successfully: {e:?}"),
         }

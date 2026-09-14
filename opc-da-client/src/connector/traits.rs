@@ -3,7 +3,6 @@
 //! Decouples domain logic and worker thread orchestration from low-level
 //! Win32 COM interfaces and native FFI structs.
 
-use crate::com::iterator::StringIterator;
 use crate::errors::{OpcError, OpcResult};
 use crate::types::{
     BrowseDirection, BrowseType, ClientGroupHandle, ClientItemHandle, NamespaceType, OpcQuality,
@@ -264,6 +263,9 @@ pub trait ConnectedServer {
     /// The group facade type returned by [`Self::add_group`].
     type Group: ConnectedGroup;
 
+    /// The iterator type returned by [`Self::browse_opc_item_ids`].
+    type ItemIterator: Iterator<Item = OpcResult<String>>;
+
     /// Ping the server to verify active liveness and apartment responsiveness.
     ///
     /// # Errors
@@ -288,7 +290,7 @@ pub trait ConnectedServer {
         filter: Option<&str>,
         data_type: u16,
         access_rights: u32,
-    ) -> OpcResult<StringIterator>;
+    ) -> OpcResult<Self::ItemIterator>;
 
     /// Change the current browse position (e.g., navigate into/out of branches).
     ///

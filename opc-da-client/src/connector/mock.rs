@@ -3,18 +3,20 @@
 //! Provides in-memory test doubles for [`ServerConnector`], [`ConnectedServer`],
 //! and [`ConnectedGroup`] without requiring Win32 COM interfaces or native drivers.
 
-use crate::com::connector::traits::{
+use super::traits::{
     ConnectedGroup, ConnectedServer, CreatedGroup, DataSource, GroupConfig, GroupItemDef,
     GroupItemResult, GroupItemState, GroupRemovalMode, ItemWrite, ServerCatalogDiscovery,
     ServerConnector,
 };
-use crate::com::iterator::StringIterator;
+use crate::errors::hresult::{CO_E_CLASSSTRING, E_FAIL, RPC_S_SERVER_UNAVAILABLE};
 use crate::errors::{OpcError, OpcResult};
-use crate::raw::hresult::RPC_S_SERVER_UNAVAILABLE;
 use crate::types::{
     BrowseDirection, BrowseType, ClientItemHandle, Clsid, NamespaceType, OpcQuality, OpcServerInfo,
     OpcValue, ServerGroupHandle, ServerIdentifier, ServerItemHandle,
 };
+
+/// Canonical COM VARIANT type discriminant for BSTR (`VT_BSTR`).
+pub const VT_BSTR: u16 = 8;
 
 /// Type alias for mock `add_items` closure.
 pub type MockAddItemsFn =
@@ -147,7 +149,7 @@ impl ConnectedGroup for MockConnectedGroup {
                 let handle_val = u32::try_from(i + 1).unwrap_or(u32::MAX);
                 GroupItemResult {
                     server_handle: ServerItemHandle::new(handle_val),
-                    canonical_type: windows::Win32::System::Variant::VT_BSTR.0,
+                    canonical_type: VT_BSTR,
                     error: None,
                 }
             })
@@ -207,7 +209,7 @@ impl ConnectedGroup for MockConnectedGroup {
         {
             // RPC server unavailable (0x800706BA) triggers connection eviction
             return Err(OpcError::Com {
-                source: windows::core::Error::from_hresult(RPC_S_SERVER_UNAVAILABLE),
+                source: windows_core::Error::from_hresult(RPC_S_SERVER_UNAVAILABLE),
             });
         }
 
@@ -220,9 +222,7 @@ impl ConnectedGroup for MockConnectedGroup {
                 .iter()
                 .map(|_| {
                     Err(OpcError::Com {
-                        source: windows::core::Error::from_hresult(
-                            windows::Win32::Foundation::E_FAIL,
-                        ),
+                        source: windows_core::Error::from_hresult(E_FAIL),
                     })
                 })
                 .collect());
@@ -308,6 +308,15 @@ impl Default for MockConnectedServer {
 }
 
 impl MockConnectedServer {
+    /// Replaces the simulated tag IDs returned during browse operations.
+    #[must_use]
+    pub fn with_tags(self, tags: Vec<String>) -> Self {
+        if let Ok(mut guard) = self.tags.lock() {
+            *guard = tags;
+        }
+        self
+    }
+
     /// Attach a custom `get_item_id` resolution closure for testing leaf error handling.
     #[must_use]
     pub fn with_get_item_id_fn<F>(mut self, f: F) -> Self
@@ -321,6 +330,7 @@ impl MockConnectedServer {
 
 impl ConnectedServer for MockConnectedServer {
     type Group = std::sync::Arc<MockConnectedGroup>;
+    type ItemIterator = std::vec::IntoIter<OpcResult<String>>;
 
     fn ping(&self) -> OpcResult<()> {
         if self
@@ -333,9 +343,7 @@ impl ConnectedServer for MockConnectedServer {
                 .load(std::sync::atomic::Ordering::Relaxed)
         {
             return Err(OpcError::Com {
-                source: windows::core::Error::from_hresult(
-                    crate::errors::hresult::RPC_S_SERVER_UNAVAILABLE,
-                ),
+                source: windows_core::Error::from_hresult(RPC_S_SERVER_UNAVAILABLE),
             });
         }
         Ok(())
@@ -356,7 +364,7 @@ impl ConnectedServer for MockConnectedServer {
         _filter: Option<&str>,
         _data_type: u16,
         _access_rights: u32,
-    ) -> OpcResult<StringIterator> {
+    ) -> OpcResult<Self::ItemIterator> {
         if browse_type == BrowseType::Flat
             && !self
                 .supports_flat_browse
@@ -374,7 +382,7 @@ impl ConnectedServer for MockConnectedServer {
                 tags.clone()
             }
         };
-        Ok(StringIterator::from_vec(items))
+        Ok(items.into_iter().map(Ok).collect::<Vec<_>>().into_iter())
     }
 
     fn change_browse_position(&self, _direction: BrowseDirection, _name: &str) -> OpcResult<()> {
@@ -411,7 +419,7 @@ impl ConnectedServer for MockConnectedServer {
         {
             // RPC server unavailable (0x800706BA) triggers connection eviction
             return Err(OpcError::Com {
-                source: windows::core::Error::from_hresult(RPC_S_SERVER_UNAVAILABLE),
+                source: windows_core::Error::from_hresult(RPC_S_SERVER_UNAVAILABLE),
             });
         }
 
@@ -694,9 +702,7 @@ impl ServerConnector for MockServerConnector {
             .load(std::sync::atomic::Ordering::Relaxed)
         {
             return Err(OpcError::Com {
-                source: windows::core::Error::from_hresult(
-                    crate::errors::hresult::CO_E_CLASSSTRING,
-                ),
+                source: windows_core::Error::from_hresult(CO_E_CLASSSTRING),
             });
         }
 
@@ -725,7 +731,7 @@ impl ServerConnector for MockServerConnector {
         {
             return Err(OpcError::connection_failed(
                 identifier.to_string(),
-                windows::core::Error::from_hresult(windows::Win32::Foundation::E_FAIL),
+                windows_core::Error::from_hresult(E_FAIL),
             ));
         }
 
@@ -735,9 +741,7 @@ impl ServerConnector for MockServerConnector {
             .load(std::sync::atomic::Ordering::Relaxed)
         {
             return Err(OpcError::Com {
-                source: windows::core::Error::from_hresult(
-                    crate::errors::hresult::CO_E_CLASSSTRING,
-                ),
+                source: windows_core::Error::from_hresult(CO_E_CLASSSTRING),
             });
         }
 
@@ -747,6 +751,7 @@ impl ServerConnector for MockServerConnector {
 
 impl ConnectedServer for std::sync::Arc<MockConnectedServer> {
     type Group = std::sync::Arc<MockConnectedGroup>;
+    type ItemIterator = std::vec::IntoIter<OpcResult<String>>;
 
     fn ping(&self) -> OpcResult<()> {
         (**self).ping()
@@ -762,7 +767,7 @@ impl ConnectedServer for std::sync::Arc<MockConnectedServer> {
         filter: Option<&str>,
         data_type: u16,
         access_rights: u32,
-    ) -> OpcResult<StringIterator> {
+    ) -> OpcResult<Self::ItemIterator> {
         (**self).browse_opc_item_ids(browse_type, filter, data_type, access_rights)
     }
 
@@ -870,7 +875,7 @@ mod tests {
                 .iter()
                 .map(|d| GroupItemResult {
                     server_handle: ServerItemHandle::new(d.client_handle.as_raw()),
-                    canonical_type: windows::Win32::System::Variant::VT_BSTR.0,
+                    canonical_type: VT_BSTR,
                     error: None,
                 })
                 .collect())
@@ -1161,9 +1166,7 @@ mod tests {
 
     #[test]
     fn test_server_catalog_discovery_segregated_contract() {
-        use crate::com::connector::traits::{
-            ServerBackend, ServerCatalogDiscovery, ServerConnector,
-        };
+        use super::super::traits::{ServerBackend, ServerCatalogDiscovery, ServerConnector};
         use crate::types::OpcServerInfo;
 
         let connector = MockServerConnector::new().with_server_details(vec![OpcServerInfo::new(
@@ -1187,5 +1190,102 @@ mod tests {
         // 3. Verify static bound via composite ServerBackend
         fn assert_backend<B: ServerBackend + ?Sized>(_b: &B) {}
         assert_backend(&connector);
+    }
+
+    #[test]
+    fn test_mock_browse_custom_item_iterator() {
+        let server = MockConnectedServer::default().with_tags(vec![
+            "Custom.Plant.Line1.Temperature".to_string(),
+            "Custom.Plant.Line1.Pressure".to_string(),
+        ]);
+
+        // Verify that ItemIterator implements Iterator<Item = OpcResult<String>>
+        fn assert_item_iterator<I: Iterator<Item = OpcResult<String>>>(_iter: I) {}
+
+        let iter = server
+            .browse_opc_item_ids(BrowseType::Leaf, None, 0, 0)
+            .expect("browse_opc_item_ids should succeed");
+        assert_item_iterator(iter);
+
+        // Verify that ConnectedServer::ItemIterator associated type can be consumed generically
+        fn browse_all<S: ConnectedServer>(s: &S) -> OpcResult<Vec<String>> {
+            let iter = s.browse_opc_item_ids(BrowseType::Leaf, None, 0, 0)?;
+            iter.collect()
+        }
+
+        let items = browse_all(&server).expect("generic browse_all should succeed");
+        assert_eq!(items.len(), 2);
+        assert_eq!(items[0], "Custom.Plant.Line1.Temperature");
+        assert_eq!(items[1], "Custom.Plant.Line1.Pressure");
+    }
+
+    #[test]
+    fn test_offline_tier2_spi_mocking_without_com() {
+        // 1. Pure in-memory instantiation without COM runtime or CoInitializeEx
+        let connector = MockServerConnector::new()
+            .with_servers(vec!["Offline.Server.1".to_string()])
+            .with_tag_values(vec![OpcValue::Int(42)]);
+
+        // 2. Catalog enumeration in offline mode
+        let servers = connector.enumerate_servers("localhost").unwrap();
+        assert_eq!(servers, vec!["Offline.Server.1"]);
+        let details = connector.enumerate_server_details("localhost").unwrap();
+        assert_eq!(details.len(), 1);
+        assert_eq!(details[0].prog_id, "Offline.Server.1");
+
+        // 3. Connect endpoint offline
+        let server = connector
+            .connect_endpoint(&crate::types::OpcServerEndpoint::from("Offline.Server.1"))
+            .unwrap();
+        assert!(server.ping().is_ok());
+        assert_eq!(
+            server.query_organization().unwrap(),
+            NamespaceType::Hierarchy
+        );
+
+        // 4. In-memory tag browsing
+        let leaves: Vec<String> = server
+            .browse_opc_item_ids(BrowseType::Leaf, None, 0, 0)
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+        assert!(!leaves.is_empty());
+
+        // 5. Ephemeral group creation
+        let created = server
+            .add_group(&GroupConfig::ephemeral("offline-group"))
+            .unwrap();
+        assert_eq!(created.server_handle, ServerGroupHandle::new(1));
+
+        // 6. Pure-Rust item registration
+        let items = [GroupItemDef {
+            item_id: "Random.Int4".to_string(),
+            client_handle: ClientItemHandle::new(1),
+            active: true,
+        }];
+        let item_results = created.group.add_items(&items).unwrap();
+        assert_eq!(item_results.len(), 1);
+        assert_eq!(item_results[0].server_handle, ServerItemHandle::new(1));
+
+        // 7. Synchronous read simulation
+        let read_states = created
+            .group
+            .read(DataSource::Device, &[ServerItemHandle::new(1)])
+            .unwrap();
+        assert_eq!(read_states.len(), 1);
+        assert_eq!(read_states[0].as_ref().unwrap().value, OpcValue::Int(42));
+
+        // 8. Synchronous write simulation
+        let write_results = created
+            .group
+            .write(&[ItemWrite::new(ServerItemHandle::new(1), OpcValue::Int(99))])
+            .unwrap();
+        assert_eq!(write_results.len(), 1);
+        assert!(write_results[0].is_ok());
+
+        // 9. Group removal
+        server
+            .remove_group(ServerGroupHandle::new(1), GroupRemovalMode::Force)
+            .unwrap();
     }
 }

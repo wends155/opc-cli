@@ -4,12 +4,12 @@
 //! the [`ServerConnector`] and [`ConnectedServer`] traits.
 
 use crate::com::connector::group::ComGroup;
-use crate::com::connector::traits::{
+use crate::com::iterator::StringIterator;
+use crate::com::security::apply_proxy_blanket;
+use crate::connector::traits::{
     ConnectedServer, CreatedGroup, GroupConfig, GroupRemovalMode, ServerCatalogDiscovery,
     ServerConnector,
 };
-use crate::com::iterator::StringIterator;
-use crate::com::security::apply_proxy_blanket;
 use crate::errors::{OpcError, OpcResult};
 use crate::raw::bindings::da::{
     OPC_BRANCH, OPC_BROWSE_DOWN, OPC_BROWSE_TO, OPC_BROWSE_UP, OPC_FLAT, OPC_LEAF,
@@ -256,6 +256,7 @@ pub struct ComServer {
 
 impl ConnectedServer for ComServer {
     type Group = ComGroup;
+    type ItemIterator = StringIterator;
 
     #[tracing::instrument(level = "debug", skip(self), err)]
     fn query_organization(&self) -> OpcResult<NamespaceType> {
@@ -284,7 +285,7 @@ impl ConnectedServer for ComServer {
         filter: Option<&str>,
         data_type: u16,
         access_rights: u32,
-    ) -> OpcResult<StringIterator> {
+    ) -> OpcResult<Self::ItemIterator> {
         let iface = self.browse_server_address_space.as_ref().ok_or_else(|| {
             OpcError::NotImplemented("IOPCBrowseServerAddressSpace not supported".to_string())
         })?;

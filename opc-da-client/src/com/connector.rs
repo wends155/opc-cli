@@ -7,10 +7,13 @@
 //! - `mock`: Pure-Rust mock infrastructure for testing (enabled via `test-support`).
 
 pub mod group;
-#[cfg(any(test, feature = "test-support"))]
-pub mod mock;
 pub mod server;
-pub mod traits;
+
+#[allow(unused_imports)]
+#[cfg(any(test, feature = "test-support"))]
+pub use crate::connector::mock;
+#[allow(unused_imports)]
+pub use crate::connector::traits;
 
 const _: () = assert!(
     std::mem::size_of::<windows::core::GUID>() == 16,
@@ -21,11 +24,15 @@ const _: () = assert!(
     "windows::core::GUID must be at least 4-byte aligned"
 );
 
+#[allow(unused_imports)]
 #[cfg(any(test, feature = "test-support"))]
-pub use mock::{MockConnectedGroup, MockConnectedServer, MockServerConnector, MockState};
-pub use server::ComConnector;
-pub use traits::{
+pub use crate::connector::mock::{
+    MockConnectedGroup, MockConnectedServer, MockServerConnector, MockState,
+};
+#[allow(unused_imports)]
+pub use crate::connector::traits::{
     ConnectedGroup, ConnectedServer, CreatedGroup, DataSource, GroupConfig, GroupItemDef,
     GroupItemResult, GroupItemState, GroupRemovalMode, ItemWrite, ServerBackend,
     ServerCatalogDiscovery, ServerConnector,
 };
+pub use server::ComConnector;

@@ -1,6 +1,8 @@
 //! Connection pool management, active group caching, and retry dispatch engine.
 
-use crate::com::connector::traits::{ConnectedServer, GroupRemovalMode, ServerConnector};
+use crate::connector::traits::{
+    ConnectedServer, CreatedGroup, GroupConfig, GroupRemovalMode, ServerConnector,
+};
 use crate::errors::{OpcError, OpcOperation, OpcResult};
 use crate::log_opc_err;
 use crate::types::{NamespaceType, OpcServerEndpoint, ServerGroupHandle, ServerItemHandle};
@@ -64,6 +66,7 @@ impl<S: ConnectedServer> Drop for PooledServer<S> {
 
 impl<S: ConnectedServer> ConnectedServer for PooledServer<S> {
     type Group = S::Group;
+    type ItemIterator = S::ItemIterator;
 
     fn ping(&self) -> OpcResult<()> {
         self.server.ping()
@@ -79,7 +82,7 @@ impl<S: ConnectedServer> ConnectedServer for PooledServer<S> {
         filter: Option<&str>,
         data_type: u16,
         access_rights: u32,
-    ) -> OpcResult<crate::com::iterator::StringIterator> {
+    ) -> OpcResult<Self::ItemIterator> {
         self.server
             .browse_opc_item_ids(browse_type, filter, data_type, access_rights)
     }
@@ -96,10 +99,7 @@ impl<S: ConnectedServer> ConnectedServer for PooledServer<S> {
         self.server.get_item_id(item_name)
     }
 
-    fn add_group(
-        &self,
-        config: &crate::com::connector::GroupConfig<'_>,
-    ) -> OpcResult<crate::com::connector::CreatedGroup<Self::Group>> {
+    fn add_group(&self, config: &GroupConfig<'_>) -> OpcResult<CreatedGroup<Self::Group>> {
         self.server.add_group(config)
     }
 
