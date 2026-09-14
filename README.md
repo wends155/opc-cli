@@ -17,7 +17,7 @@ See **[opc-da-client architecture.md](./opc-da-client/architecture.md)** for the
 
 ## ✨ Features
 
-- **Server Discovery & UNC Endpoints**: Enumerate OPC DA servers on local or remote hosts with rich catalog metadata; supports UNC endpoint syntax (`\\host\server`).
+- **Server Discovery & UNC Endpoints**: Enumerate OPC DA servers on local or remote hosts with rich catalog metadata; supports UNC endpoint syntax (`\\host\server` or `\\host\{CLSID}`).
 - **Typestate Client, Remote DCOM & Liveness Ping**: Zero-cost compile-time `Unbound` (gateway) and `Bound` (session) typestates with direct `connect` / `connect_remote` / `build_bound` shortcuts, eager liveness probe (`connect_eager`), and automatic Windows KB5004442 `RPC_C_AUTHN_LEVEL_PKT_INTEGRITY` security blanketing.
 - **Hierarchical Browsing**: Recursive exploration of complex server namespaces with cooperative cancellation and partial-result harvesting on timeout.
 - **Real-time Monitoring & Active Group Caching**: Live tag value updates with 1-second auto-refresh backed by active OPC group pooling (>75% lower DCOM RPC latency) and auto-recovery on group invalidations.
@@ -36,6 +36,19 @@ See **[opc-da-client architecture.md](./opc-da-client/architecture.md)** for the
 - **Windows OS**: This application uses Windows COM/DCOM.
 - **OPC Core Components**: Must be installed on the system to resolve OPC ProgIDs.
 - **Rust 1.93+**: Edition 2024.
+
+### 🌐 Remote OPC DA (DCOM) Status & Capabilities
+
+The underlying `opc-da-client` crate provides native Windows DCOM transport support for distributed industrial automation architectures:
+
+- **Remote Catalog Discovery**: Queries `OPCEnum` (`IOPCServerList`/`IOPCServerList2`) on remote hosts via DCOM `CoCreateInstanceEx` with proxy blanketing to enumerate available servers.
+- **Direct Remote Activation**: Activates remote OPC DA servers via `CoCreateInstanceEx` (`CLSCTX_REMOTE_SERVER`) with automatic Windows KB5004442 `RPC_C_AUTHN_LEVEL_PKT_INTEGRITY` packet integrity and proxy blanketing applied across server and group interfaces.
+
+> [!NOTE]
+> **Current Remote Status & Roadmap (Phase 5):**
+> 1. **ProgID vs CLSID**: When activating a remote server by ProgID (e.g. `\\host\Matrikon.OPC.Simulation.1`), Windows resolves the ProgID against the *local* registry. If the OPC server software is installed only on the remote host, specify the server by its bracketed CLSID directly (e.g. `\\host\{F8582CF2-88FB-11D0-B850-00C0F0104305}`). Remote ProgID resolution via `IOPCServerList::CLSIDFromProgID` on remote `OPCEnum` is tracked in [`long_term_todo.md`](long_term_todo.md).
+> 2. **TUI Host Retention**: In the interactive `opc-cli` TUI, server listing queries the remote host, but subsequent tag browsing and monitoring currently target the local machine. Full UNC host propagation through the TUI navigation stack is scheduled for Phase 5.
+> 3. **DCOM Prerequisites**: Remote activation requires network connectivity on RPC port 135 and dynamic DCOM ports, administrative DCOM launch/activation permissions configured via `dcomcnfg.exe`, and matching Windows credentials or Active Directory domain membership.
 
 ### Build & Run
 

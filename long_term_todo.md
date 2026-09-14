@@ -59,3 +59,11 @@
 - [x] Enhance `variant_to_string()` to iterate `SAFEARRAY` elements via `SafeArrayGetElement` / `SafeArrayAccessData`
 - [x] Format as `[val1, val2, ...]` with max-display cap (20 elements + `...`)
 - [x] Unit tests: 1-D int array, 1-D string array, empty array, multi-dimensional
+
+## Phase 5 — Full Remote OPC DA (DCOM) Hardening & TUI Integration
+
+- [ ] **Remote ProgID Resolution via OPCEnum**: In `connect_endpoint`, when connecting to a remote host (`endpoint.host.is_some()`) with a ProgID (`ServerIdentifier::ProgId`), resolve the ProgID to a CLSID on the remote host by querying `IOPCServerList::CLSIDFromProgID` on the remote `OPCEnum` service instead of calling local `CLSIDFromProgID` (which returns `CO_E_CLASSSTRING` if the server is not installed in the local registry).
+- [ ] **TUI Host Context Retention (`opc-cli`)**: In `opc-cli`'s navigation state (`App.nav`), retain the user-specified `host` across screen transitions (`ServerList` -> `TagList` / `TagValues`), formatting the selected server into a UNC endpoint (`\\<host>\<server>`) when dispatching `browse_tags`, `read_tags`, and `write_tag` instead of reverting to `localhost`.
+- [ ] **Remote Enumerator Proxy Blanketing**: In `BrowseOPCItemIDs`, apply DCOM proxy blanketing (`apply_proxy_blanket`) to the returned `IEnumString` interface before wrapping it in `StringIterator`, preventing `E_ACCESSDENIED` (`0x80070005`) when enumerating tags under Windows KB5004442 packet integrity enforcement.
+- [ ] **Explicit Windows Authentication / Credentials Support**: Add CLI arguments and dialog options in `opc-cli` and `opc-da-client` (`COAUTHIDENTITY` configuration) to allow authenticating as a specific domain or local Windows user when connecting to remote DCOM hosts, rather than relying solely on the current process security token.
+

@@ -238,6 +238,32 @@ async fn main() -> OpcResult<()> {
 }
 ```
 
+### Remote DCOM Server Connection
+
+When targeting a remote host over DCOM, `opc-da-client` supports UNC endpoints:
+
+```rust,no_run
+use opc_da_client::{OpcDaClient, OpcResult};
+
+#[tokio::main]
+async fn main() -> OpcResult<()> {
+    // Connect via UNC endpoint using bracketed CLSID (recommended for remote servers):
+    let client = OpcDaClient::connect(r"\\192.168.1.50\{F8582CF2-88FB-11D0-B850-00C0F0104305}")?;
+    client.connect_eager().await?;
+
+    // Or connect via remote shortcut:
+    let client = OpcDaClient::connect_remote("192.168.1.50", "{F8582CF2-88FB-11D0-B850-00C0F0104305}")?;
+    client.connect_eager().await?;
+
+    let val = client.read_f64("Random.Real8").await?;
+    println!("Value: {val}");
+    Ok(())
+}
+```
+
+> [!NOTE]
+> **Remote ProgID vs CLSID**: Activating a remote server by ProgID (e.g. `\\192.168.1.50\Matrikon.OPC.Simulation.1`) queries the *local* registry for the ProgID-to-CLSID mapping. If the OPC server is installed only on the remote host, specify the server by its bracketed CLSID (`\\host\{CLSID}`). Remote ProgID resolution via `IOPCServerList::CLSIDFromProgID` on remote `OPCEnum` is tracked in `long_term_todo.md`.
+
 ### Reading Tags with Typed Values & Quality
 
 Read current tag values, inspect decomposed quality states, and extract strongly-typed values:
