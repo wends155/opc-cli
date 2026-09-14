@@ -249,10 +249,10 @@ async fn test_worker_panic_propagation() {
         matches!(
             result,
             Err(OpcError::Worker(
-                WorkerError::Panic(_) | WorkerError::ResponseChannelClosed
+                WorkerError::Panic(_) | WorkerError::WorkerTerminated
             ))
         ),
-        "Expected OpcError::Worker(Panic | ResponseChannelClosed), got {:?}",
+        "Expected OpcError::Worker(Panic | WorkerTerminated), got {:?}",
         result
     );
 }
@@ -674,7 +674,7 @@ async fn test_worker_channel_drop_error_propagation() {
         .unwrap_err();
     assert!(matches!(
         err,
-        OpcError::Worker(WorkerError::RequestChannelClosed | WorkerError::ResponseChannelClosed)
+        OpcError::Worker(WorkerError::WorkerTerminated)
     ));
 }
 

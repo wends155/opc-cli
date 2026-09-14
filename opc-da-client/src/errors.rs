@@ -76,6 +76,14 @@ pub enum OpcError {
     #[error("Operation timed out after {0:?}")]
     Timeout(Duration),
 
+    /// Tag was not requested in the read batch.
+    #[error("Tag '{0}' was not requested in this read batch")]
+    TagNotRequested(String),
+
+    /// Tag value was null or missing in the read batch.
+    #[error("Tag '{0}' returned no value (null or missing)")]
+    TagNoValue(String),
+
     /// Catch-all for unexpected internal failures.
     #[error("Internal error: {0}")]
     Internal(String),
@@ -84,36 +92,6 @@ pub enum OpcError {
 impl From<std::num::TryFromIntError> for OpcError {
     fn from(err: std::num::TryFromIntError) -> Self {
         Self::Conversion(ConversionError::IntConversion(err))
-    }
-}
-
-impl From<tokio::task::JoinError> for OpcError {
-    fn from(err: tokio::task::JoinError) -> Self {
-        Self::Worker(WorkerError::from(err))
-    }
-}
-
-impl From<std::sync::mpsc::RecvError> for OpcError {
-    fn from(err: std::sync::mpsc::RecvError) -> Self {
-        Self::Worker(WorkerError::from(err))
-    }
-}
-
-impl From<tokio::sync::oneshot::error::RecvError> for OpcError {
-    fn from(err: tokio::sync::oneshot::error::RecvError) -> Self {
-        Self::Worker(WorkerError::from(err))
-    }
-}
-
-impl<T> From<tokio::sync::mpsc::error::SendError<T>> for OpcError {
-    fn from(err: tokio::sync::mpsc::error::SendError<T>) -> Self {
-        Self::Worker(WorkerError::from(err))
-    }
-}
-
-impl<T> From<std::sync::PoisonError<T>> for OpcError {
-    fn from(err: std::sync::PoisonError<T>) -> Self {
-        Self::Worker(WorkerError::from(err))
     }
 }
 
@@ -203,89 +181,32 @@ impl OpcError {
             "Failed to resolve ProgID '{server}' to CLSID: {err}"
         ))
     }
+
+    /// Extracts the raw unsigned 32-bit error code from [`OpcError::Com`] or [`OpcError::Server`].
+    ///
+    /// Returns `Some(code)` if the error contains an underlying COM HRESULT or OPC server
+    /// error code, or `None` if the error variant does not carry a numeric status code.
+    #[must_use]
+    pub fn raw_code(&self) -> Option<u32> {
+        match self {
+            Self::Com { source } => Some(source.code().0.cast_unsigned()),
+            Self::Server(_, code) => Some(*code),
+            _ => None,
+        }
+    }
 }
 
-/// Canonical operation identifiers for OPC DA interactions.
-#[allow(dead_code)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub(crate) enum OpcOperation {
-    ListServers,
-    ListServerDetails,
-    InspectRegistration,
-    Connect,
-    DispatchConnectionError,
-    DispatchReconnect,
-    DispatchRetriedOperation,
-    DispatchOperation,
-    ReadAddGroup,
-    ReadAddItems,
-    ReadMismatchedResults,
-    ReadSync,
-    ReadPerItem,
-    WriteAddGroup,
-    WriteAddItems,
-    WriteEmptyItemResults,
-    WriteAddItemsRejected,
-    WriteSync,
-    WriteEmptyWriteErrors,
-    WriteMismatchedResults,
-    WriteServerRejected,
-    BrowseQueryOrganization,
-    BrowseFlatLeaves,
-    BrowseFlatLeafItem,
-    BrowseFlatEnumItem,
-    BrowseRecursiveBranches,
-    BrowseRecursiveBranchItem,
-    BrowseRecursiveLeaves,
-    BrowseRecursiveLeafItem,
-    BrowseRecursiveGetItemId,
-    BrowseRecursiveChangePositionDown,
-    BrowseRecursiveChildBranch,
-    BrowseRecursiveChangePositionUp,
-    BrowseTags,
-    Ping,
-}
+/// Helper adapter for formatting optional 32-bit error codes without heap allocations.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[doc(hidden)]
+pub struct DisplayRawCode(pub Option<u32>);
 
-impl std::fmt::Display for OpcOperation {
+impl std::fmt::Display for DisplayRawCode {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let op_str = match self {
-            Self::ListServers => "list_servers",
-            Self::ListServerDetails => "list_server_details",
-            Self::InspectRegistration => "inspect_registration",
-            Self::Connect => "connect",
-            Self::DispatchConnectionError => "dispatch_with_retry:connection_error",
-            Self::DispatchReconnect => "dispatch_with_retry:reconnect",
-            Self::DispatchRetriedOperation => "dispatch_with_retry:retried_operation",
-            Self::DispatchOperation => "dispatch_with_retry:operation",
-            Self::ReadAddGroup => "read_tag_values:add_group",
-            Self::ReadAddItems => "read_tag_values:add_items",
-            Self::ReadMismatchedResults => "read_tag_values:mismatched_results",
-            Self::ReadSync => "read_tag_values:group_read",
-            Self::ReadPerItem => "read_tag_values:per_item_read",
-            Self::WriteAddGroup => "write_tag_value:add_group",
-            Self::WriteAddItems => "write_tag_value:add_items",
-            Self::WriteEmptyItemResults => "write_tag_value:empty_item_results",
-            Self::WriteAddItemsRejected => "write_tag_value:add_items_rejected",
-            Self::WriteSync => "write_tag_value:group_write",
-            Self::WriteEmptyWriteErrors => "write_tag_value:empty_write_errors",
-            Self::WriteMismatchedResults => "write_tag_value:mismatched_results",
-            Self::WriteServerRejected => "write_tag_value:server_rejected",
-            Self::BrowseQueryOrganization => "browse_tags:query_organization",
-            Self::BrowseFlatLeaves => "browse_tags:flat_leaves",
-            Self::BrowseFlatLeafItem => "browse_tags:flat_leaf_item",
-            Self::BrowseFlatEnumItem => "browse_tags:flat_enum_item",
-            Self::BrowseRecursiveBranches => "browse_recursive:branches",
-            Self::BrowseRecursiveBranchItem => "browse_recursive:branch_item",
-            Self::BrowseRecursiveLeaves => "browse_recursive:leaves",
-            Self::BrowseRecursiveLeafItem => "browse_recursive:leaf_item",
-            Self::BrowseRecursiveGetItemId => "browse_recursive:get_item_id",
-            Self::BrowseRecursiveChangePositionDown => "browse_recursive:change_position_down",
-            Self::BrowseRecursiveChildBranch => "browse_recursive:child_branch",
-            Self::BrowseRecursiveChangePositionUp => "browse_recursive:change_position_up",
-            Self::BrowseTags => "browse_tags",
-            Self::Ping => "ping",
-        };
-        write!(f, "{op_str}")
+        match self.0 {
+            Some(code) => write!(f, "0x{code:08X}"),
+            None => write!(f, "N/A"),
+        }
     }
 }
 
@@ -296,38 +217,19 @@ macro_rules! log_opc_err {
         $crate::log_opc_err!($err, $op,)
     }};
     ($err:expr, $op:expr, $($field:tt)*) => {{
-        let error = $err;
-        let operation = $op;
-        let hresult = match error {
-            $crate::errors::OpcError::Com { source: e } => {
-                Some(format!("0x{:08X}", e.code().0.cast_unsigned()))
-            }
-            _ => None,
-        };
+        let error = &$err;
+        let operation = &$op;
+        let raw_code = $crate::errors::DisplayRawCode(error.raw_code());
         let hint = error.friendly_hint();
-        let chain = format!("{error:#}");
 
         tracing::error!(
             operation = %operation,
-            hresult = hresult.as_deref().unwrap_or("N/A"),
+            hresult = %raw_code,
             hint = hint.unwrap_or("none"),
-            chain = %chain,
+            chain = %format_args!("{error:#}"),
             $($field)*
         );
     }};
-}
-
-/// Emits a structured `tracing::error!` event with machine-parseable fields.
-///
-/// Extracts the HRESULT code and friendly hint from an [`OpcError`],
-/// and logs them as named fields for aggregation by log analysis tools.
-///
-/// # Arguments
-/// * `error` - The OPC error to log
-/// * `operation` - Name of the operation that failed (e.g., "read_tag_values")
-#[allow(dead_code)]
-pub(crate) fn log_opc_error(error: &OpcError, operation: &str) {
-    log_opc_err!(error, operation);
 }
 
 #[cfg(test)]
@@ -351,6 +253,38 @@ mod tests {
                 Some("Server is not registered on this machine")
             );
         }
+    }
+
+    #[test]
+    fn test_opc_error_raw_code_extraction() {
+        let server_err = OpcError::Server("OPC_E_NOTFOUND".into(), 0x8004_0200);
+        assert_eq!(server_err.raw_code(), Some(0x8004_0200));
+
+        let conn_err = OpcError::Connection("failed".into());
+        assert_eq!(conn_err.raw_code(), None);
+
+        #[cfg(feature = "opc-da-backend")]
+        {
+            use crate::errors::hresult::RPC_S_SERVER_UNAVAILABLE;
+            let com_err = OpcError::Com {
+                source: windows_core::Error::from_hresult(RPC_S_SERVER_UNAVAILABLE),
+            };
+            assert_eq!(com_err.raw_code(), Some(0x8007_06BA));
+        }
+    }
+
+    #[test]
+    fn test_tag_not_requested_and_no_value_variants() {
+        let err1 = OpcError::TagNotRequested("Tag1".into());
+        assert_eq!(
+            err1.to_string(),
+            "Tag 'Tag1' was not requested in this read batch"
+        );
+        let err2 = OpcError::TagNoValue("Tag2".into());
+        assert_eq!(
+            err2.to_string(),
+            "Tag 'Tag2' returned no value (null or missing)"
+        );
     }
 
     #[test]
@@ -424,77 +358,27 @@ mod tests {
     }
 
     #[test]
-    fn test_opc_operation_display() {
-        assert_eq!(
-            OpcOperation::ReadAddGroup.to_string(),
-            "read_tag_values:add_group"
-        );
-        assert_eq!(
-            OpcOperation::WriteSync.to_string(),
-            "write_tag_value:group_write"
-        );
-        assert_eq!(
-            OpcOperation::BrowseRecursiveChangePositionDown.to_string(),
-            "browse_recursive:change_position_down"
-        );
-        assert_eq!(
-            OpcOperation::DispatchReconnect.to_string(),
-            "dispatch_with_retry:reconnect"
-        );
-    }
-
-    #[test]
     fn test_log_opc_err_macro() {
         let err = OpcError::Connection("server unreachable".into());
+        log_opc_err!(&err, "connect", server = "Matrikon.OPC.Simulation.1");
         log_opc_err!(
             &err,
-            OpcOperation::Connect,
-            server = "Matrikon.OPC.Simulation.1"
-        );
-        log_opc_err!(
-            &err,
-            OpcOperation::ReadAddItems,
+            "read_tag_values:add_items",
             server = "Matrikon.OPC.Simulation.1",
             tag_count = 5
         );
     }
 
     #[test]
-    fn test_channel_error_conversions_and_lock_poison() {
-        let mpsc_err = std::sync::mpsc::RecvError;
-        let opc_err: OpcError = mpsc_err.into();
-        assert!(matches!(
-            opc_err,
-            OpcError::Worker(WorkerError::InitChannelDisconnected(_))
-        ));
+    fn test_log_opc_err_macro_borrowing_no_move() {
+        let err = OpcError::Connection("server unreachable".into());
+        // Must not move err; err must be usable after macro invocation
+        log_opc_err!(&err, "connect", server = "Matrikon.OPC.Simulation.1");
+        log_opc_err!(err, "connect", server = "Matrikon.OPC.Simulation.1");
+    }
 
-        let (tx, rx) = tokio::sync::oneshot::channel::<()>();
-        drop(tx);
-        let oneshot_err = rx.blocking_recv().unwrap_err();
-        let opc_err: OpcError = oneshot_err.into();
-        assert!(matches!(
-            opc_err,
-            OpcError::Worker(WorkerError::ResponseChannelClosed)
-        ));
-
-        let (tx, rx) = tokio::sync::mpsc::channel::<()>(1);
-        drop(rx);
-        let send_err = tx.try_send(()).unwrap_err();
-        if let tokio::sync::mpsc::error::TrySendError::Closed(e) = send_err {
-            let opc_err: OpcError = tokio::sync::mpsc::error::SendError(e).into();
-            assert!(matches!(
-                opc_err,
-                OpcError::Worker(WorkerError::RequestChannelClosed)
-            ));
-        }
-
-        let lock = std::sync::Mutex::new(0);
-        let opc_err: OpcError = std::sync::PoisonError::new(lock.lock().unwrap()).into();
-        assert!(matches!(
-            opc_err,
-            OpcError::Worker(WorkerError::LockPoisoned(_))
-        ));
-
+    #[test]
+    fn test_connection_failed() {
         let conn_err = OpcError::connection_failed("Matrikon.OPC", "invalid CLSID");
         assert!(matches!(conn_err, OpcError::Connection(msg) if msg.contains("Matrikon.OPC")));
     }
@@ -560,7 +444,7 @@ mod tests {
         let cloned = err.clone();
         assert_eq!(err, cloned);
 
-        let conv_err = OpcError::Conversion("conv error".into());
+        let conv_err = OpcError::Conversion(crate::errors::ConversionError::InvalidBrowseType(1));
         assert_ne!(err, conv_err);
     }
 
@@ -571,8 +455,9 @@ mod tests {
         assert!(panic_err.is_connection_error());
         assert!(panic_err.friendly_hint().is_some());
 
-        let req_closed = WorkerError::RequestChannelClosed;
-        assert!(req_closed.is_connection_error());
+        let term_err = WorkerError::WorkerTerminated;
+        assert!(term_err.is_connection_error());
+        assert!(term_err.friendly_hint().is_some());
 
         let init_err = WorkerError::InitializationFailed("E_FAIL".into());
         assert!(!init_err.is_connection_error());
@@ -598,10 +483,10 @@ mod tests {
             OpcError::Conversion(ConversionError::InvalidBrowseType(99))
         ));
 
-        let from_str_err: ConversionError = "parse error".into();
+        let endpoint_err = ConversionError::InvalidEndpoint("opc://bad uri".into());
         assert_eq!(
-            from_str_err.to_string(),
-            "Data conversion failed: parse error"
+            endpoint_err.to_string(),
+            "Invalid server endpoint: opc://bad uri"
         );
     }
 }

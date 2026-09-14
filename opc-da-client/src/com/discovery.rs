@@ -4,7 +4,7 @@
 //! `IOPCServerList2` and `IOPCServerList`), and diagnostic inspection of local
 //! machine COM registrations via [`inspect_local_registration`].
 
-use crate::errors::{OpcError, OpcOperation, OpcResult};
+use crate::errors::{OpcError, OpcResult};
 use crate::log_opc_err;
 use crate::types::{Clsid, OpcServerInfo};
 use windows::core::Interface;
@@ -325,7 +325,7 @@ pub fn inspect_local_registration(
         let err =
             OpcError::NotImplemented("Remote machine registry inspection is not supported".into());
         let h = host.unwrap_or_default();
-        log_opc_err!(&err, OpcOperation::InspectRegistration, host = %h);
+        log_opc_err!(&err, "inspect_registration", host = %h);
         return Err(err);
     }
 
@@ -369,7 +369,7 @@ pub fn inspect_local_registration(
         format!("No LocalServer32 or InprocServer32 registry key found for CLSID {clsid_str}"),
         crate::raw::hresult::REGDB_E_CLASSNOTREG.0.cast_unsigned(),
     );
-    log_opc_err!(&err, OpcOperation::InspectRegistration, clsid = %clsid_str);
+    log_opc_err!(&err, "inspect_registration", clsid = %clsid_str);
     Err(err)
 }
 
@@ -422,7 +422,7 @@ impl OpcServerListCatalog {
                 legacy_dcom,
             )
             .inspect_err(|err| {
-                crate::log_opc_err!(err, crate::errors::OpcOperation::Connect, host = %host_str);
+                crate::log_opc_err!(err, "connect", host = %host_str);
             })?
         } else {
             // SAFETY: Calling Win32 CLSIDFromProgID with static wide string literal or fallback to standard CLSID.

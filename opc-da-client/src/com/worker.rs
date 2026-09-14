@@ -12,7 +12,7 @@ use crate::com::connector::{
     ConnectedGroup, ConnectedServer, GroupConfig, GroupItemDef, ServerBackend, ServerConnector,
 };
 use crate::com::guard::GroupGuard;
-use crate::errors::{OpcError, OpcOperation, OpcResult, WorkerError};
+use crate::errors::{OpcError, OpcResult, WorkerError};
 use crate::log_opc_err;
 use crate::types::{
     ClientItemHandle, OpcServerEndpoint, OpcServerInfo, OpcValue, ServerIdentifier, TagCollector,
@@ -29,8 +29,8 @@ pub(crate) fn elapsed_ms(start: std::time::Instant) -> u64 {
 
 static GROUP_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
 
-/// Generates a collision-proof group name composed of a prefix, process ID, and atomic sequence.
-pub(crate) fn generate_group_name(prefix: &str) -> String {
+/// Generates a unique ephemeral group name prefixed with a subsystem tag, PID, and sequence number.
+fn generate_group_name(prefix: &str) -> String {
     let pid = std::process::id();
     let seq = GROUP_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     format!("{prefix}-{pid:x}-{seq:x}")
@@ -53,15 +53,11 @@ pub(crate) struct RegisteredItemGroup<'a, S: ConnectedServer> {
 /// * `server_id` - Server identifier for structured logging.
 /// * `prefix` - Prefix for the ephemeral group name (e.g. `"opc-read"` or `"opc-write"`).
 /// * `tags` - Slice of tag names to register in the group.
-/// * `add_group_op` - Operation name for group creation logging.
-/// * `add_items_op` - Operation name for item addition logging.
 pub(crate) fn register_item_group<'a, S: ConnectedServer>(
     server: &'a S,
     server_id: &ServerIdentifier,
-    prefix: &str,
+    prefix: &'static str,
     tags: &[impl AsRef<str>],
-    add_group_op: OpcOperation,
-    add_items_op: OpcOperation,
 ) -> OpcResult<RegisteredItemGroup<'a, S>> {
     let group_name = generate_group_name(prefix);
     let created = server
@@ -69,7 +65,7 @@ pub(crate) fn register_item_group<'a, S: ConnectedServer>(
         .inspect_err(|e| {
             log_opc_err!(
                 e,
-                add_group_op,
+                format_args!("{prefix}:add_group"),
                 server = %server_id,
                 tag_count = tags.len()
             );
@@ -92,7 +88,7 @@ pub(crate) fn register_item_group<'a, S: ConnectedServer>(
     let results = group.add_items(&item_defs).inspect_err(|e| {
         log_opc_err!(
             e,
-            add_items_op,
+            format_args!("{prefix}:add_items"),
             server = %server_id,
             tag_count = tags.len()
         );
@@ -102,7 +98,7 @@ pub(crate) fn register_item_group<'a, S: ConnectedServer>(
         let err = OpcError::Internal("OPC server returned mismatched result array sizes".into());
         log_opc_err!(
             &err,
-            OpcOperation::ReadMismatchedResults,
+            format_args!("{prefix}:mismatched_results"),
             server = %server_id,
             expected = tags.len(),
             actual = results.len()
@@ -220,8 +216,8 @@ impl<C: ServerBackend + 'static> ComWorker<C> {
         });
 
         init_rx.recv().map_err(|e| {
-            tracing::error!(error = ?e, "COM worker thread disconnected during init");
-            WorkerError::InitChannelDisconnected(e.to_string())
+            tracing::warn!(error = ?e, "COM worker thread disconnected during init");
+            WorkerError::InitializationFailed(e.to_string())
         })??;
 
         tracing::debug!("COM worker thread started");
@@ -255,8 +251,8 @@ impl<C: ServerBackend + 'static> ComWorker<C> {
         });
 
         init_rx.await.map_err(|e| {
-            tracing::error!(error = ?e, "COM worker thread disconnected during init");
-            WorkerError::InitChannelDisconnected(e.to_string())
+            tracing::warn!(error = ?e, "COM worker thread disconnected during init");
+            WorkerError::InitializationFailed(e.to_string())
         })??;
 
         tracing::debug!("COM worker thread started asynchronously");
@@ -279,27 +275,27 @@ impl<C: ServerBackend + 'static> ComWorker<C> {
             .as_ref()
             .is_some_and(std::thread::JoinHandle::is_finished)
         {
-            tracing::error!("COM worker thread panicked or exited unexpectedly");
-            return Err(OpcError::Worker(WorkerError::Panic(
-                "COM worker thread panicked".into(),
-            )));
+            tracing::warn!("COM worker thread terminated or exited");
+            return Err(OpcError::Worker(WorkerError::WorkerTerminated));
         }
 
         let (tx, rx) = oneshot::channel();
         let req = req_builder(tx);
 
-        let sender = self.sender.as_ref().ok_or_else(|| {
-            OpcError::Worker(WorkerError::Panic(
-                "COM worker sender is not available".into(),
-            ))
+        let sender = self
+            .sender
+            .as_ref()
+            .ok_or(OpcError::Worker(WorkerError::WorkerTerminated))?;
+
+        sender.send(req).await.map_err(|e| {
+            tracing::warn!(error = ?e, "COM worker channel closed (worker stopped)");
+            OpcError::Worker(WorkerError::WorkerTerminated)
         })?;
 
-        sender.send(req).await.inspect_err(
-            |e| tracing::error!(error = ?e, "COM worker channel closed (worker stopped)"),
-        )?;
-
-        rx.await
-            .inspect_err(|e| tracing::error!(error = ?e, "COM worker shut down during request"))?
+        rx.await.map_err(|e| {
+            tracing::warn!(error = ?e, "COM worker shut down during request");
+            OpcError::Worker(WorkerError::WorkerTerminated)
+        })?
     }
 }
 
@@ -448,7 +444,7 @@ fn run_worker_thread<C, I, S>(
 /// Dispatches a discovery operation wrapped in exception safety handling.
 fn dispatch_discovery_request<R, F>(
     host: &str,
-    op: OpcOperation,
+    op: &'static str,
     reply: oneshot::Sender<OpcResult<R>>,
     f: F,
 ) where
@@ -479,7 +475,7 @@ fn dispatch_pooled_request<C, R, F>(
     pool: &mut pool::ConnectionPool<C::Server>,
     connector: &Arc<C>,
     endpoint: &OpcServerEndpoint,
-    op: OpcOperation,
+    op: &'static str,
     reply: oneshot::Sender<OpcResult<R>>,
     mut f: F,
 ) where
@@ -520,7 +516,7 @@ fn handle_request<C: ServerBackend + 'static>(
 ) {
     match req {
         ComRequest::ListServers { host, reply } => {
-            dispatch_discovery_request(&host, OpcOperation::ListServers, reply, |h| {
+            dispatch_discovery_request(&host, "list_servers", reply, |h| {
                 let span = tracing::info_span!("opc.list_servers", host = %h);
                 let _enter = span.enter();
                 #[cfg(feature = "dev-diagnostics")]
@@ -536,7 +532,7 @@ fn handle_request<C: ServerBackend + 'static>(
                 } else if let Err(e) = &servers {
                     log_opc_err!(
                         e,
-                        OpcOperation::ListServers,
+                        "list_servers",
                         host = %h,
                         elapsed_ms = elapsed_ms(start),
                     );
@@ -546,7 +542,7 @@ fn handle_request<C: ServerBackend + 'static>(
         }
 
         ComRequest::ListServerDetails { host, reply } => {
-            dispatch_discovery_request(&host, OpcOperation::ListServerDetails, reply, |h| {
+            dispatch_discovery_request(&host, "list_server_details", reply, |h| {
                 let span = tracing::info_span!("opc.list_server_details", host = %h);
                 let _enter = span.enter();
                 #[cfg(feature = "dev-diagnostics")]
@@ -562,7 +558,7 @@ fn handle_request<C: ServerBackend + 'static>(
                 } else if let Err(e) = &servers {
                     log_opc_err!(
                         e,
-                        OpcOperation::ListServerDetails,
+                        "list_server_details",
                         host = %h,
                         elapsed_ms = elapsed_ms(start),
                     );
@@ -580,7 +576,7 @@ fn handle_request<C: ServerBackend + 'static>(
                 pool,
                 connector,
                 &endpoint,
-                OpcOperation::ReadSync,
+                "read_tag_values:sync",
                 reply,
                 |opc_server| read::handle_read(&endpoint, &tags, opc_server),
             );
@@ -596,7 +592,7 @@ fn handle_request<C: ServerBackend + 'static>(
                 pool,
                 connector,
                 &endpoint,
-                OpcOperation::WriteSync,
+                "write_tag_value:sync",
                 reply,
                 |opc_server| write::handle_write(&endpoint.identifier, &tag_id, &value, opc_server),
             );
@@ -611,7 +607,7 @@ fn handle_request<C: ServerBackend + 'static>(
                 pool,
                 connector,
                 &endpoint,
-                OpcOperation::WriteSync,
+                "write_tag_values:sync",
                 reply,
                 |opc_server| write::handle_write_batch(&endpoint.identifier, &writes, opc_server),
             );
@@ -626,21 +622,16 @@ fn handle_request<C: ServerBackend + 'static>(
                 pool,
                 connector,
                 &endpoint,
-                OpcOperation::BrowseTags,
+                "browse_tags",
                 reply,
                 |opc_server| browse::handle_browse(&endpoint.identifier, &collector, opc_server),
             );
         }
 
         ComRequest::Ping { endpoint, reply } => {
-            dispatch_pooled_request(
-                pool,
-                connector,
-                &endpoint,
-                OpcOperation::Ping,
-                reply,
-                |server| server.ping(),
-            );
+            dispatch_pooled_request(pool, connector, &endpoint, "ping", reply, |server| {
+                server.ping()
+            });
         }
     }
 }

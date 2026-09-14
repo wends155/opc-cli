@@ -252,8 +252,7 @@ impl TryFrom<OpcValue> for i64 {
     fn try_from(value: OpcValue) -> Result<Self, Self::Error> {
         match value {
             OpcValue::Int(i) => Ok(i),
-            OpcValue::UInt(u) => i64::try_from(u)
-                .map_err(|_| crate::errors::OpcError::conversion("UInt exceeds i64 range")),
+            OpcValue::UInt(u) => i64::try_from(u).map_err(crate::errors::OpcError::from),
             OpcValue::Float(f)
                 if f.fract() == 0.0 && f >= i64::MIN as f64 && f < i64::MAX as f64 =>
             {
@@ -280,10 +279,8 @@ impl TryFrom<OpcValue> for i32 {
 
     fn try_from(value: OpcValue) -> Result<Self, Self::Error> {
         match value {
-            OpcValue::Int(i) => i32::try_from(i)
-                .map_err(|_| crate::errors::OpcError::conversion("Int exceeds i32 range")),
-            OpcValue::UInt(u) => i32::try_from(u)
-                .map_err(|_| crate::errors::OpcError::conversion("UInt exceeds i32 range")),
+            OpcValue::Int(i) => i32::try_from(i).map_err(crate::errors::OpcError::from),
+            OpcValue::UInt(u) => i32::try_from(u).map_err(crate::errors::OpcError::from),
             OpcValue::Float(f)
                 if f.fract() == 0.0 && f >= i32::MIN as f64 && f <= i32::MAX as f64 =>
             {
@@ -312,9 +309,7 @@ impl TryFrom<OpcValue> for u64 {
     fn try_from(value: OpcValue) -> Result<Self, Self::Error> {
         match value {
             OpcValue::UInt(u) => Ok(u),
-            OpcValue::Int(i) => u64::try_from(i).map_err(|_| {
-                crate::errors::OpcError::conversion("Negative Int cannot convert to u64")
-            }),
+            OpcValue::Int(i) => u64::try_from(i).map_err(crate::errors::OpcError::from),
             OpcValue::Float(f) if f.fract() == 0.0 && f >= 0.0 && f < u64::MAX as f64 => {
                 Ok(f as u64)
             }
@@ -340,10 +335,8 @@ impl TryFrom<OpcValue> for u32 {
 
     fn try_from(value: OpcValue) -> Result<Self, Self::Error> {
         match value {
-            OpcValue::UInt(u) => u32::try_from(u)
-                .map_err(|_| crate::errors::OpcError::conversion("UInt exceeds u32 range")),
-            OpcValue::Int(i) => u32::try_from(i)
-                .map_err(|_| crate::errors::OpcError::conversion("Int out of u32 range")),
+            OpcValue::UInt(u) => u32::try_from(u).map_err(crate::errors::OpcError::from),
+            OpcValue::Int(i) => u32::try_from(i).map_err(crate::errors::OpcError::from),
             OpcValue::Float(f) if f.fract() == 0.0 && f >= 0.0 && f <= u32::MAX as f64 => {
                 Ok(f as u32)
             }
@@ -389,8 +382,11 @@ impl TryFrom<OpcValue> for f32 {
                 {
                     Ok(f as Self)
                 } else {
-                    Err(crate::errors::OpcError::conversion(
-                        "Float exceeds f32 range",
+                    Err(crate::errors::OpcError::Conversion(
+                        crate::errors::ConversionError::TypeMismatch {
+                            actual: format!("{f}"),
+                            expected: "f32",
+                        },
                     ))
                 }
             }

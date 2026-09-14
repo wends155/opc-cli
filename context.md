@@ -1848,3 +1848,28 @@ emove_group errors now logged instead of silently discarded.
 > * **Pruned:**
 >   - Purged stale references to `chrono`, `async-trait`, and `windows-core (GUID)` in Dependency Direction Rules.
 
+## 2026-09-14: Block 1 — Layer 0 Foundation: Error Taxonomy & Core Primitives
+> 📝 **Context Update:**
+> * **Feature:** Block 1 Layer 0 Foundation Refactoring (`errors.rs`, `errors/conversion.rs`, `errors/worker.rs`, `types/clsid.rs`, and caller migration across `com/worker/`)
+> * **Changes:**
+>   - Eliminated closed 34-variant `OpcOperation` enum and its `Display` implementation from `errors.rs`; migrated callers across `com/worker/` (`pool.rs`, `read.rs`, `write.rs`, `browse.rs`), `com/connector/server.rs`, and `com/discovery.rs` to static string literals.
+>   - Hardened `log_opc_err!` macro: borrows `$err` safely without moving, accepts `$op: impl Display`, formats error chains via `%format_args!`, and uses `DisplayRawCode` adapter to format unsigned HRESULT codes from both `Com` and `Server` errors without heap allocation.
+>   - Added `#[must_use] pub fn raw_code(&self) -> Option<u32>` to `OpcError`.
+>   - Purged dead function `log_opc_error`.
+>   - Purged `ConversionError::Other(String)` and blanket `From<&str>` / `From<String>` implementations; retained `InvalidEndpoint(String)` for Block 2 stability.
+>   - Promoted collection indexing query errors to first-class domain variants: `OpcError::TagNotRequested(String)` and `OpcError::TagNoValue(String)`.
+>   - Consolidated `WorkerError` into clean domain variants: `WorkerTerminated`, `InitializationFailed(String)`, and `Panic(String)`.
+>   - Purged leaked Tokio channel/task and std mutex variants and external `From` impls on `OpcError`; updated `connector/mock.rs` to map lock poisoning explicitly to `OpcError::Internal`.
+>   - Eliminated false panic alarms in `ComWorker::send_request` during normal worker shutdown or channel disconnect.
+>   - Hardened `Clsid::parse` with RFC-4122 byte-level ASCII hex validation, rejecting leading signs (`+`).
+>   - Un-gated `to_windows_guid`, `from_windows_guid`, and GUID `From` implementations for unconditional interoperability.
+>   - Expanded workspace test suite from 411 to 416 tests (+5 net unit tests, 0 regressions, 0 failures).
+> * **New Constraints:**
+>   - Error logging with `log_opc_err!` takes string literals or `impl Display`; never create operation enums for logging.
+>   - `WorkerError` represents domain worker state (`WorkerTerminated`, `InitializationFailed`, `Panic`); never leak channel or mutex synchronization errors through public traits.
+>   - `Clsid::parse` strictly validates 32 hex digits; never permit leading `+` signs.
+> * **Pruned:**
+>   - `OpcOperation` enum and `log_opc_error` function.
+>   - `ConversionError::Other`, `TagNotRequested`, `TagNoValue` on `ConversionError`, and string `From` impls.
+>   - Leaked Tokio channel/task and std mutex variants on `WorkerError` and `OpcError`.
+

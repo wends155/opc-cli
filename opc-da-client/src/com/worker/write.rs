@@ -2,7 +2,7 @@
 
 use crate::com::connector::traits::ItemWrite;
 use crate::com::connector::{ConnectedGroup, ConnectedServer};
-use crate::errors::{OpcError, OpcOperation, OpcResult};
+use crate::errors::{OpcError, OpcResult};
 use crate::log_opc_err;
 use crate::types::{OpcValue, ServerIdentifier, WriteBatch, WriteResult};
 
@@ -36,14 +36,8 @@ pub fn handle_write_batch<S: ConnectedServer>(
 
     let items: Vec<(&str, &OpcValue)> = writes.iter().collect();
     let tag_names: Vec<&str> = items.iter().map(|(t, _)| *t).collect();
-    let reg = crate::com::worker::register_item_group(
-        opc_server,
-        server_id,
-        "opc-write",
-        &tag_names,
-        OpcOperation::WriteAddGroup,
-        OpcOperation::WriteAddItems,
-    )?;
+    let reg =
+        crate::com::worker::register_item_group(opc_server, server_id, "opc-write", &tag_names)?;
     let group = reg.group;
     let _group_guard = reg.group_guard;
     let results = reg.item_results;
@@ -66,7 +60,7 @@ pub fn handle_write_batch<S: ConnectedServer>(
         if let Some(ref e) = item_res.error {
             log_opc_err!(
                 e,
-                OpcOperation::WriteAddItemsRejected,
+                "write_tag_values:items_rejected",
                 server = %server_id,
                 tag = %tag_id
             );
@@ -81,7 +75,7 @@ pub fn handle_write_batch<S: ConnectedServer>(
         let server_write_results = group.write(&valid_writes).inspect_err(|e| {
             log_opc_err!(
                 e,
-                OpcOperation::WriteSync,
+                "write_tag_values:sync",
                 server = %server_id,
                 handle_count = valid_writes.len()
             );
@@ -95,7 +89,7 @@ pub fn handle_write_batch<S: ConnectedServer>(
             ));
             log_opc_err!(
                 &err,
-                OpcOperation::WriteMismatchedResults,
+                "write_tag_values:mismatched",
                 server = %server_id,
                 expected = valid_indices.len(),
                 actual = server_write_results.len()
@@ -110,7 +104,7 @@ pub fn handle_write_batch<S: ConnectedServer>(
                 Err(e) => {
                     log_opc_err!(
                         &e,
-                        OpcOperation::WriteServerRejected,
+                        "write_tag_values:server_rejected",
                         server = %server_id,
                         tag = %tag_id
                     );

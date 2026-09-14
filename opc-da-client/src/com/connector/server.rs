@@ -52,19 +52,20 @@ pub(crate) fn connect_endpoint(
     let is_remote = endpoint.host.as_deref().filter(|h| is_remote_host(Some(h)));
 
     let server: crate::raw::bindings::da::IOPCServer = if let Some(host) = is_remote {
-        crate::com::security::create_remote_instance(&clsid_raw, host, legacy_dcom)
-            .inspect_err(|err| {
-                crate::log_opc_err!(err, crate::errors::OpcOperation::Connect, server = %server_desc);
-            })?
+        crate::com::security::create_remote_instance(&clsid_raw, host, legacy_dcom).inspect_err(
+            |err| {
+                crate::log_opc_err!(err, "connect", server = %server_desc);
+            },
+        )?
     } else {
         // SAFETY: Calling COM function CoCreateInstance with valid CLSID to instantiate IOPCServer locally.
-        let s: crate::raw::bindings::da::IOPCServer = unsafe {
-            CoCreateInstance(&raw const clsid_raw, None, CLSCTX_ALL)
-        }
-        .inspect_err(|e| {
-            let err = OpcError::from(e.clone());
-            crate::log_opc_err!(&err, crate::errors::OpcOperation::Connect, server = %server_desc);
-        })?;
+        let s: crate::raw::bindings::da::IOPCServer =
+            unsafe { CoCreateInstance(&raw const clsid_raw, None, CLSCTX_ALL) }.inspect_err(
+                |e| {
+                    let err = OpcError::from(e.clone());
+                    crate::log_opc_err!(&err, "connect", server = %server_desc);
+                },
+            )?;
         s
     };
 

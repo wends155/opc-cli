@@ -4,7 +4,7 @@ use super::pool::{CachedGroup, PooledServer};
 use crate::com::connector::{
     ConnectedGroup, ConnectedServer, DataSource, GroupItemResult, GroupItemState,
 };
-use crate::errors::{OpcError, OpcOperation, OpcResult};
+use crate::errors::{OpcError, OpcResult};
 use crate::log_opc_err;
 use crate::types::{
     OpcQuality, OpcServerEndpoint, ServerIdentifier, ServerItemHandle, TagBatch, TagValue,
@@ -66,7 +66,7 @@ pub fn handle_read<S: ConnectedServer>(
             Some(Err(e)) => {
                 log_opc_err!(
                     &e,
-                    OpcOperation::ReadSync,
+                    "read_tag_values:sync",
                     server = %endpoint.identifier,
                     "Cached active group read failed with non-connection error; invalidating group and retrying via fresh registration"
                 );
@@ -118,14 +118,8 @@ pub fn handle_read<S: ConnectedServer>(
     pooled.clear_active_group();
 
     let tag_ids: Vec<String> = tags.iter_str().map(ToString::to_string).collect();
-    let reg = super::register_item_group(
-        &pooled.server,
-        &endpoint.identifier,
-        "opc-read",
-        &tag_ids,
-        OpcOperation::ReadAddGroup,
-        OpcOperation::ReadAddItems,
-    )?;
+    let reg =
+        super::register_item_group(&pooled.server, &endpoint.identifier, "opc-read", &tag_ids)?;
     let group = reg.group;
     let mut group_guard = reg.group_guard;
     let results = reg.item_results;
@@ -149,7 +143,7 @@ pub fn handle_read<S: ConnectedServer>(
             .inspect_err(|e| {
                 log_opc_err!(
                     e,
-                    OpcOperation::ReadSync,
+                    "read_tag_values:sync",
                     server = %endpoint.identifier,
                     handle_count = server_handles.len()
                 );
@@ -231,7 +225,7 @@ fn populate_item_states(
         ));
         log_opc_err!(
             &err,
-            OpcOperation::ReadMismatchedResults,
+            "read_tag_values:mismatched",
             server = %server_id,
             expected = valid_indices.len(),
             actual = item_states.len()
@@ -249,7 +243,7 @@ fn populate_item_states(
             Err(e) => {
                 log_opc_err!(
                     &e,
-                    OpcOperation::ReadPerItem,
+                    "read_tag_values:per_item",
                     server = %server_id,
                     tag = %tag_ids[idx]
                 );

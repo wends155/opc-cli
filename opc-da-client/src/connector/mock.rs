@@ -177,7 +177,10 @@ impl ConnectedGroup for MockConnectedGroup {
             return f(source, server_handles);
         }
 
-        let configured = self.tag_values.lock()?;
+        let configured = self
+            .tag_values
+            .lock()
+            .map_err(|e| OpcError::Internal(format!("Lock poisoned: {e}")))?;
         Ok(server_handles
             .iter()
             .enumerate()
@@ -374,11 +377,17 @@ impl ConnectedServer for MockConnectedServer {
         }
         let items = match browse_type {
             BrowseType::Branch => {
-                let branches = self.branch_tags.lock()?;
+                let branches = self
+                    .branch_tags
+                    .lock()
+                    .map_err(|e| OpcError::Internal(format!("Lock poisoned: {e}")))?;
                 branches.clone()
             }
             BrowseType::Leaf | BrowseType::Flat => {
-                let tags = self.tags.lock()?;
+                let tags = self
+                    .tags
+                    .lock()
+                    .map_err(|e| OpcError::Internal(format!("Lock poisoned: {e}")))?;
                 tags.clone()
             }
         };
@@ -659,7 +668,10 @@ impl ServerCatalogDiscovery for MockServerConnector {
             *lock = Some(host.to_string());
         }
 
-        let servers = self.servers.lock()?;
+        let servers = self
+            .servers
+            .lock()
+            .map_err(|e| OpcError::Internal(format!("Lock poisoned: {e}")))?;
         Ok(servers.clone())
     }
 
@@ -676,7 +688,10 @@ impl ServerCatalogDiscovery for MockServerConnector {
             *lock = Some(host.to_string());
         }
 
-        let details = self.server_details.lock()?;
+        let details = self
+            .server_details
+            .lock()
+            .map_err(|e| OpcError::Internal(format!("Lock poisoned: {e}")))?;
         Ok(details.clone())
     }
 }

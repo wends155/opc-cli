@@ -280,12 +280,8 @@ impl From<TagExtractError> for OpcError {
                 actual: value,
                 expected,
             }),
-            TagExtractError::NotRequested(tag) => {
-                Self::Conversion(crate::errors::ConversionError::TagNotRequested(tag))
-            }
-            TagExtractError::NoValue(tag) => {
-                Self::Conversion(crate::errors::ConversionError::TagNoValue(tag))
-            }
+            TagExtractError::NotRequested(tag) => Self::TagNotRequested(tag),
+            TagExtractError::NoValue(tag) => Self::TagNoValue(tag),
         }
     }
 }

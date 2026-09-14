@@ -167,18 +167,16 @@ impl Clsid {
 
     /// Converts this domain [`Clsid`] into a platform [`windows_core::GUID`].
     ///
+    /// Converts this [`Clsid`] into a platform [`windows_core::GUID`].
+    ///
     /// # Examples
     ///
     /// ```
-    /// # #[cfg(feature = "opc-da-backend")]
-    /// # {
     /// use opc_da_client::Clsid;
     /// let clsid = Clsid::zeroed();
     /// let guid = clsid.to_windows_guid();
     /// assert_eq!(guid.data1, 0);
-    /// # }
     /// ```
-    #[cfg(feature = "opc-da-backend")]
     #[inline]
     #[must_use]
     pub const fn to_windows_guid(&self) -> windows_core::GUID {
@@ -195,15 +193,11 @@ impl Clsid {
     /// # Examples
     ///
     /// ```
-    /// # #[cfg(feature = "opc-da-backend")]
-    /// # {
     /// use opc_da_client::Clsid;
     /// let guid = windows_core::GUID::zeroed();
     /// let clsid = Clsid::from_windows_guid(guid);
     /// assert!(clsid.is_zero());
-    /// # }
     /// ```
-    #[cfg(feature = "opc-da-backend")]
     #[inline]
     #[must_use]
     pub const fn from_windows_guid(guid: windows_core::GUID) -> Self {
@@ -242,6 +236,16 @@ impl Clsid {
 
         let bytes = inner.as_bytes();
         if bytes[8] != b'-' || bytes[13] != b'-' || bytes[18] != b'-' || bytes[23] != b'-' {
+            return None;
+        }
+
+        let is_hex = |b: u8| b.is_ascii_hexdigit();
+        if !bytes[0..8].iter().copied().all(is_hex)
+            || !bytes[9..13].iter().copied().all(is_hex)
+            || !bytes[14..18].iter().copied().all(is_hex)
+            || !bytes[19..23].iter().copied().all(is_hex)
+            || !bytes[24..36].iter().copied().all(is_hex)
+        {
             return None;
         }
 
@@ -308,7 +312,6 @@ impl FromStr for Clsid {
     }
 }
 
-#[cfg(feature = "opc-da-backend")]
 impl From<windows_core::GUID> for Clsid {
     #[inline]
     fn from(guid: windows_core::GUID) -> Self {
@@ -316,7 +319,6 @@ impl From<windows_core::GUID> for Clsid {
     }
 }
 
-#[cfg(feature = "opc-da-backend")]
 impl From<Clsid> for windows_core::GUID {
     #[inline]
     fn from(clsid: Clsid) -> Self {
@@ -335,5 +337,43 @@ impl From<Clsid> for u128 {
     #[inline]
     fn from(clsid: Clsid) -> Self {
         clsid.to_u128()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_clsid_parse_rejects_invalid_hex_and_plus_sign() {
+        // Leading + sign in hex chunk must be rejected
+        assert!(Clsid::parse("{+3486D51-4821-11D2-A494-3CB306C10000}").is_none());
+        // Non-hex ASCII character in chunk must be rejected
+        assert!(Clsid::parse("{G3486D51-4821-11D2-A494-3CB306C10000}").is_none());
+        // Non-ASCII multibyte must be rejected
+        assert!(Clsid::parse("{13486D51-4821-11D2-A494-3CB306C1000🦀}").is_none());
+        // Valid GUID must parse successfully
+        let valid = Clsid::parse("{13486D51-4821-11D2-A494-3CB306C10000}");
+        assert!(valid.is_some());
+        assert_eq!(
+            valid.unwrap().to_string(),
+            "{13486D51-4821-11D2-A494-3CB306C10000}"
+        );
+    }
+
+    #[test]
+    fn test_clsid_windows_guid_roundtrip() {
+        let guid = windows_core::GUID {
+            data1: 0x1348_6D51,
+            data2: 0x4821,
+            data3: 0x11D2,
+            data4: [0xA4, 0x94, 0x3C, 0xB3, 0x06, 0xC1, 0x00, 0x00],
+        };
+        let clsid = Clsid::from_windows_guid(guid);
+        assert_eq!(clsid.to_windows_guid(), guid);
+        let from_into: Clsid = guid.into();
+        assert_eq!(from_into, clsid);
+        let to_into: windows_core::GUID = clsid.into();
+        assert_eq!(to_into, guid);
     }
 }

@@ -413,28 +413,28 @@ fn test_tag_values_collection_and_lenient_coercion() {
 
     // Error conversion to OpcError
     let err: OpcError = TagExtractError::NotRequested("TagA".into()).into();
-    assert!(matches!(err, OpcError::Conversion(_)));
+    assert!(matches!(err, OpcError::TagNotRequested(_)));
 }
 
 #[test]
 fn test_tag_extract_error_conversion_fidelity() {
-    use crate::errors::{ConversionError, OpcError};
+    use crate::errors::OpcError;
     use crate::types::TagExtractError;
 
     let err_not_req: OpcError = TagExtractError::NotRequested("Sensor.Temp".to_string()).into();
     match err_not_req {
-        OpcError::Conversion(ConversionError::TagNotRequested(tag)) => {
+        OpcError::TagNotRequested(tag) => {
             assert_eq!(tag, "Sensor.Temp");
         }
-        other => panic!("Expected ConversionError::TagNotRequested, got: {other:?}"),
+        other => panic!("Expected OpcError::TagNotRequested, got: {other:?}"),
     }
 
     let err_no_val: OpcError = TagExtractError::NoValue("Sensor.Pressure".to_string()).into();
     match err_no_val {
-        OpcError::Conversion(ConversionError::TagNoValue(tag)) => {
+        OpcError::TagNoValue(tag) => {
             assert_eq!(tag, "Sensor.Pressure");
         }
-        other => panic!("Expected ConversionError::TagNoValue, got: {other:?}"),
+        other => panic!("Expected OpcError::TagNoValue, got: {other:?}"),
     }
 }
 
@@ -998,7 +998,6 @@ fn test_clsid_parse_and_display() {
     );
 }
 
-#[cfg(feature = "opc-da-backend")]
 #[test]
 fn test_clsid_windows_guid_conversion() {
     use crate::types::clsid::Clsid;

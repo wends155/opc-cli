@@ -28,30 +28,6 @@ pub enum ConversionError {
         /// Expected target type name.
         expected: &'static str,
     },
-
-    /// Other arbitrary data conversion failure.
-    #[error("Data conversion failed: {0}")]
-    Other(String),
-
-    /// Tag was not requested in the read batch.
-    #[error("Tag '{0}' was not requested in this read batch")]
-    TagNotRequested(String),
-
-    /// Tag value was null or missing in the read batch.
-    #[error("Tag '{0}' returned no value (null or missing)")]
-    TagNoValue(String),
-}
-
-impl From<&str> for ConversionError {
-    fn from(s: &str) -> Self {
-        Self::Other(s.to_string())
-    }
-}
-
-impl From<String> for ConversionError {
-    fn from(s: String) -> Self {
-        Self::Other(s)
-    }
 }
 
 #[cfg(test)]
@@ -59,17 +35,32 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_conversion_error_tag_variants() {
-        let err_not_req = ConversionError::TagNotRequested("Simulation.Item1".to_string());
+    fn test_conversion_error_typed_variants() {
+        let browse_type_err = ConversionError::InvalidBrowseType(99);
         assert_eq!(
-            err_not_req.to_string(),
-            "Tag 'Simulation.Item1' was not requested in this read batch"
+            browse_type_err.to_string(),
+            "Invalid browse type discriminant: 99"
         );
 
-        let err_no_val = ConversionError::TagNoValue("Simulation.Item2".to_string());
+        let browse_dir_err = ConversionError::InvalidBrowseDirection(12);
         assert_eq!(
-            err_no_val.to_string(),
-            "Tag 'Simulation.Item2' returned no value (null or missing)"
+            browse_dir_err.to_string(),
+            "Invalid browse direction discriminant: 12"
+        );
+
+        let endpoint_err = ConversionError::InvalidEndpoint("opc://bad uri".to_string());
+        assert_eq!(
+            endpoint_err.to_string(),
+            "Invalid server endpoint: opc://bad uri"
+        );
+
+        let mismatch_err = ConversionError::TypeMismatch {
+            actual: "string".to_string(),
+            expected: "i32",
+        };
+        assert_eq!(
+            mismatch_err.to_string(),
+            "Type mismatch: cannot convert string to i32"
         );
     }
 }

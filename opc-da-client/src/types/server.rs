@@ -167,7 +167,6 @@ impl From<Clsid> for ServerIdentifier {
     }
 }
 
-#[cfg(feature = "opc-da-backend")]
 impl From<windows_core::GUID> for ServerIdentifier {
     fn from(guid: windows_core::GUID) -> Self {
         Self::Clsid(Clsid::from_windows_guid(guid))

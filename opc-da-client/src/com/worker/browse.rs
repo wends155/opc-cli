@@ -2,7 +2,7 @@
 
 use crate::com::connector::ConnectedServer;
 use crate::com::guard::BrowsePositionGuard;
-use crate::errors::{OpcOperation, OpcResult};
+use crate::errors::OpcResult;
 use crate::log_opc_err;
 use crate::types::{BrowseType, NamespaceType, ServerIdentifier, TagCollector};
 
@@ -38,7 +38,7 @@ pub fn handle_browse<S: ConnectedServer>(
     let org = opc_server.query_organization().inspect_err(|e| {
         log_opc_err!(
             e,
-            OpcOperation::BrowseQueryOrganization,
+            "browse:query_organization",
             server = %server_id
         );
     })?;
@@ -49,7 +49,7 @@ pub fn handle_browse<S: ConnectedServer>(
             .inspect_err(|e| {
                 log_opc_err!(
                     e,
-                    OpcOperation::BrowseFlatLeaves,
+                    "browse_flat:leaves",
                     server = %server_id
                 );
             })?;
@@ -57,7 +57,7 @@ pub fn handle_browse<S: ConnectedServer>(
             let tag = tag_res.inspect_err(|e| {
                 log_opc_err!(
                     e,
-                    OpcOperation::BrowseFlatLeafItem,
+                    "browse_flat:leaf_item",
                     server = %server_id
                 );
             })?;
@@ -81,7 +81,7 @@ pub fn handle_browse<S: ConnectedServer>(
                                 Err(e) => {
                                     log_opc_err!(
                                         &e,
-                                        OpcOperation::BrowseFlatEnumItem,
+                                        "browse_flat:enum_item",
                                         server = %server_id
                                     );
                                 }
@@ -131,7 +131,7 @@ fn browse_recursive<S: ConnectedServer>(
     let leaf_iter = server
         .browse_opc_item_ids(BrowseType::Leaf, Some(""), 0, 0)
         .inspect_err(|e| {
-            log_opc_err!(e, OpcOperation::BrowseRecursiveLeaves, depth = depth);
+            log_opc_err!(e, "browse_recursive:leaves", depth = depth);
         })?;
 
     let mut leaf_ids = Vec::new();
@@ -142,7 +142,7 @@ fn browse_recursive<S: ConnectedServer>(
         let leaf_name = match leaf_res {
             Ok(name) => name,
             Err(err) => {
-                log_opc_err!(&err, OpcOperation::BrowseRecursiveLeafItem, depth = depth);
+                log_opc_err!(&err, "browse_recursive:leaf_item", depth = depth);
                 continue;
             }
         };
@@ -151,7 +151,7 @@ fn browse_recursive<S: ConnectedServer>(
             Err(err) => {
                 log_opc_err!(
                     &err,
-                    OpcOperation::BrowseRecursiveGetItemId,
+                    "browse_recursive:get_item_id",
                     depth = depth,
                     leaf = %leaf_name
                 );
@@ -171,14 +171,14 @@ fn browse_recursive<S: ConnectedServer>(
     let branch_iter = server
         .browse_opc_item_ids(BrowseType::Branch, Some(""), 0, 0)
         .inspect_err(|e| {
-            log_opc_err!(e, OpcOperation::BrowseRecursiveBranches, depth = depth);
+            log_opc_err!(e, "browse_recursive:branches", depth = depth);
         })?;
 
     let branches: Vec<String> = branch_iter
         .filter_map(|b_res| {
             b_res
                 .inspect_err(|e| {
-                    log_opc_err!(e, OpcOperation::BrowseRecursiveBranchItem, depth = depth);
+                    log_opc_err!(e, "browse_recursive:branch_item", depth = depth);
                 })
                 .ok()
         })
@@ -194,7 +194,7 @@ fn browse_recursive<S: ConnectedServer>(
             Err(e) => {
                 log_opc_err!(
                     &e,
-                    OpcOperation::BrowseRecursiveChangePositionDown,
+                    "browse_recursive:change_position_down",
                     depth = depth,
                     branch = %branch
                 );
@@ -205,7 +205,7 @@ fn browse_recursive<S: ConnectedServer>(
         if let Err(e) = browse_recursive(server, collector, depth + 1) {
             log_opc_err!(
                 &e,
-                OpcOperation::BrowseRecursiveChildBranch,
+                "browse_recursive:child_branch",
                 depth = depth,
                 branch = %branch
             );

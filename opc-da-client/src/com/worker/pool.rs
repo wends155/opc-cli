@@ -3,7 +3,7 @@
 use crate::connector::traits::{
     ConnectedServer, CreatedGroup, GroupConfig, GroupRemovalMode, ServerConnector,
 };
-use crate::errors::{OpcError, OpcOperation, OpcResult};
+use crate::errors::{OpcError, OpcResult};
 use crate::log_opc_err;
 use crate::types::{NamespaceType, OpcServerEndpoint, ServerGroupHandle, ServerItemHandle};
 use std::collections::HashMap;
@@ -250,7 +250,7 @@ where
         Err(e) if e.is_connection_error() => {
             log_opc_err!(
                 &e,
-                OpcOperation::DispatchConnectionError,
+                "dispatch:connection_error",
                 server = %endpoint,
                 action = "evicting_stale_connection"
             );
@@ -261,7 +261,7 @@ where
                 Err(connect_e) => {
                     log_opc_err!(
                         &connect_e,
-                        OpcOperation::DispatchReconnect,
+                        "dispatch:reconnect",
                         server = %endpoint
                     );
                     if connect_e.is_connection_error() {
@@ -275,7 +275,7 @@ where
             if let Err(ref op_e) = result {
                 log_opc_err!(
                     op_e,
-                    OpcOperation::DispatchRetriedOperation,
+                    "dispatch:retried",
                     server = %endpoint
                 );
                 if op_e.is_connection_error() {
@@ -290,7 +290,7 @@ where
         Err(e) => {
             log_opc_err!(
                 &e,
-                OpcOperation::DispatchOperation,
+                "dispatch:operation",
                 server = %endpoint
             );
             Err(e)
