@@ -597,47 +597,6 @@ impl<C: ServerBackend + 'static> OpcDaClient<C, Bound> {
         .await
     }
 
-    /// Asynchronously reads current values, quality, and timestamps for a batch of tags.
-    ///
-    /// Accepts any type implementing [`IntoTags`] (slices, arrays, vectors, single tag strings)
-    /// without requiring intermediate heap allocations.
-    ///
-    /// # Arguments
-    ///
-    /// * `tags` - Tag batch implementing [`IntoTags`].
-    ///
-    /// # Returns
-    ///
-    /// A [`TagValues`] collection containing the read results.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`OpcError::Connection`] if DCOM communication fails.
-    ///
-    /// # Examples
-    ///
-    /// ```rust,no_run
-    /// # #[tokio::main]
-    /// # async fn main() -> opc_da_client::OpcResult<()> {
-    /// # #[allow(deprecated)]
-    /// # {
-    /// use opc_da_client::OpcDaClient;
-    ///
-    /// let client = OpcDaClient::connect("Matrikon.OPC.Simulation.1")?;
-    /// let values = client.read_tag_values(["Random.Int4", "Random.Real8"]).await?;
-    /// # }
-    /// # Ok(())
-    /// # }
-    /// ```
-    #[deprecated(
-        since = "0.3.0",
-        note = "Use `read_tags` instead to avoid shadowing TagReader"
-    )]
-    #[inline]
-    pub async fn read_tag_values(&self, tags: impl IntoTags) -> OpcResult<TagValues> {
-        self.read_tags(tags).await
-    }
-
     /// Reads a single tag and unwraps its value using the supplied extractor closure.
     async fn read_single_typed<T, F>(&self, tag: &str, extract: F) -> OpcResult<T>
     where
@@ -895,29 +854,6 @@ impl<C: ServerBackend + 'static> OpcDaClient<C, Bound> {
     #[tracing::instrument(level = "info", skip(self), err)]
     pub async fn read_u64(&self, tag: &str) -> OpcResult<u64> {
         self.read_single_typed(tag, TagValues::get_u64).await
-    }
-
-    /// Reads a single tag and returns its full [`TagValue`].
-    ///
-    /// # Arguments
-    ///
-    /// * `tag` - Tag identifier string.
-    ///
-    /// # Returns
-    ///
-    /// Decoded [`TagValue`].
-    ///
-    /// # Errors
-    ///
-    /// Returns [`OpcError`] if the read fails.
-    /// Deprecated inherent 1-arg reader.
-    #[deprecated(
-        since = "0.3.0",
-        note = "Use `read_tag` instead to avoid shadowing TagReader"
-    )]
-    #[inline]
-    pub async fn read_tag_value(&self, tag: &str) -> OpcResult<TagValue> {
-        self.read_tag(tag).await
     }
 
     /// Reads a single tag and returns its full [`TagValue`].
@@ -1291,6 +1227,22 @@ impl<C: ServerBackend + 'static, State: Send + Sync + 'static> OpcDaClient<C, St
         writes: &[(String, OpcValue)],
     ) -> OpcResult<Vec<WriteResult>> {
         TagWriter::write_tag_values(self, server, writes).await
+    }
+
+    /// Asynchronously reads current values, quality, and timestamps for a batch of tags on the specified server.
+    ///
+    /// Inherent forwarder delegating to [`TagReader::read_tag_values`].
+    #[tracing::instrument(level = "info", skip(self, tags), err)]
+    pub async fn read_tag_values(&self, server: &str, tags: impl IntoTags) -> OpcResult<TagValues> {
+        TagReader::read_tag_values(self, server, tags.into_tag_batch()).await
+    }
+
+    /// Asynchronously reads a single tag value on the specified server.
+    ///
+    /// Inherent forwarder delegating to [`TagReader::read_tag_value`].
+    #[tracing::instrument(level = "info", skip(self), err)]
+    pub async fn read_tag_value(&self, server: &str, tag_id: &str) -> OpcResult<TagValue> {
+        TagReader::read_tag_value(self, server, tag_id).await
     }
 }
 
@@ -1766,19 +1718,6 @@ mod tests {
         // Test inherent read_tag (1 argument: tag)
         let val = client.read_tag("Tag1").await.unwrap();
         assert_eq!(val.tag_id, "Tag1");
-
-        // Test deprecated read_tag_values and read_tag_value continue working
-        #[allow(deprecated)]
-        {
-            let legacy_values = client
-                .read_tag_values(vec!["Tag1".to_string()])
-                .await
-                .unwrap();
-            assert_eq!(legacy_values.len(), 1);
-
-            let legacy_val = client.read_tag_value("Tag1").await.unwrap();
-            assert_eq!(legacy_val.tag_id, "Tag1");
-        }
     }
 
     fn setup_mock_bound_client(
@@ -1855,5 +1794,34 @@ mod tests {
             .await
             .expect("read_u64 must succeed");
         assert_eq!(val, 18_446_744_073_709_551_610);
+    }
+
+    #[tokio::test]
+    async fn test_client_inherent_read_forwarders() {
+        let state = std::sync::Arc::new(crate::com::connector::mock::MockState::default());
+        let server = std::sync::Arc::new(crate::com::connector::mock::MockConnectedServer {
+            state: state.clone(),
+            ..Default::default()
+        });
+        let connector = crate::com::connector::mock::MockServerConnector {
+            server,
+            state: state.clone(),
+            ..Default::default()
+        };
+        let client = OpcDaClient::new(connector)
+            .expect("client must initialize")
+            .bind(OpcServerEndpoint::from("Mock.Server.Forwarders"));
+
+        let vals = client
+            .read_tag_values("Mock.Server.Forwarders", &["Tag1", "Tag2"])
+            .await
+            .unwrap();
+        assert_eq!(vals.len(), 2);
+
+        let val = client
+            .read_tag_value("Mock.Server.Forwarders", "Tag1")
+            .await
+            .unwrap();
+        assert_eq!(val.tag_id, "Tag1");
     }
 }
