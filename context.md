@@ -1,5 +1,18 @@
 # Project Context Summary
 
+## 2026-09-14: Documentation Sync & Clarifications for 0.3.0 (`opc-da-client/README.md`, `opc-da-client/spec.md`)
+> 📝 **Context Update:**
+> * **Feature:** Documentation update and ergonomic clarity for `opc-da-client` based on developer interview clarifications.
+> * **Changes:**
+>   - Added prominent `0.3.0 Architecture Modernization` callout banner in `opc-da-client/README.md` highlighting the pure-Rust Tier 2 SPI connector (`opc_da_client::connector::*`), native Rust 2024 AFIT traits, typestate client sealing (`Unbound` vs `Bound`), active group auto-recovery (`0xC0040001`), eager liveness ping, and zero-allocation operations.
+>   - Removed the `TUI Remote Browsing (opc-cli)` row from `opc-da-client/README.md` DCOM status table to preserve strict crate encapsulation (retained in root `README.md`).
+>   - Updated `## Installation` section to target `version = "0.3.0"` with an active development banner providing git dependency instructions and pure-Rust offline mock guidance for the `dev` branch.
+>   - Restructured the `Writing Values` section in `opc-da-client/README.md` into side-by-side examples: Option A showcasing ergonomic bound sessions via `client.write_tag` (omitting the server argument and accepting raw Rust primitives via `Into<OpcValue>`) alongside `client.write_tags(...)` batch writes, and Option B showcasing unbound gateway clients and generic `TagWriter` trait usage (`write_tag_value(server, ...)`).
+>   - Updated verification commit hash in `opc-da-client/spec.md` to `97e4985`.
+>   - Verified full 9-gate verification pipeline (`pwsh scripts/verify.ps1`): all 113 doc-tests, 2 compile-fail tests, and 381 unit tests passed with exit code 0.
+> * **New Constraints:** Crate documentation must maintain strict encapsulation and avoid referencing downstream application UI/TUI details. Bound client documentation should emphasize `client.write_tag` and `client.write_tags` without repeating endpoint arguments.
+> * **Pruned:** Ambiguity regarding installation instructions during the 0.3.0 development cycle on `dev` and redundant write method parameterization.
+
 ## 2026-09-14: Remote OPC DA (DCOM) Status, 0.3.0 Boundaries & Architecture Guidance (`README.md`, `opc-da-client`, `long_term_todo.md`)
 > 📝 **Context Update:**
 > * **Feature:** Documentation update and architectural boundary definition for Remote OPC DA (DCOM) across `README.md`, `opc-da-client/README.md`, `opc-da-client/spec.md`, and `long_term_todo.md`.
