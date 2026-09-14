@@ -236,11 +236,13 @@ pub trait TagReader: Send + Sync {
         server: &str,
         tag_id: &str,
     ) -> impl std::future::Future<Output = OpcResult<TagValue>> + Send {
-        async {
+        async move {
             let batch = TagBatch::from_str_lenient(tag_id);
             let results = self.read_tag_values(server, batch).await?;
-            results.into_vec().pop().ok_or_else(|| {
-                crate::errors::OpcError::Internal("Server returned empty tag values".to_string())
+            results.into_iter().next().ok_or_else(|| {
+                crate::errors::OpcError::Internal(format!(
+                    "reader returned empty results for single tag read: {tag_id}"
+                ))
             })
         }
     }
@@ -401,9 +403,64 @@ mod mock {
             ) -> OpcResult<Vec<WriteResult>>;
         }
     }
+
+    mockall::mock! {
+        /// Pure-Rust mock implementation of [`ServerDiscovery`] for unit and integration tests.
+        pub ServerDiscovery {}
+
+        impl ServerDiscovery for ServerDiscovery {
+            async fn list_servers(&self, host: &str) -> OpcResult<Vec<String>>;
+            async fn list_server_details(&self, host: &str) -> OpcResult<Vec<OpcServerInfo>>;
+        }
+    }
+
+    mockall::mock! {
+        /// Pure-Rust mock implementation of [`TagBrowser`] for unit and integration tests.
+        pub TagBrowser {}
+
+        impl TagBrowser for TagBrowser {
+            async fn browse_tags(&self, server: &str, collector: TagCollector) -> OpcResult<Vec<String>>;
+        }
+    }
+
+    mockall::mock! {
+        /// Pure-Rust mock implementation of [`TagReader`] for unit and integration tests.
+        pub TagReader {}
+
+        impl TagReader for TagReader {
+            async fn read_tag_values(&self, server: &str, tags: TagBatch) -> OpcResult<TagValues>;
+            async fn read_tag_value(&self, server: &str, tag_id: &str) -> OpcResult<TagValue>;
+        }
+    }
+
+    mockall::mock! {
+        /// Pure-Rust mock implementation of [`TagWriter`] for unit and integration tests.
+        pub TagWriter {}
+
+        impl TagWriter for TagWriter {
+            async fn write_tag_value(
+                &self,
+                server: &str,
+                tag_id: &str,
+                value: OpcValue,
+            ) -> OpcResult<WriteResult>;
+            async fn write_tag_batch(
+                &self,
+                server: &str,
+                writes: crate::types::WriteBatch,
+            ) -> OpcResult<Vec<WriteResult>>;
+            async fn write_tag_values(
+                &self,
+                server: &str,
+                writes: &[(String, OpcValue)],
+            ) -> OpcResult<Vec<WriteResult>>;
+        }
+    }
 }
 #[cfg(feature = "test-support")]
-pub use mock::MockOpcProvider;
+pub use mock::{
+    MockOpcProvider, MockServerDiscovery, MockTagBrowser, MockTagReader, MockTagWriter,
+};
 
 #[cfg(test)]
 mod tests {
@@ -791,5 +848,62 @@ mod tests {
         assert_eq!(results.len(), 2);
         assert!(!results[0].is_success());
         assert!(results[1].is_success());
+    }
+
+    #[tokio::test]
+    async fn test_tag_reader_default_read_tag_value_fifo() {
+        use crate::errors::OpcResult;
+        use crate::provider::TagReader;
+        use crate::types::{OpcQuality, OpcValue, TagBatch, TagValue, TagValues};
+
+        struct FifoReader;
+        impl TagReader for FifoReader {
+            async fn read_tag_values(
+                &self,
+                _server: &str,
+                _tags: TagBatch,
+            ) -> OpcResult<TagValues> {
+                Ok(TagValues::new(vec![
+                    TagValue::new(
+                        "Sensor.First".to_string(),
+                        Some(OpcValue::Int(1)),
+                        OpcQuality::GOOD,
+                        None,
+                    ),
+                    TagValue::new(
+                        "Sensor.Second".to_string(),
+                        Some(OpcValue::Int(2)),
+                        OpcQuality::GOOD,
+                        None,
+                    ),
+                ]))
+            }
+        }
+
+        let reader = FifoReader;
+        let val = reader
+            .read_tag_value("TestServer", "Sensor.First")
+            .await
+            .expect("Default read_tag_value should succeed");
+
+        assert_eq!(val.tag_id, "Sensor.First");
+        assert_eq!(val.value(), Some(&OpcValue::Int(1)));
+
+        struct EmptyReader;
+        impl TagReader for EmptyReader {
+            async fn read_tag_values(
+                &self,
+                _server: &str,
+                _tags: TagBatch,
+            ) -> OpcResult<TagValues> {
+                Ok(TagValues::new(vec![]))
+            }
+        }
+        let empty_reader = EmptyReader;
+        let err = empty_reader
+            .read_tag_value("TestServer", "Sensor.First")
+            .await
+            .expect_err("Empty tag values must return Err");
+        assert!(matches!(err, crate::errors::OpcError::Internal(_)));
     }
 }

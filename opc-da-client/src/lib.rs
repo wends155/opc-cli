@@ -39,7 +39,9 @@ pub use com::{
 
 // Test support re-export
 #[cfg(feature = "test-support")]
-pub use provider::MockOpcProvider;
+pub use provider::{
+    MockOpcProvider, MockServerDiscovery, MockTagBrowser, MockTagReader, MockTagWriter,
+};
 
 #[cfg(all(feature = "test-support", feature = "opc-da-backend"))]
 pub use com::connector::{MockConnectedGroup, MockConnectedServer, MockServerConnector, MockState};

@@ -131,3 +131,101 @@ async fn test_mock_opc_provider_full_contract_stability() {
         .unwrap();
     assert!(single_write.is_success());
 }
+
+#[tokio::test]
+async fn test_standalone_role_mocks() {
+    use opc_da_client::{
+        MockServerDiscovery, MockTagBrowser, MockTagReader, MockTagWriter, OpcQuality,
+        OpcServerInfo, OpcValue, ServerDiscovery, TagBrowser, TagCollector, TagReader, TagValue,
+        TagValues, TagWriter, WriteResult,
+    };
+
+    // 1. Verify MockServerDiscovery in complete isolation
+    let mut discovery_mock = MockServerDiscovery::new();
+    discovery_mock
+        .expect_list_servers()
+        .with(mockall::predicate::eq("127.0.0.1"))
+        .returning(|_| Ok(vec!["Isolated.Server.1".into()]));
+    discovery_mock
+        .expect_list_server_details()
+        .returning(|host| {
+            Ok(vec![OpcServerInfo::new(
+                "Isolated.Server.1",
+                opc_da_client::Clsid::zeroed(),
+                Some("Isolated Server".into()),
+                Some(host.to_string()),
+            )])
+        });
+    let servers = discovery_mock.list_servers("127.0.0.1").await.unwrap();
+    assert_eq!(servers, vec!["Isolated.Server.1"]);
+    let details = discovery_mock
+        .list_server_details("127.0.0.1")
+        .await
+        .unwrap();
+    assert_eq!(details.len(), 1);
+    assert_eq!(details[0].prog_id, "Isolated.Server.1");
+
+    // 2. Verify MockTagBrowser in complete isolation
+    let mut browser_mock = MockTagBrowser::new();
+    browser_mock
+        .expect_browse_tags()
+        .returning(|_server, collector| {
+            let _ = collector.push("Isolated.Tag1".into());
+            let _ = collector.push("Isolated.Tag2".into());
+            Ok(collector.snapshot())
+        });
+    let collector = TagCollector::new(10);
+    let tags = browser_mock
+        .browse_tags("Isolated.Server.1", collector)
+        .await
+        .unwrap();
+    assert_eq!(tags, vec!["Isolated.Tag1", "Isolated.Tag2"]);
+
+    // 3. Verify MockTagReader in complete isolation
+    let mut reader_mock = MockTagReader::new();
+    reader_mock
+        .expect_read_tag_values()
+        .returning(|_server, batch| {
+            let items = batch
+                .iter_str()
+                .map(|t| TagValue::new(t, Some(OpcValue::Int(101)), OpcQuality::GOOD, None))
+                .collect();
+            Ok(TagValues::new(items))
+        });
+    reader_mock
+        .expect_read_tag_value()
+        .returning(|_server, tag| {
+            Ok(TagValue::new(
+                tag,
+                Some(OpcValue::Int(101)),
+                OpcQuality::GOOD,
+                None,
+            ))
+        });
+    let val = reader_mock
+        .read_tag_value("Isolated.Server.1", "Isolated.Tag1")
+        .await
+        .unwrap();
+    assert_eq!(val.tag_id, "Isolated.Tag1");
+    assert_eq!(val.value(), Some(&OpcValue::Int(101)));
+
+    // 4. Verify MockTagWriter in complete isolation
+    let mut writer_mock = MockTagWriter::new();
+    writer_mock
+        .expect_write_tag_value()
+        .returning(|_server, tag, _val| Ok(WriteResult::success(tag)));
+    writer_mock
+        .expect_write_tag_batch()
+        .returning(|_server, writes| {
+            Ok(writes
+                .iter()
+                .map(|(t, _)| WriteResult::success(t))
+                .collect())
+        });
+    let res = writer_mock
+        .write_tag_value("Isolated.Server.1", "Isolated.Tag1", OpcValue::Int(202))
+        .await
+        .unwrap();
+    assert!(res.is_success());
+    assert_eq!(res.tag_id, "Isolated.Tag1");
+}
