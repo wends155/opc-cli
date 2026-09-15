@@ -2020,4 +2020,20 @@ emove_group errors now logged instead of silently discarded.
 >   - Purged legacy monolith `opc-da-client/src/com/client.rs`.
 >   - Purged domain re-export trampolines from `provider.rs`.
 
+## 2026-09-15: Documentation Sync for opc-da-client (`/update-doc`)
+> 📝 **Context Update:**
+> * **Feature:** Documentation sync for `opc-da-client` (`/update-doc`)
+> * **Changes:**
+>   - Synchronized [`opc-da-client/spec.md`](file:///c:/Users/WSALIGAN/code/opc-cli/opc-da-client/spec.md): updated verification commit hash to `966632f`.
+>   - Synchronized §1.3 (`client` & typestate session contracts): documented `Unbound` (gateway) and `Bound` (session) inherent methods, and preserved `OpcProvider` across all typestates.
+>   - Synchronized §1.4 (`com::guard`): removed relocated guards, documenting internal MTA initialization guard.
+>   - Synchronized §1.5 (`types`): added `VarType`, `BaseVarType`, `TagBatch` SSO, `WriteBatch` slice projection, and `server_info_from_prog_ids`; pruned stale `BrowseFilter` and legacy `ItemHandle` alias.
+>   - Synchronized §1.8 (`connector`): documented pure-Rust SPI `GroupGuard` and `BrowsePositionGuard` under `connector::guard` with `catch_unwind` double-panic protection; documented modular `connector::mock` hierarchy (`state.rs`, `server.rs`, `group.rs`, `connector.rs`, `tests.rs`) with telemetry symmetry; documented `ComConnector.legacy_dcom` encapsulation; documented strict Two-Tier Root Export Hierarchy.
+>   - Verified all 9 quality gates pass (`verify.ps1`), 536 total tests green (88 doctests + 2 compile-fail + 446 compiled tests).
+> * **New Constraints:**
+>   - `spec.md` behavioral contracts strictly track post-0.3.0 modernization AST and Two-Tier export hierarchy.
+> * **Pruned:**
+>   - Stale references to `BrowseFilter` and legacy `ItemHandle` in `spec.md`.
+
+
 
