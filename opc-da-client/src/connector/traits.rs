@@ -7,7 +7,7 @@ use crate::errors::{OpcError, OpcResult};
 use crate::types::{
     BrowseDirection, BrowseType, ClientGroupHandle, ClientItemHandle, NamespaceType, OpcQuality,
     OpcServerEndpoint, OpcServerInfo, OpcValue, ServerGroupHandle, ServerIdentifier,
-    ServerItemHandle, VarType, normalize_host,
+    ServerItemHandle, VarType,
 };
 
 // ── Pure-Rust Data Transfer Objects ────────────────────────────────
@@ -202,18 +202,7 @@ pub trait ServerCatalogDiscovery: Send + Sync {
     /// Returns an [`OpcError`] if server enumeration fails.
     fn enumerate_server_details(&self, host: &str) -> OpcResult<Vec<OpcServerInfo>> {
         let servers = self.enumerate_servers(host)?;
-        let host_opt = normalize_host(Some(host));
-        Ok(servers
-            .into_iter()
-            .map(|prog_id| {
-                OpcServerInfo::new(
-                    prog_id,
-                    crate::types::Clsid::zeroed(),
-                    None,
-                    host_opt.clone(),
-                )
-            })
-            .collect())
+        Ok(crate::types::server_info_from_prog_ids(servers, Some(host)))
     }
 }
 

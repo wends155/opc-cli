@@ -1,5 +1,6 @@
 use opc_da_client::{
-    Bound, MockOpcDaClient, OpcDaClient, OpcProvider, OpcServerEndpoint, OpcValue, Unbound,
+    Bound, MockOpcDaClient, OpcDaClient, OpcProvider, OpcServerEndpoint, OpcValue, ServerDiscovery,
+    Unbound,
 };
 
 #[tokio::test]

@@ -12,7 +12,7 @@
 
 The `opc-da-client` library provides an async, trait-based API that abstracts away the complexities of Windows COM/DCOM and legacy OPC Data Access 2.05a / 3.0 protocols. It follows a strict 3-tier decoupled architecture:
 1. **Public Domain API (`provider.rs`, `types.rs`)**: High-level async role traits (`ServerDiscovery`, `TagBrowser`, `TagReader`, `TagWriter`, `OpcProvider`) with native Rust 2024 AFIT, canonical identity types (`ServerIdentifier`, `OpcServerInfo`, `OpcServerEndpoint`), typed data models (`TagValue`, `OpcValue`, `WriteBatch`, `WriteResult`, `TagCollector`), zero-allocation quality word (`OpcQuality`), and generic collection extractor `TagValues::get_as<T>`.
-2. **Pure-Rust Tier 2 SPI & Facade (`connector/`, `com::client`, `com::worker`)**: Pure-Rust SPI traits (`ServerConnector`, `ConnectedServer` with associated `ItemIterator`, `ConnectedGroup`) in `src/connector/` enabling offline mock testing on any OS without Windows COM; dedicated background COM worker thread with priority request channels; compile-time typestate client facade `OpcDaClient<C, State>` (`Unbound` gateway vs `Bound` session); connection pooling keyed by `ServerIdentifier` with active group auto-recovery (`0xC0040001`); and 3-tier server catalog / registry discovery (`OpcServerListCatalog`, `inspect_local_registration`, `OpcServerRegistration`).
+2. **Pure-Rust Tier 2 SPI & Facade (`connector/`, `client`, `com::worker`)**: Pure-Rust SPI traits (`ServerConnector`, `ConnectedServer` with associated `ItemIterator`, `ConnectedGroup`) in `src/connector/` enabling offline mock testing on any OS without Windows COM; dedicated background COM worker thread with priority request channels; compile-time typestate client facade `OpcDaClient<C, State>` (`Unbound` gateway vs `Bound` session); connection pooling keyed by `ServerIdentifier` with active group auto-recovery (`0xC0040001`); and 3-tier server catalog / registry discovery (`OpcServerListCatalog`, `inspect_local_registration`, `OpcServerRegistration`).
 3. **Crate-Internal Low-Level FFI Subsystem (`raw/`)**: Frozen Win32 COM bindings, unsafe COM allocators with arithmetic overflow prevention, and dormant bridge types sealed behind `pub(crate) mod raw;`.
 
 ---
@@ -127,10 +127,10 @@ opc-da-client/
 - **Trait Interfaces**: `std::error::Error`.
 - **Mock Availability**: N/A.
 
-### `com::client`
-- **Owns**: Concrete public `OpcDaClient<C, State = Unbound>` struct implementing `OpcProvider`, fluent builder `OpcDaClientBuilder` (`builder()`, `host()`, `server()`, `timeout()`, `with_legacy_dcom()`, `with_connector()`, `build()`, `build_bound()`), compile-time typestates `Unbound` (gateway) and `Bound` (session), zero-cost state transitions (`bind`, `bind_remote`, `unbind`), eager connection constructor (`connect_eager`), server-bound constructors (`connect`, `connect_remote`), infallible endpoint borrower (`endpoint(&self) -> &OpcServerEndpoint`) and server ID getter (`server_id(&self) -> std::borrow::Cow<'_, str>`) on `Bound`, inherent session methods strictly sealed to `Bound` (`read_tag`, `read_tags`, `read_tag_values`, `read_single_typed`, `read_f64`, `read_i32`, `read_bool`, `read_string`, `write`, `write_tag`, `write_batch`, `write_tags`, `browse`, `subscribe`), remote server discovery (`list_servers_on`, deprecated in favor of `ServerDiscovery::list_servers`), Layer 2 non-blocking subscription polling stream (`client.subscribe()`), and client-side channel sender management (`mpsc::Sender<ComRequest>`).
+### `client`
+- **Owns**: Concrete public `OpcDaClient<C, State = Unbound>` struct implementing `OpcProvider`, fluent builder `OpcDaClientBuilder` (`builder()`, `host()`, `server()`, `timeout()`, `with_legacy_dcom()`, `with_connector()`, `build()`, `build_bound()`), compile-time typestates `Unbound` (gateway) and `Bound` (session), zero-cost state transitions (`bind`, `bind_remote`, `unbind`), eager connection constructor (`connect_eager`), server-bound constructors (`connect`, `connect_remote`), infallible endpoint borrower (`endpoint(&self) -> &OpcServerEndpoint`) and server ID getter (`server_id(&self) -> std::borrow::Cow<'_, str>`) on `Bound`, inherent session methods strictly sealed to `Bound` (`read_tag`, `read_tags`, `read_single_typed`, `read_f64`, `read_i32`, `read_bool`, `read_string`, `read_f32`, `read_i64`, `read_u32`, `read_u64`, `write_tag`, `write_tags`, `browse`, `subscribe`), remote server discovery via role traits, Layer 2 non-blocking subscription polling stream (`client.subscribe()`), and client-side channel sender management (`mpsc::Sender<ComRequest>`).
 - **Does NOT own**: Direct COM worker loop execution, unmanaged pointers, or in-apartment state (delegated across channels to `ComWorker`).
-- **Trait Interfaces**: `OpcProvider`.
+- **Trait Interfaces**: `OpcProvider`, `ServerDiscovery`, `TagBrowser`, `TagReader`, `TagWriter`.
 - **Mock Availability**: `MockOpcDaClient` (exported under `all(feature = "test-support", feature = "opc-da-backend")`).
 
 ### `com::iterator`
@@ -211,7 +211,7 @@ The codebase strictly enforces unidirectional dependency flow:
 [provider] ───► [types] ◄─── [errors]
     ▲             ▲             ▲
     │             │             │
-[com::client] ──► [com::worker] ──► [connector] ──► [com::connector] ──► [com::security]
+[client] ──────► [com::worker] ──► [connector] ──► [com::connector] ──► [com::security]
                         │               ▲                │    │             ▲
                         │               │                ▼    └──► [com::discovery]
                         ▼         [connector::guard]  [com::variant] ───────┤
@@ -225,14 +225,14 @@ The codebase strictly enforces unidirectional dependency flow:
 | `types` | `errors`, `windows-core` (`GUID`) | `provider`, `com`, `raw`, `windows` | Canonical domain models must never depend on implementation details |
 | `errors` | `windows-core` (for HRESULT) | `provider`, `types`, `com` | Domain errors and HRESULT catalog are foundational and self-contained |
 | `connector` | `types`, `errors`, `thiserror`, `tokio::sync` | `com`, `raw`, `windows`, `provider` | Pure-Rust Tier 2 SPI abstractions, guards, and mocks |
-| `com::client` | `provider`, `types`, `errors`, `connector`, `com::worker`, `com::connector` | `raw` | Consumer facade dispatches requests to the worker |
+| `client` | `provider` (role traits only), `types`, `errors`, `connector`, `com::worker`, `com::connector` | `raw`, `windows` | Consumer facade dispatches requests to the worker |
 | `com::worker` | `types`, `errors`, `connector`, `com::connector`, `com::variant`, `com::guard`, `tokio::sync` | `raw` | Worker communicates via pure-Rust connector facade and internal COM primitives |
 | `com::connector` | `types`, `errors`, `connector`, `com::variant`, `com::discovery` (`guid_to_progid`), `com::security`, `com::iterator`, `raw`, `windows` | `provider` | Encapsulates all raw Win32 COM FFI marshalling |
-| `com::security` | `errors`, `windows` | `com::connector`, `com::discovery`, `com::worker`, `com::client` | Shared DCOM security blanketing and authentication level selection |
-| `com::discovery` | `types`, `errors`, `com::security`, `com::iterator`, `raw`, `windows` | `com::client`, `com::worker`, `com::connector` | Crate-internal server catalog and registry discovery |
+| `com::security` | `errors`, `windows` | `com::connector`, `com::discovery`, `com::worker`, `client` | Shared DCOM security blanketing and authentication level selection |
+| `com::discovery` | `types`, `errors`, `com::security`, `com::iterator`, `raw`, `windows` | `client`, `com::worker`, `com::connector` | Crate-internal server catalog and registry discovery |
 | `com::guard` | `errors`, `windows` | `provider`, `raw`, `connector` | RAII drop guard for thread COM MTA initialization |
 | `com::iterator` | `raw::memory`, `errors::hresult`, `types`, `errors`, `windows` | `provider`, `com::worker` | Safe COM enumeration wrapper with RAII cleanup |
-| `com::variant` | `types` (`OpcValue`), `errors::hresult`, `windows` | `com::client`, `com::worker`, `com::connector` | Pure Win32 VARIANT marshaling helper for COM connector |
+| `com::variant` | `types` (`OpcValue`), `errors::hresult`, `windows` | `client`, `com::worker`, `com::connector` | Pure Win32 VARIANT marshaling helper for COM connector |
 | `raw::memory` | `windows-core`, `types`, `errors` | `com`, `provider` | Low-level COM memory allocation abstraction |
 | `raw::bindings` | `windows-core` | `com`, `provider` | Frozen COM interface vtable bindings |
 
@@ -310,7 +310,7 @@ Strongly-typed `OpcOperation` enum and `log_opc_err!` macro emit unified machine
 
 ### 1. Co-Located Unit Tests (192 Tests in `opc-da-client`)
 - **`com::discovery.rs`**: Remote host rejection, quote and trailing flag path sanitization (`sanitize_binary_path`), `OpcServerType` display formatting, invalid registry key query failure (`test_open_reg_key_invalid`), environment variable token expansion and comprehensive stress testing with dynamic allocation fallback (`test_expand_environment_string`), local registration non-existent CLSID mapping to `REGDB_E_CLASSNOTREG` (`test_inspect_local_registration_nonexistent_returns_classnotreg`), and ProgID resolution (`guid_to_progid`).
-- **`com::client.rs`**: `OpcDaClient::list_server_details` dispatch and mock record verification.
+- **`client/tests.rs`**: `OpcDaClient::list_server_details` dispatch, typestate transitions, and mock record verification.
 - **`com::variant.rs`**: SafeArray 1D/2D conversion, VARIANT types (integers, floats, bools, strings, VT_DATE, VT_CY), error decoding, roundtrip serialization, and RAII memory safety guards (`ScopedVariant` and `ItemStatesGuard` drop verification, SafeArray bounds clamping with `i64` widening).
 - **`com::connector`**: Win32 GUID layout static assertions, rich metadata enumeration (`enumerate_server_details`), pure-Rust server connection mocks, and mock handler closures.
 - **`raw::hresult.rs`**: Strongly-typed Win32 HRESULT constants, signed cast verification, `is_connection_hresult` classification, and `format_hresult` output.

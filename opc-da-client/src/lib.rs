@@ -1,9 +1,11 @@
 #![allow(unsafe_code)]
 #![doc = include_str!("../README.md")]
 
+#[cfg(feature = "opc-da-backend")]
+pub mod client;
 pub mod connector;
 pub mod errors;
-mod provider;
+pub mod provider;
 pub mod types;
 
 #[cfg(feature = "opc-da-backend")]
@@ -12,60 +14,60 @@ pub(crate) mod raw;
 #[cfg(feature = "opc-da-backend")]
 pub(crate) mod com;
 
-// Stable public API
+// =========================================================================
+// Tier 1: Public Facade (Root Exports)
+// =========================================================================
+
 pub use errors::{ConversionError, OpcError, OpcResult, WorkerError};
-pub use provider::{
-    DisplayOptionOpcValue, DisplayOptionTimestamp, OpcProvider, OpcQuality, OpcValue,
-    OpcValueOptionExt, QualityLimit, QualityMajor, QualitySubstatus, ServerDiscovery,
-    SystemTimeOptionExt, TagBrowser, TagCollector, TagReader, TagValue, TagWriter, WriteResult,
-};
+
+pub use provider::{OpcProvider, ServerDiscovery, TagBrowser, TagReader, TagWriter};
+
 pub use types::{
-    BaseVarType, BrowseDirection, BrowseType, ClientGroupHandle, ClientItemHandle, Clsid, IntoTags,
-    IntoWriteBatch, OpcServerEndpoint, OpcServerInfo, ParseClsidError, ParseQualityError,
-    ServerGroupHandle, ServerIdentifier, ServerItemHandle, TagBatch, TagBatchIter, TagExtractError,
-    TagValues, VarType, WriteBatch, WriteBatchIntoIter, WriteBatchIter,
+    BaseVarType, BrowseDirection, BrowseType, ClientGroupHandle, ClientItemHandle, Clsid,
+    DisplayOptionOpcValue, DisplayOptionTimestamp, IntoTags, IntoWriteBatch, OpcQuality,
+    OpcServerEndpoint, OpcServerInfo, OpcValue, OpcValueOptionExt, ParseClsidError,
+    ParseQualityError, QualityLimit, QualityMajor, QualitySubstatus, ServerGroupHandle,
+    ServerIdentifier, ServerItemHandle, SystemTimeOptionExt, TagBatch, TagBatchIter, TagCollector,
+    TagExtractError, TagValue, TagValues, VarType, WriteBatch, WriteBatchIntoIter, WriteBatchIter,
+    WriteResult,
 };
 
-// Tier 2 Service Provider Interface (SPI)
-pub use connector::{
-    BrowsePositionGuard, ConnectedGroup, ConnectedServer, CreatedGroup, DataSource, GroupConfig,
-    GroupGuard, GroupItemDef, GroupItemResult, GroupItemState, GroupRemovalMode, ItemWrite,
-    ServerBackend, ServerCatalogDiscovery, ServerConnector,
-};
+#[cfg(feature = "opc-da-backend")]
+pub use client::{Bound, DefaultOpcDaClient, OpcDaClient, OpcDaClientBuilder, Unbound};
 
-// Backend re-exports (conditional)
 #[cfg(feature = "opc-da-backend")]
 pub use com::{
-    client::{Bound, OpcDaClient, OpcDaClientBuilder, Unbound},
     connector::ComConnector,
     discovery::{OpcServerRegistration, OpcServerType, inspect_local_registration},
 };
 
-// Test support re-export
+// =========================================================================
+// Test Support Exports
+// =========================================================================
+
 #[cfg(feature = "test-support")]
 pub use provider::{
     MockOpcProvider, MockServerDiscovery, MockTagBrowser, MockTagReader, MockTagWriter,
 };
 
-#[cfg(feature = "test-support")]
-pub use connector::{MockConnectedGroup, MockConnectedServer, MockServerConnector, MockState};
-
-/// Type alias for an [`OpcDaClient`] instantiated with [`MockServerConnector`].
 #[cfg(all(feature = "test-support", feature = "opc-da-backend"))]
-pub type MockOpcDaClient = com::client::OpcDaClient<connector::MockServerConnector>;
+pub use client::MockOpcDaClient;
 
-#[cfg(all(feature = "test-support", feature = "opc-da-backend"))]
-impl Default for com::client::OpcDaClient<connector::MockServerConnector> {
-    fn default() -> Self {
-        match Self::new(connector::MockServerConnector::default()) {
-            Ok(client) => client,
-            Err(e) => unreachable!("mock client initializes successfully: {e:?}"),
-        }
-    }
-}
+// =========================================================================
+// Sanity Test Suite
+// =========================================================================
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+
+    #[test]
+    fn test_feature_independence_types() {
+        let endpoint = OpcServerEndpoint::local("Test.ProgId");
+        assert_eq!(endpoint.host.as_deref(), None);
+        assert_eq!(endpoint.identifier.to_string(), "Test.ProgId");
+    }
+
     #[cfg(all(feature = "test-support", feature = "opc-da-backend"))]
     #[test]
     fn test_mock_opc_da_client_default() {

@@ -773,7 +773,7 @@ async fn test_connect_eager_ping_success_and_cached_failure() {
     use std::sync::atomic::Ordering;
     let state = Arc::new(MockState::default());
     let connector = MockServerConnector::with_state(state.clone());
-    let client = crate::com::client::OpcDaClient::new(connector)
+    let client = crate::client::OpcDaClient::new(connector)
         .expect("client initialization must succeed")
         .bind(OpcServerEndpoint::local("Mock.Server.Ping"));
 
@@ -1155,7 +1155,7 @@ async fn test_worker_browse_with_mock_associated_item_iterator() {
     let tags = worker
         .send_request(|reply| ComRequest::BrowseTags {
             endpoint: OpcServerEndpoint::local("Mock.Server.BrowseIter"),
-            collector: crate::provider::TagCollector::default(),
+            collector: crate::types::TagCollector::default(),
             reply,
         })
         .await

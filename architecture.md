@@ -194,8 +194,8 @@ opc-cli/
 - **Trait Interfaces**: `std::error::Error`, `thiserror`.
 - **Mock Availability**: N/A (pure error definitions).
 
-### `opc-da-client::com::client` (Public Client Implementation)
-- **Owns**: Public concrete `OpcDaClient<C, State>` struct implementing `OpcProvider`, fluent builder `OpcDaClientBuilder` (`builder()`), typestate transitions (`bind`, `bind_remote`, `unbind`), eager connection constructors (`connect`, `connect_remote`, `connect_eager`), inherent async readers and writers sealed to `Bound` (`read_tags`, `read_tag`, deprecated inherent `read_tag_values`, deprecated inherent `read_tag_value`, `read_f64`, `read_i32`, `read_bool`, `read_string`, `write`, `write_batch`, `browse`, `subscribe`), remote server discovery (`list_servers_on`), Layer 2 subscription polling stream (`subscribe` with zero-allocation shareable batch clones), request dispatch channel management (`mpsc::Sender<ComRequest>`), and public constructors (`OpcDaClient::new`). Note that while `com/` is internal (`pub(crate) mod com;`), `OpcDaClient`, `OpcDaClientBuilder`, and typestates are re-exported at the crate root.
+### `opc-da-client::client` (Public Client Facade & Typestate Subsystem)
+- **Owns**: Public concrete `OpcDaClient<C, State>` struct implementing `OpcProvider`, fluent builder `OpcDaClientBuilder` (`builder()`), typestate transitions (`bind`, `bind_remote`, `unbind`), eager connection constructors (`connect`, `connect_remote`, `connect_eager`), inherent async readers and writers sealed to `Bound` (`read_tags`, `read_tag`, deprecated inherent `read_tag_values`, deprecated inherent `read_tag_value`, `read_f64`, `read_i32`, `read_bool`, `read_string`, `write`, `write_batch`, `browse`, `subscribe`), remote server discovery (`list_servers_on`), Layer 2 subscription polling stream (`subscribe` with zero-allocation shareable batch clones), request dispatch channel management (`mpsc::Sender<ComRequest>`), and public constructors (`OpcDaClient::new`). `OpcDaClient`, `OpcDaClientBuilder`, and typestates are re-exported at the crate root.
 - **Does NOT Own**: In-apartment Win32 COM operations, unmanaged memory pointers, or direct FFI calls (all delegated across channels to `ComWorker`).
 - **Trait Interfaces**: Implements `OpcProvider`, `ServerDiscovery`, `TagBrowser`, `TagReader`, `TagWriter`.
 - **Mock Availability**: `MockOpcDaClient` alias available under `all(feature = "test-support", feature = "opc-da-backend")`.
@@ -285,19 +285,19 @@ opc-cli/
 
 | Module | May Import | Must NOT Import |
 |:---|:---|:---|
-| `opc-cli` (Core App: `app.rs`, `ui.rs`) | `opc-da-client` (`OpcProvider` trait, `OpcValue`, `TagValue`, `WriteResult`, `TagCollector`, `OpcError`), `ratatui`, `crossterm`, `tokio`, `tracing` (Note: `opc-cli/src/main.rs` serves as Composition Root wiring concrete client or mocks) | Direct Windows COM APIs (`windows::Win32::System::Com`), `com::client` / `com::worker` concrete types |
+| `opc-cli` (Core App: `app.rs`, `ui.rs`) | `opc-da-client` (`OpcProvider` trait, `OpcValue`, `TagValue`, `WriteResult`, `TagCollector`, `OpcError`), `ratatui`, `crossterm`, `tokio`, `tracing` (Note: `opc-cli/src/main.rs` serves as Composition Root wiring concrete client or mocks) | Direct Windows COM APIs (`windows::Win32::System::Com`), `client` / `com::worker` concrete types |
 | `opc-da-client::provider` | `types`, `errors`, `thiserror`, `tokio::sync`, `tracing` | `windows`, `chrono`, `async-trait`, `ratatui`, `crossterm`, `com`, `raw`, `serde` |
 | `opc-da-client::types` | `errors` (uses self-contained 128-bit `Clsid`) | `provider`, `com`, `raw`, `windows` |
 | `opc-da-client::errors` | `windows-core` (`HRESULT`) | `provider`, `types`, `com`, `raw` |
 | `opc-da-client::connector` | `types`, `errors`, `thiserror`, `tokio::sync` | `com`, `raw`, `windows`, `provider`, `ratatui`, `crossterm` |
-| `opc-da-client::com::client` | `provider`, `types`, `errors`, `com::worker` | `raw` |
+| `opc-da-client::client` | `provider` (role traits only), `types`, `errors`, `connector`, `com::worker`, `com::connector` | `raw`, `windows` |
 | `opc-da-client::com::worker` | `types`, `errors`, `connector`, `com::connector`, `com::variant`, `tokio::sync` | `raw` |
 | `opc-da-client::com::connector` | `types`, `errors`, `connector`, `com::variant`, `com::discovery` (`guid_to_progid`), `com::security`, `com::iterator`, `raw`, `windows` | `provider` |
-| `opc-da-client::com::security` | `errors`, `windows` | `com::connector`, `com::discovery`, `com::worker`, `com::client` |
-| `opc-da-client::com::discovery` | `types`, `errors`, `com::security`, `com::iterator`, `raw`, `windows` | `com::client`, `com::worker`, `com::connector` |
+| `opc-da-client::com::security` | `errors`, `windows` | `com::connector`, `com::discovery`, `com::worker`, `client` |
+| `opc-da-client::com::discovery` | `types`, `errors`, `com::security`, `com::iterator`, `raw`, `windows` | `client`, `com::worker`, `com::connector` |
 | `opc-da-client::com::guard` | `errors`, `windows` | `provider`, `raw` |
 | `opc-da-client::com::iterator` | `raw::memory`, `errors::hresult`, `types`, `errors`, `windows` | `provider`, `com::worker` |
-| `opc-da-client::com::variant` | `types` (`OpcValue`), `errors::hresult`, `windows` | `com::client`, `com::worker`, `com::connector` |
+| `opc-da-client::com::variant` | `types` (`OpcValue`), `errors::hresult`, `windows` | `client`, `com::worker`, `com::connector` |
 | `opc-da-client::raw` | `windows-core`, `types`, `errors` (`errors::hresult`) | `com`, `provider`, `connector` |
 | `compat/*` (Polyfills) | `core`, `windows-sys` / raw Win32 FFI | `std`, `tokio`, `opc-cli`, `opc-da-client` |
 
@@ -582,7 +582,7 @@ graph TD
     end
 
     subgraph "MTA Worker & Hardware Abstraction"
-        Reader & Writer & Browser & Discovery --> Client["com::client (OpcDaClient)"]
+        Reader & Writer & Browser & Discovery --> Client["client (OpcDaClient)"]
         Client --> Worker["com::worker (ComWorker MTA)"]
         Worker --> Connector["com::connector (ServerConnector SPI)"]
         Connector --> NativeCOM["Windows COM/DCOM Server"]

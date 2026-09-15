@@ -575,7 +575,7 @@ Structured error enum returned when converting or extracting tag values from col
 
 ---
 
-### 1.3 `com::client` & `com::worker` — Default OPC DA Client & Apartment Worker
+### 1.3 `client` & `com::worker` — Default OPC DA Client & Apartment Worker
 
 **Purpose:** Concrete `OpcProvider` implementation backed by the consolidated `com` subsystem. Handles COM MTA initialization, server connection, namespace browsing, structured catalog discovery, and synchronous I/O reads.
 
@@ -898,7 +898,7 @@ Before calling `browse_recursive`, `browse_tags` attempts `browse_opc_item_ids(B
 * `com::connector` (Facade & Re-exports):
   - Slim coordinator facade re-exporting all submodule items and re-exporting all items from `connector` for 100% backward compatibility.
 * Crate Root Re-Export:
-  - `pub type MockOpcDaClient = com::client::OpcDaClient<connector::MockServerConnector>;` exported under `#[cfg(all(feature = "test-support", feature = "opc-da-backend"))]`.
+  - `pub type MockOpcDaClient = client::OpcDaClient<connector::MockServerConnector>;` exported under `#[cfg(all(feature = "test-support", feature = "opc-da-backend"))]`.
 
 ### 1.8.1 Remote DCOM Implementation Boundary (0.3.0 vs Roadmap)
 

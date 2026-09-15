@@ -2001,3 +2001,23 @@ emove_group errors now logged instead of silently discarded.
 >   - `ConversionError::Other`, `TagNotRequested`, `TagNoValue` on `ConversionError`, and string `From` impls.
 >   - Leaked Tokio channel/task and std mutex variants on `WorkerError` and `OpcError`.
 
+## 2026-09-15: Block 7 — Layer 4 Client Facade Extraction, Two-Tier Root lib.rs, & Consumer Synchronization
+> 📝 **Context Update:**
+> * **Feature:** Block 7 Layer 4 Client Facade Extraction, Strict Two-Tier Root lib.rs, & Consumer Synchronization (resolves `review_report.md` Findings 21–24).
+> * **Changes:**
+>   - Extracted `OpcDaClient<C, State>` & `OpcDaClientBuilder<C>` from `src/com/client.rs` into dedicated pure facade subsystem `src/client/` (`mod.rs`, `builder.rs`, `typestate.rs`, `session.rs`, `subscription.rs`, `gateway.rs`, `tests.rs`).
+>   - Enforced compile-time typestate encapsulation on `OpcDaClient`: inherent multi-server operations (`read_tag_values`, `write_tag_value`, `browse_tags`) constrained to `OpcDaClient<C, Unbound>`; `OpcDaClient<C, Bound>` exposes bound session operations (`read_sync`, `write_sync`, `browse`, `subscribe`). Blanket implementation of `OpcProvider` preserved across both typestates.
+>   - Completely deleted legacy 1,950 LOC monolith `src/com/client.rs` and removed `pub mod client;` from `src/com/mod.rs`.
+>   - Implemented deduplicated `server_info_from_prog_ids` helper in `src/types/server.rs`, consumed by `provider.rs` and `connector/traits.rs`. Pruned unused `normalize_host` import from `connector/traits.rs`.
+>   - Relocated 222 LOC pure domain tests from `provider.rs` to `types/tests.rs` and pruned domain re-export trampolines (`pub use crate::types::*`) from `provider.rs`.
+>   - Established strict Two-Tier Root Export Hierarchy in `src/lib.rs`: root `crate::*` exposes client facade, role traits, domain types, and errors; `crate::connector::*` encapsulates SPI traits, SPI DTOs, guards, and mocks (no root `pub use connector::{ ... }`). Declared `pub mod provider;` explicitly and preserved crate-level sanity tests.
+>   - Synchronized consumers and integration tests (`batch_write_test.rs`, `typestate_client_test.rs`, `com/worker/tests.rs`).
+>   - Achieved 100% pass across all 9 quality verification gates (`pwsh scripts/verify.ps1`) and headless pure-Rust check (`cargo check -p opc-da-client --no-default-features`).
+> * **New Constraints:**
+>   - Client facade lives strictly under `opc_da_client::client::*` and does not contain COM interop code; COM interop is confined to `opc_da_client::com::*`.
+>   - Root `lib.rs` must not expose SPI connector types at the top level; SPI consumers must import from `opc_da_client::connector::*`.
+> * **Pruned:**
+>   - Purged legacy monolith `opc-da-client/src/com/client.rs`.
+>   - Purged domain re-export trampolines from `provider.rs`.
+
+

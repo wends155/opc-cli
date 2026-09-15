@@ -406,6 +406,26 @@ impl OpcServerInfo {
     }
 }
 
+/// Synthesizes a vector of [`OpcServerInfo`] records from a collection of ProgIDs and an optional host string,
+/// automatically normalizing localhost/loopback representations to `None`.
+pub fn server_info_from_prog_ids(
+    servers: impl IntoIterator<Item = impl Into<String>>,
+    host: Option<&str>,
+) -> Vec<OpcServerInfo> {
+    let host_opt = normalize_host(host);
+    servers
+        .into_iter()
+        .map(|prog_id| {
+            OpcServerInfo::new(
+                prog_id.into(),
+                crate::types::Clsid::zeroed(),
+                None,
+                host_opt.clone(),
+            )
+        })
+        .collect()
+}
+
 /// Connection endpoint defining a target host machine and OPC server identifier.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct OpcServerEndpoint {
@@ -609,5 +629,34 @@ impl From<&str> for OpcServerEndpoint {
 impl From<String> for OpcServerEndpoint {
     fn from(s: String) -> Self {
         Self::from(s.as_str())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_server_info_from_prog_ids_empty() {
+        let infos = server_info_from_prog_ids(Vec::<String>::new(), None);
+        assert!(infos.is_empty());
+    }
+
+    #[test]
+    fn test_server_info_from_prog_ids_localhost_normalized() {
+        let servers = vec!["Matrikon.OPC.Simulation".to_string()];
+        let infos = server_info_from_prog_ids(servers, Some("localhost"));
+        assert_eq!(infos.len(), 1);
+        assert_eq!(infos[0].prog_id(), "Matrikon.OPC.Simulation");
+        assert!(infos[0].host().is_none());
+    }
+
+    #[test]
+    fn test_server_info_from_prog_ids_remote_host() {
+        let servers = vec!["Server1".to_string(), "Server2".to_string()];
+        let infos = server_info_from_prog_ids(servers, Some("192.168.1.50"));
+        assert_eq!(infos.len(), 2);
+        assert_eq!(infos[0].host(), Some("192.168.1.50"));
+        assert_eq!(infos[1].host(), Some("192.168.1.50"));
     }
 }

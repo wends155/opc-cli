@@ -4,7 +4,6 @@
 //! lifecycle management, thread affinity, memory wrappers,
 //! connection traits, and the concrete OPC DA client.
 
-pub mod client;
 pub mod connector;
 pub mod discovery;
 pub(crate) mod guard;

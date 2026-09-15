@@ -1,6 +1,5 @@
-use opc_da_client::{
-    MockServerConnector, MockState, OpcDaClient, OpcProvider, OpcServerEndpoint, OpcValue,
-};
+use opc_da_client::connector::{MockServerConnector, MockState};
+use opc_da_client::{OpcDaClient, OpcProvider, OpcServerEndpoint, OpcValue};
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 

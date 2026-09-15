@@ -683,7 +683,7 @@ Deprecated items will trigger compiler warnings starting in `0.3.0` and will rem
 The crate is architected in three decoupled layers:
 
 1. **Public Domain API (`provider.rs`, `types.rs`)**: Exposes the high-level async trait (`OpcProvider`), canonical data models (`TagValue`, `OpcValue`, `WriteResult`, `TagCollector`, `ServerIdentifier`, `OpcServerInfo`, `OpcServerEndpoint`), pure protocol types (`GroupHandle`, `ItemHandle`, `BrowseType`, `BrowseDirection`), and zero-allocation quality word (`OpcQuality`).
-2. **COM Worker & Client Runtime (`com::client`, `com::worker`)**: The asynchronous client communicates via Tokio channels with a dedicated MTA background thread. The worker thread maintains connection pooling, proxy caching (keyed by `ServerIdentifier`), and automatic recovery on stale connections.
+2. **COM Worker & Client Runtime (`client`, `com::worker`)**: The asynchronous client communicates via Tokio channels with a dedicated MTA background thread. The worker thread maintains connection pooling, proxy caching (keyed by `ServerIdentifier`), and automatic recovery on stale connections.
 3. **Pure-Rust Connector Facade & Subsystem (`com::connector`, `com::discovery`, `com::variant`, `raw::`)**: COM servers and groups are accessed strictly via pure-Rust trait interfaces (`ConnectedServer`, `ConnectedGroup`), while `com::discovery` manages multi-tier catalog adapters (`IOPCServerList`/`IOPCServerList2`) and local registry inspection, completely isolating Win32 COM pointers, apartments, and `VARIANT` structures from domain code.
 
 See [architecture.md](./architecture.md) for in-depth architectural specifications and diagrams, and [spec.md](./spec.md) for behavioral contracts.
