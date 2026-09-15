@@ -82,7 +82,8 @@ opc-cli/
 │       ├── connector.rs        # Pure-Rust Tier 2 SPI connector module root (unconditional re-exports)
 │       ├── connector/          # Pure-Rust Tier 2 SPI connector subsystem (compiles offline on Linux/macOS)
 │       │   ├── traits.rs       # Core SPI traits (ServerConnector, ConnectedServer with associated ItemIterator, ConnectedGroup)
-│       │   └── mock.rs         # Pure-Rust mock infrastructure (MockServerConnector, MockConnectedServer, MockConnectedGroup, MockState)
+│       │   ├── guard.rs        # Pure-Rust SPI resource guards (GroupGuard, BrowsePositionGuard)
+│       │   └── mock/           # Pure-Rust mock infrastructure submodules (state, group, server, connector)
 │       ├── com/                # COM subsystem (sealed pub(crate) mod com; gated behind opc-da-backend)
 │       │   ├── mod.rs          # COM module root & re-exports
 │       │   ├── client.rs       # OpcDaClient implementation

@@ -80,7 +80,7 @@ opc-da-client/
     ├── errors.rs           # OpcError (is_connection_error), OpcResult, OpcOperation, inherent friendly_hint diagnostics
     ├── errors/             # Hierarchical error modules (hresult, worker, conversion)
     ├── connector.rs        # Pure-Rust Tier 2 SPI connector module root (unconditional re-exports)
-    ├── connector/          # Pure-Rust Tier 2 SPI connector subsystem (traits.rs with ItemIterator, mock.rs)
+    ├── connector/          # Pure-Rust Tier 2 SPI connector subsystem (traits.rs with ItemIterator, guard.rs, mock/ submodules)
     ├── com/                # COM subsystem (feature-gated: opc-da-backend)
     │   ├── mod.rs          # Module declarations & internal re-exports
     │   ├── client.rs       # OpcDaClient<C, State>: compile-time typestate facade (Unbound vs Bound) & session helpers

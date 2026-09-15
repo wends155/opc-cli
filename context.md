@@ -1,5 +1,26 @@
 # Project Context Summary
 
+## 2026-09-15: Block 5 (Layer 2 Mock Modularization & Telemetry Symmetry) Completed (`opc-da-client`)
+> 📝 **Context Update:**
+> * **Feature:** Execution of Block 5 of the 7-block modernization roadmap (`review_report.md` Findings 15 & 16 in `opc-da-client`), decomposing the monolithic 1,361-line `connector/mock.rs` into modular submodules under `connector/mock/`, establishing telemetry symmetry between `connect_identifier` and `connect_endpoint`, adding lock poison recovery, and optimizing browse iterator allocation.
+> * **Changes:**
+>   - **Submodule Decomposition (`src/connector/mock/`):**
+>     - Extracted `MockState` into `state.rs` with all 18 fields public, poison-resilient getters (`unwrap_or_else(PoisonError::into_inner)`), and telemetry mutation helpers (`record_connection`, `record_enumerated_host`, `record_group_name`, `record_browse_direction`).
+>     - Extracted `MockConnectedGroup` into `group.rs` with closure type aliases (`MockAddItemsFn`, `MockReadFn`, `MockWriteFn`), `ConnectedGroup` implementations (struct + `Arc<T>`), and early `drop(guard)` drop-tightening.
+>     - Extracted `MockConnectedServer` into `server.rs` with atomic organization (`AtomicU32`), flat browse and connection drop flags, single-pass browse allocation, and `ConnectedServer` implementations (struct + `Arc<T>`).
+>     - Extracted `MockServerConnector` into `connector.rs` with fluent builders, `ServerCatalogDiscovery`, and `ServerConnector`.
+>     - Created directory module root `mod.rs` re-exporting public items at `mock::` level with 100% backward compatibility.
+>     - Deleted monolithic `src/connector/mock.rs` to eliminate Rust compiler `E0761` module namespace collisions.
+>   - **Telemetry Symmetry (Finding 16):**
+>     - Refactored `MockServerConnector::connect_identifier` to delegate directly to `connect_endpoint`.
+>     - Hardened connection telemetry to increment `connect_count` and record `last_connected_endpoint` strictly on connection success, resolving the previous failure-path leakage.
+>   - **Test Migration & Coverage Hardening:**
+>     - Migrated all 17 existing unit tests to `tests.rs` and added 3 new tests: `test_mock_telemetry_symmetry_on_failure_and_success`, `test_mock_browse_single_pass_allocation`, and `test_mock_state_lock_poison_recovery`.
+>   - **Verification Pipeline:**
+>     - Ran full 9-gate quality pipeline (`pwsh scripts/verify.ps1`): all 118 doc-tests and 446 compiled unit/integration tests passed with exit code 0. Zero clippy warnings under `-D warnings`.
+> * **New Constraints:** Mock subsystem code lives under `src/connector/mock/`; do not add monolithic mock files. All mock mutex lock operations must use `.unwrap_or_else(PoisonError::into_inner)` rather than silent error drops. `MockServerConnector::connect_identifier` must delegate directly to `connect_endpoint` to preserve telemetry symmetry.
+> * **Pruned:** Monolithic 1,361-line `connector/mock.rs`; asymmetric failure path telemetry in `connect_identifier`; silent mutex lock drops; multi-pass browse allocations.
+
 ## 2026-09-14: Block 4 (Layer 2 Pure-Rust SPI & Resource Lifecycle Guards) Completed (`opc-da-client`)
 > 📝 **Context Update:**
 > * **Feature:** Execution of Block 4 of the 7-block modernization roadmap (`review_report.md` Findings 13 and 14 in `opc-da-client`), establishing the pure-Rust `VarType` domain abstraction and migrating resource lifecycle guards (`GroupGuard`, `BrowsePositionGuard`) into the decoupled Tier 2 SPI connector layer with double-panic protection.
