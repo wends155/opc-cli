@@ -3,10 +3,10 @@
 //! Provides [`ComGroup`] implementing [`ConnectedGroup`] with leak-free
 //! `ScopedVariant` and `ItemStatesGuard` resource management.
 
-use crate::com::connector::traits::{
+use crate::com::variant::{ItemStatesGuard, ScopedVariant};
+use crate::connector::{
     ConnectedGroup, DataSource, GroupItemDef, GroupItemResult, GroupItemState, ItemWrite,
 };
-use crate::com::variant::{ItemStatesGuard, ScopedVariant};
 use crate::errors::{OpcError, OpcResult};
 use crate::raw::memory::RemoteArray;
 use crate::types::{ClientItemHandle, OpcQuality, ServerItemHandle, VarType};

@@ -1,7 +1,6 @@
 //! Tag writing engine with validation, native batching, and result mapping.
 
-use crate::com::connector::traits::ItemWrite;
-use crate::com::connector::{ConnectedGroup, ConnectedServer};
+use crate::connector::{ConnectedGroup, ConnectedServer, ItemWrite};
 use crate::errors::{OpcError, OpcResult};
 use crate::log_opc_err;
 use crate::types::{OpcValue, ServerIdentifier, WriteBatch, WriteResult};
@@ -149,8 +148,8 @@ pub fn handle_write<S: ConnectedServer>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::com::connector::GroupItemDef;
-    use crate::com::connector::mock::MockConnectedServer;
+    use crate::connector::GroupItemDef;
+    use crate::connector::mock::MockConnectedServer;
     use crate::types::{IntoWriteBatch, ServerItemHandle, VarType};
 
     #[test]
@@ -167,8 +166,8 @@ mod tests {
 
     #[test]
     fn test_worker_native_write_batch_partial_failures_and_ordering() {
-        let state = std::sync::Arc::new(crate::com::connector::mock::MockState::default());
-        let group = crate::com::connector::mock::MockConnectedGroup {
+        let state = std::sync::Arc::new(crate::connector::mock::MockState::default());
+        let group = crate::connector::mock::MockConnectedGroup {
             state: state.clone(),
             ..Default::default()
         }
@@ -178,7 +177,7 @@ mod tests {
                 .enumerate()
                 .map(|(idx, _)| {
                     if idx == 1 {
-                        crate::com::connector::GroupItemResult {
+                        crate::connector::GroupItemResult {
                             server_handle: ServerItemHandle::new(0),
                             canonical_type: VarType::EMPTY,
                             error: Some(OpcError::InvalidState(
@@ -186,7 +185,7 @@ mod tests {
                             )),
                         }
                     } else {
-                        crate::com::connector::GroupItemResult {
+                        crate::connector::GroupItemResult {
                             #[allow(clippy::cast_possible_truncation)]
                             server_handle: ServerItemHandle::new((idx + 1) as u32),
                             canonical_type: VarType::EMPTY,
@@ -209,7 +208,7 @@ mod tests {
                 .collect())
         });
 
-        let server = crate::com::connector::mock::MockConnectedServer {
+        let server = crate::connector::mock::MockConnectedServer {
             group: std::sync::Arc::new(group),
             state,
             ..Default::default()

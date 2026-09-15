@@ -304,7 +304,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::com::connector::mock::{MockServerConnector, MockState};
+    use crate::connector::mock::{MockServerConnector, MockState};
     use crate::errors::OpcError;
     use std::sync::atomic::Ordering;
 
@@ -379,7 +379,7 @@ mod tests {
 
     #[test]
     fn test_worker_active_group_caching_hit_miss_and_invalidation() {
-        use crate::com::connector::{ConnectedGroup, ConnectedServer, GroupConfig, GroupItemDef};
+        use crate::connector::{ConnectedGroup, ConnectedServer, GroupConfig, GroupItemDef};
         use crate::types::{ClientItemHandle, OpcServerEndpoint, ServerItemHandle};
 
         let state = Arc::new(MockState::default());
@@ -539,7 +539,7 @@ mod tests {
 
     #[test]
     fn test_pool_evict_synchronously_clears_active_group() {
-        use crate::com::connector::{ConnectedServer, GroupConfig};
+        use crate::connector::{ConnectedServer, GroupConfig};
 
         let state = Arc::new(MockState::default());
         let connector = Arc::new(MockServerConnector::with_state(state.clone()));
@@ -577,7 +577,7 @@ mod tests {
 
     #[test]
     fn test_failure_cooldowns_pruning_and_capacity_cap() {
-        use crate::com::connector::ServerConnector;
+        use crate::connector::ServerConnector;
         let mut pool: ConnectionPool<<MockServerConnector as ServerConnector>::Server> =
             ConnectionPool::new();
         for i in 0..=MAX_COOLDOWNS + 5 {

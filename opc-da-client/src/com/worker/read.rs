@@ -1,7 +1,7 @@
 //! Tag reading engine with in-place value population and active group caching.
 
 use super::pool::{CachedGroup, PooledServer};
-use crate::com::connector::{
+use crate::connector::{
     ConnectedGroup, ConnectedServer, DataSource, GroupItemResult, GroupItemState,
 };
 use crate::errors::{OpcError, OpcResult};
@@ -259,8 +259,8 @@ fn populate_item_states(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::com::connector::mock::MockConnectedServer;
     use crate::com::worker::pool::PooledServer;
+    use crate::connector::mock::MockConnectedServer;
     use crate::types::{OpcServerEndpoint, TagBatch};
 
     #[test]

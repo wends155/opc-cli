@@ -89,7 +89,7 @@ pub(crate) fn connect_server_identifier(
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub struct ComConnector {
     /// Whether to enforce legacy DCOM authentication (None/None instead of Packet/Dynamic).
-    pub legacy_dcom: bool,
+    legacy_dcom: bool,
 }
 
 impl ComConnector {
@@ -103,6 +103,21 @@ impl ComConnector {
     #[must_use]
     pub const fn with_legacy_dcom(legacy_dcom: bool) -> Self {
         Self { legacy_dcom }
+    }
+
+    /// Returns whether legacy DCOM authentication is enabled.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use opc_da_client::ComConnector;
+    ///
+    /// let connector = ComConnector::new();
+    /// assert!(!connector.legacy_dcom());
+    /// ```
+    #[must_use]
+    pub const fn legacy_dcom(&self) -> bool {
+        self.legacy_dcom
     }
 
     /// Connects to an [`OpcServerEndpoint`](crate::types::OpcServerEndpoint) using this connector's settings.
@@ -432,5 +447,19 @@ mod tests {
     fn test_authn_level_selection() {
         assert_eq!(authn_level_for(false), RPC_C_AUTHN_LEVEL_PKT_INTEGRITY);
         assert_eq!(authn_level_for(true), RPC_C_AUTHN_LEVEL_CONNECT);
+    }
+
+    #[test]
+    fn test_com_connector_legacy_dcom_getter_and_builder() {
+        use super::ComConnector;
+
+        let default_conn = ComConnector::new();
+        assert!(!default_conn.legacy_dcom());
+
+        let legacy_conn = ComConnector::with_legacy_dcom(true);
+        assert!(legacy_conn.legacy_dcom());
+
+        let non_legacy_conn = ComConnector::with_legacy_dcom(false);
+        assert!(!non_legacy_conn.legacy_dcom());
     }
 }

@@ -7,8 +7,8 @@
 pub mod client;
 pub mod connector;
 pub mod discovery;
-pub mod guard;
-pub mod iterator;
+pub(crate) mod guard;
+pub(crate) mod iterator;
 pub(crate) mod security;
 pub(crate) mod variant;
 pub(crate) mod worker;

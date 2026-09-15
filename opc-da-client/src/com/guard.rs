@@ -7,8 +7,6 @@ use crate::errors::OpcResult;
 use std::marker::PhantomData;
 use windows::Win32::System::Com::{COINIT_MULTITHREADED, CoInitializeEx, CoUninitialize};
 
-pub(crate) use crate::connector::guard::{BrowsePositionGuard, GroupGuard};
-
 /// Drop guard for COM thread initialization.
 ///
 /// Calling [`ComGuard::new`] initializes COM in Multi-Threaded Apartment

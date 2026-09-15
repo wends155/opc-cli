@@ -1,7 +1,6 @@
 //! Address space browsing engine with RAII position protection.
 
-use crate::com::connector::ConnectedServer;
-use crate::com::guard::BrowsePositionGuard;
+use crate::connector::{BrowsePositionGuard, ConnectedServer};
 use crate::errors::OpcResult;
 use crate::log_opc_err;
 use crate::types::{BrowseType, NamespaceType, ServerIdentifier, TagCollector, VarType};
@@ -223,7 +222,7 @@ fn browse_recursive<S: ConnectedServer>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::com::connector::mock::MockConnectedServer;
+    use crate::connector::mock::MockConnectedServer;
 
     #[test]
     fn test_handle_browse_preserves_collector() {

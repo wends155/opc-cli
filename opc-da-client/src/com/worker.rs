@@ -8,10 +8,10 @@ mod write;
 #[cfg(test)]
 mod tests;
 
-use crate::com::connector::{
-    ConnectedGroup, ConnectedServer, GroupConfig, GroupItemDef, ServerBackend, ServerConnector,
+use crate::connector::{
+    ConnectedGroup, ConnectedServer, GroupConfig, GroupGuard, GroupItemDef, GroupItemResult,
+    ServerBackend, ServerConnector,
 };
-use crate::com::guard::GroupGuard;
 use crate::errors::{OpcError, OpcResult, WorkerError};
 use crate::log_opc_err;
 use crate::types::{
@@ -43,7 +43,7 @@ pub(crate) struct RegisteredItemGroup<'a, S: ConnectedServer> {
     /// Guard that deletes the group on drop unless disarmed.
     pub(crate) group_guard: GroupGuard<'a, S>,
     /// Results of the `add_items` call, matching the input tag order.
-    pub(crate) item_results: Vec<crate::com::connector::GroupItemResult>,
+    pub(crate) item_results: Vec<GroupItemResult>,
 }
 
 /// Helper to create an ephemeral group and register items on a connected OPC server.

@@ -1,8 +1,8 @@
 use super::*;
-use crate::com::connector::{
-    GroupItemResult, GroupItemState, MockConnectedGroup, MockConnectedServer, MockServerConnector,
-    MockState,
+use crate::connector::mock::{
+    MockConnectedGroup, MockConnectedServer, MockServerConnector, MockState,
 };
+use crate::connector::{GroupItemResult, GroupItemState};
 use crate::errors::{OpcError, WorkerError};
 use crate::types::{
     ClientItemHandle, IntoWriteBatch, OpcQuality, OpcServerEndpoint, OpcValue, ServerItemHandle,

@@ -201,12 +201,6 @@ opc-da-client/
 - **Trait Interfaces**: Native COM interface declarations.
 - **Mock Availability**: N/A.
 
-### `raw::hresult`
-- **Owns**: Strongly-typed Win32 HRESULT constants (`E_POINTER`, `RPC_S_*`, `OPC_E_*`), HRESULT classification (`is_connection_hresult`), diagnostic hint lookup (`friendly_hresult_hint`), and hex string formatting (`format_hresult`).
-- **Does NOT own**: Public domain errors (`errors::OpcError`) or high-level error logging.
-- **Trait Interfaces**: Pure functional classification & formatting helpers.
-- **Mock Availability**: N/A (tested via co-located unit tests).
-
 ---
 
 ## 6. Dependency Direction Rules
@@ -217,30 +211,30 @@ The codebase strictly enforces unidirectional dependency flow:
 [provider] ───► [types] ◄─── [errors]
     ▲             ▲             ▲
     │             │             │
-[com::client] ──► [com::worker] ──► [com::connector] ──► [com::security]
-                        │               │    │             ▲
-                        │               ▼    └──► [com::discovery]
-                        ▼         [com::variant] ──────────┤
-                  [com::guard] ─────────┘                  │
-                  [com::iterator] ─────────────────────────┘
+[com::client] ──► [com::worker] ──► [connector] ──► [com::connector] ──► [com::security]
+                        │               ▲                │    │             ▲
+                        │               │                ▼    └──► [com::discovery]
+                        ▼         [connector::guard]  [com::variant] ───────┤
+                  [com::guard] ─────────┘                │                  │
+                  [com::iterator] ───────────────────────┴──────────────────┘
 ```
 
 | Module | May Import | Must NOT Import | Rationale |
 | :--- | :--- | :--- | :--- |
 | `provider` | `types`, `errors`, `thiserror`, `async-trait`, `windows-core` (`GUID`) | `com`, `raw`, `serde` | Public domain interface must be backend-agnostic |
 | `types` | `errors`, `windows-core` (`GUID`) | `provider`, `com`, `raw`, `windows` | Canonical domain models must never depend on implementation details |
-| `errors` | `windows-core` (for HRESULT), `raw::hresult` (internal) | `provider`, `types`, `com` | Domain errors are foundational and self-contained |
-| `com::client` | `provider`, `types`, `errors`, `com::worker` | `raw` | Consumer facade dispatches requests to the worker |
-| `com::worker` | `types`, `errors`, `com::connector`, `com::variant`, `com::guard`, `tokio::sync` | `raw` | Worker communicates exclusively via pure-Rust connector facade |
-| `com::connector` | `types`, `errors`, `com::variant`, `com::discovery` (`guid_to_progid`), `com::security`, `com::iterator`, `raw`, `windows` | `provider` | Encapsulates all raw Win32 COM FFI marshalling |
+| `errors` | `windows-core` (for HRESULT) | `provider`, `types`, `com` | Domain errors and HRESULT catalog are foundational and self-contained |
+| `connector` | `types`, `errors`, `thiserror`, `tokio::sync` | `com`, `raw`, `windows`, `provider` | Pure-Rust Tier 2 SPI abstractions, guards, and mocks |
+| `com::client` | `provider`, `types`, `errors`, `connector`, `com::worker`, `com::connector` | `raw` | Consumer facade dispatches requests to the worker |
+| `com::worker` | `types`, `errors`, `connector`, `com::connector`, `com::variant`, `com::guard`, `tokio::sync` | `raw` | Worker communicates via pure-Rust connector facade and internal COM primitives |
+| `com::connector` | `types`, `errors`, `connector`, `com::variant`, `com::discovery` (`guid_to_progid`), `com::security`, `com::iterator`, `raw`, `windows` | `provider` | Encapsulates all raw Win32 COM FFI marshalling |
 | `com::security` | `errors`, `windows` | `com::connector`, `com::discovery`, `com::worker`, `com::client` | Shared DCOM security blanketing and authentication level selection |
 | `com::discovery` | `types`, `errors`, `com::security`, `com::iterator`, `raw`, `windows` | `com::client`, `com::worker`, `com::connector` | Crate-internal server catalog and registry discovery |
-| `com::guard` | `com::connector`, `types`, `errors`, `windows` | `provider`, `raw` | RAII drop guards for COM runtime, group cleanup, and browse cursor |
-| `com::iterator` | `raw::memory`, `raw::hresult`, `types`, `errors`, `windows` | `provider`, `com::worker` | Safe COM enumeration wrapper with RAII cleanup |
-| `com::variant` | `types` (`OpcValue`), `raw::hresult`, `windows` | `com::client`, `com::worker`, `com::connector` | Pure Win32 VARIANT marshaling helper for COM connector |
+| `com::guard` | `errors`, `windows` | `provider`, `raw`, `connector` | RAII drop guard for thread COM MTA initialization |
+| `com::iterator` | `raw::memory`, `errors::hresult`, `types`, `errors`, `windows` | `provider`, `com::worker` | Safe COM enumeration wrapper with RAII cleanup |
+| `com::variant` | `types` (`OpcValue`), `errors::hresult`, `windows` | `com::client`, `com::worker`, `com::connector` | Pure Win32 VARIANT marshaling helper for COM connector |
 | `raw::memory` | `windows-core`, `types`, `errors` | `com`, `provider` | Low-level COM memory allocation abstraction |
 | `raw::bindings` | `windows-core` | `com`, `provider` | Frozen COM interface vtable bindings |
-| `raw::hresult` | `windows-core` | `provider`, `types`, `com` | Foundational Win32 HRESULT constants and formatters |
 
 ---
 

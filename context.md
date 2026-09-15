@@ -1,5 +1,30 @@
 # Project Context Summary
 
+## 2026-09-15: Block 6 (Layer 3 COM Direct Routing & Encapsulation) Completed (`opc-da-client`)
+> 📝 **Context Update:**
+> * **Feature:** Execution of Block 6 of the 7-block modernization roadmap (`review_report.md` Findings 17–20 in `opc-da-client`), encapsulating `ComConnector.legacy_dcom`, simplifying `inspect_local_registration` to 1 argument, decoupling low-level FFI subsystem `raw` from `hresult`, scoping internal COM guards and iterators to `pub(crate) mod`, and enforcing direct Tier 2 SPI routing by purging pass-through trampolines from `com/connector.rs` and `com/guard.rs`.
+> * **Changes:**
+>   - **`ComConnector` Encapsulation (Finding 19):**
+>     - Made struct field `legacy_dcom: bool` private in `src/com/connector/server.rs`.
+>     - Implemented zero-cost getter `pub const fn legacy_dcom(&self) -> bool` with runnable `# Examples` doc-test and unit test `test_com_connector_legacy_dcom_getter_and_builder`.
+>   - **`inspect_local_registration` Signature Simplification (Finding 20):**
+>     - Simplified signature to `pub fn inspect_local_registration(clsid: &Clsid) -> OpcResult<OpcServerRegistration>` in `src/com/discovery.rs`.
+>     - Removed vestigial `host` argument and dead remote rejection branch; rewired missing key error directly to `errors::hresult::REGDB_E_CLASSNOTREG`.
+>     - Purged dead unit test `test_inspect_local_registration_remote_rejected` and updated nonexistent CLSID test.
+>   - **Direct HRESULT Routing & FFI Decoupling (Finding 17):**
+>     - Rewired `com/variant.rs` to import `friendly_hresult_hint` directly from `crate::errors::hresult`.
+>     - Purged redundant `pub use crate::errors::hresult;` from `src/raw/mod.rs` and cleaned module documentation.
+>   - **COM Visibility Scoping (Finding 18):**
+>     - Scoped `guard` and `iterator` modules to `pub(crate) mod` in `src/com/mod.rs`.
+>   - **Direct Tier 2 SPI Routing & Purge Trampolines (Finding 17):**
+>     - Rewired all call sites across `com/client.rs`, `com/connector/group.rs`, and `com/worker/` (`browse.rs`, `pool.rs`, `read.rs`, `write.rs`, `tests.rs`) directly to `crate::connector::*` and `crate::connector::mock::*`.
+>     - Purged pass-through re-exports from `src/com/connector.rs` (`traits`, `mock`) and `src/com/guard.rs` (`GroupGuard`, `BrowsePositionGuard`).
+>     - Updated migration and deprecation documentation in `README.md`.
+>   - **Quality Gate Verification:**
+>     - Ran full 9-gate quality pipeline (`pwsh scripts/verify.ps1`): all 119 doc-tests and 446 compiled unit/integration tests passed with exit code 0. Zero clippy warnings under `-D warnings`.
+> * **New Constraints:** `ComConnector.legacy_dcom` is private; access strictly via `connector.legacy_dcom()`. `inspect_local_registration` takes only `&Clsid`. All SPI traits and mock items must be imported directly from `crate::connector::*` or `crate::connector::mock::*`, never through `com::connector::*`. Low-level `raw` module does not re-export `hresult`. `com::guard` and `com::iterator` are internal to crate (`pub(crate)`).
+> * **Pruned:** Redundant pass-through re-exports in `com/connector.rs` and `raw/mod.rs`; guard trampolines in `com/guard.rs`; vestigial `host` parameter and remote rejection branch in `inspect_local_registration`; public visibility of `com::guard` and `com::iterator`.
+
 ## 2026-09-15: Block 5 (Layer 2 Mock Modularization & Telemetry Symmetry) Completed (`opc-da-client`)
 > 📝 **Context Update:**
 > * **Feature:** Execution of Block 5 of the 7-block modernization roadmap (`review_report.md` Findings 15 & 16 in `opc-da-client`), decomposing the monolithic 1,361-line `connector/mock.rs` into modular submodules under `connector/mock/`, establishing telemetry symmetry between `connect_identifier` and `connect_endpoint`, adding lock poison recovery, and optimizing browse iterator allocation.

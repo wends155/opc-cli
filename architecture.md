@@ -269,17 +269,11 @@ opc-cli/
 - **Trait Interfaces**: Native COM interface declarations.
 - **Mock Availability**: N/A.
 
-### `opc-da-client::raw::hresult` (Internal Compatibility Facade)
-- **Owns**: Crate-internal re-export facade (`pub(crate) use crate::errors::hresult;` in `raw/mod.rs`) providing seamless access to Win32 HRESULT constants, classification (`is_connection_hresult`), and diagnostic hints without DAG inversion. Canonical ownership and definitions reside unconditionally in `opc-da-client::errors::hresult`.
-- **Does NOT Own**: Canonical HRESULT definition (owned by `errors::hresult`), public domain errors (`errors::OpcError`), or high-level error logging.
-- **Trait Interfaces**: Pure functional classification & formatting helpers re-exported from `errors::hresult`.
-- **Mock Availability**: N/A (tested via co-located unit tests in `errors::hresult`).
-
 ### `ComWorker` (MTA Worker Thread Pool)
 - **Owns**: Dedicated OS background thread, 2-tier `catch_unwind` panic resilience with priority queue dispatch favoring reads and writes over background browses (`PriorityRequestQueue`), `CoInitializeEx(MTA)` lifecycle (`ComGuard`), connection pool caching keyed by `ServerIdentifier` with active group reuse (`PooledServer`), 5-second failure cooldown circuit breaker bounded to `MAX_COOLDOWNS = 256` with LRU eviction, native batch writes (`handle_write_batch`), generic `dispatch_pooled_request` with transparent stale connection eviction on RPC errors (`0x800706BA`), and modular worker dispatch engines (`pool::dispatch_with_retry`, `read::handle_read`, `write::handle_write`, `browse::handle_browse`).
 - **Does NOT Own**: TUI state, UI rendering, high-level task timeouts.
-- **Trait Interfaces**: Uses internal `ServerConnector` trait and connector submodules (`com::connector::{traits, server, group, mock}`).
-- **Mock Availability**: Fully unit-tested via modular `MockServerConnector` (exported under `feature = "test-support"`).
+- **Trait Interfaces**: Uses Tier 2 SPI traits (`connector::{ServerConnector, ConnectedServer, ConnectedGroup}`) and concrete COM facades (`com::connector::{server, group}`).
+- **Mock Availability**: Fully unit-tested via modular `MockServerConnector` in `connector::mock` (exported under `feature = "test-support"`).
 
 ### `compat/*` (NT 6.1 Polyfill Crates)
 - **Owns**: C-ABI DLL exports for missing Windows 8+ APIs (`WaitOnAddress`, `ProcessPrng`, `RoOriginateError`).
@@ -297,14 +291,14 @@ opc-cli/
 | `opc-da-client::errors` | `windows-core` (`HRESULT`) | `provider`, `types`, `com`, `raw` |
 | `opc-da-client::connector` | `types`, `errors`, `thiserror`, `tokio::sync` | `com`, `raw`, `windows`, `provider`, `ratatui`, `crossterm` |
 | `opc-da-client::com::client` | `provider`, `types`, `errors`, `com::worker` | `raw` |
-| `opc-da-client::com::worker` | `types`, `errors`, `com::connector`, `com::variant`, `com::guard`, `tokio::sync` | `raw` |
-| `opc-da-client::com::connector` | `types`, `errors`, `com::variant`, `com::discovery` (`guid_to_progid`), `com::security`, `com::iterator`, `raw`, `windows` | `provider` |
+| `opc-da-client::com::worker` | `types`, `errors`, `connector`, `com::connector`, `com::variant`, `tokio::sync` | `raw` |
+| `opc-da-client::com::connector` | `types`, `errors`, `connector`, `com::variant`, `com::discovery` (`guid_to_progid`), `com::security`, `com::iterator`, `raw`, `windows` | `provider` |
 | `opc-da-client::com::security` | `errors`, `windows` | `com::connector`, `com::discovery`, `com::worker`, `com::client` |
 | `opc-da-client::com::discovery` | `types`, `errors`, `com::security`, `com::iterator`, `raw`, `windows` | `com::client`, `com::worker`, `com::connector` |
-| `opc-da-client::com::guard` | `com::connector`, `types`, `errors`, `windows` | `provider`, `raw` |
+| `opc-da-client::com::guard` | `errors`, `windows` | `provider`, `raw` |
 | `opc-da-client::com::iterator` | `raw::memory`, `errors::hresult`, `types`, `errors`, `windows` | `provider`, `com::worker` |
 | `opc-da-client::com::variant` | `types` (`OpcValue`), `errors::hresult`, `windows` | `com::client`, `com::worker`, `com::connector` |
-| `opc-da-client::raw` | `windows-core`, `types`, `errors` (`errors::hresult`) | `com`, `provider` |
+| `opc-da-client::raw` | `windows-core`, `types`, `errors` (`errors::hresult`) | `com`, `provider`, `connector` |
 | `compat/*` (Polyfills) | `core`, `windows-sys` / raw Win32 FFI | `std`, `tokio`, `opc-cli`, `opc-da-client` |
 
 ## 7. Toolchain

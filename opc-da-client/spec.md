@@ -841,20 +841,18 @@ Before calling `browse_recursive`, `browse_tags` attempts `browse_opc_item_ids(B
 
 ---
 
-##### `inspect_local_registration(clsid: &Clsid, host: Option<&str>) -> OpcResult<OpcServerRegistration>`
+##### `inspect_local_registration(clsid: &Clsid) -> OpcResult<OpcServerRegistration>`
 
 **Description:** Inspects the local machine Windows registry for an OPC DA server's registration details by querying `HKCR\CLSID\{...}` across both native and 32-bit (`KEY_WOW64_32KEY`) views. Registry key traversal is consolidated through a private `open_reg_key` helper wrapping `RegOpenKeyExW` with `KEY_READ`. Registry value reading incorporates two-phase dynamic buffer reallocation on `ERROR_MORE_DATA` (234) and resolves `REG_EXPAND_SZ` strings using `windows::Win32::System::Environment::ExpandEnvironmentStringsW` with safe slice bounds checking.
 
 **Inputs:**
 * `clsid`: Reference to the 128-bit COM Class ID (`Clsid`).
-* `host`: Target host machine. If `Some` and not localhost/127.0.0.1, returns [`OpcError::NotImplemented`].
 
 **Returns:**
 * `Ok(OpcServerRegistration)` with resolved binary path and server execution type.
 
 **Errors:**
-* [`OpcError::NotImplemented`] if `host` is a remote machine.
-* [`OpcError::Com`] with `REGDB_E_CLASSNOTREG` (`0x80040154`) if the CLSID registry key does not exist.
+* [`OpcError::Server`] with `REGDB_E_CLASSNOTREG` (`0x80040154`) if the CLSID registry key does not exist.
 * [`OpcError::Server`] if neither `LocalServer32` nor `InprocServer32` registry keys exist or if registry values cannot be parsed.
 
 ---
@@ -1252,7 +1250,7 @@ Defines the behavioral contract of the `opc-cli` binary interface:
 
 ### Discovery & Registry Inspection Unit Tests (in `com/discovery.rs`)
 
-- [x] `test_inspect_local_registration_remote_rejected` — verifies `inspect_local_registration` cleanly rejects remote machine addresses with `OpcError::NotImplemented`.
+- [x] `test_com_connector_legacy_dcom_getter_and_builder` — verifies `ComConnector::legacy_dcom` accessor and `with_legacy_dcom` builder.
 - [x] `test_sanitize_binary_path_quoted` — verifies `sanitize_binary_path` strips surrounding double quotes from registry image paths.
 - [x] `test_sanitize_binary_path_unquoted_with_flag` — verifies `sanitize_binary_path` strips trailing CLI flags (`-Embedding`, `/automation`).
 - [x] `test_opc_server_type_display` — verifies `OpcServerType` Display formatting (`LocalServer32 (Executable)` vs `InprocServer32 (DLL)`).

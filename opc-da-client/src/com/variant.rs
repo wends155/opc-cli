@@ -6,7 +6,7 @@
 //! This module is private to the `com` subsystem (`pub(crate)`) ensuring
 //! low-level COM FFI structures do not leak into Tier 1 domain code.
 
-use crate::raw::hresult::friendly_hresult_hint as friendly_com_hresult_hint;
+use crate::errors::hresult::friendly_hresult_hint as friendly_com_hresult_hint;
 use crate::types::OpcValue;
 use windows::Win32::Foundation::VARIANT_BOOL;
 use windows::Win32::System::Ole::{

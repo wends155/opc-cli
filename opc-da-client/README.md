@@ -524,7 +524,7 @@ Version `0.3.0` modernizes client ergonomics, standardizes batch write syntax, d
 | `client.write_batch(writes)` | `client.write_tags(writes)` | ⚠️ Deprecated | Accepts `impl IntoWriteBatch` (`[("T", v)]`, `&[...]`, `Vec<...>`). |
 | `client.read_tag_values(tags)` on `Bound` | `client.read_tags(tags)` | ❌ Removed on `Bound` | Eliminates compiler collision (`E0592`) with `TagReader::read_tag_values`. |
 | `client.read_tag_value(tag)` on `Bound` | `client.read_tag(tag)` | ❌ Removed on `Bound` | Eliminates compiler collision (`E0592`) with `TagReader::read_tag_value`. |
-| `use opc_da_client::com::connector::*` | `use opc_da_client::connector::*` | ⚠️ Re-exported | Pure SPI moved to `opc_da_client::connector::*` (no Windows COM dependency). |
+| `use opc_da_client::com::connector::{traits, mock}` | `use opc_da_client::connector::*` | ❌ Removed | Direct Tier 2 SPI routing: Pure SPI and mock suites moved to `opc_da_client::connector::*` (no Windows COM dependency). |
 | `ConnectedServer::browse_opc_item_ids` returning `StringIterator` | Returns `Self::ItemIterator: Iterator<Item = OpcResult<String>>` | 🔄 Refactored | Decoupled from concrete Win32 BSTR iterator via associated type. |
 | `MockOpcProvider` (monolithic only) | `MockTagReader`, `MockTagWriter`, `MockTagBrowser`, `MockServerDiscovery` | ✨ Added | Granular segregated role mocks available under `test-support`. |
 | `ConversionError::Other` on missing tag | `ConversionError::TagNotRequested(tag)` / `TagNoValue(tag)` | ✨ Added | Lossless error taxonomy preserving tag identification on lookup failure. |
@@ -610,7 +610,7 @@ async fn main() -> OpcResult<()> {
 | `OpcDaClient::write_batch` | 0.3.0 | 0.4.0 / 1.0.0 | `OpcDaClient::write_tags` |
 | `OpcDaClient::list_servers_on` | 0.2.1 | 0.4.0 / 1.0.0 | `ServerDiscovery::list_servers` |
 | `TagWriter::write_tag_values` | 0.2.0 | 0.4.0 / 1.0.0 | `TagWriter::write_tag_batch` |
-| `opc_da_client::com::connector::*` re-exports | 0.3.0 | 0.4.0 / 1.0.0 | `opc_da_client::connector::*` |
+| `opc_da_client::com::connector::{traits, mock}` | 0.3.0 | 0.3.0 (Clean Break) | `opc_da_client::connector::*` |
 
 Deprecated items will trigger compiler warnings starting in `0.3.0` and will remain backward-compatible throughout the `0.3.x` release lifecycle before being removed in `0.4.0`.
 

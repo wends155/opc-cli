@@ -307,28 +307,16 @@ pub(crate) fn guid_to_progid(guid: &windows::core::GUID) -> OpcResult<String> {
 ///
 /// # Arguments
 /// * `clsid` - 128-bit COM Class ID of the server.
-/// * `host` - Target host machine. If `Some` and not localhost/127.0.0.1, returns [`OpcError::NotImplemented`].
 ///
 /// # Returns
 ///
 /// An [`OpcServerRegistration`] containing the server name, executable/DLL path, and threading model.
 ///
 /// # Errors
-/// Returns [`OpcError::NotImplemented`] if `host` is a remote machine.
+///
 /// Returns [`OpcError::Server`] if the CLSID is not found or neither `LocalServer32` nor `InprocServer32` exists.
 #[tracing::instrument(level = "info", skip(clsid), err)]
-pub fn inspect_local_registration(
-    clsid: &Clsid,
-    host: Option<&str>,
-) -> OpcResult<OpcServerRegistration> {
-    if crate::types::is_remote_host(host) {
-        let err =
-            OpcError::NotImplemented("Remote machine registry inspection is not supported".into());
-        let h = host.unwrap_or_default();
-        log_opc_err!(&err, "inspect_registration", host = %h);
-        return Err(err);
-    }
-
+pub fn inspect_local_registration(clsid: &Clsid) -> OpcResult<OpcServerRegistration> {
     let clsid_str = clsid.to_bracketed();
 
     use windows::Win32::System::Registry::{KEY_WOW64_32KEY, REG_SAM_FLAGS};
@@ -367,7 +355,9 @@ pub fn inspect_local_registration(
 
     let err = OpcError::Server(
         format!("No LocalServer32 or InprocServer32 registry key found for CLSID {clsid_str}"),
-        crate::raw::hresult::REGDB_E_CLASSNOTREG.0.cast_unsigned(),
+        crate::errors::hresult::REGDB_E_CLASSNOTREG
+            .0
+            .cast_unsigned(),
     );
     log_opc_err!(&err, "inspect_registration", clsid = %clsid_str);
     Err(err)
@@ -572,18 +562,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_inspect_local_registration_remote_rejected() {
-        let clsid = Clsid::zeroed();
-        let err = inspect_local_registration(&clsid, Some("192.168.1.100")).unwrap_err();
-        match err {
-            OpcError::NotImplemented(msg) => {
-                assert!(msg.contains("Remote machine registry"));
-            }
-            other => panic!("Expected NotImplemented, got {other:?}"),
-        }
-    }
-
-    #[test]
     fn test_sanitize_binary_path_quoted() {
         let raw = r#""C:\Program Files\Matrikon\OPC\Simulation.exe" /automation"#;
         let path = sanitize_binary_path(raw);
@@ -658,12 +636,14 @@ mod tests {
     #[test]
     fn test_inspect_local_registration_nonexistent_returns_classnotreg() {
         let nonexistent_clsid = Clsid::from_u128(0xFEEDFACE_CAFE_BEEF_0123_456789ABCDEF);
-        let err = inspect_local_registration(&nonexistent_clsid, None).unwrap_err();
+        let err = inspect_local_registration(&nonexistent_clsid).unwrap_err();
         match err {
             OpcError::Server(msg, code) => {
                 assert_eq!(
                     code,
-                    crate::raw::hresult::REGDB_E_CLASSNOTREG.0.cast_unsigned()
+                    crate::errors::hresult::REGDB_E_CLASSNOTREG
+                        .0
+                        .cast_unsigned()
                 );
                 assert!(msg.contains("No LocalServer32 or InprocServer32 registry key found"));
             }

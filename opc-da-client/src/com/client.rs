@@ -10,8 +10,9 @@
 //! (MTA) [`ComWorker`] background thread. It provides both unbound multi-server gateway
 //! operations and server-bound session operations with infallible endpoint access.
 
-use crate::com::connector::{ComConnector, ServerBackend};
+use crate::com::connector::ComConnector;
 use crate::com::worker::{ComRequest, ComWorker};
+use crate::connector::ServerBackend;
 use crate::errors::{OpcError, OpcResult};
 use crate::provider::{
     OpcValue, ServerDiscovery, TagBrowser, TagCollector, TagReader, TagValue, TagWriter,
@@ -1446,7 +1447,7 @@ impl<C: ServerBackend + 'static, State: Send + Sync + 'static> TagWriter for Opc
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::com::connector::MockServerConnector;
+    use crate::connector::mock::MockServerConnector;
     use crate::provider::OpcProvider;
     use crate::types::{ClientItemHandle, OpcQuality, ServerItemHandle, VarType};
 
@@ -1467,7 +1468,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_client_builder_configuration_and_unbound_discovery() {
-        let state = std::sync::Arc::new(crate::com::connector::mock::MockState::default());
+        let state = std::sync::Arc::new(crate::connector::mock::MockState::default());
         let connector = MockServerConnector::with_state(state.clone());
 
         // 1. Bound client
@@ -1538,8 +1539,8 @@ mod tests {
     #[tokio::test]
     #[allow(clippy::too_many_lines)]
     async fn test_inherent_async_reads_and_writes_on_client() {
-        let state = std::sync::Arc::new(crate::com::connector::mock::MockState::default());
-        let group = crate::com::connector::mock::MockConnectedGroup {
+        let state = std::sync::Arc::new(crate::connector::mock::MockState::default());
+        let group = crate::connector::mock::MockConnectedGroup {
             state: state.clone(),
             ..Default::default()
         };
@@ -1549,25 +1550,23 @@ mod tests {
                 String,
             >::new()));
         let reg_add = item_registry.clone();
-        let add_fn = Box::new(
-            move |items: &[crate::com::connector::traits::GroupItemDef]| {
-                let mut reg = reg_add.lock().unwrap();
-                Ok(items
-                    .iter()
-                    .enumerate()
-                    .map(|(i, it)| {
-                        #[allow(clippy::cast_possible_truncation)]
-                        let h = ServerItemHandle::new((i + 1) as u32);
-                        reg.insert(h, it.item_id.clone());
-                        crate::com::connector::traits::GroupItemResult {
-                            server_handle: h,
-                            canonical_type: VarType::BSTR,
-                            error: None,
-                        }
-                    })
-                    .collect())
-            },
-        );
+        let add_fn = Box::new(move |items: &[crate::connector::GroupItemDef]| {
+            let mut reg = reg_add.lock().unwrap();
+            Ok(items
+                .iter()
+                .enumerate()
+                .map(|(i, it)| {
+                    #[allow(clippy::cast_possible_truncation)]
+                    let h = ServerItemHandle::new((i + 1) as u32);
+                    reg.insert(h, it.item_id.clone());
+                    crate::connector::GroupItemResult {
+                        server_handle: h,
+                        canonical_type: VarType::BSTR,
+                        error: None,
+                    }
+                })
+                .collect())
+        });
         let reg_read = item_registry.clone();
         let read_fn = Box::new(move |_source, handles: &[ServerItemHandle]| {
             let reg = reg_read.lock().unwrap();
@@ -1580,7 +1579,7 @@ mod tests {
                         "Random.String" => OpcValue::String("mock_string".into()),
                         _ => OpcValue::Int(42),
                     };
-                    Ok(crate::com::connector::traits::GroupItemState {
+                    Ok(crate::connector::GroupItemState {
                         client_handle: ClientItemHandle::new(h.as_raw()),
                         value: val,
                         quality: OpcQuality::GOOD,
@@ -1590,7 +1589,7 @@ mod tests {
                 .collect())
         });
         let group = group.with_add_items_fn(add_fn).with_read_fn(read_fn);
-        let server = std::sync::Arc::new(crate::com::connector::mock::MockConnectedServer {
+        let server = std::sync::Arc::new(crate::connector::mock::MockConnectedServer {
             group: std::sync::Arc::new(group),
             state: state.clone(),
             ..Default::default()
@@ -1662,7 +1661,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_remote_host_propagation_and_discovery() {
-        let state = std::sync::Arc::new(crate::com::connector::mock::MockState::default());
+        let state = std::sync::Arc::new(crate::connector::mock::MockState::default());
         let connector = MockServerConnector::with_state(state.clone());
 
         let client = OpcDaClient::builder()
@@ -1680,7 +1679,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_client_subscribe_mpsc_polling_stream() {
-        let state = std::sync::Arc::new(crate::com::connector::mock::MockState::default());
+        let state = std::sync::Arc::new(crate::connector::mock::MockState::default());
         let connector = MockServerConnector::with_state(state.clone());
 
         let client = OpcDaClient::builder()
@@ -1701,7 +1700,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_subscribe_receiver_drop_cancellation() {
-        let state = std::sync::Arc::new(crate::com::connector::mock::MockState::default());
+        let state = std::sync::Arc::new(crate::connector::mock::MockState::default());
         let connector = MockServerConnector::with_state(state.clone());
 
         let client = OpcDaClient::builder()
@@ -1718,7 +1717,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_client_bind_and_connect_eager() {
-        let state = std::sync::Arc::new(crate::com::connector::mock::MockState::default());
+        let state = std::sync::Arc::new(crate::connector::mock::MockState::default());
         let connector = MockServerConnector::with_state(state.clone());
 
         let client = OpcDaClient::new(connector.clone()).unwrap();
@@ -1739,7 +1738,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_client_role_traits_via_opc_provider() {
-        let state = std::sync::Arc::new(crate::com::connector::mock::MockState::default());
+        let state = std::sync::Arc::new(crate::connector::mock::MockState::default());
         let connector = MockServerConnector::with_state(state.clone());
 
         fn assert_provider<P: OpcProvider>(_p: &P) {}
@@ -1786,7 +1785,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_inherent_read_tags_and_read_tag_session_methods() {
-        let state = std::sync::Arc::new(crate::com::connector::mock::MockState::default());
+        let state = std::sync::Arc::new(crate::connector::mock::MockState::default());
         let connector = MockServerConnector::with_state(state.clone());
         let client = OpcDaClient::builder()
             .with_connector(connector)
@@ -1806,14 +1805,14 @@ mod tests {
     fn setup_mock_bound_client(
         _tag: &str,
         value: OpcValue,
-    ) -> OpcDaClient<crate::com::connector::mock::MockServerConnector, Bound> {
-        let state = std::sync::Arc::new(crate::com::connector::mock::MockState::default());
-        let group = crate::com::connector::mock::MockConnectedGroup::default().with_read_fn(
+    ) -> OpcDaClient<crate::connector::mock::MockServerConnector, Bound> {
+        let state = std::sync::Arc::new(crate::connector::mock::MockState::default());
+        let group = crate::connector::mock::MockConnectedGroup::default().with_read_fn(
             move |_source, handles| {
                 Ok(handles
                     .iter()
                     .map(|&h| {
-                        Ok(crate::com::connector::traits::GroupItemState {
+                        Ok(crate::connector::GroupItemState {
                             client_handle: ClientItemHandle::new(h.as_raw()),
                             value: value.clone(),
                             quality: OpcQuality::GOOD,
@@ -1823,12 +1822,12 @@ mod tests {
                     .collect())
             },
         );
-        let server = std::sync::Arc::new(crate::com::connector::mock::MockConnectedServer {
+        let server = std::sync::Arc::new(crate::connector::mock::MockConnectedServer {
             group: std::sync::Arc::new(group),
             state: state.clone(),
             ..Default::default()
         });
-        let connector = crate::com::connector::mock::MockServerConnector {
+        let connector = crate::connector::mock::MockServerConnector {
             server,
             state,
             ..Default::default()
@@ -1881,12 +1880,12 @@ mod tests {
 
     #[tokio::test]
     async fn test_client_inherent_read_forwarders() {
-        let state = std::sync::Arc::new(crate::com::connector::mock::MockState::default());
-        let server = std::sync::Arc::new(crate::com::connector::mock::MockConnectedServer {
+        let state = std::sync::Arc::new(crate::connector::mock::MockState::default());
+        let server = std::sync::Arc::new(crate::connector::mock::MockConnectedServer {
             state: state.clone(),
             ..Default::default()
         });
-        let connector = crate::com::connector::mock::MockServerConnector {
+        let connector = crate::connector::mock::MockServerConnector {
             server,
             state: state.clone(),
             ..Default::default()
