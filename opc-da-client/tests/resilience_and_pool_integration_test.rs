@@ -214,3 +214,41 @@ async fn test_client_worker_deterministic_lifecycle_teardown() {
     // If ComWorker thread teardown was not clean or hung on channel join, this test would hang or leak.
     // Reaching this point confirms deterministic termination.
 }
+
+#[tokio::test]
+async fn test_write_tag_does_not_auto_retry_on_connection_error() {
+    let state = Arc::new(MockState::default());
+    let connector = MockServerConnector::with_state(state.clone());
+    let client = OpcDaClient::builder()
+        .server("Mock.Simulation.Server")
+        .with_connector(connector)
+        .build_bound()
+        .expect("building bound client must succeed");
+
+    client
+        .connect_eager()
+        .await
+        .expect("initial eager connection probe must succeed");
+    assert_eq!(state.connect_count.load(Ordering::Relaxed), 1);
+
+    state
+        .should_fail_with_connection_error
+        .store(true, Ordering::Relaxed);
+
+    let write_err = client
+        .write_tag("Tag1", OpcValue::Int(42))
+        .await
+        .unwrap_err();
+    match write_err {
+        OpcError::Com { source } => {
+            assert_eq!(source.code(), RPC_S_SERVER_UNAVAILABLE);
+        }
+        other => panic!("Expected OpcError::Com, got: {other:?}"),
+    }
+
+    assert_eq!(
+        state.connect_count.load(Ordering::Relaxed),
+        1,
+        "Non-idempotent write must not auto-reconnect or issue duplicate write"
+    );
+}

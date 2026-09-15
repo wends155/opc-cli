@@ -198,6 +198,15 @@ impl<S: ConnectedServer> ConnectionPool<S> {
     }
 }
 
+/// Declares whether a pooled operation may be transparently retried on connection failure.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum RetryPolicy {
+    /// Operation is safe to retry on fresh connection (e.g. ReadTagValues, BrowseTags, Ping).
+    Idempotent,
+    /// Operation mutates PLC state and must NOT be automatically retried (e.g. WriteTagValue).
+    NonIdempotent,
+}
+
 /// Dispatches an operation against a pooled server connection, transparently evicting
 /// and reconnecting if a stale proxy RPC error is detected, while enforcing circuit breaker cooldowns.
 #[tracing::instrument(level = "debug", skip(pool, connector, operation))]
@@ -205,6 +214,7 @@ pub(crate) fn dispatch_with_retry<C, F, R>(
     pool: &mut ConnectionPool<C::Server>,
     connector: &Arc<C>,
     endpoint: &OpcServerEndpoint,
+    retry_policy: RetryPolicy,
     mut operation: F,
 ) -> OpcResult<R>
 where
@@ -257,6 +267,13 @@ where
                 action = "evicting_stale_connection"
             );
             pool.evict(endpoint);
+            if retry_policy == RetryPolicy::NonIdempotent {
+                tracing::warn!(
+                    server = %endpoint,
+                    "Non-idempotent operation failed with connection error; skipping automatic retry"
+                );
+                return Err(e);
+            }
             tracing::debug!(server = %endpoint, "Reconnecting");
             let fresh_srv = match connector.connect_endpoint(endpoint) {
                 Ok(s) => s,
@@ -316,13 +333,25 @@ mod tests {
         let endpoint = OpcServerEndpoint::local("Matrikon.OPC.Simulation.1");
 
         // First call: cache miss, connect_count becomes 1
-        let res1 = dispatch_with_retry(&mut pool, &connector, &endpoint, |_| Ok(42));
+        let res1 = dispatch_with_retry(
+            &mut pool,
+            &connector,
+            &endpoint,
+            RetryPolicy::Idempotent,
+            |_| Ok(42),
+        );
         assert_eq!(res1.unwrap(), 42);
         assert_eq!(state.connect_count.load(Ordering::SeqCst), 1);
         assert_eq!(pool.len(), 1);
 
         // Second call: cache hit, connect_count remains 1
-        let res2 = dispatch_with_retry(&mut pool, &connector, &endpoint, |_| Ok(84));
+        let res2 = dispatch_with_retry(
+            &mut pool,
+            &connector,
+            &endpoint,
+            RetryPolicy::Idempotent,
+            |_| Ok(84),
+        );
         assert_eq!(res2.unwrap(), 84);
         assert_eq!(state.connect_count.load(Ordering::SeqCst), 1);
     }
@@ -335,23 +364,35 @@ mod tests {
         let endpoint = OpcServerEndpoint::local("Matrikon.OPC.Simulation.1");
 
         // First connect
-        let _ = dispatch_with_retry(&mut pool, &connector, &endpoint, |_| Ok(()));
+        let _ = dispatch_with_retry(
+            &mut pool,
+            &connector,
+            &endpoint,
+            RetryPolicy::Idempotent,
+            |_| Ok(()),
+        );
         assert_eq!(state.connect_count.load(Ordering::SeqCst), 1);
 
         // Operation triggers connection error (RPC server unavailable)
         let attempt = std::sync::atomic::AtomicUsize::new(0);
-        let res = dispatch_with_retry(&mut pool, &connector, &endpoint, |_| {
-            let n = attempt.fetch_add(1, Ordering::SeqCst);
-            if n == 0 {
-                Err(OpcError::Com {
-                    source: windows_core::Error::from_hresult(windows_core::HRESULT(
-                        i32::from_ne_bytes(0x8007_06BA_u32.to_ne_bytes()),
-                    )),
-                })
-            } else {
-                Ok("recovered")
-            }
-        });
+        let res = dispatch_with_retry(
+            &mut pool,
+            &connector,
+            &endpoint,
+            RetryPolicy::Idempotent,
+            |_| {
+                let n = attempt.fetch_add(1, Ordering::SeqCst);
+                if n == 0 {
+                    Err(OpcError::Com {
+                        source: windows_core::Error::from_hresult(windows_core::HRESULT(
+                            i32::from_ne_bytes(0x8007_06BA_u32.to_ne_bytes()),
+                        )),
+                    })
+                } else {
+                    Ok("recovered")
+                }
+            },
+        );
 
         assert_eq!(res.unwrap(), "recovered");
         assert_eq!(state.connect_count.load(Ordering::SeqCst), 2);
@@ -365,19 +406,30 @@ mod tests {
         let mut pool = ConnectionPool::new();
         let endpoint = OpcServerEndpoint::local("Matrikon.OPC.Simulation.1");
 
-        let _ = dispatch_with_retry(&mut pool, &connector, &endpoint, |_| Ok(()));
+        let _ = dispatch_with_retry(
+            &mut pool,
+            &connector,
+            &endpoint,
+            RetryPolicy::Idempotent,
+            |_| Ok(()),
+        );
         assert_eq!(state.connect_count.load(Ordering::SeqCst), 1);
 
         // Operation returns non-connection error (e.g. InvalidState)
-        let res: OpcResult<()> = dispatch_with_retry(&mut pool, &connector, &endpoint, |_| {
-            Err(OpcError::InvalidState("item not found".into()))
-        });
+        let res: OpcResult<()> = dispatch_with_retry(
+            &mut pool,
+            &connector,
+            &endpoint,
+            RetryPolicy::Idempotent,
+            |_| Err(OpcError::InvalidState("item not found".into())),
+        );
         assert!(res.is_err());
         assert_eq!(state.connect_count.load(Ordering::SeqCst), 1);
         assert_eq!(pool.len(), 1);
     }
 
     #[test]
+    #[allow(clippy::too_many_lines)]
     fn test_worker_active_group_caching_hit_miss_and_invalidation() {
         use crate::connector::{ConnectedGroup, ConnectedServer, GroupConfig, GroupItemDef};
         use crate::types::{ClientItemHandle, OpcServerEndpoint, ServerItemHandle};
@@ -391,81 +443,99 @@ mod tests {
         let tags_b = vec!["Tag3".to_string()];
 
         // 1. First read with tags_a: cache miss, creates group & adds items
-        let res1 = dispatch_with_retry(&mut pool, &connector, &endpoint, |pooled| {
-            if let Some(cached) = &pooled.active_group
-                && cached.tags == tags_a
-            {
-                return Ok("hit");
-            }
-            let group_config = GroupConfig::ephemeral("opc-group-1");
-            let created = pooled.server.add_group(&group_config)?;
-            let item_defs: Vec<GroupItemDef> = tags_a
-                .iter()
-                .map(|t| GroupItemDef {
-                    item_id: t.clone(),
-                    client_handle: ClientItemHandle::new(1),
-                    active: true,
-                })
-                .collect();
-            let _ = created.group.add_items(&item_defs)?;
-            pooled.active_group = Some(CachedGroup {
-                tags: tags_a.clone(),
-                group: created.group,
-                server_handle: created.server_handle,
-                server_item_handles: vec![ServerItemHandle::new(1), ServerItemHandle::new(2)],
-                valid_indices: vec![0, 1],
-                rejected_errors: Vec::new(),
-            });
-            Ok("miss")
-        });
+        let res1 = dispatch_with_retry(
+            &mut pool,
+            &connector,
+            &endpoint,
+            RetryPolicy::Idempotent,
+            |pooled| {
+                if let Some(cached) = &pooled.active_group
+                    && cached.tags == tags_a
+                {
+                    return Ok("hit");
+                }
+                let group_config = GroupConfig::ephemeral("opc-group-1");
+                let created = pooled.server.add_group(&group_config)?;
+                let item_defs: Vec<GroupItemDef> = tags_a
+                    .iter()
+                    .map(|t| GroupItemDef {
+                        item_id: t.clone(),
+                        client_handle: ClientItemHandle::new(1),
+                        active: true,
+                    })
+                    .collect();
+                let _ = created.group.add_items(&item_defs)?;
+                pooled.active_group = Some(CachedGroup {
+                    tags: tags_a.clone(),
+                    group: created.group,
+                    server_handle: created.server_handle,
+                    server_item_handles: vec![ServerItemHandle::new(1), ServerItemHandle::new(2)],
+                    valid_indices: vec![0, 1],
+                    rejected_errors: Vec::new(),
+                });
+                Ok("miss")
+            },
+        );
         assert_eq!(res1.unwrap(), "miss");
         assert_eq!(state.add_group_count.load(Ordering::SeqCst), 1);
         assert_eq!(state.add_items_count.load(Ordering::SeqCst), 1);
         assert_eq!(state.remove_group_count.load(Ordering::SeqCst), 0);
 
         // 2. Second read with EXACT SAME tags_a: cache hit! No add_group or add_items
-        let res2 = dispatch_with_retry(&mut pool, &connector, &endpoint, |pooled| {
-            if let Some(cached) = &pooled.active_group
-                && cached.tags == tags_a
-            {
-                return Ok("hit");
-            }
-            Ok("miss")
-        });
+        let res2 = dispatch_with_retry(
+            &mut pool,
+            &connector,
+            &endpoint,
+            RetryPolicy::Idempotent,
+            |pooled| {
+                if let Some(cached) = &pooled.active_group
+                    && cached.tags == tags_a
+                {
+                    return Ok("hit");
+                }
+                Ok("miss")
+            },
+        );
         assert_eq!(res2.unwrap(), "hit");
         assert_eq!(state.add_group_count.load(Ordering::SeqCst), 1);
         assert_eq!(state.add_items_count.load(Ordering::SeqCst), 1);
         assert_eq!(state.remove_group_count.load(Ordering::SeqCst), 0);
 
         // 3. Third read with DIFFERENT tags_b: cache miss, removes old group, creates new
-        let res3 = dispatch_with_retry(&mut pool, &connector, &endpoint, |pooled| {
-            if let Some(cached) = &pooled.active_group
-                && cached.tags == tags_b
-            {
-                return Ok("hit");
-            }
-            pooled.clear_active_group();
-            let group_config = GroupConfig::ephemeral("opc-group-2");
-            let created = pooled.server.add_group(&group_config)?;
-            let item_defs: Vec<GroupItemDef> = tags_b
-                .iter()
-                .map(|t| GroupItemDef {
-                    item_id: t.clone(),
-                    client_handle: ClientItemHandle::new(1),
-                    active: true,
-                })
-                .collect();
-            let _ = created.group.add_items(&item_defs)?;
-            pooled.active_group = Some(CachedGroup {
-                tags: tags_b.clone(),
-                group: created.group,
-                server_handle: created.server_handle,
-                server_item_handles: vec![ServerItemHandle::new(1)],
-                valid_indices: vec![0],
-                rejected_errors: Vec::new(),
-            });
-            Ok("miss_switched")
-        });
+        let res3 = dispatch_with_retry(
+            &mut pool,
+            &connector,
+            &endpoint,
+            RetryPolicy::Idempotent,
+            |pooled| {
+                if let Some(cached) = &pooled.active_group
+                    && cached.tags == tags_b
+                {
+                    return Ok("hit");
+                }
+                pooled.clear_active_group();
+                let group_config = GroupConfig::ephemeral("opc-group-2");
+                let created = pooled.server.add_group(&group_config)?;
+                let item_defs: Vec<GroupItemDef> = tags_b
+                    .iter()
+                    .map(|t| GroupItemDef {
+                        item_id: t.clone(),
+                        client_handle: ClientItemHandle::new(1),
+                        active: true,
+                    })
+                    .collect();
+                let _ = created.group.add_items(&item_defs)?;
+                pooled.active_group = Some(CachedGroup {
+                    tags: tags_b.clone(),
+                    group: created.group,
+                    server_handle: created.server_handle,
+                    server_item_handles: vec![ServerItemHandle::new(1)],
+                    valid_indices: vec![0],
+                    rejected_errors: Vec::new(),
+                });
+                Ok("miss_switched")
+            },
+        );
         assert_eq!(res3.unwrap(), "miss_switched");
         assert_eq!(state.add_group_count.load(Ordering::SeqCst), 2);
         assert_eq!(state.add_items_count.load(Ordering::SeqCst), 2);
@@ -473,17 +543,23 @@ mod tests {
 
         // 4. Invalidation on connection error: evicts connection and drops cached group
         let attempt = std::sync::atomic::AtomicUsize::new(0);
-        let res4: OpcResult<()> = dispatch_with_retry(&mut pool, &connector, &endpoint, |_| {
-            if attempt.fetch_add(1, Ordering::SeqCst) == 0 {
-                Err(OpcError::Com {
-                    source: windows_core::Error::from_hresult(windows_core::HRESULT(
-                        i32::from_ne_bytes(0x8007_06BA_u32.to_ne_bytes()),
-                    )),
-                })
-            } else {
-                Ok(())
-            }
-        });
+        let res4: OpcResult<()> = dispatch_with_retry(
+            &mut pool,
+            &connector,
+            &endpoint,
+            RetryPolicy::Idempotent,
+            |_| {
+                if attempt.fetch_add(1, Ordering::SeqCst) == 0 {
+                    Err(OpcError::Com {
+                        source: windows_core::Error::from_hresult(windows_core::HRESULT(
+                            i32::from_ne_bytes(0x8007_06BA_u32.to_ne_bytes()),
+                        )),
+                    })
+                } else {
+                    Ok(())
+                }
+            },
+        );
         assert!(res4.is_ok());
         let srv = pool.connections.get(&endpoint).unwrap();
         assert!(srv.active_group.is_none());
@@ -502,16 +578,26 @@ mod tests {
 
         // Phase 1: Initial connection failure enters 5s cooldown
         state.should_fail_connect.store(true, Ordering::SeqCst);
-        let res1: OpcResult<()> =
-            dispatch_with_retry(&mut pool, &connector, &dead_endpoint, |_| Ok(()));
+        let res1: OpcResult<()> = dispatch_with_retry(
+            &mut pool,
+            &connector,
+            &dead_endpoint,
+            RetryPolicy::Idempotent,
+            |_| Ok(()),
+        );
         assert!(res1.is_err());
         assert!(res1.unwrap_err().is_connection_error());
 
         // Fast-fail: Next call within 5s immediately fails without calling connector
         let start = Instant::now();
         let connect_count_before = state.connect_count.load(Ordering::SeqCst);
-        let res2: OpcResult<()> =
-            dispatch_with_retry(&mut pool, &connector, &dead_endpoint, |_| Ok(()));
+        let res2: OpcResult<()> = dispatch_with_retry(
+            &mut pool,
+            &connector,
+            &dead_endpoint,
+            RetryPolicy::Idempotent,
+            |_| Ok(()),
+        );
         let elapsed = start.elapsed();
         assert!(res2.is_err());
         assert!(elapsed < Duration::from_millis(100));
@@ -522,14 +608,24 @@ mod tests {
 
         // Phase 2: Endpoint isolation — live_endpoint operates normally
         state.should_fail_connect.store(false, Ordering::SeqCst);
-        let res_live: OpcResult<i32> =
-            dispatch_with_retry(&mut pool, &connector, &live_endpoint, |_| Ok(123));
+        let res_live: OpcResult<i32> = dispatch_with_retry(
+            &mut pool,
+            &connector,
+            &live_endpoint,
+            RetryPolicy::Idempotent,
+            |_| Ok(123),
+        );
         assert_eq!(res_live.unwrap(), 123);
         assert_eq!(pool.len(), 1);
 
         // dead_endpoint is STILL in cooldown
-        let res3: OpcResult<()> =
-            dispatch_with_retry(&mut pool, &connector, &dead_endpoint, |_| Ok(()));
+        let res3: OpcResult<()> = dispatch_with_retry(
+            &mut pool,
+            &connector,
+            &dead_endpoint,
+            RetryPolicy::Idempotent,
+            |_| Ok(()),
+        );
         assert!(res3.is_err());
         assert_eq!(
             state.connect_count.load(Ordering::SeqCst),
@@ -547,19 +643,25 @@ mod tests {
         let endpoint = OpcServerEndpoint::local("Matrikon.OPC.Simulation.1");
 
         // Connect and create active group
-        let _ = dispatch_with_retry(&mut pool, &connector, &endpoint, |pooled| {
-            let group_config = GroupConfig::ephemeral("test-group");
-            let created = pooled.server.add_group(&group_config)?;
-            pooled.active_group = Some(CachedGroup {
-                tags: vec!["Tag1".to_string()],
-                group: created.group,
-                server_handle: created.server_handle,
-                server_item_handles: vec![ServerItemHandle::new(1)],
-                valid_indices: vec![0],
-                rejected_errors: Vec::new(),
-            });
-            Ok(())
-        });
+        let _ = dispatch_with_retry(
+            &mut pool,
+            &connector,
+            &endpoint,
+            RetryPolicy::Idempotent,
+            |pooled| {
+                let group_config = GroupConfig::ephemeral("test-group");
+                let created = pooled.server.add_group(&group_config)?;
+                pooled.active_group = Some(CachedGroup {
+                    tags: vec!["Tag1".to_string()],
+                    group: created.group,
+                    server_handle: created.server_handle,
+                    server_item_handles: vec![ServerItemHandle::new(1)],
+                    valid_indices: vec![0],
+                    rejected_errors: Vec::new(),
+                });
+                Ok(())
+            },
+        );
 
         assert_eq!(state.add_group_count.load(Ordering::SeqCst), 1);
         assert_eq!(state.remove_group_count.load(Ordering::SeqCst), 0);
@@ -573,6 +675,55 @@ mod tests {
 
         // Second evict should return false
         assert!(!pool.evict(&endpoint));
+    }
+
+    #[test]
+    fn test_dispatch_non_idempotent_skips_retry_on_connection_error() {
+        let state = Arc::new(MockState::default());
+        let connector = Arc::new(MockServerConnector::with_state(state.clone()));
+        let mut pool = ConnectionPool::new();
+        let endpoint = OpcServerEndpoint::local("Matrikon.OPC.Simulation.1");
+
+        // First connect
+        let _ = dispatch_with_retry(
+            &mut pool,
+            &connector,
+            &endpoint,
+            RetryPolicy::NonIdempotent,
+            |_| Ok(()),
+        );
+        assert_eq!(state.connect_count.load(Ordering::SeqCst), 1);
+        assert_eq!(pool.len(), 1);
+
+        // Operation triggers connection error (RPC server unavailable)
+        let attempt = std::sync::atomic::AtomicUsize::new(0);
+        let res: OpcResult<()> = dispatch_with_retry(
+            &mut pool,
+            &connector,
+            &endpoint,
+            RetryPolicy::NonIdempotent,
+            |_| {
+                attempt.fetch_add(1, Ordering::SeqCst);
+                Err(OpcError::Com {
+                    source: windows_core::Error::from_hresult(windows_core::HRESULT(
+                        i32::from_ne_bytes(0x8007_06BA_u32.to_ne_bytes()),
+                    )),
+                })
+            },
+        );
+
+        assert!(res.is_err(), "Non-idempotent operation should return error");
+        assert_eq!(
+            attempt.load(Ordering::SeqCst),
+            1,
+            "Operation should only be attempted once"
+        );
+        assert_eq!(
+            state.connect_count.load(Ordering::SeqCst),
+            1,
+            "Should not have reconnected for non-idempotent operation"
+        );
+        assert_eq!(pool.len(), 0, "Stale connection should be evicted");
     }
 
     #[test]

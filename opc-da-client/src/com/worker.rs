@@ -176,6 +176,36 @@ pub enum ComRequest {
     },
 }
 
+impl ComRequest {
+    /// Responds to this request's reply channel with the given error.
+    #[allow(clippy::match_same_arms)]
+    pub fn fail(self, err: OpcError) {
+        match self {
+            Self::ListServers { reply, .. } => {
+                let _ = reply.send(Err(err));
+            }
+            Self::ListServerDetails { reply, .. } => {
+                let _ = reply.send(Err(err));
+            }
+            Self::ReadTagValues { reply, .. } => {
+                let _ = reply.send(Err(err));
+            }
+            Self::WriteTagValue { reply, .. } => {
+                let _ = reply.send(Err(err));
+            }
+            Self::WriteTagValues { reply, .. } => {
+                let _ = reply.send(Err(err));
+            }
+            Self::BrowseTags { reply, .. } => {
+                let _ = reply.send(Err(err));
+            }
+            Self::Ping { reply, .. } => {
+                let _ = reply.send(Err(err));
+            }
+        }
+    }
+}
+
 /// Dedicated background worker thread manager handling COM MTA apartment thread affinity.
 ///
 /// Dispatches requests received over an `mpsc` channel to Windows COM interfaces while maintaining
@@ -326,6 +356,9 @@ fn is_high_priority(req: &ComRequest) -> bool {
     )
 }
 
+/// Maximum opportunistic queue depth to preserve Tokio channel backpressure.
+pub(crate) const MAX_QUEUE_DEPTH: usize = 64;
+
 /// Two-tier priority request queue for the dedicated COM worker thread.
 /// High priority (Read/Write I/O) requests are always dispatched before low priority (Browse/List) requests.
 #[derive(Default)]
@@ -338,6 +371,12 @@ impl PriorityRequestQueue {
     #[must_use]
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Returns the total number of queued high-priority and low-priority requests.
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.high.len() + self.low.len()
     }
 
     pub fn push(&mut self, req: ComRequest) {
@@ -356,9 +395,20 @@ impl PriorityRequestQueue {
         self.high.is_empty() && self.low.is_empty()
     }
 
+    #[allow(dead_code)]
     pub fn clear(&mut self) {
         self.high.clear();
         self.low.clear();
+    }
+
+    /// Drains all queued requests and sends an explicit error reply to each oneshot channel.
+    pub fn drain_and_reject(&mut self, err: &OpcError) {
+        for req in self.high.drain(..) {
+            req.fail(err.clone());
+        }
+        for req in self.low.drain(..) {
+            req.fail(err.clone());
+        }
     }
 }
 
@@ -412,8 +462,12 @@ fn run_worker_thread<C, I, S>(
                 }
 
                 // Opportunistically drain any pending channel items into priority-classified queues
-                while let Ok(pending) = rx.try_recv() {
-                    queue.push(pending);
+                while queue.len() < MAX_QUEUE_DEPTH {
+                    if let Ok(pending) = rx.try_recv() {
+                        queue.push(pending);
+                    } else {
+                        break;
+                    }
                 }
 
                 // Always serve high-priority before low-priority
@@ -433,8 +487,21 @@ fn run_worker_thread<C, I, S>(
                     panic = %msg,
                     "Unhandled panic in COM worker loop; resetting pool and queue, then continuing"
                 );
-                pool.clear();
-                queue.clear();
+                if let Err(clear_payload) =
+                    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        pool.clear();
+                    }))
+                {
+                    let clear_msg = extract_panic_message(&*clear_payload);
+                    tracing::error!(
+                        panic = %clear_msg,
+                        "Secondary panic while clearing COM pool during panic recovery"
+                    );
+                }
+                let panic_err = OpcError::Worker(WorkerError::Panic(format!(
+                    "Worker thread recovered from panic on preceding request: {msg}"
+                )));
+                queue.drain_and_reject(&panic_err);
             }
         }
     }
@@ -451,6 +518,10 @@ fn dispatch_discovery_request<R, F>(
 ) where
     F: FnOnce(&str) -> OpcResult<R>,
 {
+    if reply.is_closed() {
+        tracing::debug!(op, host = %host, "Caller cancelled discovery request; skipping dispatch");
+        return;
+    }
     let host_str = host.to_string();
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| f(host)));
     match result {
@@ -477,15 +548,20 @@ fn dispatch_pooled_request<C, R, F>(
     connector: &Arc<C>,
     endpoint: &OpcServerEndpoint,
     op: &'static str,
+    retry_policy: pool::RetryPolicy,
     reply: oneshot::Sender<OpcResult<R>>,
     mut f: F,
 ) where
     C: ServerConnector + 'static,
     F: FnMut(&mut pool::PooledServer<C::Server>) -> OpcResult<R>,
 {
+    if reply.is_closed() {
+        tracing::debug!(op, server = %endpoint, "Caller cancelled pooled request; skipping dispatch");
+        return;
+    }
     let endpoint_clone = endpoint.clone();
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        pool::dispatch_with_retry(pool, connector, endpoint, &mut f)
+        pool::dispatch_with_retry(pool, connector, endpoint, retry_policy, &mut f)
     }));
 
     match result {
@@ -578,6 +654,7 @@ fn handle_request<C: ServerBackend + 'static>(
                 connector,
                 &endpoint,
                 "read_tag_values:sync",
+                pool::RetryPolicy::Idempotent,
                 reply,
                 |opc_server| read::handle_read(&endpoint, &tags, opc_server),
             );
@@ -594,6 +671,7 @@ fn handle_request<C: ServerBackend + 'static>(
                 connector,
                 &endpoint,
                 "write_tag_value:sync",
+                pool::RetryPolicy::NonIdempotent,
                 reply,
                 |opc_server| write::handle_write(&endpoint.identifier, &tag_id, &value, opc_server),
             );
@@ -609,6 +687,7 @@ fn handle_request<C: ServerBackend + 'static>(
                 connector,
                 &endpoint,
                 "write_tag_values:sync",
+                pool::RetryPolicy::NonIdempotent,
                 reply,
                 |opc_server| write::handle_write_batch(&endpoint.identifier, &writes, opc_server),
             );
@@ -624,15 +703,22 @@ fn handle_request<C: ServerBackend + 'static>(
                 connector,
                 &endpoint,
                 "browse_tags",
+                pool::RetryPolicy::Idempotent,
                 reply,
                 |opc_server| browse::handle_browse(&endpoint.identifier, &collector, opc_server),
             );
         }
 
         ComRequest::Ping { endpoint, reply } => {
-            dispatch_pooled_request(pool, connector, &endpoint, "ping", reply, |server| {
-                server.ping()
-            });
+            dispatch_pooled_request(
+                pool,
+                connector,
+                &endpoint,
+                "ping",
+                pool::RetryPolicy::Idempotent,
+                reply,
+                |server| server.ping(),
+            );
         }
     }
 }

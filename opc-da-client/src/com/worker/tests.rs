@@ -7,7 +7,7 @@ use crate::errors::hresult::{CO_E_CLASSSTRING, E_FAIL};
 use crate::errors::{OpcError, WorkerError};
 use crate::types::{
     ClientItemHandle, IntoWriteBatch, OpcQuality, OpcServerEndpoint, OpcValue, ServerItemHandle,
-    TagBatch, TagCollector, VarType,
+    TagBatch, TagCollector, TagValues, VarType,
 };
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
@@ -192,6 +192,46 @@ async fn test_stale_connection_eviction() {
         .unwrap();
 
     // Initial connect
+    worker
+        .send_request(|reply| ComRequest::Ping {
+            endpoint: OpcServerEndpoint::local("Mock.Server.1"),
+            reply,
+        })
+        .await
+        .unwrap();
+
+    assert_eq!(state.connect_count.load(Ordering::Relaxed), 1);
+
+    // Enable connection error flag to trigger eviction on next operation
+    state
+        .should_fail_with_connection_error
+        .store(true, Ordering::Relaxed);
+
+    // Next idempotent request triggers eviction and reconnect attempt
+    let _ = worker
+        .send_request(|reply| ComRequest::ReadTagValues {
+            endpoint: OpcServerEndpoint::local("Mock.Server.1"),
+            tags: TagBatch::from(vec!["Tag1".to_string()]),
+            reply,
+        })
+        .await;
+
+    assert_eq!(
+        state.connect_count.load(Ordering::Relaxed),
+        2,
+        "Stale connection should be evicted and reconnected"
+    );
+}
+
+#[tokio::test]
+async fn test_worker_write_tag_does_not_reconnect_on_connection_error() {
+    let state = Arc::new(MockState::default());
+    let connector = Arc::new(MockServerConnector::with_state(state.clone()));
+    let worker = tokio::task::spawn_blocking(move || ComWorker::start(connector).unwrap())
+        .await
+        .unwrap();
+
+    // Initial connect
     let _ = worker
         .send_request(|reply| ComRequest::WriteTagValue {
             endpoint: OpcServerEndpoint::local("Mock.Server.1"),
@@ -209,8 +249,8 @@ async fn test_stale_connection_eviction() {
         .should_fail_with_connection_error
         .store(true, Ordering::Relaxed);
 
-    // Next request triggers eviction and reconnect attempt
-    let _ = worker
+    // Write request fails with connection error and must NOT reconnect
+    let res = worker
         .send_request(|reply| ComRequest::WriteTagValue {
             endpoint: OpcServerEndpoint::local("Mock.Server.1"),
             tag_id: "Tag2".to_string(),
@@ -219,10 +259,14 @@ async fn test_stale_connection_eviction() {
         })
         .await;
 
+    assert!(
+        res.is_err(),
+        "Non-idempotent write should fail immediately on connection error"
+    );
     assert_eq!(
         state.connect_count.load(Ordering::Relaxed),
-        2,
-        "Stale connection should be evicted and reconnected"
+        1,
+        "Stale connection should be evicted without automatic reconnection for non-idempotent write"
     );
 }
 
@@ -1162,4 +1206,195 @@ async fn test_worker_browse_with_mock_associated_item_iterator() {
     assert_eq!(tags.len(), 2);
     assert_eq!(tags[0], "Device.Sensors.Pressure");
     assert_eq!(tags[1], "Device.Sensors.Flow");
+}
+
+#[test]
+fn test_priority_queue_length_and_fifo() {
+    let mut queue = PriorityRequestQueue::new();
+    assert_eq!(queue.len(), 0);
+    assert!(queue.is_empty());
+
+    for _ in 0..70 {
+        let (reply, _) = oneshot::channel();
+        queue.push(ComRequest::Ping {
+            endpoint: OpcServerEndpoint::local("Mock.Server"),
+            reply,
+        });
+    }
+    assert_eq!(queue.len(), 70);
+    assert!(!queue.is_empty());
+
+    let mut popped = 0;
+    while queue.pop_next().is_some() {
+        popped += 1;
+    }
+    assert_eq!(popped, 70);
+    assert_eq!(queue.len(), 0);
+    assert!(queue.is_empty());
+}
+
+#[tokio::test]
+async fn test_early_cancellation_skips_pooled_dispatch() {
+    let state = Arc::new(MockState::default());
+    let called = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let called_clone = called.clone();
+
+    let connector = Arc::new(MockServerConnector::with_state(state.clone()).with_read_fn(
+        move |_, _| {
+            called_clone.store(true, Ordering::SeqCst);
+            Ok(vec![])
+        },
+    ));
+    let worker = tokio::task::spawn_blocking(move || ComWorker::start(connector).unwrap())
+        .await
+        .unwrap();
+
+    let (reply, rx) = oneshot::channel::<OpcResult<TagValues>>();
+    drop(rx); // Closed channel
+
+    worker
+        .sender()
+        .unwrap()
+        .send(ComRequest::ReadTagValues {
+            endpoint: OpcServerEndpoint::local("Mock.Server.1"),
+            tags: TagBatch::from(vec!["Tag1".to_string()]),
+            reply,
+        })
+        .await
+        .unwrap();
+
+    let ping_res = worker
+        .send_request(|reply| ComRequest::Ping {
+            endpoint: OpcServerEndpoint::local("Mock.Server.1"),
+            reply,
+        })
+        .await;
+    assert!(ping_res.is_ok(), "Ping request must succeed");
+
+    assert!(
+        !called.load(Ordering::SeqCst),
+        "Synchronous read operation must be skipped when reply channel is closed"
+    );
+}
+
+#[test]
+fn test_priority_queue_drain_and_reject() {
+    let mut queue = PriorityRequestQueue::new();
+    let (reply1, mut rx1) = oneshot::channel();
+    let (reply2, mut rx2) = oneshot::channel();
+    let (reply3, rx3) = oneshot::channel();
+    drop(rx3); // Closed channel to verify graceful ignore
+
+    queue.push(ComRequest::Ping {
+        endpoint: OpcServerEndpoint::local("Mock.Server.1"),
+        reply: reply1,
+    });
+    queue.push(ComRequest::ListServers {
+        host: "localhost".into(),
+        reply: reply2,
+    });
+    queue.push(ComRequest::ReadTagValues {
+        endpoint: OpcServerEndpoint::local("Mock.Server.1"),
+        tags: TagBatch::from(vec!["Tag1".to_string()]),
+        reply: reply3,
+    });
+
+    assert_eq!(queue.len(), 3);
+
+    let panic_err = OpcError::Worker(WorkerError::Panic(
+        "Worker thread recovered from panic on preceding request: test panic".into(),
+    ));
+    queue.drain_and_reject(&panic_err);
+
+    assert_eq!(queue.len(), 0);
+    assert!(queue.is_empty());
+
+    let res1 = rx1.try_recv().unwrap();
+    match res1 {
+        Err(OpcError::Worker(WorkerError::Panic(msg))) => {
+            assert!(msg.contains("Worker thread recovered from panic on preceding request"));
+        }
+        other => panic!("Expected WorkerError::Panic, got: {other:?}"),
+    }
+
+    let res2 = rx2.try_recv().unwrap();
+    assert!(matches!(res2, Err(OpcError::Worker(WorkerError::Panic(_)))));
+}
+
+#[tokio::test]
+async fn test_active_group_invalidated_on_read_length_mismatch() {
+    let state = Arc::new(MockState::default());
+    let read_invocation = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let read_invocation_clone = read_invocation.clone();
+
+    let connector = Arc::new(MockServerConnector::with_state(state.clone()).with_read_fn(
+        move |_, handles| {
+            let n = read_invocation_clone.fetch_add(1, Ordering::SeqCst);
+            if n == 1 {
+                // 2nd read (cache hit): server returns mismatched array size
+                Ok(vec![])
+            } else {
+                Ok(handles
+                    .iter()
+                    .map(|&h| {
+                        Ok(GroupItemState {
+                            client_handle: ClientItemHandle::new(h.as_raw()),
+                            value: OpcValue::Int(100),
+                            quality: OpcQuality::GOOD,
+                            timestamp: std::time::SystemTime::UNIX_EPOCH,
+                        })
+                    })
+                    .collect())
+            }
+        },
+    ));
+
+    let worker = tokio::task::spawn_blocking(move || ComWorker::start(connector).unwrap())
+        .await
+        .unwrap();
+
+    let endpoint = OpcServerEndpoint::local("Mock.Server.1");
+    let tags = TagBatch::from(vec!["Tag1".to_string(), "Tag2".to_string()]);
+
+    // 1. First read (cache miss): registers group and populates cache
+    let res1 = worker
+        .send_request(|reply| ComRequest::ReadTagValues {
+            endpoint: endpoint.clone(),
+            tags: tags.clone(),
+            reply,
+        })
+        .await;
+    assert!(res1.is_ok(), "Initial read must succeed");
+    assert_eq!(state.add_group_count.load(Ordering::Relaxed), 1);
+
+    // 2. Second read (cache hit): fails with mismatched length; clears active group
+    let res2 = worker
+        .send_request(|reply| ComRequest::ReadTagValues {
+            endpoint: endpoint.clone(),
+            tags: tags.clone(),
+            reply,
+        })
+        .await;
+    assert!(
+        res2.is_err(),
+        "Second read must fail on mismatched array sizes"
+    );
+
+    // 3. Third read: must re-register group rather than hitting poisoned cache
+    let res3 = worker
+        .send_request(|reply| ComRequest::ReadTagValues {
+            endpoint,
+            tags,
+            reply,
+        })
+        .await;
+    assert!(
+        res3.is_ok(),
+        "Third read must succeed following cache invalidation"
+    );
+    assert_eq!(
+        state.add_group_count.load(Ordering::Relaxed),
+        2,
+        "Group must be re-registered after cache invalidation"
+    );
 }

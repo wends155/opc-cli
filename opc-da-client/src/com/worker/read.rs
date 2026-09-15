@@ -75,35 +75,63 @@ pub fn handle_read<S: ConnectedServer>(
             }
         };
 
-        if let Some(states) = states_opt
-            && let Some(cached) = &pooled.active_group
-        {
-            let mut tag_values: Vec<TagValue> = cached
-                .tags
-                .iter()
-                .map(|tag_id| TagValue {
-                    tag_id: tag_id.clone(),
-                    outcome: Err(OpcError::Internal("Not read".into())),
-                    quality: OpcQuality::BAD_CONFIG_ERROR,
-                    timestamp: None,
-                })
-                .collect();
+        if let Some(states) = states_opt {
+            let (tag_values_res, should_clear) = if let Some(cached) = &pooled.active_group {
+                let mut tag_values: Vec<TagValue> = cached
+                    .tags
+                    .iter()
+                    .map(|tag_id| TagValue {
+                        tag_id: tag_id.clone(),
+                        outcome: Err(OpcError::Internal("Not read".into())),
+                        quality: OpcQuality::BAD_CONFIG_ERROR,
+                        timestamp: None,
+                    })
+                    .collect();
 
-            // Populate remembered errors for items that were rejected during add_items
-            for &(idx, ref err) in &cached.rejected_errors {
-                tag_values[idx].quality = OpcQuality::BAD_CONFIG_ERROR;
-                tag_values[idx].outcome = Err(err.clone());
+                // Populate remembered errors for items that were rejected during add_items
+                for &(idx, ref err) in &cached.rejected_errors {
+                    tag_values[idx].quality = OpcQuality::BAD_CONFIG_ERROR;
+                    tag_values[idx].outcome = Err(err.clone());
+                }
+
+                let populate_res = if let Some(item_states) = states {
+                    populate_item_states(
+                        item_states,
+                        &cached.valid_indices,
+                        &cached.tags,
+                        &endpoint.identifier,
+                        &mut tag_values,
+                    )
+                } else {
+                    Ok(())
+                };
+
+                match populate_res {
+                    Ok(()) => (Ok(tag_values), false),
+                    Err(e) => (Err(e), true),
+                }
+            } else {
+                (
+                    Err(OpcError::Internal(
+                        "Active group unexpectedly missing".into(),
+                    )),
+                    false,
+                )
+            };
+
+            if should_clear {
+                if let Err(ref e) = tag_values_res {
+                    log_opc_err!(
+                        e,
+                        "read_tag_values:sync",
+                        server = %endpoint.identifier,
+                        "Cached active group item state size mismatch; invalidating group"
+                    );
+                }
+                pooled.clear_active_group();
             }
 
-            if let Some(item_states) = states {
-                populate_item_states(
-                    item_states,
-                    &cached.valid_indices,
-                    &cached.tags,
-                    &endpoint.identifier,
-                    &mut tag_values,
-                )?;
-            }
+            let tag_values = tag_values_res?;
 
             tracing::info!(
                 count = tag_values.len(),
