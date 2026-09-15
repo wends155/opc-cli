@@ -15,17 +15,45 @@ use std::time::Duration;
 pub use builder::OpcDaClientBuilder;
 pub use typestate::{Bound, Unbound};
 
+#[cfg(feature = "opc-da-backend")]
 use crate::com::connector::ComConnector;
 use crate::com::worker::{ComRequest, ComWorker};
 use crate::connector::ServerBackend;
 use crate::errors::{OpcError, OpcResult};
-use crate::types::{OpcServerEndpoint, ServerIdentifier};
+use crate::types::OpcServerEndpoint;
+#[cfg(feature = "opc-da-backend")]
+use crate::types::ServerIdentifier;
 
 #[cfg(feature = "opc-da-backend")]
 pub type DefaultOpcDaClient<State = Unbound> = OpcDaClient<ComConnector, State>;
 
 /// High-level client facade parameterized by connector backend `C` and typestate `State`.
+#[cfg(feature = "opc-da-backend")]
 pub struct OpcDaClient<C: ServerBackend + 'static = ComConnector, State = Unbound> {
+    pub(crate) worker: Arc<ComWorker<C>>,
+    pub(crate) endpoint: Option<OpcServerEndpoint>,
+    pub(crate) timeout: Option<Duration>,
+    pub(crate) _state: std::marker::PhantomData<State>,
+}
+
+/// High-level client facade parameterized by connector backend `C` and typestate `State`.
+#[cfg(all(not(feature = "opc-da-backend"), any(test, feature = "test-support")))]
+pub struct OpcDaClient<
+    C: ServerBackend + 'static = crate::connector::MockServerConnector,
+    State = Unbound,
+> {
+    pub(crate) worker: Arc<ComWorker<C>>,
+    pub(crate) endpoint: Option<OpcServerEndpoint>,
+    pub(crate) timeout: Option<Duration>,
+    pub(crate) _state: std::marker::PhantomData<State>,
+}
+
+/// High-level client facade parameterized by connector backend `C` and typestate `State`.
+#[cfg(all(
+    not(feature = "opc-da-backend"),
+    not(any(test, feature = "test-support"))
+))]
+pub struct OpcDaClient<C: ServerBackend + 'static, State = Unbound> {
     pub(crate) worker: Arc<ComWorker<C>>,
     pub(crate) endpoint: Option<OpcServerEndpoint>,
     pub(crate) timeout: Option<Duration>,
@@ -52,6 +80,7 @@ impl<C: ServerBackend + 'static, State> std::fmt::Debug for OpcDaClient<C, State
     }
 }
 
+#[cfg(feature = "opc-da-backend")]
 impl OpcDaClient<ComConnector, Unbound> {
     #[must_use]
     pub fn builder() -> OpcDaClientBuilder<ComConnector> {
@@ -76,7 +105,20 @@ impl OpcDaClient<ComConnector, Unbound> {
     }
 }
 
+#[cfg(all(not(feature = "opc-da-backend"), any(test, feature = "test-support")))]
+impl OpcDaClient<crate::connector::MockServerConnector, Unbound> {
+    #[must_use]
+    pub fn builder() -> OpcDaClientBuilder<crate::connector::MockServerConnector> {
+        OpcDaClientBuilder::default()
+    }
+}
+
 impl<C: ServerBackend + 'static> OpcDaClient<C, Unbound> {
+    /// Creates a builder targeting a specific backend connector.
+    #[must_use]
+    pub fn builder_with_connector(connector: C) -> OpcDaClientBuilder<C> {
+        OpcDaClientBuilder::new_with_connector(connector)
+    }
     #[tracing::instrument(level = "info", skip(connector), err)]
     pub fn new(connector: C) -> OpcResult<Self> {
         let worker = ComWorker::start(Arc::new(connector))?;

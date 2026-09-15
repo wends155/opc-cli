@@ -2,6 +2,7 @@
 
 use crate::client::OpcDaClient;
 use crate::client::typestate::{Bound, Unbound};
+#[cfg(feature = "opc-da-backend")]
 use crate::com::connector::ComConnector;
 use crate::connector::ServerBackend;
 use crate::errors::{OpcError, OpcResult};
@@ -9,6 +10,7 @@ use crate::types::{OpcServerEndpoint, ServerIdentifier, normalize_host};
 use std::time::Duration;
 
 /// Fluent builder for configuring and constructing an [`OpcDaClient`].
+#[cfg(feature = "opc-da-backend")]
 #[derive(Debug, Clone)]
 pub struct OpcDaClientBuilder<C = ComConnector> {
     pub(crate) host: Option<String>,
@@ -18,12 +20,32 @@ pub struct OpcDaClientBuilder<C = ComConnector> {
     pub(crate) connector: Option<C>,
 }
 
-impl Default for OpcDaClientBuilder<ComConnector> {
-    fn default() -> Self {
-        Self::new()
-    }
+/// Fluent builder for configuring and constructing an [`OpcDaClient`].
+#[cfg(all(not(feature = "opc-da-backend"), any(test, feature = "test-support")))]
+#[derive(Debug, Clone)]
+pub struct OpcDaClientBuilder<C = crate::connector::MockServerConnector> {
+    pub(crate) host: Option<String>,
+    pub(crate) server: Option<ServerIdentifier>,
+    pub(crate) timeout: Option<Duration>,
+    pub(crate) legacy_dcom: bool,
+    pub(crate) connector: Option<C>,
 }
 
+/// Fluent builder for configuring and constructing an [`OpcDaClient`].
+#[cfg(all(
+    not(feature = "opc-da-backend"),
+    not(any(test, feature = "test-support"))
+))]
+#[derive(Debug, Clone)]
+pub struct OpcDaClientBuilder<C> {
+    pub(crate) host: Option<String>,
+    pub(crate) server: Option<ServerIdentifier>,
+    pub(crate) timeout: Option<Duration>,
+    pub(crate) legacy_dcom: bool,
+    pub(crate) connector: Option<C>,
+}
+
+#[cfg(feature = "opc-da-backend")]
 impl OpcDaClientBuilder<ComConnector> {
     /// Creates a new default client builder targeting the standard Windows [`ComConnector`].
     #[must_use]
@@ -47,6 +69,19 @@ impl OpcDaClientBuilder<ComConnector> {
 }
 
 impl<C: ServerBackend + 'static> OpcDaClientBuilder<C> {
+    /// Creates a new client builder pre-configured with a custom backend connector.
+    /// Available on all platforms, including offline builds.
+    #[must_use]
+    pub fn new_with_connector(connector: C) -> Self {
+        Self {
+            host: None,
+            server: None,
+            timeout: None,
+            legacy_dcom: false,
+            connector: Some(connector),
+        }
+    }
+
     /// Sets the target remote host (or `"localhost"`).
     #[must_use]
     pub fn host(mut self, host: impl Into<String>) -> Self {
@@ -135,5 +170,11 @@ impl<C: ServerBackend + Default + 'static> OpcDaClientBuilder<C> {
             )
         })?;
         Ok(unbound.bind(ep))
+    }
+}
+
+impl<C: ServerBackend + Default + 'static> Default for OpcDaClientBuilder<C> {
+    fn default() -> Self {
+        Self::new_with_connector(C::default())
     }
 }

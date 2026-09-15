@@ -4,10 +4,18 @@
 //! lifecycle management, thread affinity, memory wrappers,
 //! connection traits, and the concrete OPC DA client.
 
-pub mod connector;
-pub mod discovery;
+// Always compiled — pure-Rust initializer traits + worker subsystem
 pub(crate) mod guard;
-pub(crate) mod iterator;
-pub(crate) mod security;
-pub(crate) mod variant;
 pub(crate) mod worker;
+
+// Windows COM backend — only compiled with opc-da-backend feature
+#[cfg(feature = "opc-da-backend")]
+pub mod connector;
+#[cfg(feature = "opc-da-backend")]
+pub mod discovery;
+#[cfg(feature = "opc-da-backend")]
+pub(crate) mod iterator;
+#[cfg(feature = "opc-da-backend")]
+pub(crate) mod security;
+#[cfg(feature = "opc-da-backend")]
+pub(crate) mod variant;

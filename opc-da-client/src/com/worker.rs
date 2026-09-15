@@ -198,7 +198,7 @@ impl<C: ServerBackend + 'static> ComWorker<C> {
 
     /// Starts the background COM worker thread with default MTA initialization.
     pub fn start(connector: Arc<C>) -> Result<Self, OpcError> {
-        Self::start_with_initializer::<crate::com::guard::DefaultComInit>(connector)
+        Self::start_with_initializer::<crate::com::guard::ActiveDefaultComInit>(connector)
     }
 
     /// Starts the background COM worker thread with a specified COM initialization strategy.
@@ -232,7 +232,8 @@ impl<C: ServerBackend + 'static> ComWorker<C> {
     /// Starts the background COM worker thread asynchronously without blocking the executor.
     #[allow(dead_code)]
     pub async fn start_async(connector: Arc<C>) -> Result<Self, OpcError> {
-        Self::start_async_with_initializer::<crate::com::guard::DefaultComInit>(connector).await
+        Self::start_async_with_initializer::<crate::com::guard::ActiveDefaultComInit>(connector)
+            .await
     }
 
     /// Starts the background COM worker thread asynchronously with a specified COM initialization strategy.

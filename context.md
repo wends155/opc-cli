@@ -1,5 +1,38 @@
 # Project Context Summary
 
+## 2026-09-15: Block A (Decouple `opc-da-client` from `opc-da-backend` Feature Gate) Completed (`opc-da-client`)
+> 📝 **Context Update:**
+> * **Feature:** Execution of Block A of the 10-block modernization roadmap (Findings #1 and #2 enabling offline integration testing in `opc-da-client`), decoupling `OpcDaClient<C>`, `OpcDaClientBuilder<C>`, and `ComWorker<C>` from `#[cfg(feature = "opc-da-backend")]`.
+> * **Changes:**
+>   - **`ComInitializer` Associated Guard & `NoOpComInit` (`src/com/guard.rs`):**
+>     - Added `type Guard: 'static` associated type to `ComInitializer` trait.
+>     - Gated `ComGuard` and `DefaultComInit` behind `#[cfg(feature = "opc-da-backend")]`.
+>     - Added pure-Rust `NoOpComInit` with `type Guard = ()` and `ActiveDefaultComInit` type alias switching between `DefaultComInit` and `NoOpComInit` based on `opc-da-backend`.
+>     - Updated test-only `FailingComInit` to `type Guard = ()` and added unconditional unit test `no_op_com_init_returns_ok`.
+>   - **Worker FFI Decoupling (`src/com/worker.rs`, `src/com/worker/pool.rs`, `src/com/worker/tests.rs`):**
+>     - Rewired `ComWorker::start` and `start_async` to initialize via `ActiveDefaultComInit`.
+>     - Replaced all `windows::core` error conversions in `pool.rs` and `worker/tests.rs` with unconditional `windows_core::Error`.
+>     - Promoted `CO_E_CLASSSTRING` and `E_FAIL` to top-level imports in `worker/tests.rs`.
+>   - **Inward Feature Gate Pushing (`src/com/mod.rs`):**
+>     - Ungated `guard` and `worker` modules so the background worker thread compiles unconditionally.
+>     - Retained `opc-da-backend` gate on `connector`, `discovery`, `iterator`, `security`, and `variant`.
+>   - **Generic Builder & Client Defaults (`src/client/builder.rs`, `src/client/mod.rs`):**
+>     - Implemented three-tier default type parameter pattern for `OpcDaClientBuilder<C>` and `OpcDaClient<C>`: Tier 1 (`ComConnector`), Tier 2 (`MockServerConnector`), Tier 3 (unconstrained `C`).
+>     - Added `new_with_connector(C)` constructor and single generic `Default for OpcDaClientBuilder<C>`.
+>     - Implemented concrete `builder()` methods on `OpcDaClient<ComConnector, Unbound>` and `OpcDaClient<MockServerConnector, Unbound>`, plus `builder_with_connector(C)`.
+>     - Gated `test_builder_timeout_and_legacy_dcom` on `opc-da-backend` and stripped legacy DCOM call from offline builder test.
+>   - **Crate Root Ungating (`src/lib.rs`):**
+>     - Removed `opc-da-backend` gate from `pub mod client;` and `pub(crate) mod com;`.
+>     - Re-exported `Bound`, `OpcDaClient`, `OpcDaClientBuilder`, and `Unbound` unconditionally.
+>     - Re-exported `MockOpcDaClient` under `#[cfg(feature = "test-support")]` without requiring `opc-da-backend`.
+>     - Added `#[cfg_attr(feature = "opc-da-backend", doc = include_str!("../README.md"))]` so Windows COM doctests do not break offline headless test suites.
+>   - **Quality Gate Verification:**
+>     - Verified full 9-gate quality pipeline (`pwsh scripts/verify.ps1`): all 360 unit/integration tests and doc-tests passed with exit code 0.
+>     - Verified offline test execution: `cargo test -p opc-da-client --no-default-features --features test-support` passed with exit code 0.
+>     - Verified zero downstream regression in `opc-cli` crate (`cargo check -p opc-cli` exited 0).
+> * **New Constraints:** `OpcDaClient<C>` and `ComWorker<C>` are always compiled; offline integration tests must use `MockServerConnector` or custom backends without enabling `opc-da-backend`. `MockOpcDaClient` requires only `test-support`. In expression position, use `OpcDaClient::builder()` or `OpcDaClient::builder_with_connector(c)`.
+> * **Pruned:** Requirement for Windows COM runtime in `OpcDaClient` and `ComWorker`; hardwired `ComGuard` dependency in `ComInitializer` trait; redundant DCOM calls in offline builder tests.
+
 ## 2026-09-15: Block 6 (Layer 3 COM Direct Routing & Encapsulation) Completed (`opc-da-client`)
 > 📝 **Context Update:**
 > * **Feature:** Execution of Block 6 of the 7-block modernization roadmap (`review_report.md` Findings 17–20 in `opc-da-client`), encapsulating `ComConnector.legacy_dcom`, simplifying `inspect_local_registration` to 1 argument, decoupling low-level FFI subsystem `raw` from `hresult`, scoping internal COM guards and iterators to `pub(crate) mod`, and enforcing direct Tier 2 SPI routing by purging pass-through trampolines from `com/connector.rs` and `com/guard.rs`.

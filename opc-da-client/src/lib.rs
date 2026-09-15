@@ -1,7 +1,6 @@
 #![allow(unsafe_code)]
-#![doc = include_str!("../README.md")]
+#![cfg_attr(feature = "opc-da-backend", doc = include_str!("../README.md"))]
 
-#[cfg(feature = "opc-da-backend")]
 pub mod client;
 pub mod connector;
 pub mod errors;
@@ -11,7 +10,6 @@ pub mod types;
 #[cfg(feature = "opc-da-backend")]
 pub(crate) mod raw;
 
-#[cfg(feature = "opc-da-backend")]
 pub(crate) mod com;
 
 // =========================================================================
@@ -32,8 +30,10 @@ pub use types::{
     WriteResult,
 };
 
+pub use client::{Bound, OpcDaClient, OpcDaClientBuilder, Unbound};
+
 #[cfg(feature = "opc-da-backend")]
-pub use client::{Bound, DefaultOpcDaClient, OpcDaClient, OpcDaClientBuilder, Unbound};
+pub use client::DefaultOpcDaClient;
 
 #[cfg(feature = "opc-da-backend")]
 pub use com::{
@@ -50,7 +50,7 @@ pub use provider::{
     MockOpcProvider, MockServerDiscovery, MockTagBrowser, MockTagReader, MockTagWriter,
 };
 
-#[cfg(all(feature = "test-support", feature = "opc-da-backend"))]
+#[cfg(feature = "test-support")]
 pub use client::MockOpcDaClient;
 
 // =========================================================================
@@ -68,7 +68,7 @@ mod tests {
         assert_eq!(endpoint.identifier.to_string(), "Test.ProgId");
     }
 
-    #[cfg(all(feature = "test-support", feature = "opc-da-backend"))]
+    #[cfg(feature = "test-support")]
     #[test]
     fn test_mock_opc_da_client_default() {
         use super::MockOpcDaClient;

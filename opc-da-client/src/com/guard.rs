@@ -4,7 +4,9 @@
 //! `CoInitializeEx`, even on early returns or panics.
 
 use crate::errors::OpcResult;
+#[cfg(feature = "opc-da-backend")]
 use std::marker::PhantomData;
+#[cfg(feature = "opc-da-backend")]
 use windows::Win32::System::Com::{COINIT_MULTITHREADED, CoInitializeEx, CoUninitialize};
 
 /// Drop guard for COM thread initialization.
@@ -31,6 +33,7 @@ use windows::Win32::System::Com::{COINIT_MULTITHREADED, CoInitializeEx, CoUninit
 ///     Ok(())
 /// }
 /// ```
+#[cfg(feature = "opc-da-backend")]
 #[derive(Debug)]
 #[must_use = "Dropping ComGuard immediately uninitializes COM on the current thread"]
 pub struct ComGuard {
@@ -38,6 +41,7 @@ pub struct ComGuard {
     _not_send: PhantomData<*mut ()>,
 }
 
+#[cfg(feature = "opc-da-backend")]
 impl ComGuard {
     /// Initialize COM in Multi-Threaded Apartment (MTA) mode.
     /// # Returns
@@ -64,6 +68,7 @@ impl ComGuard {
     }
 }
 
+#[cfg(feature = "opc-da-backend")]
 impl Drop for ComGuard {
     fn drop(&mut self) {
         tracing::debug!("COM MTA teardown");
@@ -75,21 +80,47 @@ impl Drop for ComGuard {
     }
 }
 
-/// Injectable COM initialization strategy — enables testing the failure path.
+/// Injectable COM initialization strategy.
 ///
-/// This is an internal trait. External consumers use [`ComGuard::new`] directly.
+/// Implementors control what "COM setup" means for a given connector:
+/// - `DefaultComInit`: calls `CoInitializeEx(MTA)` on the worker thread (production).
+/// - `NoOpComInit`: returns `Ok(())` immediately (offline / test connectors).
 pub(crate) trait ComInitializer: Send + 'static {
-    fn init() -> OpcResult<ComGuard>;
+    /// The guard type held alive for the duration of the worker thread.
+    type Guard: 'static;
+    fn init() -> OpcResult<Self::Guard>;
 }
 
 /// Production COM initializer — calls `ComGuard::new()`.
+#[cfg(feature = "opc-da-backend")]
 pub(crate) struct DefaultComInit;
 
+#[cfg(feature = "opc-da-backend")]
 impl ComInitializer for DefaultComInit {
+    type Guard = ComGuard;
     fn init() -> OpcResult<ComGuard> {
         ComGuard::new()
     }
 }
+
+/// No-op COM initializer for offline/test connectors that do not require Windows COM.
+/// Compiled unconditionally.
+#[allow(dead_code)]
+pub(crate) struct NoOpComInit;
+
+impl ComInitializer for NoOpComInit {
+    type Guard = ();
+    fn init() -> OpcResult<()> {
+        Ok(())
+    }
+}
+
+/// Selects the production COM initializer when `opc-da-backend` is active,
+/// falling back to the no-op initializer for offline / cross-platform builds.
+#[cfg(feature = "opc-da-backend")]
+pub(crate) type ActiveDefaultComInit = DefaultComInit;
+#[cfg(not(feature = "opc-da-backend"))]
+pub(crate) type ActiveDefaultComInit = NoOpComInit;
 
 /// Test-only COM initializer that always fails with a synthetic HRESULT.
 #[cfg(test)]
@@ -97,7 +128,8 @@ pub(crate) struct FailingComInit;
 
 #[cfg(test)]
 impl ComInitializer for FailingComInit {
-    fn init() -> OpcResult<ComGuard> {
+    type Guard = ();
+    fn init() -> OpcResult<()> {
         Err(crate::errors::OpcError::Internal(
             "Synthetic COM init failure (test)".into(),
         ))
@@ -107,8 +139,14 @@ impl ComInitializer for FailingComInit {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::errors::OpcResult;
 
+    /// Verify `NoOpComInit` compiles and returns `Ok(())` unconditionally.
+    #[test]
+    fn no_op_com_init_returns_ok() {
+        assert!(NoOpComInit::init().is_ok());
+    }
+
+    #[cfg(feature = "opc-da-backend")]
     #[test]
     fn com_guard_new_returns_opc_result() {
         // Static compile test: ComGuard::new() must return OpcResult<ComGuard>.
@@ -116,6 +154,7 @@ mod tests {
         let _: OpcResult<ComGuard> = ComGuard::new();
     }
 
+    #[cfg(feature = "opc-da-backend")]
     #[test]
     fn com_guard_constructs_and_drops() {
         // On Windows, CoInitializeEx(MTA) should succeed.

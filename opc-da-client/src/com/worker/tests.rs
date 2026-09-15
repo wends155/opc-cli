@@ -3,6 +3,7 @@ use crate::connector::mock::{
     MockConnectedGroup, MockConnectedServer, MockServerConnector, MockState,
 };
 use crate::connector::{GroupItemResult, GroupItemState};
+use crate::errors::hresult::{CO_E_CLASSSTRING, E_FAIL};
 use crate::errors::{OpcError, WorkerError};
 use crate::types::{
     ClientItemHandle, IntoWriteBatch, OpcQuality, OpcServerEndpoint, OpcValue, ServerItemHandle,
@@ -141,7 +142,7 @@ async fn test_worker_write_tag_value_failure() {
     assert!(result.is_error(), "Write should fail");
     match result.status {
         Err(OpcError::Com { source }) => {
-            assert_eq!(source.code(), windows::Win32::Foundation::E_FAIL);
+            assert_eq!(source.code(), E_FAIL);
         }
         other => panic!("Expected OpcError::Com, got {:?}", other),
     }
@@ -355,9 +356,7 @@ async fn test_worker_read_tag_values_quality_decoding() {
                             server_handle: ServerItemHandle::new(0),
                             canonical_type: VarType::EMPTY,
                             error: Some(OpcError::Com {
-                                source: windows::core::Error::from_hresult(
-                                    windows::Win32::Foundation::E_FAIL,
-                                ),
+                                source: windows_core::Error::from_hresult(E_FAIL),
                             }),
                         }
                     } else {
@@ -812,7 +811,7 @@ async fn test_active_group_cache_invalidation_and_retry_on_handle_error() {
         let count = read_counter_clone.fetch_add(1, Ordering::Relaxed);
         if count == 1 {
             return Err(OpcError::Com {
-                source: windows::core::Error::from_hresult(windows_core::HRESULT(
+                source: windows_core::Error::from_hresult(windows_core::HRESULT(
                     0xC004_0001_u32.cast_signed(),
                 )),
             });
@@ -1009,7 +1008,7 @@ async fn test_browse_recursive_resilient_to_get_item_id_failure() {
         MockConnectedServer::default().with_get_item_id_fn(|item_name| {
             if item_name == "FailingTag" {
                 Err(OpcError::Com {
-                    source: windows::core::Error::from_hresult(
+                    source: windows_core::Error::from_hresult(
                         windows_core::HRESULT(0x8000_4005_u32.cast_signed()), // E_FAIL
                     ),
                 })
@@ -1056,9 +1055,8 @@ async fn test_browse_recursive_resilient_to_get_item_id_failure() {
 
 #[tokio::test]
 async fn test_progid_resolution_error_mapping_not_connection_error() {
-    use crate::errors::hresult::CO_E_CLASSSTRING;
     let err = OpcError::Com {
-        source: windows::core::Error::from_hresult(CO_E_CLASSSTRING),
+        source: windows_core::Error::from_hresult(CO_E_CLASSSTRING),
     };
     assert!(
         !err.is_connection_error(),

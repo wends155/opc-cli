@@ -344,7 +344,7 @@ mod tests {
             let n = attempt.fetch_add(1, Ordering::SeqCst);
             if n == 0 {
                 Err(OpcError::Com {
-                    source: windows::core::Error::from_hresult(windows::core::HRESULT(
+                    source: windows_core::Error::from_hresult(windows_core::HRESULT(
                         i32::from_ne_bytes(0x8007_06BA_u32.to_ne_bytes()),
                     )),
                 })
@@ -476,7 +476,7 @@ mod tests {
         let res4: OpcResult<()> = dispatch_with_retry(&mut pool, &connector, &endpoint, |_| {
             if attempt.fetch_add(1, Ordering::SeqCst) == 0 {
                 Err(OpcError::Com {
-                    source: windows::core::Error::from_hresult(windows::core::HRESULT(
+                    source: windows_core::Error::from_hresult(windows_core::HRESULT(
                         i32::from_ne_bytes(0x8007_06BA_u32.to_ne_bytes()),
                     )),
                 })

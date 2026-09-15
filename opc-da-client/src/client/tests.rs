@@ -29,7 +29,6 @@ async fn test_client_builder_configuration_and_unbound_discovery() {
     let client = OpcDaClient::builder()
         .host("192.168.1.50")
         .server("Matrikon.OPC.Simulation.1")
-        .with_legacy_dcom(true)
         .with_connector(connector.clone())
         .build_bound()
         .expect("building bound client should succeed");
@@ -51,6 +50,7 @@ async fn test_client_builder_configuration_and_unbound_discovery() {
     assert_eq!(servers, vec!["Mock.Server.1".to_string()]);
 }
 
+#[cfg(feature = "opc-da-backend")]
 #[tokio::test]
 async fn test_builder_timeout_and_legacy_dcom() {
     let timeout = Duration::from_secs(5);
