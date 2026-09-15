@@ -1,5 +1,90 @@
 # Project Context Summary
 
+## 2026-09-16: Block C3 (Integration Tests for Connection Resilience, Pooling & Lifecycle — Findings #2, #24) Completed (`opc-da-client`)
+> 📝 **Context Update:**
+> * **Feature:** Execution of Block C3 of the modernization roadmap (Findings #2 and #24 in `opc-da-client`), establishing dedicated integration test coverage for connection resilience, pooling, active group invalidation/recovery, circuit breaker cooldowns, and deterministic thread teardown under `feature = "test-support"`.
+> * **Changes:**
+>   - **Integration Test Registration (`Cargo.toml`):**
+>     - Registered `resilience_and_pool_integration_test` test binary under `required-features = ["test-support"]`.
+>   - **Resilience & Pooling Integration Suite (`tests/resilience_and_pool_integration_test.rs`):**
+>     - Implemented 5 public contract integration tests: eager ping reachability and failure propagation (`test_eager_ping_reachability`), transparent active group invalidation and auto-recovery on `0xC0040001` (`OPC_E_INVALIDHANDLE`) (`test_active_group_auto_recovery_on_invalid_handle`), stale proxy eviction and automatic reconnection on `RPC_S_SERVER_UNAVAILABLE` (`0x800706BA`) (`test_connection_drop_eviction_and_reconnection`), immediate short-circuiting within the 5-second failure cooldown window without slow timer sleeps (`test_circuit_breaker_failure_cooldown_short_circuit`), and deterministic thread teardown and channel closure on client drop (`test_client_worker_deterministic_lifecycle_teardown`).
+>   - **Typestate Session Error Recovery & Rebinding (`tests/typestate_client_test.rs`):**
+>     - Implemented `test_typestate_failure_recovery_and_rebind` (Finding #24), validating session unbinding and rebinding to an alternative server while retaining the underlying client worker instance.
+>   - **Scope Discipline:**
+>     - 0 modifications to production code in `opc-da-client/src/`.
+>   - **Verification:**
+>     - Full 9-gate verification pipeline (`pwsh -File scripts/verify.ps1`) exited 0 with all 400+ unit, integration, and doc tests passing and zero clippy warnings under `-D warnings`.
+> * **New Constraints:** Circuit breaker cooldown tests must assert immediate fast-path rejection without sleeping for 5 seconds. Typestate transitions involving session failure recovery and rebinding belong in `typestate_client_test.rs` to maintain domain test cohesiveness.
+> * **Pruned:** Gap in offline integration testing for connection resilience, pool eviction, and worker thread lifecycle; Findings #2 and #24 fully verified and closed.
+
+## 2026-09-15: Block C2 (Integration Tests for Tag I/O & Subscriptions — Findings #2, #21, #22, #23) Completed (`opc-da-client`)
+> 📝 **Context Update:**
+> * **Feature:** Execution of Block C2 of the modernization roadmap (Findings #2, #21, #22, #23 in `opc-da-client`), establishing two dedicated integration test suites in `tests/` exercising the public `OpcDaClient`, `TagReader`, `TagWriter`, and streaming subscription contracts without Windows COM dependencies under `feature = "test-support"`.
+> * **Changes:**
+>   - **Integration Test Registration (`Cargo.toml`):**
+>     - Registered `tag_io_integration_test` and `subscription_integration_test` test binaries under `required-features = ["test-support"]`.
+>   - **Tag I/O Integration Suite (`tests/tag_io_integration_test.rs`):**
+>     - Implemented 7 public contract integration tests: mixed-type batch reading across 10 distinct OPC DA types and typed getters (`test_tag_io_mixed_type_batch_read_and_typed_getters`), inherent scalar convenience readers on `Bound` client (`test_tag_io_inherent_scalar_convenience_readers`), partial item read failure handling preserving diagnostics (`test_tag_io_partial_item_read_failure_handling`), empty read and write batch short-circuiting (`test_tag_io_empty_batch_short_circuit`), batch write partial failures with error hint diagnostics (`test_tag_io_batch_write_partial_failures_and_diagnostics` - Finding #23), role trait polymorphism across `Unbound` and `Bound` typestates (`test_tag_io_role_trait_polymorphism`), and active group cache hit verification (`test_tag_io_active_group_cache_hit`).
+>   - **Subscription Integration Suite (`tests/subscription_integration_test.rs`):**
+>     - Implemented 6 public contract integration tests: multi-tick streaming cadence verification (`test_subscription_multi_tick_cadence`), dynamic mock value update observation (`test_subscription_dynamic_mock_value_updates`), receiver drop cancellation and background loop cessation (`test_subscription_receiver_drop_cancellation` - Finding #22), transient read error resilience without stream termination (`test_subscription_transient_error_resilience` - Finding #21), connection error termination with clean channel closure returning `None` (`test_subscription_connection_error_termination` - Finding #21), and zero-allocation batch sharing across arrays, slices, and vectors (`test_subscription_zero_allocation_batch_sharing`).
+>   - **Scope Discipline:**
+>     - 0 modifications to production code in `opc-da-client/src/`.
+>   - **Verification:**
+>     - Full 9-gate verification pipeline (`pwsh -File scripts/verify.ps1`) exited 0 with all 397 unit/integration/doc tests passing and zero clippy warnings under `-D warnings`.
+> * **New Constraints:** Fixed-size tag arrays passed to `client.subscribe` should be passed by value (e.g. `["Tag"]`) to satisfy `clippy::needless_borrows_for_generic_args`. In subscription connection failure tests, fail all subsequent retries (`n >= 1`) to ensure the worker's internal auto-reconnect does not recover and deliver unexpected ticks.
+> * **Pruned:** Lack of offline integration test coverage for Tag I/O and streaming subscriptions; direct COM dependency required for subscription testing; findings #2, #21, #22, and #23 closed in `review_report.md`.
+
+## 2026-09-15: Block C1 (Integration Tests for Server Discovery & Namespace Browsing — Finding #2) Completed (`opc-da-client`)
+> 📝 **Context Update:**
+> * **Feature:** Execution of Block C1 of the modernization roadmap (Finding #2 in `opc-da-client`), establishing two dedicated integration test suites in `tests/` exercising the public `OpcDaClient`, `ServerDiscovery`, `TagBrowser`, and `TagCollector` contracts without Windows COM dependencies under `feature = "test-support"`.
+> * **Changes:**
+>   - **Integration Test Registration (`Cargo.toml`):**
+>     - Registered `server_discovery_integration_test` and `tag_browsing_integration_test` test binaries under `required-features = ["test-support"]`.
+>   - **Server Discovery Integration Suite (`tests/server_discovery_integration_test.rs`):**
+>     - Implemented 5 public contract integration tests: local/remote enumeration (`test_server_discovery_local_and_remote_enumeration`), structured metadata inspection (`test_server_discovery_structured_metadata_inspection`), trait polymorphism across `Unbound` and `Bound` typestates (`test_server_discovery_trait_polymorphism`), connection failure injection and recovery (`test_server_discovery_connection_failure_simulation`), and empty catalog handling (`test_server_discovery_empty_catalog`).
+>   - **Tag Browsing Integration Suite (`tests/tag_browsing_integration_test.rs`):**
+>     - Implemented 6 public contract integration tests: flat namespace browsing (`test_tag_browsing_flat_namespace`), fast flat acceleration bypass (`test_tag_browsing_hierarchical_fast_flat`), recursive hierarchical walk with `BrowsePositionGuard` symmetry (`test_tag_browsing_hierarchical_recursive_walk`), capacity bounding and cancellation (`test_tag_browsing_collector_limits_and_cancellation`), bound session facade with inherent browse and unbinding (`test_tag_browsing_bound_session_facade`), and descent failure recovery with child error guard unwind (`test_tag_browsing_guard_unwind_symmetry_and_error_recovery`).
+>   - **Scope Discipline:**
+>     - 0 modifications to production code in `src/`.
+>   - **Verification:**
+>     - Full 9-gate verification pipeline (`pwsh -File scripts/verify.ps1`) exited 0 with all 384 tests passing and zero clippy warnings under `-D warnings`.
+> * **New Constraints:** Integration tests for server discovery and namespace browsing must test against public facade traits (`ServerDiscovery`, `TagBrowser`) or inherent `OpcDaClient` session methods; mock SPI interactions should be verified via `MockState` telemetry assertions. `OpcServerEndpoint` fields are encapsulated; access via `ep.host()` and `ep.identifier()`.
+> * **Pruned:** Gap in offline integration testing for server discovery and namespace browsing; requirement for COM backend to test discovery and hierarchical tag walk.
+
+
+## 2026-09-15: Block B (Normalize Test Topology — Findings #9 & #10) Completed (`opc-da-client`)
+> 📝 **Context Update:**
+> * **Feature:** Execution of Block B of the 10-block modernization roadmap (Findings #9 and #10 in `opc-da-client`), relocating misplaced unit tests from integration test binaries into co-located unit test modules, decomposing the monolithic 1,927-line `types/tests.rs` into 10 domain submodules, and creating pure-Rust domain pipeline integration test suite `tests/domain_pipeline_test.rs`.
+> * **Changes:**
+>   - **Handle Unit Tests Relocation (Finding #9):**
+>     - Appended `handles::tests` block with 4 helper functions and 3 tests to `src/types/handles.rs`.
+>     - Deleted standalone integration binary `tests/handle_type_safety_test.rs`.
+>   - **Mock Contract Stability Tests Relocation (Finding #9):**
+>     - Appended `test_mock_opc_provider_full_contract_stability` and `test_standalone_role_mocks` to `src/provider.rs:mod tests`.
+>     - Deleted standalone integration binary `tests/mock_contract_stability_test.rs` and removed its `[[test]]` section from `Cargo.toml`.
+>   - **Monolithic `types/tests.rs` Decomposition (Finding #10):**
+>     - Decomposed all 68 tests from `src/types/tests.rs` into 10 co-located submodules:
+>       - `src/types/browse.rs`: 5 tests
+>       - `src/types/quality.rs`: 8 tests
+>       - `src/types/batch.rs`: 6 tests
+>       - `src/types/collection.rs`: 14 tests
+>       - `src/types/server.rs`: 13 tests (eliminated inner `opc-da-backend` gate on `test_server_identifier_conversions_and_display`)
+>       - `src/types/clsid.rs`: 4 tests
+>       - `src/types/value.rs`: 7 tests
+>       - `src/types/write_batch.rs`: 1 test
+>       - `src/types/vartype.rs`: 5 tests
+>       - `src/types/collector.rs`: 5 tests
+>     - Deleted `src/types/tests.rs` (1,927 lines removed).
+>     - Removed `#[cfg(test)] mod tests;` declaration from `src/types.rs`.
+>   - **Domain Pipeline Integration Suite (Finding #9):**
+>     - Created `tests/domain_pipeline_test.rs` with 3 end-to-end domain pipeline integration tests (`test_domain_pipeline_full_roundtrip`, `test_domain_pipeline_degraded_quality_and_error_propagation`, `test_domain_pipeline_vartype_automation_enforcement`).
+>     - Tested cleanly under `cargo test -p opc-da-client --test domain_pipeline_test --no-default-features`.
+>   - **Quality Gate Verification:**
+>     - Verified full 9-gate quality pipeline (`pwsh scripts/verify.ps1`): all 373 unit/integration/doc tests passed with exit code 0.
+>     - Clippy zero warnings under `-D warnings`. Formatter 100% compliant.
+> * **New Constraints:** Domain type unit tests must be placed inside the co-located `mod tests` block of their respective `src/types/<submodule>.rs` file; no monolithic `types/tests.rs` should be created. Tests in `tests/` must be true intermodule/intramodule integration tests exercising multiple subsystems.
+> * **Pruned:** Monolithic 1,927-line `types/tests.rs`; redundant test binaries `handle_type_safety_test` and `mock_contract_stability_test`; redundant `[[test]]` entry in `Cargo.toml`.
+
 ## 2026-09-15: Block A (Decouple `opc-da-client` from `opc-da-backend` Feature Gate) Completed (`opc-da-client`)
 > 📝 **Context Update:**
 > * **Feature:** Execution of Block A of the 10-block modernization roadmap (Findings #1 and #2 enabling offline integration testing in `opc-da-client`), decoupling `OpcDaClient<C>`, `OpcDaClientBuilder<C>`, and `ComWorker<C>` from `#[cfg(feature = "opc-da-backend")]`.

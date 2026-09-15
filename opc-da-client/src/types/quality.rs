@@ -360,3 +360,99 @@ impl fmt::Display for OpcQuality {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_opc_quality_good_standard() {
+        let q = OpcQuality::from(0x00C0);
+        assert_eq!(q.major(), QualityMajor::Good);
+        assert_eq!(q.substatus(), QualitySubstatus::NonSpecific);
+        assert_eq!(q.limit(), QualityLimit::NotLimited);
+        assert_eq!(q.raw(), 0x00C0);
+        assert!(q.is_good());
+        assert!(!q.is_bad());
+        assert!(!q.is_uncertain());
+        assert!(!q.is_limited());
+        assert_eq!(q.to_string(), "Good");
+    }
+
+    #[test]
+    fn test_opc_quality_good_local_override() {
+        let q = OpcQuality::from(0x00D8);
+        assert_eq!(q.major(), QualityMajor::Good);
+        assert_eq!(q.substatus(), QualitySubstatus::LocalOverride);
+        assert_eq!(q.limit(), QualityLimit::NotLimited);
+        assert_eq!(q.to_string(), "Good (Local Override)");
+    }
+
+    #[test]
+    fn test_opc_quality_bad_comm_failure() {
+        let q = OpcQuality::from(0x0018);
+        assert_eq!(q.major(), QualityMajor::Bad);
+        assert_eq!(q.substatus(), QualitySubstatus::CommFailure);
+        assert_eq!(q.limit(), QualityLimit::NotLimited);
+        assert!(q.is_bad());
+        assert_eq!(q.to_string(), "Bad (Comm Failure)");
+    }
+
+    #[test]
+    fn test_opc_quality_uncertain_limits() {
+        let q = OpcQuality::from(0x0056);
+        assert_eq!(q.major(), QualityMajor::Uncertain);
+        assert_eq!(q.substatus(), QualitySubstatus::EguExceeded);
+        assert_eq!(q.limit(), QualityLimit::HighLimited);
+        assert!(q.is_uncertain());
+        assert!(q.is_limited());
+        assert_eq!(q.to_string(), "Uncertain (EGU Exceeded) [High Limited]");
+    }
+
+    #[test]
+    fn test_opc_quality_new_constructor() {
+        let q = OpcQuality::new(
+            QualityMajor::Uncertain,
+            QualitySubstatus::EguExceeded,
+            QualityLimit::HighLimited,
+        );
+        assert_eq!(q.major(), QualityMajor::Uncertain);
+        assert_eq!(q.substatus(), QualitySubstatus::EguExceeded);
+        assert_eq!(q.limit(), QualityLimit::HighLimited);
+        assert_eq!(q.raw(), 0x0056);
+    }
+
+    #[test]
+    fn test_opc_quality_roundtrip_u16() {
+        let words = [
+            0x00C0, 0x0000, 0x0040, 0x0004, 0x0018, 0x0008, 0x00D8, 0x0056,
+        ];
+        for &w in &words {
+            let q = OpcQuality::from(w);
+            let back: u16 = q.into();
+            assert_eq!(back, w);
+        }
+    }
+
+    #[test]
+    fn test_opc_quality_from_str() {
+        assert_eq!("good".parse::<OpcQuality>().unwrap(), OpcQuality::GOOD);
+        assert_eq!("Good".parse::<OpcQuality>().unwrap(), OpcQuality::GOOD);
+        assert_eq!("bad".parse::<OpcQuality>().unwrap(), OpcQuality::BAD);
+        assert_eq!(
+            "uncertain".parse::<OpcQuality>().unwrap(),
+            OpcQuality::UNCERTAIN
+        );
+        assert!("other".parse::<OpcQuality>().is_err());
+    }
+
+    #[test]
+    fn test_parse_quality_error_raw_accessor() {
+        let err = ParseQualityError::new("CORRUPT_QUALITY");
+        assert_eq!(err.raw(), "CORRUPT_QUALITY");
+        assert_eq!(
+            format!("{err}"),
+            "Invalid OPC quality string: 'CORRUPT_QUALITY'"
+        );
+    }
+}

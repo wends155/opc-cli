@@ -1014,3 +1014,525 @@ impl FromIterator<TagValue> for TagValues {
         Self::new(iter.into_iter().collect())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::time::SystemTime;
+
+    use super::*;
+    use crate::errors::OpcError;
+    use crate::types::value::SystemTimeOptionExt;
+
+    #[test]
+    fn test_feature_independence_no_default_features() {
+        let tv = TagValue::new("TagX", Some(OpcValue::Int(10)), OpcQuality::GOOD, None);
+        assert!(tv.is_good());
+        assert_eq!(tv.tag_id, "TagX");
+    }
+
+    #[test]
+    fn test_tag_values_collection_and_lenient_coercion() {
+        let items = vec![
+            TagValue::new(
+                "Simulation.Int",
+                Some(OpcValue::Int(42)),
+                OpcQuality::GOOD,
+                None,
+            ),
+            TagValue::new(
+                "Simulation.Float",
+                Some(OpcValue::Float(12.345)),
+                OpcQuality::GOOD,
+                None,
+            ),
+            TagValue::new(
+                "Simulation.Bool",
+                Some(OpcValue::Bool(true)),
+                OpcQuality::GOOD,
+                None,
+            ),
+            TagValue::new(
+                "Simulation.String",
+                Some(OpcValue::String("Running".into())),
+                OpcQuality::GOOD,
+                None,
+            ),
+            TagValue::new("Simulation.NoVal", None, OpcQuality::BAD_CONFIG_ERROR, None),
+            TagValue::with_error(
+                "Simulation.Failed",
+                OpcQuality::BAD_CONFIG_ERROR,
+                OpcError::Internal("COM error 0x80040154".into()),
+            ),
+        ];
+
+        let tvs = TagValues::new(items);
+        assert_eq!(tvs.len(), 6);
+        assert!(!tvs.is_empty());
+
+        // Case-insensitive lookups
+        assert!(tvs.get("simulation.int").is_some());
+        assert_eq!(tvs.get_value("SIMULATION.INT"), Some(&OpcValue::Int(42)));
+
+        // Direct typed extractions
+        assert_eq!(tvs.get_i32("Simulation.Int").unwrap(), 42);
+        assert!((tvs.get_f64("Simulation.Float").unwrap() - 12.345).abs() < 1e-5);
+        assert!(tvs.get_bool("Simulation.Bool").unwrap());
+        assert_eq!(tvs.get_str("Simulation.String").unwrap(), "Running");
+
+        // Lenient lossless coercion: i32 -> f64
+        assert!((tvs.get_f64("Simulation.Int").unwrap() - 42.0).abs() < 1e-5);
+
+        // Errors:
+        // 1. NotRequested
+        assert_eq!(
+            tvs.get_f64("Unknown.Tag"),
+            Err(TagExtractError::NotRequested("Unknown.Tag".into()))
+        );
+
+        // 2. ReadFailed (preserves underlying error)
+        match tvs.get_f64("Simulation.Failed") {
+            Err(TagExtractError::ReadFailed { tag, source }) => {
+                assert_eq!(tag, "Simulation.Failed");
+                assert!(source.to_string().contains("0x80040154"));
+            }
+            other => panic!("Expected ReadFailed, got {other:?}"),
+        }
+
+        // 3. NoValue
+        assert_eq!(
+            tvs.get_f64("Simulation.NoVal"),
+            Err(TagExtractError::NoValue("Simulation.NoVal".into()))
+        );
+
+        // 4. TypeMismatch
+        match tvs.get_f64("Simulation.String") {
+            Err(TagExtractError::TypeMismatch {
+                tag,
+                value,
+                expected,
+            }) => {
+                assert_eq!(tag, "Simulation.String");
+                assert_eq!(value, "Running");
+                assert_eq!(expected, "f64");
+            }
+            other => panic!("Expected TypeMismatch, got {other:?}"),
+        }
+
+        // Error conversion to OpcError
+        let err: OpcError = TagExtractError::NotRequested("TagA".into()).into();
+        assert!(matches!(err, OpcError::TagNotRequested(_)));
+    }
+
+    #[test]
+    fn test_tag_extract_error_conversion_fidelity() {
+        let err_not_req: OpcError = TagExtractError::NotRequested("Sensor.Temp".to_string()).into();
+        match err_not_req {
+            OpcError::TagNotRequested(tag) => {
+                assert_eq!(tag, "Sensor.Temp");
+            }
+            other => panic!("Expected OpcError::TagNotRequested, got: {other:?}"),
+        }
+
+        let err_no_val: OpcError = TagExtractError::NoValue("Sensor.Pressure".to_string()).into();
+        match err_no_val {
+            OpcError::TagNoValue(tag) => {
+                assert_eq!(tag, "Sensor.Pressure");
+            }
+            other => panic!("Expected OpcError::TagNoValue, got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_tag_values_coercion_overflow_and_null_edge_cases() {
+        let items = vec![
+            TagValue::new(
+                "Overflow.Float",
+                Some(OpcValue::Float(1e25)),
+                OpcQuality::GOOD,
+                None,
+            ),
+            TagValue::new(
+                "Nan.Float",
+                Some(OpcValue::Float(f64::NAN)),
+                OpcQuality::GOOD,
+                None,
+            ),
+            TagValue::new(
+                "Inf.Float",
+                Some(OpcValue::Float(f64::INFINITY)),
+                OpcQuality::GOOD,
+                None,
+            ),
+            TagValue::new(
+                "Frac.Float",
+                Some(OpcValue::Float(42.75)),
+                OpcQuality::GOOD,
+                None,
+            ),
+            TagValue::new(
+                "Exact.Float",
+                Some(OpcValue::Float(50.0)),
+                OpcQuality::GOOD,
+                None,
+            ),
+            TagValue::new("Null.Tag", Some(OpcValue::Null), OpcQuality::GOOD, None),
+            TagValue::new("Empty.Tag", Some(OpcValue::Empty), OpcQuality::GOOD, None),
+            TagValue::new("Num.Str", Some(OpcValue::Int(123)), OpcQuality::GOOD, None),
+        ];
+
+        let tvs = TagValues::new(items);
+
+        // Overflow: 1e25 into i32 must fail safely with TypeMismatch, not wrap or panic
+        assert!(matches!(
+            tvs.get_i32("Overflow.Float"),
+            Err(TagExtractError::TypeMismatch { .. })
+        ));
+
+        // NaN into i32 must fail
+        assert!(matches!(
+            tvs.get_i32("Nan.Float"),
+            Err(TagExtractError::TypeMismatch { .. })
+        ));
+
+        // Infinity into i32 must fail
+        assert!(matches!(
+            tvs.get_i32("Inf.Float"),
+            Err(TagExtractError::TypeMismatch { .. })
+        ));
+
+        // Fractional float into i32 must fail (lossy)
+        assert!(matches!(
+            tvs.get_i32("Frac.Float"),
+            Err(TagExtractError::TypeMismatch { .. })
+        ));
+
+        // Exact integer float into i32 succeeds (lossless)
+        assert_eq!(tvs.get_i32("Exact.Float").unwrap(), 50);
+
+        // Null and Empty map to NoValue
+        assert_eq!(
+            tvs.get_f64("Null.Tag"),
+            Err(TagExtractError::NoValue("Null.Tag".into()))
+        );
+        assert_eq!(
+            tvs.get_f64("Empty.Tag"),
+            Err(TagExtractError::NoValue("Empty.Tag".into()))
+        );
+
+        // get_str on non-string returns TypeMismatch
+        assert!(matches!(
+            tvs.get_str("Num.Str"),
+            Err(TagExtractError::TypeMismatch { .. })
+        ));
+    }
+
+    #[test]
+    fn test_tag_value_outcome_facade() {
+        let success = TagValue::success("Tag1", OpcValue::Int(10), OpcQuality::GOOD, None);
+        assert!(success.is_good());
+        assert!(!success.is_error());
+        assert_eq!(success.value(), Some(&OpcValue::Int(10)));
+        assert_eq!(success.error(), None);
+        assert_eq!(success.outcome(), Ok(&OpcValue::Int(10)));
+        assert_eq!(success.display_value(), "10");
+
+        let failure = TagValue::with_error(
+            "Tag2",
+            OpcQuality::BAD_COMM_FAILURE,
+            OpcError::Connection("Disconnected".into()),
+        );
+        assert!(!failure.is_good());
+        assert!(failure.is_error());
+        assert_eq!(failure.value(), None);
+        assert!(failure.error().is_some());
+        assert!(failure.outcome().is_err());
+        assert_eq!(failure.display_value(), "Error");
+    }
+
+    #[test]
+    fn test_tag_values_deref() {
+        let tv1 = TagValue::new("Tag1", Some(OpcValue::Int(1)), OpcQuality::GOOD, None);
+        let tv2 = TagValue::new("Tag2", Some(OpcValue::Int(2)), OpcQuality::GOOD, None);
+        let tvs = TagValues::new(vec![tv1, tv2]);
+
+        // Test deref to slice
+        assert_eq!(tvs.len(), 2);
+        assert_eq!(tvs[0].tag_id, "Tag1");
+        assert_eq!(tvs[1].tag_id, "Tag2");
+
+        let slice: &[TagValue] = &tvs;
+        assert_eq!(slice.len(), 2);
+    }
+
+    #[test]
+    fn test_tag_value_quality_semantic_matrix() {
+        // Quadrant 1: GOOD quality + Ok(val)
+        let q1 = TagValue::new("Q1", Some(OpcValue::Int(42)), OpcQuality::GOOD, None);
+        assert!(q1.is_good());
+        assert!(!q1.is_error());
+        assert!(!q1.is_uncertain());
+        assert!(!q1.is_bad());
+        assert_eq!(q1.error(), None);
+        assert!(q1.outcome().is_ok());
+
+        // Quadrant 2: UNCERTAIN quality + Ok(val) (The Bug Quadrant)
+        let q2 = TagValue::new("Q2", Some(OpcValue::Int(42)), OpcQuality::UNCERTAIN, None);
+        assert!(!q2.is_good());
+        assert!(q2.is_uncertain());
+        assert!(!q2.is_error(), "Outcome is Ok, so is_error() must be false");
+        assert!(!q2.is_bad());
+        assert_eq!(q2.error(), None);
+        assert!(q2.outcome().is_ok());
+
+        // Quadrant 3: BAD quality + Ok(val) (Clamped/Stale cache)
+        let q3 = TagValue::new(
+            "Q3",
+            Some(OpcValue::Int(42)),
+            OpcQuality::BAD_CONFIG_ERROR,
+            None,
+        );
+        assert!(!q3.is_good());
+        assert!(!q3.is_uncertain());
+        assert!(q3.is_bad());
+        assert!(!q3.is_error());
+        assert_eq!(q3.error(), None);
+        assert!(q3.outcome().is_ok());
+
+        // Quadrant 4: BAD quality + Err(OpcError) (Failed Read)
+        let q4 = TagValue::with_error(
+            "Q4",
+            OpcQuality::BAD_COMM_FAILURE,
+            OpcError::Connection("Drop".into()),
+        );
+        assert!(!q4.is_good());
+        assert!(!q4.is_uncertain());
+        assert!(q4.is_bad());
+        assert!(q4.is_error());
+        assert!(q4.error().is_some());
+        assert!(q4.outcome().is_err());
+    }
+
+    #[test]
+    fn test_tag_extract_error_preserves_source() {
+        let err = TagExtractError::ReadFailed {
+            tag: "Faulty.Tag".into(),
+            source: OpcError::Connection("DCOM RPC timeout 0x800706BA".into()),
+        };
+        let opc_err: OpcError = err.into();
+        assert!(
+            opc_err.is_connection_error(),
+            "Converting TagExtractError::ReadFailed to OpcError must preserve connection error provenance"
+        );
+    }
+
+    #[test]
+    fn test_tag_values_typed_getters() {
+        let items = vec![
+            TagValue::new("U32.Tag", Some(OpcValue::UInt(100)), OpcQuality::GOOD, None),
+            TagValue::new(
+                "U64.Tag",
+                Some(OpcValue::UInt(5_000_000_000)),
+                OpcQuality::GOOD,
+                None,
+            ),
+            TagValue::new(
+                "I64.Tag",
+                Some(OpcValue::Int(-1_000_000_000_000)),
+                OpcQuality::GOOD,
+                None,
+            ),
+            TagValue::new(
+                "F32.Tag",
+                Some(OpcValue::Float(12.340_000_152_587_89)),
+                OpcQuality::GOOD,
+                None,
+            ),
+            TagValue::new(
+                "WholeFloat.Tag",
+                Some(OpcValue::Float(42.0)),
+                OpcQuality::GOOD,
+                None,
+            ),
+            TagValue::new(
+                "FracFloat.Tag",
+                Some(OpcValue::Float(42.7)),
+                OpcQuality::GOOD,
+                None,
+            ),
+            TagValue::new(
+                "StrNum.Tag",
+                Some(OpcValue::String("42".into())),
+                OpcQuality::GOOD,
+                None,
+            ),
+            TagValue::with_error(
+                "Err.Tag",
+                OpcQuality::BAD,
+                OpcError::Internal("Hardware fault".into()),
+            ),
+        ];
+        let tvs = TagValues::new(items);
+
+        // Typed getters
+        assert_eq!(tvs.get_u32("u32.tag").unwrap(), 100u32);
+        assert_eq!(tvs.get_u64("u64.tag").unwrap(), 5_000_000_000u64);
+        assert_eq!(tvs.get_i64("i64.tag").unwrap(), -1_000_000_000_000i64);
+        assert!((tvs.get_f32("f32.tag").unwrap() - 12.34f32).abs() < 1e-5);
+
+        // Generic get_as<T>
+        assert_eq!(tvs.get_as::<u32>("u32.tag").unwrap(), 100u32);
+        assert_eq!(tvs.get_as::<u64>("u64.tag").unwrap(), 5_000_000_000u64);
+        assert_eq!(tvs.get_as::<i64>("i64.tag").unwrap(), -1_000_000_000_000i64);
+        assert_eq!(tvs.get_as::<i32>("wholefloat.tag").unwrap(), 42i32);
+        assert_eq!(tvs.get_as::<u32>("wholefloat.tag").unwrap(), 42u32);
+
+        // Whole-number float to integer coercion succeeds
+        assert_eq!(tvs.get_u32("wholefloat.tag").unwrap(), 42u32);
+        assert_eq!(tvs.get_u64("wholefloat.tag").unwrap(), 42u64);
+        assert_eq!(tvs.get_i64("wholefloat.tag").unwrap(), 42i64);
+
+        // Fractional float to integer coercion fails with TypeMismatch
+        assert!(matches!(
+            tvs.get_u32("fracfloat.tag"),
+            Err(TagExtractError::TypeMismatch { .. })
+        ));
+        assert!(matches!(
+            tvs.get_u64("fracfloat.tag"),
+            Err(TagExtractError::TypeMismatch { .. })
+        ));
+        assert!(matches!(
+            tvs.get_i64("fracfloat.tag"),
+            Err(TagExtractError::TypeMismatch { .. })
+        ));
+        assert!(matches!(
+            tvs.get_as::<u32>("fracfloat.tag"),
+            Err(TagExtractError::TypeMismatch { .. })
+        ));
+
+        // String parsing is NOT implicitly performed (no stringly-typed magic)
+        assert!(matches!(
+            tvs.get_u32("strnum.tag"),
+            Err(TagExtractError::TypeMismatch { .. })
+        ));
+        assert!(matches!(
+            tvs.get_i32("strnum.tag"),
+            Err(TagExtractError::TypeMismatch { .. })
+        ));
+        assert!(matches!(
+            tvs.get_f64("strnum.tag"),
+            Err(TagExtractError::TypeMismatch { .. })
+        ));
+        assert!(matches!(
+            tvs.get_as::<u32>("strnum.tag"),
+            Err(TagExtractError::TypeMismatch { .. })
+        ));
+
+        // Missing tag returns NotRequested
+        assert!(matches!(
+            tvs.get_u32("nonexistent.tag"),
+            Err(TagExtractError::NotRequested(_))
+        ));
+
+        // Read error preserves ReadFailed
+        assert!(matches!(
+            tvs.get_u32("err.tag"),
+            Err(TagExtractError::ReadFailed { .. })
+        ));
+    }
+
+    #[test]
+    fn test_tag_extract_error_tag_accessor() {
+        let err_not_req = TagExtractError::NotRequested("Sensor.Temperature".to_string());
+        assert_eq!(err_not_req.tag(), "Sensor.Temperature");
+
+        let err_read_failed = TagExtractError::ReadFailed {
+            tag: "Sensor.Pressure".to_string(),
+            source: OpcError::Connection("DCOM RPC disconnected".into()),
+        };
+        assert_eq!(err_read_failed.tag(), "Sensor.Pressure");
+
+        let err_no_val = TagExtractError::NoValue("Sensor.FlowRate".to_string());
+        assert_eq!(err_no_val.tag(), "Sensor.FlowRate");
+
+        let err_type_mismatch = TagExtractError::TypeMismatch {
+            tag: "Sensor.StatusFlag".to_string(),
+            value: "active".to_string(),
+            expected: "bool",
+        };
+        assert_eq!(err_type_mismatch.tag(), "Sensor.StatusFlag");
+
+        // Borrow verification: returns &str without heap reallocation
+        let borrowed: &str = err_not_req.tag();
+        assert_eq!(borrowed, "Sensor.Temperature");
+    }
+
+    #[test]
+    fn test_tag_value_helpers_success() {
+        let tv = TagValue {
+            tag_id: "Tag1".to_string(),
+            outcome: Ok(OpcValue::Int(42)),
+            quality: OpcQuality::GOOD,
+            timestamp: Some(SystemTime::UNIX_EPOCH),
+        };
+        assert!(tv.is_good());
+        assert!(!tv.is_error());
+        assert_eq!(tv.display_value(), "42");
+        assert_eq!(tv.formatted_timestamp(), "N/A"); // UNIX_EPOCH returns "N/A" in helper
+    }
+
+    #[test]
+    fn test_tag_value_helpers_failure() {
+        let tv = TagValue {
+            tag_id: "Tag2".to_string(),
+            outcome: Err(OpcError::Internal("Comm failed".into())),
+            quality: OpcQuality::BAD_COMM_FAILURE,
+            timestamp: None,
+        };
+        assert!(!tv.is_good());
+        assert!(tv.is_error());
+        assert_eq!(tv.display_value(), "Error");
+        assert_eq!(tv.formatted_timestamp(), "N/A");
+    }
+
+    #[test]
+    fn test_tag_value_display() {
+        let tv = TagValue {
+            tag_id: "Simulation.Item1".to_string(),
+            outcome: Ok(OpcValue::Float(99.5)),
+            quality: OpcQuality::GOOD,
+            timestamp: Some(SystemTime::UNIX_EPOCH),
+        };
+        assert_eq!(format!("{tv}"), "Simulation.Item1 = 99.5 [Good] @ N/A");
+    }
+
+    #[test]
+    fn test_tag_value_destructuring_ergonomics() {
+        let tv = TagValue {
+            tag_id: "Device1.Tag1".to_string(),
+            outcome: Ok(OpcValue::String("Active".into())),
+            quality: OpcQuality::GOOD,
+            timestamp: None,
+        };
+
+        // Exact pattern destructuring
+        let TagValue {
+            tag_id,
+            outcome,
+            quality,
+            timestamp,
+        } = tv;
+
+        let formatted = format!(
+            "Tag: {:<15} | Value: {:<10} | Quality: {:<6} | Timestamp: {}",
+            tag_id,
+            outcome.ok().display(),
+            quality,
+            timestamp.display_or("N/A")
+        );
+
+        assert_eq!(
+            formatted,
+            "Tag: Device1.Tag1    | Value: Active     | Quality: Good   | Timestamp: N/A"
+        );
+    }
+}

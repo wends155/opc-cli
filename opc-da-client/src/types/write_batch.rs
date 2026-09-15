@@ -473,4 +473,28 @@ mod tests {
         assert_eq!(batch_slices.len(), 2);
         assert_eq!(batch_slices.as_slice().unwrap()[0].0, "TagA");
     }
+
+    #[test]
+    fn test_write_result_co_located() {
+        use crate::errors::OpcError;
+
+        let ok = WriteResult::success("Channel.Device.Tag1");
+        assert!(ok.is_success());
+        assert!(!ok.is_error());
+        assert_eq!(ok.tag_id, "Channel.Device.Tag1");
+        assert_eq!(ok.status, Ok(()));
+        assert!(ok.error().is_none());
+
+        let err = WriteResult::failure(
+            "Channel.Device.Tag2",
+            OpcError::Connection("Disconnected".into()),
+        );
+        assert!(err.is_error());
+        assert!(!err.is_success());
+        assert_eq!(err.tag_id, "Channel.Device.Tag2");
+        assert_eq!(
+            err.error(),
+            Some(&OpcError::Connection("Disconnected".into()))
+        );
+    }
 }

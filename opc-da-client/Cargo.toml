@@ -52,11 +52,25 @@ name = "batch_write_test"
 required-features = ["test-support"]
 
 [[test]]
-name = "mock_contract_stability_test"
-required-features = ["test-support"]
-
-[[test]]
 name = "typestate_client_test"
 required-features = ["test-support"]
 
+[[test]]
+name = "server_discovery_integration_test"
+required-features = ["test-support"]
 
+[[test]]
+name = "tag_browsing_integration_test"
+required-features = ["test-support"]
+
+[[test]]
+name = "tag_io_integration_test"
+required-features = ["test-support"]
+
+[[test]]
+name = "subscription_integration_test"
+required-features = ["test-support"]
+
+[[test]]
+name = "resilience_and_pool_integration_test"
+required-features = ["test-support"]

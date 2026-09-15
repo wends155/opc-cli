@@ -106,3 +106,56 @@ pub enum NamespaceType {
     /// Flat namespace without hierarchical folders or branches (Win32 `OPC_NS_FLAT` = 2).
     Flat = 2,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_namespace_type_discriminants() {
+        assert_eq!(NamespaceType::Hierarchy as u32, 1);
+        assert_eq!(NamespaceType::Flat as u32, 2);
+    }
+
+    #[test]
+    fn browse_type_from_roundtrip() {
+        for (variant, expected) in [
+            (BrowseType::Branch, 1u32),
+            (BrowseType::Leaf, 2u32),
+            (BrowseType::Flat, 3u32),
+        ] {
+            let raw: u32 = variant.into();
+            assert_eq!(raw, expected);
+            let back = BrowseType::try_from(raw).unwrap();
+            assert_eq!(back, variant);
+        }
+    }
+
+    #[test]
+    fn browse_type_try_from_rejects_invalid() {
+        assert!(BrowseType::try_from(0u32).is_err());
+        assert!(BrowseType::try_from(4u32).is_err());
+        assert!(BrowseType::try_from(u32::MAX).is_err());
+    }
+
+    #[test]
+    fn browse_direction_from_roundtrip() {
+        for (variant, expected) in [
+            (BrowseDirection::Up, 1u32),
+            (BrowseDirection::Down, 2u32),
+            (BrowseDirection::To, 3u32),
+        ] {
+            let raw: u32 = variant.into();
+            assert_eq!(raw, expected);
+            let back = BrowseDirection::try_from(raw).unwrap();
+            assert_eq!(back, variant);
+        }
+    }
+
+    #[test]
+    fn browse_direction_try_from_rejects_invalid() {
+        assert!(BrowseDirection::try_from(0u32).is_err());
+        assert!(BrowseDirection::try_from(4u32).is_err());
+        assert!(BrowseDirection::try_from(u32::MAX).is_err());
+    }
+}

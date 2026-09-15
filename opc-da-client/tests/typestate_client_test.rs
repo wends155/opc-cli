@@ -67,3 +67,45 @@ async fn test_server_id_returns_formatted_guid_for_clsid_endpoint() {
     assert!(sid.ends_with('}'), "Expected GUID format, got: {sid}");
     assert_ne!(sid, "{CLSID}", "Placeholder not replaced: {sid}");
 }
+
+#[tokio::test]
+async fn test_typestate_failure_recovery_and_rebind() {
+    use opc_da_client::connector::MockServerConnector;
+
+    let connector = MockServerConnector::default();
+
+    // 1. Bound client on Server A
+    let bound_a = OpcDaClient::builder()
+        .server("Mock.Server.Primary")
+        .with_connector(connector)
+        .build_bound()
+        .expect("bound client on primary server");
+
+    assert_eq!(bound_a.server_id(), "Mock.Server.Primary");
+
+    // 2. Perform operation on Server A
+    let read_a = bound_a
+        .read_tag("Primary.Tag")
+        .await
+        .expect("read from primary server");
+    assert!(read_a.outcome.is_ok());
+
+    // 3. Unbind from Server A upon failover or migration
+    let (unbound, previous_ep) = bound_a.unbind();
+    assert_eq!(
+        previous_ep.identifier().as_prog_id(),
+        Some("Mock.Server.Primary")
+    );
+    assert!(unbound.endpoint().is_none());
+
+    // 4. Rebind to Standby Server B on the same client worker instance
+    let bound_b = unbound.bind(OpcServerEndpoint::local("Mock.Server.Standby"));
+    assert_eq!(bound_b.server_id(), "Mock.Server.Standby");
+
+    // 5. Successful operations on Standby Server B
+    let read_b = bound_b
+        .read_tag("Standby.Tag")
+        .await
+        .expect("read from standby server");
+    assert!(read_b.outcome.is_ok());
+}

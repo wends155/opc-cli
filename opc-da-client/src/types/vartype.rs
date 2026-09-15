@@ -309,3 +309,114 @@ impl From<VarType> for windows::Win32::System::Variant::VARENUM {
         Self(vt.0)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_vartype_constants_and_raw_roundtrip() {
+        assert_eq!(VarType::EMPTY.raw(), 0);
+        assert_eq!(VarType::NULL.raw(), 1);
+        assert_eq!(VarType::I2.raw(), 2);
+        assert_eq!(VarType::I4.raw(), 3);
+        assert_eq!(VarType::R4.raw(), 4);
+        assert_eq!(VarType::R8.raw(), 5);
+        assert_eq!(VarType::CY.raw(), 6);
+        assert_eq!(VarType::DATE.raw(), 7);
+        assert_eq!(VarType::BSTR.raw(), 8);
+        assert_eq!(VarType::DISPATCH.raw(), 9);
+        assert_eq!(VarType::ERROR.raw(), 10);
+        assert_eq!(VarType::BOOL.raw(), 11);
+        assert_eq!(VarType::VARIANT.raw(), 12);
+        assert_eq!(VarType::UNKNOWN_INTERFACE.raw(), 13);
+        assert_eq!(VarType::DECIMAL.raw(), 14);
+        assert_eq!(VarType::I1.raw(), 16);
+        assert_eq!(VarType::UI1.raw(), 17);
+        assert_eq!(VarType::UI2.raw(), 18);
+        assert_eq!(VarType::UI4.raw(), 19);
+        assert_eq!(VarType::I8.raw(), 20);
+        assert_eq!(VarType::UI8.raw(), 21);
+        assert_eq!(VarType::INT.raw(), 22);
+        assert_eq!(VarType::UINT.raw(), 23);
+
+        let vt = VarType::from(3u16);
+        assert_eq!(vt, VarType::I4);
+        assert_eq!(u16::from(vt), 3);
+        assert_eq!(VarType::from_raw(8), VarType::BSTR);
+        assert_eq!(VarType::from_base(BaseVarType::Bstr), VarType::BSTR);
+        assert_eq!(VarType::default(), VarType::EMPTY);
+    }
+
+    #[test]
+    fn test_vartype_bitmasks_array_and_byref() {
+        let scalar = VarType::I4;
+        assert!(!scalar.is_array());
+        assert!(!scalar.is_byref());
+        assert!(!scalar.is_vector());
+        assert_eq!(scalar.base_type(), BaseVarType::I4);
+
+        let arr = VarType::from_raw(0x2003);
+        assert!(arr.is_array());
+        assert!(!arr.is_byref());
+        assert_eq!(arr.base_raw(), 3);
+        assert_eq!(arr.base_type(), BaseVarType::I4);
+
+        let byref = VarType::from_raw(0x4008);
+        assert!(!byref.is_array());
+        assert!(byref.is_byref());
+        assert_eq!(byref.base_raw(), 8);
+        assert_eq!(byref.base_type(), BaseVarType::Bstr);
+
+        let composite = VarType::from_raw(0x6005);
+        assert!(composite.is_array());
+        assert!(composite.is_byref());
+        assert_eq!(composite.base_raw(), 5);
+        assert_eq!(composite.base_type(), BaseVarType::R8);
+    }
+
+    #[test]
+    fn test_vartype_base_type_decomposition() {
+        assert_eq!(VarType::from_raw(0).base_type(), BaseVarType::Empty);
+        assert_eq!(VarType::from_raw(9).base_type(), BaseVarType::Dispatch);
+        assert_eq!(
+            VarType::from_raw(13).base_type(),
+            BaseVarType::UnknownInterface
+        );
+        assert_eq!(VarType::from_raw(999).base_type(), BaseVarType::Other(999));
+    }
+
+    #[test]
+    fn test_vartype_display_formatting() {
+        assert_eq!(VarType::I4.to_string(), "VT_I4");
+        assert_eq!(VarType::BSTR.to_string(), "VT_BSTR");
+        assert_eq!(VarType::EMPTY.to_string(), "VT_EMPTY");
+        assert_eq!(VarType::from_raw(0x2011).to_string(), "VT_ARRAY | VT_UI1");
+        assert_eq!(
+            VarType::from_raw(0x6005).to_string(),
+            "VT_ARRAY | VT_BYREF | VT_R8"
+        );
+        assert_eq!(BaseVarType::Bool.to_string(), "VT_BOOL");
+        assert_eq!(BaseVarType::Other(0x0FFF).to_string(), "VT_OTHER(0x0FFF)");
+        assert_eq!(
+            VarType::from_raw(0x2FFF).to_string(),
+            "VT_ARRAY | VT_OTHER(0x0FFF)"
+        );
+    }
+
+    #[cfg(feature = "opc-da-backend")]
+    #[test]
+    fn test_vartype_varenum_roundtrip() {
+        use windows::Win32::System::Variant::{
+            VARENUM, VT_BOOL, VT_BSTR, VT_DISPATCH, VT_I4, VT_R8, VT_UI1, VT_UNKNOWN,
+        };
+
+        assert_eq!(VarType::from(VT_I4), VarType::I4);
+        assert_eq!(VarType::from(VT_BSTR), VarType::BSTR);
+        assert_eq!(VarType::from(VT_DISPATCH), VarType::DISPATCH);
+        assert_eq!(VarType::from(VT_UNKNOWN), VarType::UNKNOWN_INTERFACE);
+        assert_eq!(VarType::from(VT_BOOL), VarType::BOOL);
+        assert_eq!(VarType::from(VT_UI1), VarType::UI1);
+        assert_eq!(VARENUM::from(VarType::R8), VT_R8);
+    }
+}

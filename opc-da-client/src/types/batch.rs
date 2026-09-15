@@ -458,3 +458,242 @@ impl<'a> IntoIterator for &'a TagBatch {
         self.iter_str()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use super::*;
+
+    #[test]
+    fn test_tag_batch_into_tags_conversions() {
+        // 1. Static slice
+        static STATIC_SLICE: &[&str] = &["Tag1", "Tag2"];
+        let batch = STATIC_SLICE.into_tag_batch();
+        assert_eq!(batch.len(), 2);
+        assert!(!batch.is_empty());
+        assert_eq!(batch.iter_str().collect::<Vec<_>>(), vec!["Tag1", "Tag2"]);
+        assert_eq!(
+            batch.into_vec(),
+            vec!["Tag1".to_string(), "Tag2".to_string()]
+        );
+
+        // 2. Fixed-size array of static str
+        let arr = ["TagA", "TagB", "TagC"];
+        let batch = arr.into_tag_batch();
+        assert_eq!(batch.len(), 3);
+        assert_eq!(
+            batch.iter_str().collect::<Vec<_>>(),
+            vec!["TagA", "TagB", "TagC"]
+        );
+        assert_eq!(batch.into_vec(), vec!["TagA", "TagB", "TagC"]);
+
+        // 3. Single static str literal
+        let single_static = "SingleTag";
+        let batch = single_static.into_tag_batch();
+        assert_eq!(batch.len(), 1);
+        assert_eq!(batch.iter_str().collect::<Vec<_>>(), vec!["SingleTag"]);
+        assert_eq!(batch.into_vec(), vec!["SingleTag"]);
+
+        // 4. Vec<String>
+        let vec_strings = vec!["Dyn1".to_string(), "Dyn2".to_string()];
+        let batch = vec_strings.into_tag_batch();
+        assert_eq!(batch.len(), 2);
+        assert_eq!(batch.iter_str().collect::<Vec<_>>(), vec!["Dyn1", "Dyn2"]);
+        assert_eq!(batch.into_vec(), vec!["Dyn1", "Dyn2"]);
+
+        // 5. &[String]
+        let slice_strings: &[String] = &["S1".to_string(), "S2".to_string()];
+        let batch = slice_strings.into_tag_batch();
+        assert_eq!(batch.len(), 2);
+        assert_eq!(batch.iter_str().collect::<Vec<_>>(), vec!["S1", "S2"]);
+        assert_eq!(batch.into_vec(), vec!["S1", "S2"]);
+
+        // 6. TagBatch::from_str_lenient
+        let inline_batch = TagBatch::from_str_lenient("Short.Tag");
+        assert_eq!(inline_batch.len(), 1);
+        assert_eq!(
+            inline_batch.iter_str().collect::<Vec<_>>(),
+            vec!["Short.Tag"]
+        );
+        assert_eq!(inline_batch.clone().into_vec(), vec!["Short.Tag"]);
+        assert_eq!(inline_batch.into_shareable().len(), 1);
+
+        let long_batch =
+            TagBatch::from_str_lenient("Very.Long.Tag.That.Exceeds.Thirty.One.Bytes.Identifier");
+        assert_eq!(long_batch.len(), 1);
+        assert_eq!(
+            long_batch.iter_str().collect::<Vec<_>>(),
+            vec!["Very.Long.Tag.That.Exceeds.Thirty.One.Bytes.Identifier"]
+        );
+
+        // 7. Arc<[String]>
+        let arc_slice: Arc<[String]> =
+            Arc::from(vec!["Arc1".to_string(), "Arc2".to_string()].into_boxed_slice());
+        let batch = arc_slice.into_tag_batch();
+        assert_eq!(batch.len(), 2);
+        assert_eq!(batch.iter_str().collect::<Vec<_>>(), vec!["Arc1", "Arc2"]);
+        assert_eq!(batch.into_vec(), vec!["Arc1", "Arc2"]);
+
+        // 8. Single owned String
+        let single_string = "OwnedSingle".to_string();
+        let batch = single_string.into_tag_batch();
+        assert_eq!(batch.len(), 1);
+        assert_eq!(batch.iter_str().collect::<Vec<_>>(), vec!["OwnedSingle"]);
+        assert_eq!(batch.into_vec(), vec!["OwnedSingle"]);
+
+        // 9. Empty static slice
+        let empty_batch = (&[] as &[&str]).into_tag_batch();
+        assert_eq!(empty_batch.len(), 0);
+        assert!(empty_batch.is_empty());
+        assert_eq!(empty_batch.iter_str().count(), 0);
+        assert!(empty_batch.into_vec().is_empty());
+    }
+
+    #[test]
+    fn test_tag_batch_into_shareable() {
+        let owned_batch = vec!["TagA".to_string(), "TagB".to_string()].into_tag_batch();
+        let shareable = owned_batch.into_shareable();
+        assert!(matches!(shareable.repr, TagBatchRepr::Shared(_)));
+        assert_eq!(shareable.len(), 2);
+        assert_eq!(
+            shareable.iter_str().collect::<Vec<_>>(),
+            vec!["TagA", "TagB"]
+        );
+
+        let static_batch = ["Static1", "Static2"].into_tag_batch();
+        let shareable_static = static_batch.into_shareable();
+        assert_eq!(shareable_static.len(), 2);
+    }
+
+    #[test]
+    fn test_tag_batch_encapsulation_methods() {
+        static TAGS: &[&str] = &["Tag1", "Tag2"];
+        let batch_static = TagBatch::from_static(TAGS);
+        assert_eq!(batch_static.len(), 2);
+        assert!(!batch_static.is_empty());
+        assert_eq!(
+            batch_static.iter().collect::<Vec<_>>(),
+            vec!["Tag1", "Tag2"]
+        );
+        assert_eq!(
+            batch_static.iter_str().collect::<Vec<_>>(),
+            vec!["Tag1", "Tag2"]
+        );
+        assert_eq!(batch_static.as_static_slice(), Some(TAGS));
+        assert_eq!(batch_static.as_slice(), None);
+
+        let vec_tags = vec!["TagA".to_string(), "TagB".to_string()];
+        let batch_owned = TagBatch::from(vec_tags);
+        assert_eq!(batch_owned.len(), 2);
+        assert_eq!(batch_owned.as_slice().unwrap(), &["TagA", "TagB"]);
+        assert_eq!(batch_owned.as_static_slice(), None);
+
+        let shared_tags: Arc<[String]> =
+            Arc::from(vec!["S1".to_string(), "S2".to_string()].into_boxed_slice());
+        let batch_shared = TagBatch::from(shared_tags);
+        assert_eq!(batch_shared.len(), 2);
+        assert_eq!(batch_shared.as_slice().unwrap(), &["S1", "S2"]);
+        assert_eq!(batch_shared.as_static_slice(), None);
+
+        let shareable_static = batch_static.into_shareable();
+        assert_eq!(shareable_static.as_static_slice(), Some(TAGS));
+
+        let shareable_owned = batch_owned.into_shareable();
+        assert_eq!(shareable_owned.len(), 2);
+        assert_eq!(shareable_owned.as_slice().unwrap(), &["TagA", "TagB"]);
+
+        let empty = TagBatch::empty();
+        assert_eq!(empty.len(), 0);
+        assert!(empty.is_empty());
+        assert_eq!(empty.as_static_slice(), Some(&[][..]));
+    }
+
+    #[test]
+    fn test_tag_batch_value_equality() {
+        static TAGS: &[&str] = &["Tag1", "Tag2"];
+        let b_static = TagBatch::from_static(TAGS);
+        let b_owned = TagBatch::from(vec!["Tag1".to_string(), "Tag2".to_string()]);
+        let b_sso = TagBatch::from_str_lenient("Tag1");
+        let b_sso_owned = TagBatch::from(vec!["Tag1".to_string()]);
+
+        assert_eq!(
+            b_static, b_owned,
+            "Static and Owned batches with identical items must be equal"
+        );
+        assert_eq!(
+            b_sso, b_sso_owned,
+            "SSO inline and OwnedSingle with identical items must be equal"
+        );
+        assert_ne!(b_static, b_sso);
+    }
+
+    #[test]
+    fn test_tag_batch_from_iterator() {
+        let strings = vec!["Tag1".to_string(), "Tag2".to_string()];
+        let batch_owned: TagBatch = strings.into_iter().collect();
+        assert_eq!(batch_owned.len(), 2);
+        assert_eq!(
+            batch_owned.iter_str().collect::<Vec<_>>(),
+            vec!["Tag1", "Tag2"]
+        );
+
+        let slices = ["TagA", "TagB", "TagC"];
+        let batch_slices: TagBatch = slices.into_iter().collect();
+        assert_eq!(batch_slices.len(), 3);
+        assert_eq!(
+            batch_slices.iter_str().collect::<Vec<_>>(),
+            vec!["TagA", "TagB", "TagC"]
+        );
+
+        let empty_batch: TagBatch = std::iter::empty::<String>().collect();
+        assert_eq!(empty_batch.len(), 0);
+        assert!(empty_batch.is_empty());
+    }
+
+    #[test]
+    fn test_tag_batch_sso_boundary_and_multibyte_safety() {
+        // 0-byte empty string
+        let batch_empty = TagBatch::from_str_lenient("");
+        assert_eq!(batch_empty.len(), 1);
+        assert_eq!(batch_empty.iter_str().collect::<Vec<_>>(), vec![""]);
+        assert_eq!(batch_empty.into_vec(), vec![""]);
+
+        // Exactly 31-byte string
+        let s31 = "1234567890123456789012345678901";
+        assert_eq!(s31.len(), 31);
+        let batch_31 = TagBatch::from_str_lenient(s31);
+        assert_eq!(batch_31.len(), 1);
+        assert_eq!(batch_31.iter_str().next(), Some(s31));
+        assert_eq!(batch_31.into_vec(), vec![s31.to_string()]);
+
+        // Exactly 32-byte string
+        let s32 = "12345678901234567890123456789012";
+        assert_eq!(s32.len(), 32);
+        let batch_32 = TagBatch::from_str_lenient(s32);
+        assert_eq!(batch_32.len(), 1);
+        assert_eq!(batch_32.iter_str().next(), Some(s32));
+        assert_eq!(batch_32.into_vec(), vec![s32.to_string()]);
+
+        // Multibyte UTF-8: Japanese
+        let jp = "タグ１２３";
+        assert_eq!(jp.len(), 15);
+        let batch_jp = TagBatch::from_str_lenient(jp);
+        assert_eq!(batch_jp.len(), 1);
+        assert_eq!(batch_jp.iter_str().next(), Some(jp));
+        assert_eq!(batch_jp.into_vec(), vec![jp.to_string()]);
+
+        // Multibyte UTF-8: Emoji
+        let emoji = "🚀🏭⚡";
+        assert_eq!(emoji.len(), 11);
+        let batch_emoji = TagBatch::from_str_lenient(emoji);
+        assert_eq!(batch_emoji.len(), 1);
+        assert_eq!(batch_emoji.iter_str().next(), Some(emoji));
+
+        // 33-byte multibyte fallback
+        let s33 = format!("{}タグ", "A".repeat(27));
+        assert_eq!(s33.len(), 33);
+        let batch_33 = TagBatch::from_str_lenient(&s33);
+        assert_eq!(batch_33.iter_str().next(), Some(s33.as_str()));
+    }
+}

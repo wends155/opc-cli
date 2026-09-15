@@ -684,4 +684,99 @@ mod tests {
             res_u64
         );
     }
+
+    #[test]
+    fn test_opc_value_f32_and_default() {
+        assert_eq!(OpcValue::default(), OpcValue::Empty);
+        let val: OpcValue = 12.5f32.into();
+        assert_eq!(val, OpcValue::Float(12.5));
+        let f: f32 = val.try_into().unwrap();
+        assert!((f - 12.5).abs() < 1e-6);
+
+        let int_val = OpcValue::Int(42);
+        let f_from_int: f32 = int_val.try_into().unwrap();
+        assert!((f_from_int - 42.0f32).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    #[allow(clippy::many_single_char_names, clippy::duration_suboptimal_units)]
+    fn test_display_option_timestamp_civil() {
+        use std::time::{Duration, SystemTime};
+
+        // 1. Unix Epoch
+        assert_eq!(format!("{}", Some(SystemTime::UNIX_EPOCH).display()), "N/A");
+
+        // 2. Fixed Timestamp: 1700000000 = 2023-11-14 22:13:20 UTC
+        let ts = SystemTime::UNIX_EPOCH + Duration::from_secs(1_700_000_000);
+        assert_eq!(format!("{}", Some(ts).display()), "2023-11-14 22:13:20");
+
+        // 3. Leap Year: 2024-02-29 12:00:00 UTC = 1709208000
+        let leap_ts = SystemTime::UNIX_EPOCH + Duration::from_secs(1_709_208_000);
+        assert_eq!(
+            format!("{}", Some(leap_ts).display()),
+            "2024-02-29 12:00:00"
+        );
+
+        // 4. Pre-1970 via secs_to_civil: -86400 = 1969-12-31 00:00:00
+        let (y, m, d, h, min, s) = secs_to_civil(-86400);
+        assert_eq!((y, m, d, h, min, s), (1969, 12, 31, 0, 0, 0));
+    }
+
+    #[test]
+    fn test_opc_value_display() {
+        assert_eq!(OpcValue::String("hello".into()).to_string(), "hello");
+        assert_eq!(OpcValue::Int(100).to_string(), "100");
+        assert_eq!(OpcValue::Float(12.34).to_string(), "12.34");
+        assert_eq!(OpcValue::Bool(true).to_string(), "true");
+        assert_eq!(OpcValue::Bool(false).to_string(), "false");
+        assert_eq!(OpcValue::Empty.to_string(), "Empty");
+        assert_eq!(OpcValue::Null.to_string(), "Null");
+    }
+
+    #[test]
+    fn test_opc_value_option_ext_some() {
+        let val_opt = Some(OpcValue::Int(42));
+        assert_eq!(format!("{}", val_opt.display()), "42");
+        assert_eq!(format!("{}", val_opt.display_or("Custom")), "42");
+
+        let val_ref = val_opt.as_ref();
+        assert_eq!(format!("{}", val_ref.display()), "42");
+        assert_eq!(format!("{}", val_ref.display_or("Custom")), "42");
+    }
+
+    #[test]
+    fn test_opc_value_option_ext_none() {
+        let val_opt: Option<OpcValue> = None;
+        assert_eq!(format!("{}", val_opt.display()), "Error");
+        assert_eq!(format!("{}", val_opt.display_or("Custom")), "Custom");
+
+        let val_ref = val_opt.as_ref();
+        assert_eq!(format!("{}", val_ref.display()), "Error");
+        assert_eq!(format!("{}", val_ref.display_or("Custom")), "Custom");
+    }
+
+    #[test]
+    fn test_system_time_option_ext_some() {
+        use std::time::SystemTime;
+
+        // Non-epoch time (1700000000 = 2023-11-14 22:13:20 UTC)
+        let ts = SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1_700_000_000);
+        let ts_opt = Some(ts);
+        let expected = "2023-11-14 22:13:20";
+        assert_eq!(format!("{}", ts_opt.display()), expected);
+        assert_eq!(format!("{}", ts_opt.display_or("Custom")), expected);
+    }
+
+    #[test]
+    fn test_system_time_option_ext_none_and_epoch() {
+        use std::time::SystemTime;
+
+        let ts_none: Option<SystemTime> = None;
+        assert_eq!(format!("{}", ts_none.display()), "N/A");
+        assert_eq!(format!("{}", ts_none.display_or("Custom")), "Custom");
+
+        let ts_epoch = Some(SystemTime::UNIX_EPOCH);
+        assert_eq!(format!("{}", ts_epoch.display()), "N/A");
+        assert_eq!(format!("{}", ts_epoch.display_or("Custom")), "Custom");
+    }
 }

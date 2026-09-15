@@ -659,4 +659,570 @@ mod tests {
         assert_eq!(infos[0].host(), Some("192.168.1.50"));
         assert_eq!(infos[1].host(), Some("192.168.1.50"));
     }
+
+    #[test]
+    fn test_server_identifier_conversions_and_display() {
+        let prog_id = ServerIdentifier::from("Matrikon.OPC.Simulation.1");
+        assert_eq!(
+            prog_id,
+            ServerIdentifier::ProgId("Matrikon.OPC.Simulation.1".into())
+        );
+        assert_eq!(prog_id.to_string(), "Matrikon.OPC.Simulation.1");
+        assert!(prog_id.is_prog_id());
+        assert!(!prog_id.is_clsid());
+
+        let clsid_str = "{28E68F9A-8D75-11D1-8DC3-3C302A000000}";
+        let parsed = ServerIdentifier::from(clsid_str);
+        assert!(parsed.is_clsid());
+        assert_eq!(parsed.to_string().to_uppercase(), clsid_str.to_uppercase());
+
+        let direct_guid = windows_core::GUID::from_u128(0x28E6_8F9A_8D75_11D1_8DC3_3C30_2A00_0000);
+        let from_guid = ServerIdentifier::from(direct_guid);
+        assert!(from_guid.is_clsid());
+
+        let direct_clsid = Clsid::from_u128(0x28E6_8F9A_8D75_11D1_8DC3_3C30_2A00_0000);
+        let from_clsid = ServerIdentifier::from(direct_clsid);
+        assert!(from_clsid.is_clsid());
+        assert_eq!(from_clsid.as_clsid(), Some(&direct_clsid));
+    }
+
+    #[test]
+    fn test_opc_server_info_display_name_and_endpoint() {
+        let info_with_user_type = OpcServerInfo::new(
+            "Matrikon.OPC.Simulation.1",
+            Clsid::zeroed(),
+            Some("Matrikon Simulation Server".into()),
+            None,
+        );
+        assert_eq!(
+            info_with_user_type.display_name(),
+            "Matrikon Simulation Server"
+        );
+        assert_eq!(
+            info_with_user_type.endpoint().identifier(),
+            &ServerIdentifier::ProgId("Matrikon.OPC.Simulation.1".into())
+        );
+
+        let info_without_user_type = OpcServerInfo::new(
+            "Kepware.KEPServerEX.V6",
+            Clsid::zeroed(),
+            None,
+            Some("192.168.1.10".into()),
+        );
+        assert_eq!(
+            info_without_user_type.display_name(),
+            "Kepware.KEPServerEX.V6"
+        );
+        assert_eq!(
+            info_without_user_type.endpoint().host(),
+            Some("192.168.1.10")
+        );
+    }
+
+    #[test]
+    fn test_format_guid_bracketed() {
+        let guid = windows_core::GUID::zeroed();
+        assert_eq!(
+            format_guid_bracketed(&guid),
+            "{00000000-0000-0000-0000-000000000000}"
+        );
+        assert_eq!(
+            format_guid_bracketed(&guid),
+            ServerIdentifier::Clsid(Clsid::from_windows_guid(guid)).to_string()
+        );
+
+        let custom_guid = windows_core::GUID::from_u128(0x01234567_89AB_CDEF_0123_456789ABCDEF);
+        assert_eq!(
+            format_guid_bracketed(&custom_guid),
+            ServerIdentifier::Clsid(Clsid::from_windows_guid(custom_guid)).to_string()
+        );
+    }
+
+    #[test]
+    fn test_host_normalization_and_remote_detection() {
+        assert_eq!(normalize_host_str(None), None);
+        assert_eq!(normalize_host_str(Some("")), None);
+        assert_eq!(normalize_host_str(Some("   \t\r\n")), None);
+        assert_eq!(normalize_host_str(Some("localhost")), None);
+        assert_eq!(normalize_host_str(Some("LocalHost")), None);
+        assert_eq!(normalize_host_str(Some("LOCALHOST")), None);
+        assert_eq!(normalize_host_str(Some("127.0.0.1")), None);
+        assert_eq!(normalize_host_str(Some("::1")), None);
+        assert_eq!(
+            normalize_host_str(Some("192.168.1.50")),
+            Some("192.168.1.50")
+        );
+        assert_eq!(
+            normalize_host_str(Some("  remote-plc  ")),
+            Some("remote-plc")
+        );
+        assert_eq!(
+            normalize_host_str(Some("scada-node-01")),
+            Some("scada-node-01")
+        );
+
+        assert_eq!(normalize_host(None), None);
+        assert_eq!(normalize_host(Some("")), None);
+        assert_eq!(normalize_host(Some("   ")), None);
+        assert_eq!(normalize_host(Some("localhost")), None);
+        assert_eq!(normalize_host(Some("LOCALHOST")), None);
+        assert_eq!(normalize_host(Some("127.0.0.1")), None);
+        assert_eq!(normalize_host(Some("::1")), None);
+
+        assert_eq!(
+            normalize_host(Some("192.168.1.50")),
+            Some("192.168.1.50".to_string())
+        );
+        assert_eq!(
+            normalize_host(Some("  plc-host  ")),
+            Some("plc-host".to_string())
+        );
+
+        assert!(!is_remote_host(None));
+        assert!(!is_remote_host(Some("")));
+        assert!(!is_remote_host(Some("localhost")));
+        assert!(!is_remote_host(Some("127.0.0.1")));
+        assert!(!is_remote_host(Some("::1")));
+        assert!(is_remote_host(Some("remote-server")));
+
+        let local_ep = OpcServerEndpoint::local("Test.Server");
+        assert!(!local_ep.is_remote());
+        assert_eq!(local_ep.host, None);
+
+        let remote_local = OpcServerEndpoint::remote("localhost", "Test.Server");
+        assert!(!remote_local.is_remote());
+        assert_eq!(remote_local.host, None);
+
+        let remote_ep = OpcServerEndpoint::remote("10.0.0.1", "Test.Server");
+        assert!(remote_ep.is_remote());
+        assert_eq!(remote_ep.host, Some("10.0.0.1".to_string()));
+
+        let info = OpcServerInfo::new(
+            "Test.Server",
+            Clsid::zeroed(),
+            Some("Test Title".to_string()),
+            Some("localhost".to_string()),
+        );
+        assert_eq!(info.host(), None);
+        assert_eq!(info.display_name(), "Test Title");
+        let ep = info.endpoint();
+        assert!(!ep.is_remote());
+    }
+
+    #[test]
+    fn test_endpoint_unc_parsing_roundtrip() {
+        use std::str::FromStr;
+
+        // Windows UNC backslash path
+        let ep1 = OpcServerEndpoint::from_str(r"\\192.168.1.50\Matrikon.OPC.Simulation").unwrap();
+        assert_eq!(ep1.host(), Some("192.168.1.50"));
+        assert_eq!(ep1.identifier().to_string(), "Matrikon.OPC.Simulation");
+        assert!(ep1.is_remote());
+        assert_eq!(ep1.to_string(), r"\\192.168.1.50\Matrikon.OPC.Simulation");
+
+        // Unix-style forward slash path
+        let ep2 = OpcServerEndpoint::from_str("//192.168.1.50/Matrikon.OPC.Simulation").unwrap();
+        assert_eq!(ep2.host(), Some("192.168.1.50"));
+        assert_eq!(ep2.identifier().to_string(), "Matrikon.OPC.Simulation");
+        assert!(ep2.is_remote());
+
+        // Localhost UNC normalized to local
+        let ep_local = OpcServerEndpoint::from_str(r"\\localhost\Matrikon.OPC.Simulation").unwrap();
+        assert_eq!(ep_local.host(), None);
+        assert!(!ep_local.is_remote());
+        assert_eq!(ep_local.to_string(), "Matrikon.OPC.Simulation");
+
+        // Plain server name without host
+        let ep_plain = OpcServerEndpoint::from_str("Matrikon.OPC.Simulation").unwrap();
+        assert_eq!(ep_plain.host(), None);
+        assert!(!ep_plain.is_remote());
+        assert_eq!(ep_plain.to_string(), "Matrikon.OPC.Simulation");
+
+        // Roundtrip test via Display and FromStr
+        let ep_remote = OpcServerEndpoint::remote("10.0.0.5", "Kepware.KEPServerEX.V6");
+        let display_str = ep_remote.to_string();
+        let reparsed: OpcServerEndpoint = display_str.parse().unwrap();
+        assert_eq!(ep_remote, reparsed);
+
+        // From<&str> delegates to parsing
+        let ep_from_str: OpcServerEndpoint = r"\\192.168.1.50\Matrikon.OPC.Simulation".into();
+        assert_eq!(ep_from_str, ep1);
+
+        // Rejection cases
+        assert!(OpcServerEndpoint::from_str("").is_err());
+        assert!(OpcServerEndpoint::from_str("   ").is_err());
+        assert!(OpcServerEndpoint::from_str(r"\\").is_err());
+        assert!(OpcServerEndpoint::from_str(r"\\host\").is_err());
+    }
+
+    #[test]
+    fn test_parse_errors_display_and_traits() {
+        use std::str::FromStr;
+
+        use crate::types::clsid::Clsid;
+
+        // 1. ParseServerIdError variants & display
+        let err_empty_id = ParseServerIdError::Empty;
+        assert_eq!(
+            format!("{err_empty_id}"),
+            "Server identifier cannot be empty"
+        );
+
+        let err_too_long = ParseServerIdError::ProgIdTooLong(256);
+        assert_eq!(
+            format!("{err_too_long}"),
+            "ProgID length 256 exceeds maximum allowed 255 characters"
+        );
+
+        let err_invalid_prog = ParseServerIdError::InvalidProgId("Invalid..ProgID".to_string());
+        assert_eq!(
+            format!("{err_invalid_prog}"),
+            "Invalid characters or syntax in ProgID: 'Invalid..ProgID'"
+        );
+
+        let clsid_err = Clsid::from_str("not-a-guid").unwrap_err();
+        let err_clsid = ParseServerIdError::InvalidClsid(clsid_err);
+        assert!(format!("{err_clsid}").contains("Invalid CLSID GUID string: 'not-a-guid'"));
+
+        // 2. ParseEndpointError variants & display
+        let err_ep_empty = ParseEndpointError::Empty;
+        assert_eq!(format!("{err_ep_empty}"), "Server endpoint cannot be empty");
+
+        let err_ep_format = ParseEndpointError::InvalidFormat("bad-endpoint".to_string());
+        assert_eq!(
+            format!("{err_ep_format}"),
+            "Invalid endpoint syntax: 'bad-endpoint'"
+        );
+
+        let err_ep_missing = ParseEndpointError::MissingServer(r"\\host\".to_string());
+        assert_eq!(
+            format!("{err_ep_missing}"),
+            r"Missing server identifier in endpoint path: '\\host\'"
+        );
+
+        let err_ep_nested = ParseEndpointError::from(err_empty_id.clone());
+        assert_eq!(
+            format!("{err_ep_nested}"),
+            "Invalid server identifier in endpoint: Server identifier cannot be empty"
+        );
+
+        // 3. std::error::Error source checking
+        let std_err: &dyn std::error::Error = &err_ep_nested;
+        assert!(std_err.source().is_some());
+        let source = std_err.source().unwrap();
+        assert_eq!(format!("{source}"), format!("{err_empty_id}"));
+    }
+
+    #[test]
+    fn test_prog_id_validation_boundaries() {
+        // Valid boundaries: length 1 and 255
+        assert!(validate_prog_id("A").is_ok());
+        assert!(validate_prog_id("A.B").is_ok());
+
+        let prog_id_255 = "A".repeat(255);
+        assert!(validate_prog_id(&prog_id_255).is_ok());
+
+        let prog_id_dot_255 = format!("{}.{}", "A".repeat(127), "B".repeat(127));
+        assert_eq!(prog_id_dot_255.len(), 255);
+        assert!(validate_prog_id(&prog_id_dot_255).is_ok());
+
+        // Boundary: length 0 (empty) and length 256
+        assert_eq!(validate_prog_id(""), Err(ParseServerIdError::Empty));
+        assert_eq!(validate_prog_id("   "), Err(ParseServerIdError::Empty));
+
+        let prog_id_256 = "A".repeat(256);
+        assert_eq!(
+            validate_prog_id(&prog_id_256),
+            Err(ParseServerIdError::ProgIdTooLong(256))
+        );
+
+        // Syntax rejection: leading or trailing dots
+        assert!(matches!(
+            validate_prog_id(".Server.Prog"),
+            Err(ParseServerIdError::InvalidProgId(_))
+        ));
+        assert!(matches!(
+            validate_prog_id("Server.Prog."),
+            Err(ParseServerIdError::InvalidProgId(_))
+        ));
+
+        // Syntax rejection: consecutive dots
+        assert!(matches!(
+            validate_prog_id("Server..Prog"),
+            Err(ParseServerIdError::InvalidProgId(_))
+        ));
+
+        // Syntax rejection: special characters & spaces
+        let invalid_chars = [
+            "Server Name",
+            "Server@1",
+            "Server#Tag",
+            "Server$Val",
+            "Server/1",
+            "Server\\1",
+            "Server:1",
+        ];
+        for invalid in invalid_chars {
+            assert!(
+                matches!(
+                    validate_prog_id(invalid),
+                    Err(ParseServerIdError::InvalidProgId(_))
+                ),
+                "Expected '{invalid}' to fail ProgID validation"
+            );
+        }
+    }
+
+    #[test]
+    fn test_server_identifier_from_str_valid_and_invalid() {
+        use std::str::FromStr;
+
+        // 1. Valid ProgID
+        let id_prog = ServerIdentifier::from_str("Matrikon.OPC.Simulation.1").unwrap();
+        assert_eq!(id_prog.as_prog_id(), Some("Matrikon.OPC.Simulation.1"));
+        assert!(id_prog.is_prog_id());
+        assert!(!id_prog.is_clsid());
+
+        // 2. Valid Bracketed CLSID
+        let clsid_str = "{28E68F9A-8D75-11D1-8DC3-3C302A000000}";
+        let id_clsid = ServerIdentifier::from_str(clsid_str).unwrap();
+        assert!(id_clsid.is_clsid());
+        assert_eq!(
+            id_clsid.to_string().to_uppercase(),
+            clsid_str.to_uppercase()
+        );
+
+        // 3. From<&str>
+        let id_from = ServerIdentifier::from("Kepware.KEPServerEX.V6");
+        assert_eq!(id_from.as_prog_id(), Some("Kepware.KEPServerEX.V6"));
+
+        // 4. Invalid cases
+        assert_eq!(
+            ServerIdentifier::from_str(""),
+            Err(ParseServerIdError::Empty)
+        );
+        assert_eq!(
+            ServerIdentifier::from_str("   "),
+            Err(ParseServerIdError::Empty)
+        );
+
+        assert!(matches!(
+            ServerIdentifier::from_str("{not-a-valid-guid}"),
+            Err(ParseServerIdError::InvalidClsid(_))
+        ));
+
+        assert!(matches!(
+            ServerIdentifier::from_str("Invalid Server Identifier"),
+            Err(ParseServerIdError::InvalidProgId(_))
+        ));
+    }
+
+    #[test]
+    fn test_endpoint_from_str_comprehensive_schemes() {
+        use std::str::FromStr;
+
+        // Windows UNC
+        let ep_unc =
+            OpcServerEndpoint::from_str(r"\\192.168.1.50\Matrikon.OPC.Simulation.1").unwrap();
+        assert_eq!(ep_unc.host.as_deref(), Some("192.168.1.50"));
+        assert_eq!(ep_unc.identifier.to_string(), "Matrikon.OPC.Simulation.1");
+        assert!(ep_unc.is_remote());
+        assert_eq!(
+            ep_unc.to_string(),
+            r"\\192.168.1.50\Matrikon.OPC.Simulation.1"
+        );
+
+        // Unix forward slash
+        let ep_unix =
+            OpcServerEndpoint::from_str("//192.168.1.50/Matrikon.OPC.Simulation.1").unwrap();
+        assert_eq!(ep_unix.host.as_deref(), Some("192.168.1.50"));
+        assert_eq!(ep_unix.identifier.to_string(), "Matrikon.OPC.Simulation.1");
+        assert!(ep_unix.is_remote());
+
+        // URI scheme: opc://
+        let ep_uri =
+            OpcServerEndpoint::from_str("opc://192.168.1.50/Matrikon.OPC.Simulation.1").unwrap();
+        assert_eq!(ep_uri.host.as_deref(), Some("192.168.1.50"));
+        assert_eq!(ep_uri.identifier.to_string(), "Matrikon.OPC.Simulation.1");
+        assert!(ep_uri.is_remote());
+
+        // URI scheme: opc.da://
+        let ep_da_uri =
+            OpcServerEndpoint::from_str("opc.da://192.168.1.50/Matrikon.OPC.Simulation.1").unwrap();
+        assert_eq!(ep_da_uri.host.as_deref(), Some("192.168.1.50"));
+        assert_eq!(
+            ep_da_uri.identifier.to_string(),
+            "Matrikon.OPC.Simulation.1"
+        );
+        assert!(ep_da_uri.is_remote());
+
+        // Raw slash
+        let ep_raw_slash =
+            OpcServerEndpoint::from_str("192.168.1.50/Matrikon.OPC.Simulation.1").unwrap();
+        assert_eq!(ep_raw_slash.host.as_deref(), Some("192.168.1.50"));
+        assert_eq!(
+            ep_raw_slash.identifier.to_string(),
+            "Matrikon.OPC.Simulation.1"
+        );
+        assert!(ep_raw_slash.is_remote());
+
+        // Standalone local ProgID
+        let ep_local_prog = OpcServerEndpoint::from_str("Matrikon.OPC.Simulation.1").unwrap();
+        assert_eq!(ep_local_prog.host, None);
+        assert!(!ep_local_prog.is_remote());
+        assert_eq!(
+            ep_local_prog.identifier.to_string(),
+            "Matrikon.OPC.Simulation.1"
+        );
+
+        // Standalone local CLSID
+        let clsid_str = "{28E68F9A-8D75-11D1-8DC3-3C302A000000}";
+        let ep_local_clsid = OpcServerEndpoint::from_str(clsid_str).unwrap();
+        assert_eq!(ep_local_clsid.host, None);
+        assert!(!ep_local_clsid.is_remote());
+        assert!(ep_local_clsid.identifier.is_clsid());
+    }
+
+    #[test]
+    fn test_endpoint_from_str_localhost_normalization() {
+        use std::str::FromStr;
+
+        let local_inputs = [
+            r"\\localhost\Matrikon.OPC.Simulation.1",
+            r"\\LOCALHOST\Matrikon.OPC.Simulation.1",
+            r"\\127.0.0.1\Matrikon.OPC.Simulation.1",
+            r"\\::1\Matrikon.OPC.Simulation.1",
+            "//localhost/Matrikon.OPC.Simulation.1",
+            "//127.0.0.1/Matrikon.OPC.Simulation.1",
+            "opc://localhost/Matrikon.OPC.Simulation.1",
+            "opc.da://localhost/Matrikon.OPC.Simulation.1",
+            "opc://127.0.0.1/Matrikon.OPC.Simulation.1",
+            "localhost/Matrikon.OPC.Simulation.1",
+        ];
+
+        for input in local_inputs {
+            let ep = OpcServerEndpoint::from_str(input).unwrap();
+            assert_eq!(
+                ep.host, None,
+                "Host in '{input}' should be normalized to None"
+            );
+            assert!(!ep.is_remote(), "Endpoint '{input}' should not be remote");
+            assert_eq!(ep.identifier.to_string(), "Matrikon.OPC.Simulation.1");
+        }
+    }
+
+    #[test]
+    fn test_endpoint_from_str_negative_syntax_cases() {
+        use std::str::FromStr;
+
+        assert_eq!(
+            OpcServerEndpoint::from_str(""),
+            Err(ParseEndpointError::Empty)
+        );
+        assert_eq!(
+            OpcServerEndpoint::from_str("   "),
+            Err(ParseEndpointError::Empty)
+        );
+
+        assert!(matches!(
+            OpcServerEndpoint::from_str(r"\\host\"),
+            Err(ParseEndpointError::MissingServer(_))
+        ));
+        assert_eq!(
+            OpcServerEndpoint::from_str("//host"),
+            Err(ParseEndpointError::InvalidFormat(
+                "Expected host and server separated by delimiter in '//host'".into()
+            ))
+        );
+        assert!(matches!(
+            OpcServerEndpoint::from_str("opc://host/"),
+            Err(ParseEndpointError::MissingServer(_))
+        ));
+        assert!(matches!(
+            OpcServerEndpoint::from_str("opc.da://host/"),
+            Err(ParseEndpointError::MissingServer(_))
+        ));
+
+        assert!(matches!(
+            OpcServerEndpoint::from_str(r"\\192.168.1.50\Invalid Prog@ID"),
+            Err(ParseEndpointError::InvalidServerId(
+                ParseServerIdError::InvalidProgId(_)
+            ))
+        ));
+    }
+
+    #[test]
+    fn test_endpoint_deprecated_from_str_behavior() {
+        use std::str::FromStr;
+
+        #[allow(deprecated)]
+        let ep: OpcServerEndpoint = r"\\192.168.1.50\Matrikon.OPC.Simulation.1".into();
+        assert_eq!(ep.host.as_deref(), Some("192.168.1.50"));
+        assert_eq!(ep.identifier.to_string(), "Matrikon.OPC.Simulation.1");
+
+        let res = OpcServerEndpoint::from_str(r"\\192.168.1.50\Matrikon.OPC.Simulation.1");
+        assert!(res.is_ok());
+
+        let err_res = OpcServerEndpoint::from_str("");
+        assert!(err_res.is_err());
+    }
+
+    #[test]
+    fn test_opc_server_info_getters_and_encapsulation() {
+        let clsid = Clsid::from_u128(0x28E6_8F9A_8D75_11D1_8DC3_3C30_2A00_0000);
+        let info = OpcServerInfo::new(
+            "Matrikon.OPC.Simulation.1",
+            clsid,
+            Some("Matrikon Simulation Server".to_string()),
+            Some("192.168.1.50".to_string()),
+        );
+
+        assert_eq!(info.prog_id(), "Matrikon.OPC.Simulation.1");
+        assert_eq!(info.clsid(), clsid);
+        assert_eq!(info.user_type(), Some("Matrikon Simulation Server"));
+        assert_eq!(info.host(), Some("192.168.1.50"));
+        assert_eq!(info.display_name(), "Matrikon Simulation Server");
+
+        let ep = info.endpoint();
+        assert!(ep.is_remote());
+        assert_eq!(ep.host(), Some("192.168.1.50"));
+        assert_eq!(
+            ep.identifier(),
+            &ServerIdentifier::ProgId("Matrikon.OPC.Simulation.1".into())
+        );
+
+        // Consuming accessor verification
+        assert_eq!(info.into_prog_id(), "Matrikon.OPC.Simulation.1");
+
+        // Fallback display name and localhost normalization to None
+        let local_info = OpcServerInfo::new(
+            "Kepware.KEPServerEX.V6",
+            Clsid::zeroed(),
+            None,
+            Some("localhost".to_string()),
+        );
+
+        assert_eq!(local_info.prog_id(), "Kepware.KEPServerEX.V6");
+        assert_eq!(local_info.clsid(), Clsid::zeroed());
+        assert_eq!(local_info.user_type(), None);
+        assert_eq!(local_info.host(), None);
+        assert_eq!(local_info.display_name(), "Kepware.KEPServerEX.V6");
+
+        let local_ep = local_info.endpoint();
+        assert!(!local_ep.is_remote());
+        assert_eq!(local_ep.host(), None);
+        assert_eq!(
+            local_ep.identifier(),
+            &ServerIdentifier::ProgId("Kepware.KEPServerEX.V6".into())
+        );
+
+        // Whitespace host normalization to None
+        let trimmed_info = OpcServerInfo::new(
+            "Yokogawa.Exaopc.1",
+            Clsid::zeroed(),
+            Some("Yokogawa Server".to_string()),
+            Some("   ".to_string()),
+        );
+        assert_eq!(trimmed_info.host(), None);
+    }
 }

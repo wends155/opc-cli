@@ -15,9 +15,6 @@ pub(crate) mod value;
 pub(crate) mod vartype;
 pub(crate) mod write_batch;
 
-#[cfg(test)]
-mod tests;
-
 pub use batch::*;
 pub use browse::*;
 pub use clsid::*;

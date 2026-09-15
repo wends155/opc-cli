@@ -205,4 +205,99 @@ mod tests {
         assert_eq!(inserted, 0);
         assert_eq!(collector.len(), 0);
     }
+
+    #[test]
+    fn test_tag_collector_lifecycle() {
+        let collector = TagCollector::new(5);
+        assert_eq!(collector.len(), 0);
+        assert!(collector.is_empty());
+        assert_eq!(collector.max_tags(), 5);
+        assert!(!collector.is_full());
+        assert!(!collector.is_cancelled());
+
+        assert!(collector.push("Tag1".into()));
+        assert!(collector.push("Tag2".into()));
+        assert_eq!(collector.len(), 2);
+        assert!(!collector.is_empty());
+        assert!(!collector.is_full());
+
+        let snap = collector.snapshot();
+        assert_eq!(snap, vec!["Tag1".to_string(), "Tag2".to_string()]);
+        assert_eq!(collector.len(), 2);
+
+        let harvested = collector.harvest();
+        assert_eq!(harvested, vec!["Tag1".to_string(), "Tag2".to_string()]);
+        assert_eq!(collector.len(), 0);
+        assert!(collector.is_empty());
+    }
+
+    #[test]
+    fn test_tag_collector_capacity_cap() {
+        let collector = TagCollector::new(2);
+        assert!(collector.push("T1".into()));
+        assert!(collector.push("T2".into()));
+        assert_eq!(collector.len(), 2);
+        assert!(collector.is_full());
+
+        // Further pushes must be rejected
+        assert!(!collector.push("T3".into()));
+        assert_eq!(collector.len(), 2);
+        assert_eq!(
+            collector.snapshot(),
+            vec!["T1".to_string(), "T2".to_string()]
+        );
+    }
+
+    #[test]
+    fn test_tag_collector_unbounded() {
+        let collector = TagCollector::unbounded();
+        assert_eq!(collector.max_tags(), usize::MAX);
+        assert!(!collector.is_full());
+        assert!(collector.push("A".into()));
+        assert!(!collector.is_full());
+    }
+
+    #[test]
+    fn test_tag_collector_cancellation() {
+        let collector = TagCollector::new(10);
+        let c1 = collector.clone();
+        let c2 = collector.clone();
+
+        assert!(!c1.is_cancelled());
+        assert!(!c2.is_cancelled());
+
+        collector.cancel();
+        assert!(c1.is_cancelled());
+        assert!(c2.is_cancelled());
+        assert!(collector.is_cancelled());
+
+        // Pushes after cancellation must be rejected
+        assert!(!collector.push("T1".into()));
+        assert_eq!(collector.len(), 0);
+    }
+
+    #[test]
+    fn test_tag_collector_multithreaded() {
+        let collector = TagCollector::new(400);
+        let handles: Vec<_> = (0..4)
+            .map(|thread_id| {
+                let col = collector.clone();
+                std::thread::spawn(move || {
+                    for i in 0..100 {
+                        assert!(col.push(format!("T_{thread_id}_{i}")));
+                    }
+                })
+            })
+            .collect();
+
+        for h in handles {
+            h.join().unwrap();
+        }
+
+        assert_eq!(collector.len(), 400);
+        assert!(collector.is_full());
+        let tags = collector.harvest();
+        assert_eq!(tags.len(), 400);
+        assert_eq!(collector.len(), 0);
+    }
 }
