@@ -3,7 +3,7 @@
 > **Behavioral Source of Truth** for the `opc-da-client` library crate.
 > Defines *what* each module should do — independent of current implementation.
 >
-> Last verified against: 97e4985
+> Last verified against: 966632f
 
 ---
 
@@ -644,22 +644,27 @@ Structured error enum returned when converting or extracting tag values from col
 | `write_tags(&self, writes: impl IntoWriteBatch) -> OpcResult<Vec<WriteResult>>` | `pub async fn write_tags(&self, writes: impl IntoWriteBatch) -> OpcResult<Vec<WriteResult>>` | Writes multiple tags in a single native DCOM batch operation. |
 | `write(&self, tag: &str, value: impl Into<OpcValue>) -> OpcResult<WriteResult>` | `pub async fn write(&self, tag: &str, value: impl Into<OpcValue>) -> OpcResult<WriteResult>` | *(Deprecated since 0.3.0, prefer `write_tag`)* Writes a single value to a tag. |
 | `write_batch(&self, writes: impl IntoWriteBatch) -> OpcResult<Vec<WriteResult>>` | `pub async fn write_batch(&self, writes: impl IntoWriteBatch) -> OpcResult<Vec<WriteResult>>` | *(Deprecated since 0.3.0, prefer `write_tags`)* Writes multiple tags in a single native DCOM batch operation. |
-| `browse(&self, filter: BrowseFilter) -> OpcResult<TagCollector>` | `pub async fn browse(&self, filter: BrowseFilter) -> OpcResult<TagCollector>` | Browses the address space of the bound server. |
+| `browse(&self, collector: TagCollector) -> OpcResult<Vec<String>>` | `pub async fn browse(&self, collector: TagCollector) -> OpcResult<Vec<String>>` | Recursively browses the address space of the bound server, streaming discovered tags to the collector. |
 | `subscribe(&self, tags: impl IntoTags, interval: Duration)` | `pub fn subscribe(&self, tags: impl IntoTags, interval: Duration) -> tokio::sync::mpsc::Receiver<TagValues>` | Starts a Layer 2 non-blocking polling stream yielding `TagValues` periodically. Terminates on channel close or connection error. |
 
-**General & Compatibility Methods on `OpcDaClient<C, State>`:**
+**Inherent Multi-Server Gateway Methods on `OpcDaClient<C, Unbound>`:**
 | Method | Signature | Description |
 | :--- | :--- | :--- |
-| `read_tag_values(&self, server: &str, tags: impl IntoTags)` | `pub async fn read_tag_values(&self, server: &str, tags: impl IntoTags) -> OpcResult<TagValues>` | Inherent 2-argument forwarder routing directly to `TagReader::read_tag_values`. |
-| `read_tag_value(&self, server: &str, tag_id: &str)` | `pub async fn read_tag_value(&self, server: &str, tag_id: &str) -> OpcResult<TagValue>` | Inherent 2-argument forwarder routing directly to `TagReader::read_tag_value`. |
-| `write_tag_value(&self, server: &str, tag_id: &str, value: OpcValue)` | `pub async fn write_tag_value(&self, server: &str, tag_id: &str, value: OpcValue) -> OpcResult<WriteResult>` | Inherent 3-argument forwarder routing to `TagWriter::write_tag_value`. |
-| `write_tag_batch(&self, server: &str, writes: WriteBatch)` | `pub async fn write_tag_batch(&self, server: &str, writes: WriteBatch) -> OpcResult<Vec<WriteResult>>` | Inherent 2-argument forwarder routing to `TagWriter::write_tag_batch`. |
-| `write_tag_values(&self, server: &str, writes: &[(String, OpcValue)])` | `pub async fn write_tag_values(&self, server: &str, writes: &[(String, OpcValue)]) -> OpcResult<Vec<WriteResult>>` | *(Deprecated since 0.2.0, prefer `write_tag_batch`)* Forwarder routing to `TagWriter::write_tag_values`. |
-| `endpoint(&self)` | `pub fn endpoint(&self) -> Option<&OpcServerEndpoint>` | Returns `Some(&OpcServerEndpoint)` if bound, `None` if unbound. |
-| `is_bound(&self)` | `pub fn is_bound(&self) -> bool` | Checks whether this client instance is bound to a server. |
-| `list_servers_on(&self, host: &str)` | `pub async fn list_servers_on(&self, host: &str) -> OpcResult<Vec<String>>` | *(Deprecated since 0.2.1)* Discovers OPC servers on a host. Prefer `ServerDiscovery::list_servers`. |
+| `list_servers(&self, host: &str)` | `pub async fn list_servers(&self, host: &str) -> OpcResult<Vec<String>>` | Enumerate available OPC DA servers on `host`. |
+| `list_server_details(&self, host: &str)` | `pub async fn list_server_details(&self, host: &str) -> OpcResult<Vec<OpcServerInfo>>` | Enumerate servers on `host` with ProgID, CLSID, and user-readable name. |
+| `browse_tags(&self, server: &str, collector: TagCollector)` | `pub async fn browse_tags(&self, server: &str, collector: TagCollector) -> OpcResult<Vec<String>>` | Browse address space of `server`. |
+| `read_tag_values(&self, server: &str, tags: impl IntoTags)` | `pub async fn read_tag_values(&self, server: &str, tags: impl IntoTags) -> OpcResult<TagValues>` | Read multiple tag values from `server`. |
+| `read_tag_value(&self, server: &str, tag_id: &str)` | `pub async fn read_tag_value(&self, server: &str, tag_id: &str) -> OpcResult<TagValue>` | Read single tag value from `server`. |
+| `write_tag_value(&self, server: &str, tag_id: &str, value: OpcValue)` | `pub async fn write_tag_value(&self, server: &str, tag_id: &str, value: OpcValue) -> OpcResult<WriteResult>` | Write single tag value to `server`. |
+| `write_tag_batch(&self, server: &str, writes: WriteBatch)` | `pub async fn write_tag_batch(&self, server: &str, writes: WriteBatch) -> OpcResult<Vec<WriteResult>>` | Write batch of tag values to `server`. |
 
-Implements `OpcProvider` for all five trait methods (`list_servers`, `list_server_details`, `browse_tags`, `read_tag_values`, `write_tag_value`) by dispatching to the `ComWorker`.
+**Shared Inherent Methods on `OpcDaClient<C, State>`:**
+| Method | Signature | Description |
+| :--- | :--- | :--- |
+| `timeout(&self)` | `pub fn timeout(&self) -> Option<Duration>` | Returns the configured request timeout duration, if any. |
+
+**Role Traits & Composite `OpcProvider`:**
+`OpcDaClient<C, State>` implements `ServerDiscovery`, `TagBrowser`, `TagReader`, `TagWriter`, and composite `OpcProvider` across all typestates (`Unbound` and `Bound`), dispatching asynchronously to the MTA `ComWorker`.
 
 **Invariants:**
 *   All COM work runs on a dedicated, long-lived `ComWorker` thread, avoiding repeated initialization overhead and solving COM thread-affinity constraints.
@@ -731,41 +736,11 @@ Before calling `browse_recursive`, `browse_tags` attempts `browse_opc_item_ids(B
 *   `S_FALSE` (already initialized) is treated as success — the guard will still call `CoUninitialize` on drop.
 *   The guard is **not** `Send` or `Sync` — it must remain on the thread that created it.
 
-##### `struct GroupGuard<'a, S: ConnectedServer>` (Internal RAII Cleanup)
-
-**Purpose:** Provide an automatic RAII drop guard for temporary COM groups created during `read_tag_values` and `write_tag_value` executions on the `ComWorker` thread.
-
-| Method | Signature | Description |
-| :--- | :--- | :--- |
-| `new(server: &'a S, handle: GroupHandle)` | `pub(crate) fn new(server: &'a S, handle: GroupHandle) -> Self` | Wraps server reference and group handle with `disarmed = false`. |
-| `handle(&self)` | `pub(crate) fn handle(&self) -> GroupHandle` | Returns the inner group handle. |
-| `disarm(&mut self)` | `pub(crate) fn disarm(&mut self)` | Disarms automatic cleanup on drop. |
-
-**Drop behavior:** When dropped, if not disarmed, calls `self.server.remove_group(self.handle, true)`. Any server cleanup errors are logged as warnings without panicking.
-
-**Invariants:**
-*   Constructed immediately upon successful `add_group` return.
-*   Guarantees group destruction on all function exits (early `?` propagation, empty item slices, error returns, and panics).
-
-##### `struct BrowsePositionGuard<'a, S: ConnectedServer>` (Internal RAII Position Guard)
-
-**Purpose:** Provide an automatic RAII cursor restore guard for hierarchical namespace browsing in `handle_browse` and `browse_recursive`.
-
-| Method | Signature | Description |
-| :--- | :--- | :--- |
-| `enter(server: &'a S, branch: &str)` | `pub(crate) fn enter(server: &'a S, branch: &str) -> OpcResult<Self>` | Navigates down into branch via `server.change_browse_position(BrowseDirection::Down, branch)`. On success, wraps server with `active: true`. |
-| `disarm(&mut self)` | `pub(crate) fn disarm(&mut self)` | Disarms automatic cursor restore on drop. |
-
-**Drop behavior:** When dropped, if `active`, navigates back up via `self.server.change_browse_position(BrowseDirection::Up, "")`. Any errors are logged as warnings without panicking.
-
-**Invariants:**
-*   Guarantees cursor position restoration on all exits from recursive branch traversal (success, early return, error propagation, or panic).
-
 ---
 
-### 1.5 `types` — Canonical Protocol Types & Handles
+### 1.5 `types` — Canonical Protocol Types, Handles, & VarType
 
-**Purpose:** Provide canonical data structures and newtypes representing OPC DA concepts:
+**Purpose:** Provide canonical domain data structures, handles, and newtypes representing OPC DA concepts:
 
 #### Public API
 
@@ -773,7 +748,8 @@ Before calling `browse_recursive`, `browse_tags` attempts `browse_opc_item_ids(B
 - `ServerGroupHandle`: Encapsulated opaque typestate newtype representing server-assigned group identifier, with constructor `new(u32)`, and accessors `as_raw(&self) -> u32`, `into_raw(self) -> u32`.
 - `ClientItemHandle`: Encapsulated opaque typestate newtype representing client-assigned item identifier, with constructor `new(u32)`, and accessors `as_raw(&self) -> u32`, `into_raw(self) -> u32`.
 - `ServerItemHandle`: Encapsulated opaque typestate newtype representing server-assigned item identifier, with constructor `new(u32)`, and accessors `as_raw(&self) -> u32`, `into_raw(self) -> u32`.
-- `ItemHandle`: Legacy backward-compatible type alias for `ServerItemHandle`.
+- `VarType`: Zero-cost `#[repr(transparent)] struct VarType(u16)` newtype for COM Automation `VARTYPE` variant discriminants, eliminating raw integer primitive obsession across Tier 2 SPI contracts. Provides associated constants (`EMPTY`, `NULL`, `I2`, `I4`, `R4`, `R8`, `CY`, `DATE`, `BSTR`, `DISPATCH`, `ERROR`, `BOOL`, `VARIANT`, `UNKNOWN_INTERFACE`, `DECIMAL`, `I1`, `UI1`, `UI2`, `UI4`, `I8`, `UI8`, `INT`, `UINT`), bitmask predicates (`is_array()`, `is_byref()`, `is_vector()`), `base_raw() -> u16`, `base_type() -> BaseVarType`, and `Display`.
+- `BaseVarType`: Strongly-typed enum representing scalar variant types (`Empty`, `Null`, `I2`, `I4`, `R4`, `R8`, `Cy`, `Date`, `Bstr`, `Dispatch`, `Error`, `Bool`, `Variant`, `UnknownInterface`, `Decimal`, `I1`, `Ui1`, `Ui2`, `Ui4`, `I8`, `Ui8`, `Int`, `Uint`, `Other(u16)`).
 - `OpcQuality`: Fully decomposed, zero-allocation 16-bit OPC DA quality word with private fields and getter methods (`major()`, `substatus()`, `limit()`, `raw()`). Implements `From<u16>`, `From<OpcQuality> for u16`, `Display` (rich human-readable diagnostics), `std::str::FromStr` returning `Result<Self, ParseQualityError>`, and predicates (`is_good`, `is_bad`, `is_uncertain`, `is_limited`).
 - `ParseQualityError`: Error struct returned when parsing an invalid quality string via `FromStr`. Implements `Display`, `thiserror::Error`, and `std::error::Error`, with private `String` storage and `.raw()` accessor.
 - `OpcValue`: Canonical domain value enum (`String(String)`, `Int(i64)`, `UInt(u64)`, `Float(f64)`, `Bool(bool)`, `Empty`, `Null`). Implements `std::str::FromStr`, `From` for primitive integer, float, boolean, and string types, and typed accessors (`as_str`, `as_int`, `as_uint`, `as_float`, `as_bool`, `is_empty`, `is_null`).
@@ -783,9 +759,10 @@ Before calling `browse_recursive`, `browse_tags` attempts `browse_opc_item_ids(B
 - `BrowseType`: Strongly-typed enum for namespace browsing (`Branch = 1`, `Leaf = 2`, `Flat = 3`). Implements zero-cost `From<BrowseType> for u32` and fallible `TryFrom<u32> for BrowseType`.
 - `BrowseDirection`: Strongly-typed enum for address space cursor movement (`Up = 1`, `Down = 2`, `To = 3`). Implements zero-cost `From<BrowseDirection> for u32` and fallible `TryFrom<u32> for BrowseDirection`.
 - `NamespaceType`: Strongly-typed enum indicating server namespace hierarchy (`Hierarchy = 1`, `Flat = 2`). Implements `From<NamespaceType> for u32` and fallible `TryFrom<u32> for NamespaceType`.
-- `BrowseFilter`: Structure encapsulating tag filtering options (name pattern, data type constraint, access rights constraint) used when traversing server address spaces.
-- `WriteBatch`: Zero-allocation polymorphic batch write representation (`Single`, `Shared`, `Owned`) with zero-allocation borrowed iterator `WriteBatchIter` and owning iterator `WriteBatchIntoIter`.
+- `TagBatch`: Small String Optimized (SSO) collection of tag IDs with a 31-byte stack inline buffer for single-tag requests, eliminating heap allocations on standard read cycles, with multibyte UTF-8 boundary safety and sequence-based semantic equality.
+- `WriteBatch`: Zero-allocation polymorphic batch write representation (`Single`, `Shared`, `Owned`) with zero-copy contiguous slice projections, borrowed iterator `WriteBatchIter`, and owning iterator `WriteBatchIntoIter`.
 - `IntoWriteBatch`: Universal conversion trait for batch write payloads.
+- `server_info_from_prog_ids(host: &str, prog_ids: Vec<String>) -> Vec<OpcServerInfo>`: Canonical deduplicated helper synthesizing `OpcServerInfo` records from ProgIDs.
 
 ---
 
@@ -875,7 +852,7 @@ Before calling `browse_recursive`, `browse_tags` attempts `browse_opc_item_ids(B
 
 ### 1.8 `connector` & `com::connector` — Pure-Rust SPI & Windows COM Implementation
 
-**Purpose:** Pure-Rust Service Provider Interface (SPI) traits, DTOs, and concrete Win32 COM / mock implementations partitioned into cohesive single-responsibility modules:
+**Purpose:** Pure-Rust Service Provider Interface (SPI) traits, DTOs, lifecycle guards, and concrete Win32 COM / mock implementations partitioned into cohesive single-responsibility modules:
 
 * `opc_da_client::connector` (Pure Tier 2 SPI):
   - `ServerCatalogDiscovery`: Discovers servers via `enumerate_servers(host: &str) -> OpcResult<Vec<String>>` and `enumerate_server_details(host: &str) -> OpcResult<Vec<OpcServerInfo>>`. Implemented by `ComConnector` and `MockServerConnector`.
@@ -886,19 +863,22 @@ Before calling `browse_recursive`, `browse_tags` attempts `browse_opc_item_ids(B
     - `add_items(&self, items: &[GroupItemDef]) -> OpcResult<Vec<GroupItemResult>>`
     - `read(&self, source: DataSource, server_handles: &[ServerItemHandle]) -> OpcResult<Vec<Result<GroupItemState, OpcError>>>`
     - `write(&self, items: &[ItemWrite]) -> OpcResult<Vec<Result<(), OpcError>>>`
-  - DTOs: `GroupItemDef`, `GroupItemResult`, `GroupItemState`, `ItemWrite`, `DataSource`, `GroupConfig`, `CreatedGroup`, `GroupRemovalMode`.
-  - Pure-Rust Mock Suite (`connector::mock` under `feature = "test-support"`): `MockConnectedGroup`, `MockConnectedServer`, `MockServerConnector`, `MockState` (with `should_fail_ping`, `should_fail_progid`, and call counters). Fully functional offline and on non-Windows platforms without `opc-da-backend`.
+  - DTOs: `GroupItemDef`, `GroupItemResult` (using strongly-typed `VarType`), `GroupItemState`, `ItemWrite`, `DataSource`, `GroupConfig`, `CreatedGroup`, `GroupRemovalMode`.
+  - `GroupGuard<'a, S: ConnectedServer>`: Pure-Rust RAII lifecycle drop guard managing temporary OPC groups during execution. Dropping calls `server.remove_group(handle, Force)` protected by `std::panic::catch_unwind` against double-panics during stack unwinding.
+  - `BrowsePositionGuard<'a, S: ConnectedServer>`: Pure-Rust RAII position cursor guard restoring parent address space position (`BrowseDirection::Up`) on drop with `catch_unwind` double-panic protection and structured logging.
+  - Pure-Rust Mock Suite (`connector::mock` under `feature = "test-support"`): Decomposed into modular submodules under `connector/mock/` (`state.rs`, `server.rs`, `group.rs`, `connector.rs`, `tests.rs`). Features telemetry symmetry (`connect_identifier` delegating directly to `connect_endpoint`), poison-resilient lock recovery, and zero Windows COM FFI coupling.
 * `com::connector::server`:
-  - `ComConnector`: Connects to local and remote servers via `connect_server_endpoint` and enumerates servers via Component Categories catalog and `CLSID_OPC_SERVER_LIST`.
+  - `ComConnector`: Connects to local and remote servers via `connect_server_endpoint` and enumerates servers via Component Categories catalog and `CLSID_OPC_SERVER_LIST`. Encapsulates `legacy_dcom` field with read-only getter `legacy_dcom(&self) -> bool`.
   - `ComServer`: Wraps native `IOPCServer` and `IOPCBrowseServerAddressSpace`, managing namespace queries and group creation. Binds `ItemIterator = StringIterator`.
   - `connect_server_endpoint(endpoint: &OpcServerEndpoint, legacy_dcom: bool) -> OpcResult<IOPCServer>`: For local servers, calls `CoCreateInstance` (directly using CLSID if `ServerIdentifier::Clsid`, or resolving ProgID). For remote servers, issues `CoCreateInstanceEx` with `COSERVERINFO` and `COAUTHINFO` (enforcing KB5004442 `RPC_C_AUTHN_LEVEL_PKT_INTEGRITY` unless `legacy_dcom` is enabled), and applies `apply_proxy_blanket` on `IOPCServer` and child groups.
 * `com::connector::group`:
   - `ComGroup`: Wraps native group COM interfaces (`IOPCItemMgt`, `IOPCSyncIO`, `IOPCGroupStateMgt`, etc.).
   - Protected by `ScopedVariant` on synchronous write paths and `ItemStatesGuard` on synchronous read paths, guaranteeing zero `VARIANT` memory leaks.
-* `com::connector` (Facade & Re-exports):
-  - Slim coordinator facade re-exporting all submodule items and re-exporting all items from `connector` for 100% backward compatibility.
-* Crate Root Re-Export:
-  - `pub type MockOpcDaClient = client::OpcDaClient<connector::MockServerConnector>;` exported under `#[cfg(all(feature = "test-support", feature = "opc-da-backend"))]`.
+* `com::connector` (Internal Module Coordinator):
+  - Internal coordinator module exposing `ComConnector`, `ComServer`, and `ComGroup`. Zero pass-through trampolines to `crate::connector`.
+* Two-Tier Root Export Hierarchy (`src/lib.rs`):
+  - Root `crate::*` exposes high-level client facade (`OpcDaClient`, `OpcDaClientBuilder`, `Bound`, `Unbound`, `SubscriptionStream`), role traits (`ServerDiscovery`, `TagBrowser`, `TagReader`, `TagWriter`), provider interface (`OpcProvider`), domain types, and error taxonomy.
+  - SPI traits, guards, and mocks are strictly encapsulated under `crate::connector::*`. Root `pub use connector::{ ... }` is strictly prohibited.
 
 ### 1.8.1 Remote DCOM Implementation Boundary (0.3.0 vs Roadmap)
 
