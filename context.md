@@ -1,5 +1,30 @@
 # Project Context Summary
 
+## 2026-09-16: Block D (Worker Resilience, Concurrency & Panic Safety — Findings #5, #6, #7, #8, #15, #25) Completed (`opc-da-client`)
+> 📝 **Context Update:**
+> * **Feature:** Execution of Block D of the modernization roadmap (Findings #5, #6, #7, #8, #15, #25 in `opc-da-client`), hardening background COM MTA worker thread resilience, bounding channel request queue depth, enforcing write non-idempotency safety, safeguarding COM teardown panics, and eliminating active group cache poisoning.
+> * **Changes:**
+>   - **Channel Backpressure Bounding (Finding #15):**
+>     - Introduced `MAX_QUEUE_DEPTH = 64` in `src/com/worker.rs`, capping opportunistic `rx.try_recv()` draining in `run_worker_thread` to preserve Tokio bounded channel backpressure.
+>   - **Explicit Panic Drain & Propagation (Finding #6):**
+>     - Implemented `PriorityRequestQueue::drain_and_reject` and `ComRequest::fail`, rejecting all queued requests with explicit `WorkerError::Panic` instead of dropping oneshot senders on worker thread panic recovery.
+>   - **Panic Teardown Resilience (Finding #5):**
+>     - Wrapped `pool.clear()` in `std::panic::catch_unwind` during Tier 2 panic recovery in `run_worker_thread`, logging secondary COM proxy drop faults without killing the thread.
+>   - **Early Request Cancellation (Finding #25):**
+>     - Added `reply.is_closed()` checks to `dispatch_discovery_request` and `dispatch_pooled_request`, skipping expensive COM RPC calls when callers have cancelled or timed out.
+>   - **Write Idempotency Safety (Finding #7):**
+>     - Defined `RetryPolicy::{Idempotent, NonIdempotent}` in `src/com/worker/pool.rs` and threaded through `dispatch_with_retry`. Mutating write operations (`WriteTagValue`, `WriteTagValues`) evict stale proxies on connection drop but strictly avoid automatic reconnection/retrying to protect PLCs against duplicate actuations.
+>   - **Active Group Cache Invalidation (Finding #8):**
+>     - Scoped borrow lifetimes in `src/com/worker/read.rs` to invalidate `pooled.active_group` on `populate_item_states` length mismatch before propagating errors, preventing cache poisoning.
+>   - **Unit & Integration Regression Coverage:**
+>     - Added unit tests in `src/com/worker/tests.rs` covering priority queue length/FIFO, early cancellation, queue draining on panic, active group cache invalidation on length mismatch, and non-idempotent write failure without reconnection.
+>     - Added `test_write_tag_does_not_auto_retry_on_connection_error` in `tests/resilience_and_pool_integration_test.rs`.
+>     - Updated `test_stale_connection_eviction` to use `ReadTagValues` for idempotent reconnection verification.
+>   - **Verification:**
+>     - Full 9-gate quality pipeline (`pwsh -File scripts/verify.ps1`) exited 0 with 317 unit/integration tests and 90 doctests passing with zero warnings under `-D warnings`.
+> * **New Constraints:** Mutating operations dispatched via `dispatch_with_retry` must always specify `RetryPolicy::NonIdempotent` to ensure no automated re-execution occurs upon connection failure. Queue draining in the worker event loop must never exceed `MAX_QUEUE_DEPTH`.
+> * **Pruned:** Closed Findings #5, #6, #7, #8, #15, and #25 from `review_report.md`.
+
 ## 2026-09-16: Block C3 (Integration Tests for Connection Resilience, Pooling & Lifecycle — Findings #2, #24) Completed (`opc-da-client`)
 > 📝 **Context Update:**
 > * **Feature:** Execution of Block C3 of the modernization roadmap (Findings #2 and #24 in `opc-da-client`), establishing dedicated integration test coverage for connection resilience, pooling, active group invalidation/recovery, circuit breaker cooldowns, and deterministic thread teardown under `feature = "test-support"`.
