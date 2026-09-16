@@ -254,7 +254,7 @@ async fn main() -> OpcResult<()> {
     }
 
     // Connect directly via 128-bit CLSID string without requiring ProgID lookup
-    let direct_id = ServerIdentifier::from("{28E68F9A-8D75-11D1-8DC3-3C302A000000}");
+    let direct_id = "{28E68F9A-8D75-11D1-8DC3-3C302A000000}".parse::<ServerIdentifier>()?;
     assert!(direct_id.is_clsid());
     Ok(())
 }

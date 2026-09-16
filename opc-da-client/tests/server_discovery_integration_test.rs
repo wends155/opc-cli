@@ -79,7 +79,7 @@ async fn test_server_discovery_structured_metadata_inspection() {
     assert_eq!(ep.host(), Some("10.0.0.50"));
     assert_eq!(
         ep.identifier(),
-        &ServerIdentifier::from("Acme.ScadaServer.DA.1")
+        &ServerIdentifier::try_from("Acme.ScadaServer.DA.1").unwrap()
     );
     assert_eq!(state.last_enumerated_host().as_deref(), Some("10.0.0.50"));
 }

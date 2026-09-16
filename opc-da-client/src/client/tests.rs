@@ -36,7 +36,7 @@ async fn test_client_builder_configuration_and_unbound_discovery() {
     assert_eq!(client.endpoint().host.as_deref(), Some("192.168.1.50"));
     assert_eq!(
         client.endpoint().identifier,
-        ServerIdentifier::from("Matrikon.OPC.Simulation.1")
+        ServerIdentifier::try_from("Matrikon.OPC.Simulation.1").unwrap()
     );
 
     // 2. Unbound client discovery
@@ -98,7 +98,7 @@ async fn test_client_subscribe_mpsc_polling_stream() {
     let connector = MockServerConnector::new();
     let client = OpcDaClient::new(connector)
         .unwrap()
-        .bind(OpcServerEndpoint::local("Mock.Server.1"));
+        .bind(OpcServerEndpoint::local_prog_id("Mock.Server.1"));
     let mut rx = client.subscribe(["Random.Int4"], Duration::from_millis(20));
 
     let first = rx.recv().await;
@@ -110,7 +110,7 @@ async fn test_subscribe_receiver_drop_cancellation() {
     let connector = MockServerConnector::new();
     let client = OpcDaClient::new(connector)
         .unwrap()
-        .bind(OpcServerEndpoint::local("Mock.Server.1"));
+        .bind(OpcServerEndpoint::local_prog_id("Mock.Server.1"));
     let rx = client.subscribe(["Random.Int4"], Duration::from_millis(10));
     drop(rx);
     tokio::time::sleep(Duration::from_millis(30)).await;
@@ -121,7 +121,7 @@ async fn test_client_bind_and_connect_eager() {
     let connector = MockServerConnector::new();
     let client = OpcDaClient::new(connector)
         .unwrap()
-        .bind(OpcServerEndpoint::local("Mock.Server.1"));
+        .bind(OpcServerEndpoint::local_prog_id("Mock.Server.1"));
     assert!(client.connect_eager().await.is_ok());
 }
 
@@ -138,7 +138,7 @@ async fn test_inherent_read_tags_and_read_tag_session_methods() {
     let connector = MockServerConnector::new();
     let client = OpcDaClient::new(connector)
         .unwrap()
-        .bind(OpcServerEndpoint::local("Mock.Server.1"));
+        .bind(OpcServerEndpoint::local_prog_id("Mock.Server.1"));
     let val = client.read_tag("Random.Int4").await.unwrap();
     assert_eq!(val.tag_id, "Random.Int4");
 }
@@ -148,7 +148,7 @@ async fn test_client_read_f32() {
     let connector = MockServerConnector::new();
     let client = OpcDaClient::new(connector)
         .unwrap()
-        .bind(OpcServerEndpoint::local("Mock.Server.1"));
+        .bind(OpcServerEndpoint::local_prog_id("Mock.Server.1"));
     let _ = client.read_f32("Random.Real4").await;
 }
 
@@ -157,7 +157,7 @@ async fn test_client_read_i64() {
     let connector = MockServerConnector::new();
     let client = OpcDaClient::new(connector)
         .unwrap()
-        .bind(OpcServerEndpoint::local("Mock.Server.1"));
+        .bind(OpcServerEndpoint::local_prog_id("Mock.Server.1"));
     let _ = client.read_i64("Random.Int8").await;
 }
 
@@ -166,7 +166,7 @@ async fn test_client_read_u32() {
     let connector = MockServerConnector::new();
     let client = OpcDaClient::new(connector)
         .unwrap()
-        .bind(OpcServerEndpoint::local("Mock.Server.1"));
+        .bind(OpcServerEndpoint::local_prog_id("Mock.Server.1"));
     let _ = client.read_u32("Random.UInt4").await;
 }
 
@@ -175,7 +175,7 @@ async fn test_client_read_u64() {
     let connector = MockServerConnector::new();
     let client = OpcDaClient::new(connector)
         .unwrap()
-        .bind(OpcServerEndpoint::local("Mock.Server.1"));
+        .bind(OpcServerEndpoint::local_prog_id("Mock.Server.1"));
     let _ = client.read_u64("Random.UInt8").await;
 }
 
@@ -184,7 +184,7 @@ async fn test_client_inherent_read_forwarders() {
     let connector = MockServerConnector::new();
     let client = OpcDaClient::new(connector)
         .unwrap()
-        .bind(OpcServerEndpoint::local("Mock.Server.1"));
+        .bind(OpcServerEndpoint::local_prog_id("Mock.Server.1"));
     let _ = client.read_f64("Random.Real8").await;
     let _ = client.read_i32("Random.Int4").await;
     let _ = client.read_bool("Random.Boolean").await;
@@ -194,9 +194,10 @@ async fn test_client_inherent_read_forwarders() {
 #[test]
 fn test_client_bind_remote_localhost_normalization() {
     let connector = MockServerConnector::new();
-    let client = OpcDaClient::new(connector)
-        .unwrap()
-        .bind_remote("localhost", "Mock.Server.1");
+    let client = OpcDaClient::new(connector).unwrap().bind_remote(
+        "localhost",
+        ServerIdentifier::try_from("Mock.Server.1").unwrap(),
+    );
     assert!(client.endpoint().host.is_none());
 }
 
@@ -235,14 +236,16 @@ fn test_client_bind_unbind_lifecycle() {
     let client = OpcDaClient::new(MockServerConnector::new()).unwrap();
     assert!(client.endpoint().is_none());
 
-    let bound = client.bind(OpcServerEndpoint::local("Matrikon.OPC.Simulation.1"));
+    let bound = client.bind(OpcServerEndpoint::local_prog_id(
+        "Matrikon.OPC.Simulation.1",
+    ));
     assert_eq!(bound.server_id(), "Matrikon.OPC.Simulation.1");
 
     let (unbound, ep) = bound.unbind();
     assert!(unbound.endpoint().is_none());
     assert_eq!(
         ep.identifier,
-        ServerIdentifier::from("Matrikon.OPC.Simulation.1")
+        ServerIdentifier::try_from("Matrikon.OPC.Simulation.1").unwrap()
     );
 }
 
@@ -385,4 +388,52 @@ async fn test_unbound_write_tag_generic_into_opc_value() {
         .await
         .unwrap();
     assert!(res3.is_success());
+}
+
+#[test]
+fn test_builder_server_deferred_error_accumulation() {
+    use crate::client::builder::OpcDaClientBuilder;
+
+    // 1. Invalid host with null byte
+    let res = OpcDaClientBuilder::new()
+        .host("bad\0host")
+        .server("Valid.Server")
+        .build();
+    assert!(
+        matches!(res, Err(OpcError::InvalidState(_))),
+        "expected InvalidState for null host, got {res:?}"
+    );
+
+    // 2. Chaining after error does not clobber first error
+    let res_clobber = OpcDaClientBuilder::new()
+        .host("first\0bad")
+        .server("Second\0Bad")
+        .build();
+    if let Err(OpcError::InvalidState(msg)) = res_clobber {
+        assert!(
+            msg.contains("Host"),
+            "first error must be preserved, got {msg}"
+        );
+    } else {
+        panic!("expected InvalidState, got {res_clobber:?}");
+    }
+
+    // 3. build_bound with missing server
+    let res_no_server = OpcDaClientBuilder::new().build_bound();
+    assert!(
+        matches!(res_no_server, Err(OpcError::InvalidState(_))),
+        "expected InvalidState for missing server, got {res_no_server:?}"
+    );
+}
+
+#[test]
+fn test_client_bind_new_fail_early_on_invalid_endpoint() {
+    let res = OpcDaClient::bind_new("bad\0endpoint");
+    assert!(res.is_err(), "bind_new must reject invalid endpoint early");
+
+    let res_remote = OpcDaClient::bind_new_remote("bad\0host", "Valid.Server");
+    assert!(
+        res_remote.is_err(),
+        "bind_new_remote must reject null host early"
+    );
 }

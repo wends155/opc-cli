@@ -295,7 +295,7 @@ mod tests {
     fn test_handle_read_empty_tags_short_circuits() {
         let server = MockConnectedServer::default();
         let mut pooled = PooledServer::new(server);
-        let endpoint = OpcServerEndpoint::local("Test.Server");
+        let endpoint = OpcServerEndpoint::local_prog_id("Test.Server");
         let tags = TagBatch::from_static(&[]);
         let results = handle_read(&endpoint, &tags, &mut pooled).expect("empty tags must succeed");
         assert!(results.is_empty());
@@ -305,7 +305,7 @@ mod tests {
     fn test_handle_read_with_mock_server() {
         let server = MockConnectedServer::default();
         let mut pooled = PooledServer::new(server);
-        let endpoint = OpcServerEndpoint::local("Test.Server");
+        let endpoint = OpcServerEndpoint::local_prog_id("Test.Server");
         let tags = TagBatch::from_static(&["Random.Int4", "Random.Real8"]);
         let results =
             handle_read(&endpoint, &tags, &mut pooled).expect("reading tags must succeed");
@@ -322,7 +322,7 @@ mod tests {
         let server = MockConnectedServer::default();
         let state = server.state.clone();
         let mut pooled = PooledServer::new(server);
-        let endpoint = OpcServerEndpoint::local("Test.Server");
+        let endpoint = OpcServerEndpoint::local_prog_id("Test.Server");
         let tags = TagBatch::from_static(&["Random.Int4"]);
 
         // First read (cache miss): group added, guard disarmed, cached in pooled
@@ -347,7 +347,7 @@ mod tests {
     fn test_handle_read_rejects_exceeding_max_batch_size() {
         let server = MockConnectedServer::default();
         let mut pooled = PooledServer::new(server);
-        let endpoint = OpcServerEndpoint::local("Test.Server");
+        let endpoint = OpcServerEndpoint::local_prog_id("Test.Server");
 
         let tags_vec: Vec<String> = (0..=MAX_TAG_BATCH_SIZE)
             .map(|i| format!("Tag.{i}"))
@@ -365,7 +365,7 @@ mod tests {
     fn test_handle_read_cache_hit_zero_sentinel_errors() {
         let server = MockConnectedServer::default();
         let mut pooled = PooledServer::new(server);
-        let endpoint = OpcServerEndpoint::local("Test.Server");
+        let endpoint = OpcServerEndpoint::local_prog_id("Test.Server");
         let tags = TagBatch::from_static(&["Random.Int4"]);
 
         // First read (miss)

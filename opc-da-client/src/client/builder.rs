@@ -17,6 +17,7 @@ pub struct OpcDaClientBuilder<C = DefaultBackendConnector> {
     pub(crate) timeout: Option<Duration>,
     pub(crate) legacy_dcom: bool,
     pub(crate) connector: Option<C>,
+    pub(crate) server_err: Option<OpcError>,
 }
 
 impl OpcDaClientBuilder<DefaultBackendConnector> {
@@ -42,6 +43,7 @@ impl OpcDaClientBuilder<DefaultBackendConnector> {
             timeout: None,
             legacy_dcom: false,
             connector: Some(DefaultBackendConnector::default()),
+            server_err: None,
         }
     }
 }
@@ -82,20 +84,33 @@ impl<C: ServerBackend + 'static> OpcDaClientBuilder<C> {
             timeout: None,
             legacy_dcom: false,
             connector: Some(connector),
+            server_err: None,
         }
     }
 
     /// Sets the target remote host (or `"localhost"`).
     #[must_use]
     pub fn host(mut self, host: impl Into<String>) -> Self {
-        self.host = Some(host.into());
+        let h = host.into();
+        if h.contains('\0') {
+            let _ = self.server_err.get_or_insert_with(|| {
+                OpcError::InvalidState("Host cannot contain interior null bytes".to_string())
+            });
+        } else {
+            self.host = Some(h);
+        }
         self
     }
 
     /// Sets the target server identifier (ProgID or CLSID).
     #[must_use]
-    pub fn server(mut self, server: impl Into<ServerIdentifier>) -> Self {
-        self.server = Some(server.into());
+    pub fn server(mut self, server: impl TryInto<ServerIdentifier, Error: Into<OpcError>>) -> Self {
+        match server.try_into() {
+            Ok(id) => self.server = Some(id),
+            Err(err) => {
+                let _ = self.server_err.get_or_insert_with(|| err.into());
+            }
+        }
         self
     }
 
@@ -118,6 +133,7 @@ impl<C: ServerBackend + 'static> OpcDaClientBuilder<C> {
             timeout: self.timeout,
             legacy_dcom: self.legacy_dcom,
             connector: Some(connector),
+            server_err: self.server_err,
         }
     }
 
@@ -138,7 +154,11 @@ impl<C: ServerBackend + 'static> OpcDaClientBuilder<C> {
         host: Option<&str>,
         server: Option<ServerIdentifier>,
         timeout: Option<Duration>,
+        server_err: Option<OpcError>,
     ) -> OpcResult<OpcDaClient<C, Unbound>> {
+        if let Some(err) = server_err {
+            return Err(err);
+        }
         let mut client = OpcDaClient::new(connector)?;
         client.timeout = timeout;
         if let Some(server) = server {
@@ -174,7 +194,13 @@ impl<C: ServerBackend + 'static> OpcDaClientBuilder<C> {
     /// # }
     /// ```
     pub fn build_with_connector(self, connector: C) -> OpcResult<OpcDaClient<C, Unbound>> {
-        Self::build_internal(connector, self.host.as_deref(), self.server, self.timeout)
+        Self::build_internal(
+            connector,
+            self.host.as_deref(),
+            self.server,
+            self.timeout,
+            self.server_err,
+        )
     }
 }
 
@@ -202,7 +228,13 @@ impl<C: ServerBackend + Default + 'static> OpcDaClientBuilder<C> {
     /// ```
     pub fn build(self) -> OpcResult<OpcDaClient<C, Unbound>> {
         let connector = self.connector.unwrap_or_default();
-        Self::build_internal(connector, self.host.as_deref(), self.server, self.timeout)
+        Self::build_internal(
+            connector,
+            self.host.as_deref(),
+            self.server,
+            self.timeout,
+            self.server_err,
+        )
     }
 
     /// Builds the `OpcDaClient` directly in the [`Bound`] typestate.
@@ -230,6 +262,9 @@ impl<C: ServerBackend + Default + 'static> OpcDaClientBuilder<C> {
     /// # }
     /// ```
     pub fn build_bound(self) -> OpcResult<OpcDaClient<C, Bound>> {
+        if let Some(ref err) = self.server_err {
+            return Err(err.clone());
+        }
         if self.server.is_none() {
             return Err(OpcError::InvalidState(
                 "Cannot build bound client without configuring server identifier".into(),

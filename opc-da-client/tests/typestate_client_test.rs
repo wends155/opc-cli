@@ -10,7 +10,7 @@ async fn test_client_typestate_bind_and_unbind() {
     assert!(unbound.endpoint().is_none());
 
     // 2. Transition to Bound typestate
-    let endpoint = OpcServerEndpoint::local("Matrikon.OPC.Simulation.1");
+    let endpoint = OpcServerEndpoint::local_prog_id("Matrikon.OPC.Simulation.1");
     let bound: OpcDaClient<_, Bound> = unbound.bind(endpoint.clone());
 
     // 3. Bound state guarantees non-optional endpoint and server_id
@@ -39,7 +39,7 @@ async fn test_client_typestate_bind_and_unbind() {
     assert!(restored_unbound.endpoint().is_none());
 
     // 6. Restored client can be rebound
-    let rebound = restored_unbound.bind(OpcServerEndpoint::local("Another.Server.1"));
+    let rebound = restored_unbound.bind(OpcServerEndpoint::local_prog_id("Another.Server.1"));
     assert_eq!(rebound.server_id(), "Another.Server.1");
 }
 
@@ -51,8 +51,9 @@ async fn test_typestate_implements_opc_provider() {
     assert_provider(&unbound);
     assert!(unbound.list_servers("localhost").await.is_ok());
 
-    let bound =
-        MockOpcDaClient::default().bind(OpcServerEndpoint::local("Matrikon.OPC.Simulation.1"));
+    let bound = MockOpcDaClient::default().bind(OpcServerEndpoint::local_prog_id(
+        "Matrikon.OPC.Simulation.1",
+    ));
     assert_provider(&bound);
     assert!(bound.list_servers("localhost").await.is_ok());
 }
@@ -99,7 +100,7 @@ async fn test_typestate_failure_recovery_and_rebind() {
     assert!(unbound.endpoint().is_none());
 
     // 4. Rebind to Standby Server B on the same client worker instance
-    let bound_b = unbound.bind(OpcServerEndpoint::local("Mock.Server.Standby"));
+    let bound_b = unbound.bind(OpcServerEndpoint::local_prog_id("Mock.Server.Standby"));
     assert_eq!(bound_b.server_id(), "Mock.Server.Standby");
 
     // 5. Successful operations on Standby Server B

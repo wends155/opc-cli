@@ -277,21 +277,21 @@ impl From<windows_core::GUID> for ServerIdentifier {
     }
 }
 
-impl From<&str> for ServerIdentifier {
-    fn from(s: &str) -> Self {
-        s.parse().unwrap_or_else(|_| {
-            if let Some(clsid) = Clsid::parse(s) {
-                Self::Clsid(clsid)
-            } else {
-                Self::ProgId(s.to_string())
-            }
-        })
+impl TryFrom<&str> for ServerIdentifier {
+    type Error = ParseServerIdError;
+
+    #[inline]
+    fn try_from(s: &str) -> Result<Self, Self::Error> {
+        s.parse()
     }
 }
 
-impl From<String> for ServerIdentifier {
-    fn from(s: String) -> Self {
-        Self::from(s.as_str())
+impl TryFrom<String> for ServerIdentifier {
+    type Error = ParseServerIdError;
+
+    #[inline]
+    fn try_from(s: String) -> Result<Self, Self::Error> {
+        s.parse()
     }
 }
 
@@ -468,9 +468,43 @@ impl OpcServerEndpoint {
     /// ```
     /// use opc_da_client::types::OpcServerEndpoint;
     ///
-    /// let ep = OpcServerEndpoint::local("Matrikon.OPC.Simulation.1");
+    /// let ep = OpcServerEndpoint::local_prog_id("Matrikon.OPC.Simulation.1");
     /// assert!(!ep.is_remote());
     /// ```
+    /// Parses an endpoint from a string representation.
+    ///
+    /// Symmetrical with [`ServerIdentifier::new`].
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ParseEndpointError`] if parsing or validation fails.
+    pub fn new(s: &str) -> Result<Self, ParseEndpointError> {
+        s.parse()
+    }
+
+    /// Creates a local endpoint directly from a raw ProgID string without validation.
+    ///
+    /// Convenient for tests and trusted internal call sites.
+    #[must_use]
+    pub fn local_prog_id(prog_id: impl Into<String>) -> Self {
+        Self {
+            host: None,
+            identifier: ServerIdentifier::ProgId(prog_id.into()),
+        }
+    }
+
+    /// Creates a remote endpoint directly from a host and raw ProgID string.
+    ///
+    /// Automatically normalizes `host`.
+    #[must_use]
+    pub fn remote_prog_id(host: impl Into<String>, prog_id: impl Into<String>) -> Self {
+        let host_str = host.into();
+        Self {
+            host: normalize_host(Some(&host_str)),
+            identifier: ServerIdentifier::ProgId(prog_id.into()),
+        }
+    }
+
     #[must_use]
     pub fn local(identifier: impl Into<ServerIdentifier>) -> Self {
         Self {
@@ -494,7 +528,7 @@ impl OpcServerEndpoint {
     /// ```
     /// use opc_da_client::types::OpcServerEndpoint;
     ///
-    /// let ep = OpcServerEndpoint::remote("192.168.1.10", "Matrikon.OPC.Simulation.1");
+    /// let ep = OpcServerEndpoint::remote_prog_id("192.168.1.10", "Matrikon.OPC.Simulation.1");
     /// assert!(ep.is_remote());
     /// assert_eq!(ep.host(), Some("192.168.1.10"));
     /// ```
@@ -526,8 +560,8 @@ impl OpcServerEndpoint {
     /// ```
     /// use opc_da_client::types::OpcServerEndpoint;
     ///
-    /// assert!(!OpcServerEndpoint::local("Server").is_remote());
-    /// assert!(OpcServerEndpoint::remote("10.0.0.1", "Server").is_remote());
+    /// assert!(!OpcServerEndpoint::local_prog_id("Server").is_remote());
+    /// assert!(OpcServerEndpoint::remote_prog_id("10.0.0.1", "Server").is_remote());
     /// ```
     #[must_use]
     pub fn is_remote(&self) -> bool {
@@ -646,15 +680,21 @@ impl FromStr for OpcServerEndpoint {
     }
 }
 
-impl From<&str> for OpcServerEndpoint {
-    fn from(s: &str) -> Self {
-        s.parse().unwrap_or_else(|_| Self::local(s))
+impl TryFrom<&str> for OpcServerEndpoint {
+    type Error = ParseEndpointError;
+
+    #[inline]
+    fn try_from(s: &str) -> Result<Self, Self::Error> {
+        s.parse()
     }
 }
 
-impl From<String> for OpcServerEndpoint {
-    fn from(s: String) -> Self {
-        Self::from(s.as_str())
+impl TryFrom<String> for OpcServerEndpoint {
+    type Error = ParseEndpointError;
+
+    #[inline]
+    fn try_from(s: String) -> Result<Self, Self::Error> {
+        s.parse()
     }
 }
 
@@ -735,6 +775,49 @@ mod tests {
     }
 
     #[test]
+    fn test_server_identifier_try_from_str_and_string() {
+        // Valid ProgID
+        let id_str: Result<ServerIdentifier, _> = "Matrikon.OPC.Simulation.1".try_into();
+        assert!(matches!(id_str, Ok(ServerIdentifier::ProgId(_))));
+
+        let id_string: Result<ServerIdentifier, _> =
+            "Matrikon.OPC.Simulation.1".to_string().try_into();
+        assert!(matches!(id_string, Ok(ServerIdentifier::ProgId(_))));
+
+        // Valid CLSID
+        let clsid_str: Result<ServerIdentifier, _> =
+            "{28E68F9A-8D75-11D1-8DC3-3C302A000000}".try_into();
+        assert!(matches!(clsid_str, Ok(ServerIdentifier::Clsid(_))));
+
+        // Empty string
+        let empty_res: Result<ServerIdentifier, _> = "".try_into();
+        assert!(matches!(empty_res, Err(ParseServerIdError::Empty)));
+
+        // Invalid ProgID with null byte
+        let null_res: Result<ServerIdentifier, _> = "Bad\0ProgId".try_into();
+        assert!(matches!(
+            null_res,
+            Err(ParseServerIdError::InvalidProgId(_))
+        ));
+    }
+
+    #[test]
+    fn test_opc_server_endpoint_try_from_str_and_string() {
+        // Local endpoint
+        let ep_local: Result<OpcServerEndpoint, _> = "Matrikon.OPC.Simulation.1".try_into();
+        assert!(matches!(ep_local, Ok(ep) if !ep.is_remote()));
+
+        // Remote endpoint
+        let ep_remote: Result<OpcServerEndpoint, _> =
+            "\\\\192.168.1.10\\Matrikon.OPC.Simulation.1".try_into();
+        assert!(matches!(ep_remote, Ok(ep) if ep.is_remote() && ep.host() == Some("192.168.1.10")));
+
+        // Empty endpoint
+        let ep_empty: Result<OpcServerEndpoint, _> = "".try_into();
+        assert!(matches!(ep_empty, Err(ParseEndpointError::Empty)));
+    }
+
+    #[test]
     fn test_server_info_from_prog_ids_empty() {
         let infos = server_info_from_prog_ids(Vec::<String>::new(), None);
         assert!(infos.is_empty());
@@ -760,7 +843,7 @@ mod tests {
 
     #[test]
     fn test_server_identifier_conversions_and_display() {
-        let prog_id = ServerIdentifier::from("Matrikon.OPC.Simulation.1");
+        let prog_id = ServerIdentifier::try_from("Matrikon.OPC.Simulation.1").unwrap();
         assert_eq!(
             prog_id,
             ServerIdentifier::ProgId("Matrikon.OPC.Simulation.1".into())
@@ -770,7 +853,7 @@ mod tests {
         assert!(!prog_id.is_clsid());
 
         let clsid_str = "{28E68F9A-8D75-11D1-8DC3-3C302A000000}";
-        let parsed = ServerIdentifier::from(clsid_str);
+        let parsed = ServerIdentifier::try_from(clsid_str).unwrap();
         assert!(parsed.is_clsid());
         assert_eq!(parsed.to_string().to_uppercase(), clsid_str.to_uppercase());
 
@@ -894,15 +977,15 @@ mod tests {
         assert!(!is_remote_host(Some("::1")));
         assert!(is_remote_host(Some("remote-server")));
 
-        let local_ep = OpcServerEndpoint::local("Test.Server");
+        let local_ep = OpcServerEndpoint::local_prog_id("Test.Server");
         assert!(!local_ep.is_remote());
         assert_eq!(local_ep.host, None);
 
-        let remote_local = OpcServerEndpoint::remote("localhost", "Test.Server");
+        let remote_local = OpcServerEndpoint::remote_prog_id("localhost", "Test.Server");
         assert!(!remote_local.is_remote());
         assert_eq!(remote_local.host, None);
 
-        let remote_ep = OpcServerEndpoint::remote("10.0.0.1", "Test.Server");
+        let remote_ep = OpcServerEndpoint::remote_prog_id("10.0.0.1", "Test.Server");
         assert!(remote_ep.is_remote());
         assert_eq!(remote_ep.host, Some("10.0.0.1".to_string()));
 
@@ -948,13 +1031,14 @@ mod tests {
         assert_eq!(ep_plain.to_string(), "Matrikon.OPC.Simulation");
 
         // Roundtrip test via Display and FromStr
-        let ep_remote = OpcServerEndpoint::remote("10.0.0.5", "Kepware.KEPServerEX.V6");
+        let ep_remote = OpcServerEndpoint::remote_prog_id("10.0.0.5", "Kepware.KEPServerEX.V6");
         let display_str = ep_remote.to_string();
         let reparsed: OpcServerEndpoint = display_str.parse().unwrap();
         assert_eq!(ep_remote, reparsed);
 
-        // From<&str> delegates to parsing
-        let ep_from_str: OpcServerEndpoint = r"\\192.168.1.50\Matrikon.OPC.Simulation".into();
+        // FromStr delegates to parsing
+        let ep_from_str: OpcServerEndpoint =
+            r"\\192.168.1.50\Matrikon.OPC.Simulation".parse().unwrap();
         assert_eq!(ep_from_str, ep1);
 
         // Rejection cases
@@ -1101,8 +1185,8 @@ mod tests {
             clsid_str.to_uppercase()
         );
 
-        // 3. From<&str>
-        let id_from = ServerIdentifier::from("Kepware.KEPServerEX.V6");
+        // 3. TryFrom<&str>
+        let id_from = ServerIdentifier::try_from("Kepware.KEPServerEX.V6").unwrap();
         assert_eq!(id_from.as_prog_id(), Some("Kepware.KEPServerEX.V6"));
 
         // 4. Invalid cases
@@ -1264,7 +1348,9 @@ mod tests {
     fn test_endpoint_from_str_behavior() {
         use std::str::FromStr;
 
-        let ep: OpcServerEndpoint = r"\\192.168.1.50\Matrikon.OPC.Simulation.1".into();
+        let ep: OpcServerEndpoint = r"\\192.168.1.50\Matrikon.OPC.Simulation.1"
+            .try_into()
+            .unwrap();
         assert_eq!(ep.host.as_deref(), Some("192.168.1.50"));
         assert_eq!(ep.identifier.to_string(), "Matrikon.OPC.Simulation.1");
 

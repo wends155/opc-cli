@@ -322,8 +322,10 @@ fn test_mock_state_observability_counters() {
 fn test_connect_endpoint_preserves_host() {
     let state = std::sync::Arc::new(MockState::default());
     let connector = MockServerConnector::with_state(state.clone());
-    let endpoint =
-        crate::types::OpcServerEndpoint::remote("192.168.1.100", "Matrikon.OPC.Simulation.1");
+    let endpoint = crate::types::OpcServerEndpoint::remote_prog_id(
+        "192.168.1.100",
+        "Matrikon.OPC.Simulation.1",
+    );
     let _server = connector
         .connect_endpoint(&endpoint)
         .expect("connect_endpoint should succeed");
@@ -455,7 +457,9 @@ fn test_offline_tier2_spi_mocking_without_com() {
 
     // 3. Connect endpoint offline
     let server = connector
-        .connect_endpoint(&crate::types::OpcServerEndpoint::from("Offline.Server.1"))
+        .connect_endpoint(&crate::types::OpcServerEndpoint::local_prog_id(
+            "Offline.Server.1",
+        ))
         .unwrap();
     assert!(server.ping().is_ok());
     assert_eq!(
@@ -555,7 +559,7 @@ fn test_mock_telemetry_symmetry_on_failure_and_success() {
     let state = Arc::new(MockState::default());
     let connector = MockServerConnector::with_state(state.clone());
     let id = ServerIdentifier::ProgId("Mock.Server.1".into());
-    let endpoint = OpcServerEndpoint::local("Mock.Server.1");
+    let endpoint = OpcServerEndpoint::local_prog_id("Mock.Server.1");
 
     // 1. Connection failure injection: both methods return Err and do NOT increment connect_count
     state.should_fail_connect.store(true, Ordering::Relaxed);
@@ -629,7 +633,7 @@ fn test_mock_state_lock_poison_recovery() {
     assert_eq!(state.last_connected_endpoint(), None);
 
     // Assert mutator recovers and records endpoint
-    let ep = OpcServerEndpoint::local("Recovered.Server");
+    let ep = OpcServerEndpoint::local_prog_id("Recovered.Server");
     state.record_connection(&ep);
     assert_eq!(state.last_connected_endpoint(), Some(ep));
 }

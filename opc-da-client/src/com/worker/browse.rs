@@ -272,7 +272,7 @@ mod tests {
     #[test]
     fn test_handle_browse_preserves_collector() {
         let server = MockConnectedServer::default();
-        let server_id = ServerIdentifier::from("Test.Server");
+        let server_id = ServerIdentifier::try_from("Test.Server").unwrap();
         let collector = TagCollector::new(100);
 
         let tags = handle_browse(&server_id, &collector, &server)
@@ -286,7 +286,7 @@ mod tests {
     #[test]
     fn test_handle_browse_cancelled_returns_snapshot() {
         let server = MockConnectedServer::default();
-        let server_id = ServerIdentifier::from("Test.Server");
+        let server_id = ServerIdentifier::try_from("Test.Server").unwrap();
         let collector = TagCollector::new(100);
         collector.cancel();
 
@@ -298,7 +298,7 @@ mod tests {
     #[test]
     fn test_handle_browse_flat_chunked_batch_push() {
         let server = MockConnectedServer::default();
-        let server_id = ServerIdentifier::from("Test.Server");
+        let server_id = ServerIdentifier::try_from("Test.Server").unwrap();
         let collector = TagCollector::new(1000);
 
         let tags = handle_browse(&server_id, &collector, &server)

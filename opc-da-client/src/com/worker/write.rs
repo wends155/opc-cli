@@ -155,7 +155,7 @@ mod tests {
     #[test]
     fn test_handle_write_success() {
         let server = MockConnectedServer::default();
-        let server_id = ServerIdentifier::from("Test.Server");
+        let server_id = ServerIdentifier::try_from("Test.Server").unwrap();
         let value = OpcValue::Int(123);
         let result = handle_write(&server_id, "Random.Int4", &value, &server)
             .expect("write operation should succeed");
@@ -214,7 +214,7 @@ mod tests {
             ..Default::default()
         };
 
-        let server_id = ServerIdentifier::from("Test.Server");
+        let server_id = ServerIdentifier::try_from("Test.Server").unwrap();
         let writes = vec![
             ("Tag1".to_string(), OpcValue::Int(10)),
             ("Tag2".to_string(), OpcValue::Int(20)),

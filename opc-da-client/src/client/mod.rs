@@ -20,9 +20,7 @@ use crate::com::connector::ComConnector;
 use crate::com::worker::{ComRequest, ComWorker};
 use crate::connector::ServerBackend;
 use crate::errors::{OpcError, OpcResult};
-use crate::types::OpcServerEndpoint;
-#[cfg(feature = "opc-da-backend")]
-use crate::types::ServerIdentifier;
+use crate::types::{OpcServerEndpoint, ServerIdentifier};
 
 #[cfg(feature = "opc-da-backend")]
 pub type DefaultBackendConnector = ComConnector;
@@ -74,15 +72,18 @@ impl OpcDaClient<DefaultBackendConnector, Unbound> {
     }
 }
 
-#[cfg(feature = "opc-da-backend")]
-impl OpcDaClient<ComConnector, Unbound> {
-    /// Constructs a client bound to a local OPC DA server by ProgID or CLSID.
+impl OpcDaClient<DefaultBackendConnector, Unbound> {
+    /// Constructs a client bound to an OPC DA server endpoint (local ProgID/CLSID, UNC path, or URI).
+    ///
+    /// Validates the target endpoint *before* initializing the backend connector.
     ///
     /// # Errors
-    /// Returns [`OpcError::Worker`] if the COM worker thread initialization fails.
+    ///
+    /// Returns [`OpcError`] if the endpoint format is invalid or backend initialization fails.
     ///
     /// # Examples
-    /// ```no_run
+    ///
+    /// ```rust,no_run
     /// use opc_da_client::OpcDaClient;
     ///
     /// # fn run() -> opc_da_client::OpcResult<()> {
@@ -91,20 +92,21 @@ impl OpcDaClient<ComConnector, Unbound> {
     /// # }
     /// ```
     pub fn bind_new(
-        server: impl Into<ServerIdentifier>,
-    ) -> OpcResult<OpcDaClient<ComConnector, Bound>> {
-        let endpoint = OpcServerEndpoint::from(server.into());
-        let client = Self::new(ComConnector::new())?;
+        server: impl TryInto<OpcServerEndpoint, Error: Into<OpcError>>,
+    ) -> OpcResult<OpcDaClient<DefaultBackendConnector, Bound>> {
+        let endpoint = server.try_into().map_err(Into::into)?;
+        let client = Self::new(DefaultBackendConnector::default())?;
         Ok(client.bind(endpoint))
     }
 
     /// Constructs a client bound to a remote OPC DA server by host and ProgID or CLSID.
     ///
-    /// Normalizes localhost strings, creates a background COM worker thread, and binds to the target endpoint.
+    /// Validates the host and server identifier *before* initializing the backend connector.
     ///
     /// # Errors
     ///
-    /// Returns [`OpcError::Worker`] if the COM worker thread initialization fails.
+    /// Returns [`OpcError`] if the host contains interior null bytes, the server identifier is invalid,
+    /// or backend initialization fails.
     ///
     /// # Panics
     ///
@@ -122,10 +124,17 @@ impl OpcDaClient<ComConnector, Unbound> {
     /// ```
     pub fn bind_new_remote(
         host: impl Into<String>,
-        server: impl Into<ServerIdentifier>,
-    ) -> OpcResult<OpcDaClient<ComConnector, Bound>> {
-        let endpoint = OpcServerEndpoint::remote(host, server);
-        let client = Self::new(ComConnector::new())?;
+        server: impl TryInto<ServerIdentifier, Error: Into<OpcError>>,
+    ) -> OpcResult<OpcDaClient<DefaultBackendConnector, Bound>> {
+        let host_str = host.into();
+        if host_str.contains('\0') {
+            return Err(OpcError::InvalidState(
+                "Host cannot contain interior null bytes".to_string(),
+            ));
+        }
+        let identifier = server.try_into().map_err(Into::into)?;
+        let endpoint = OpcServerEndpoint::remote(host_str, identifier);
+        let client = Self::new(DefaultBackendConnector::default())?;
         Ok(client.bind(endpoint))
     }
 }

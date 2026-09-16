@@ -215,7 +215,7 @@ async fn test_tag_browsing_bound_session_facade() {
     assert_eq!(bound_client.server_id(), "Mock.Bound.Server");
     assert_eq!(
         bound_client.endpoint().identifier(),
-        &ServerIdentifier::from("Mock.Bound.Server")
+        &ServerIdentifier::try_from("Mock.Bound.Server").unwrap()
     );
 
     // Inherent single-server browse method
@@ -241,7 +241,7 @@ async fn test_tag_browsing_bound_session_facade() {
     let (unbound_client, endpoint) = bound_client.unbind();
     assert_eq!(
         endpoint.identifier(),
-        &ServerIdentifier::from("Mock.Bound.Server")
+        &ServerIdentifier::try_from("Mock.Bound.Server").unwrap()
     );
     assert!(unbound_client.endpoint().is_none());
 }

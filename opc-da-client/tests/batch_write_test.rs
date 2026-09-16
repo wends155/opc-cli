@@ -47,7 +47,7 @@ async fn test_client_write_tags_accepts_array_slice_and_vector() {
     let connector = MockServerConnector::with_state(state.clone());
     let client = OpcDaClient::new(connector)
         .expect("client must initialize")
-        .bind(OpcServerEndpoint::local("Mock.Server.BatchWrite"));
+        .bind(OpcServerEndpoint::local_prog_id("Mock.Server.BatchWrite"));
 
     // 1. Array of pairs
     let array_res = client

@@ -421,7 +421,7 @@ mod tests {
         let state = Arc::new(MockState::default());
         let connector = Arc::new(MockServerConnector::with_state(state.clone()));
         let mut pool = ConnectionPool::new();
-        let endpoint = OpcServerEndpoint::local("Matrikon.OPC.Simulation.1");
+        let endpoint = OpcServerEndpoint::local_prog_id("Matrikon.OPC.Simulation.1");
 
         // First call: cache miss, connect_count becomes 1
         let res1 = dispatch_with_retry(
@@ -452,7 +452,7 @@ mod tests {
         let state = Arc::new(MockState::default());
         let connector = Arc::new(MockServerConnector::with_state(state.clone()));
         let mut pool = ConnectionPool::new();
-        let endpoint = OpcServerEndpoint::local("Matrikon.OPC.Simulation.1");
+        let endpoint = OpcServerEndpoint::local_prog_id("Matrikon.OPC.Simulation.1");
 
         // First connect
         let _ = dispatch_with_retry(
@@ -495,7 +495,7 @@ mod tests {
         let state = Arc::new(MockState::default());
         let connector = Arc::new(MockServerConnector::with_state(state.clone()));
         let mut pool = ConnectionPool::new();
-        let endpoint = OpcServerEndpoint::local("Matrikon.OPC.Simulation.1");
+        let endpoint = OpcServerEndpoint::local_prog_id("Matrikon.OPC.Simulation.1");
 
         let _ = dispatch_with_retry(
             &mut pool,
@@ -528,7 +528,7 @@ mod tests {
         let state = Arc::new(MockState::default());
         let connector = Arc::new(MockServerConnector::with_state(state.clone()));
         let mut pool = ConnectionPool::new();
-        let endpoint = OpcServerEndpoint::local("Matrikon.OPC.Simulation.1");
+        let endpoint = OpcServerEndpoint::local_prog_id("Matrikon.OPC.Simulation.1");
 
         let tags_a = vec!["Tag1".to_string(), "Tag2".to_string()];
         let tags_b = vec!["Tag3".to_string()];
@@ -658,8 +658,8 @@ mod tests {
         let state = Arc::new(MockState::default());
         let connector = Arc::new(MockServerConnector::with_state(state.clone()));
         let mut pool = ConnectionPool::new();
-        let dead_endpoint = OpcServerEndpoint::local("Dead.Server.1");
-        let live_endpoint = OpcServerEndpoint::local("Live.Server.1");
+        let dead_endpoint = OpcServerEndpoint::local_prog_id("Dead.Server.1");
+        let live_endpoint = OpcServerEndpoint::local_prog_id("Live.Server.1");
 
         // Phase 1: Initial connection failure enters 5s cooldown
         state.should_fail_connect.store(true, Ordering::SeqCst);
@@ -725,7 +725,7 @@ mod tests {
         let state = Arc::new(MockState::default());
         let connector = Arc::new(MockServerConnector::with_state(state.clone()));
         let mut pool = ConnectionPool::new();
-        let endpoint = OpcServerEndpoint::local("Matrikon.OPC.Simulation.1");
+        let endpoint = OpcServerEndpoint::local_prog_id("Matrikon.OPC.Simulation.1");
 
         // Connect and create active group
         let _ = dispatch_with_retry(
@@ -767,7 +767,7 @@ mod tests {
         let state = Arc::new(MockState::default());
         let connector = Arc::new(MockServerConnector::with_state(state.clone()));
         let mut pool = ConnectionPool::new();
-        let endpoint = OpcServerEndpoint::local("Matrikon.OPC.Simulation.1");
+        let endpoint = OpcServerEndpoint::local_prog_id("Matrikon.OPC.Simulation.1");
 
         // First connect
         let _ = dispatch_with_retry(
@@ -817,7 +817,7 @@ mod tests {
         let mut pool: ConnectionPool<<MockServerConnector as ServerConnector>::Server> =
             ConnectionPool::new();
         for i in 0..=MAX_COOLDOWNS + 5 {
-            let ep = OpcServerEndpoint::local(format!("Server.{i}"));
+            let ep = OpcServerEndpoint::local_prog_id(format!("Server.{i}"));
             pool.record_failure(ep);
         }
         assert!(pool.failure_cooldowns.len() <= MAX_COOLDOWNS);
@@ -831,7 +831,7 @@ mod tests {
         let state = Arc::new(MockState::default());
         let connector = Arc::new(MockServerConnector::with_state(state.clone()));
         let mut pool = ConnectionPool::new();
-        let endpoint = OpcServerEndpoint::local("Matrikon.OPC.Simulation.1");
+        let endpoint = OpcServerEndpoint::local_prog_id("Matrikon.OPC.Simulation.1");
 
         let batch_a = ["Tag1", "Tag2"].into_tag_batch();
         let batch_b = ["Tag3", "Tag4"].into_tag_batch();
@@ -934,7 +934,7 @@ mod tests {
         let state = Arc::new(MockState::default());
         let connector = Arc::new(MockServerConnector::with_state(state.clone()));
         let mut pool = ConnectionPool::new();
-        let endpoint = OpcServerEndpoint::local("Matrikon.OPC.Simulation.1");
+        let endpoint = OpcServerEndpoint::local_prog_id("Matrikon.OPC.Simulation.1");
 
         // Insert 4 distinct batches (Batch 1..=4)
         for i in 1..=4 {
@@ -1010,7 +1010,7 @@ mod tests {
         let state = Arc::new(MockState::default());
         let connector = Arc::new(MockServerConnector::with_state(state.clone()));
         let mut pool = ConnectionPool::new();
-        let endpoint = OpcServerEndpoint::local("Matrikon.OPC.Simulation.1");
+        let endpoint = OpcServerEndpoint::local_prog_id("Matrikon.OPC.Simulation.1");
 
         // Insert Group A and Group B
         let _ = dispatch_with_retry(
@@ -1063,7 +1063,7 @@ mod tests {
 
         // Populate 32 connections (MAX_ACTIVE_CONNECTIONS)
         for i in 1..=32 {
-            let ep = OpcServerEndpoint::local(format!("Server.{i}"));
+            let ep = OpcServerEndpoint::local_prog_id(format!("Server.{i}"));
             let _ =
                 dispatch_with_retry(&mut pool, &connector, &ep, RetryPolicy::Idempotent, |_| {
                     Ok(())
@@ -1073,7 +1073,7 @@ mod tests {
         assert_eq!(state.connect_count.load(Ordering::SeqCst), 32);
 
         // Access Server.1 to refresh its last_used timestamp
-        let ep1 = OpcServerEndpoint::local("Server.1");
+        let ep1 = OpcServerEndpoint::local_prog_id("Server.1");
         let _ = dispatch_with_retry(&mut pool, &connector, &ep1, RetryPolicy::Idempotent, |_| {
             Ok(())
         });
@@ -1081,7 +1081,7 @@ mod tests {
         assert_eq!(state.connect_count.load(Ordering::SeqCst), 32);
 
         // Connect to 33rd endpoint -> evicts LRU (Server.2)
-        let ep33 = OpcServerEndpoint::local("Server.33");
+        let ep33 = OpcServerEndpoint::local_prog_id("Server.33");
         let _ = dispatch_with_retry(
             &mut pool,
             &connector,
@@ -1097,7 +1097,7 @@ mod tests {
         // Server.33 is in the pool
         assert!(pool.connections.contains_key(&ep33));
         // Server.2 was the oldest unrefreshed, so it was evicted
-        let ep2 = OpcServerEndpoint::local("Server.2");
+        let ep2 = OpcServerEndpoint::local_prog_id("Server.2");
         assert!(!pool.connections.contains_key(&ep2));
     }
 }

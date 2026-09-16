@@ -103,6 +103,12 @@ impl From<windows_core::HRESULT> for OpcError {
     }
 }
 
+impl From<std::convert::Infallible> for OpcError {
+    fn from(err: std::convert::Infallible) -> Self {
+        match err {}
+    }
+}
+
 fn format_com_hint(source: &windows_core::Error) -> String {
     if let Some(hint) = self::hresult::friendly_hresult_hint(source.code()) {
         format!(" ({hint})")

@@ -60,7 +60,7 @@ mod tests {
 
     #[test]
     fn test_feature_independence_types() {
-        let endpoint = OpcServerEndpoint::local("Test.ProgId");
+        let endpoint = OpcServerEndpoint::local_prog_id("Test.ProgId");
         assert_eq!(endpoint.host.as_deref(), None);
         assert_eq!(endpoint.identifier.to_string(), "Test.ProgId");
     }
