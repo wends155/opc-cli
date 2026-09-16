@@ -32,7 +32,7 @@ pub(crate) fn connect_endpoint(
     let clsid_raw = match &endpoint.identifier {
         ServerIdentifier::Clsid(clsid) => clsid.to_windows_guid(),
         ServerIdentifier::ProgId(server_name) => {
-            let server_lp = LocalPointer::from(server_name.as_str());
+            let server_lp = LocalPointer::try_from_str(server_name.as_str())?;
             // SAFETY: Calling COM function CLSIDFromProgID with a null-terminated wide string.
             match unsafe { CLSIDFromProgID(server_lp.as_pcwstr()) } {
                 Ok(guid) => guid,
@@ -309,7 +309,7 @@ impl ConnectedServer for ComServer {
         let iface = self.browse_server_address_space.as_ref().ok_or_else(|| {
             OpcError::NotImplemented("IOPCBrowseServerAddressSpace not supported".to_string())
         })?;
-        let filter_ptr = LocalPointer::from(filter.unwrap_or_default());
+        let filter_ptr = LocalPointer::try_from_str(filter.unwrap_or_default())?;
         let raw_type = match browse_type {
             BrowseType::Branch => OPC_BRANCH,
             BrowseType::Leaf => OPC_LEAF,
@@ -332,7 +332,7 @@ impl ConnectedServer for ComServer {
         let iface = self.browse_server_address_space.as_ref().ok_or_else(|| {
             OpcError::NotImplemented("IOPCBrowseServerAddressSpace not supported".to_string())
         })?;
-        let name_ptr = LocalPointer::from(name);
+        let name_ptr = LocalPointer::try_from_str(name)?;
         let raw_dir = match direction {
             BrowseDirection::Up => OPC_BROWSE_UP,
             BrowseDirection::Down => OPC_BROWSE_DOWN,
@@ -350,7 +350,7 @@ impl ConnectedServer for ComServer {
         let iface = self.browse_server_address_space.as_ref().ok_or_else(|| {
             OpcError::NotImplemented("IOPCBrowseServerAddressSpace not supported".to_string())
         })?;
-        let item_data_id = LocalPointer::from(item_name);
+        let item_data_id = LocalPointer::try_from_str(item_name)?;
         // SAFETY: Calling COM interface method GetItemID with valid item_data_id string.
         let output = unsafe { iface.GetItemID(item_data_id.as_pwstr())? };
         // SAFETY: `output` is allocated by IOPCBrowseServerAddressSpace::GetItemID via CoTaskMemAlloc.
@@ -364,7 +364,7 @@ impl ConnectedServer for ComServer {
     #[tracing::instrument(level = "info", skip(self), err)]
     fn add_group(&self, config: &GroupConfig<'_>) -> OpcResult<CreatedGroup<Self::Group>> {
         let mut group = None;
-        let group_name_buf = LocalPointer::from(config.name);
+        let group_name_buf = LocalPointer::try_from_str(config.name)?;
         // SAFETY: group_name_buf outlives AddGroup invocation.
         let group_name_ptr = unsafe { group_name_buf.as_pcwstr() };
 

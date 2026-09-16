@@ -25,6 +25,8 @@ use windows::{
     core::{PCWSTR, PWSTR},
 };
 
+use crate::errors::{OpcError, OpcResult};
+
 // ── Owning COM Wide Strings ─────────────────────────────────────────
 
 /// An owning RAII wrapper for a null-terminated UTF-16 string allocated via `CoTaskMemAlloc`.
@@ -559,6 +561,7 @@ impl<T: Sized> Drop for RemotePointer<T> {
 /// A safe wrapper around locally allocated memory needing to be passed to COM functions.
 ///
 /// This struct is useful for preparing data to be read by COM functions.
+#[derive(Debug)]
 pub struct LocalPointer<T: Sized> {
     inner: Option<T>,
 }
@@ -619,11 +622,37 @@ impl<T: Sized> LocalPointer<T> {
 
 // Implementations for string handling
 
-impl<S: AsRef<str>> From<S> for LocalPointer<Vec<u16>> {
-    /// Converts a string slice to a `LocalPointer` containing a UTF-16 encoded null-terminated string.
-    #[inline(always)]
-    fn from(s: S) -> Self {
-        Self::new(Some(s.as_ref().encode_utf16().chain(Some(0)).collect()))
+impl LocalPointer<Vec<u16>> {
+    /// Attempts to convert a string slice to a `LocalPointer` containing a UTF-16 encoded null-terminated string.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Err(OpcError::InvalidState)` if the string contains interior null bytes (`\0`), preventing CWE-626.
+    pub fn try_from_str(s: &str) -> OpcResult<Self> {
+        if s.contains('\0') {
+            return Err(OpcError::InvalidState(format!(
+                "String contains interior null byte: {s:?}"
+            )));
+        }
+        Ok(Self::new(Some(s.encode_utf16().chain(Some(0)).collect())))
+    }
+}
+
+impl TryFrom<&str> for LocalPointer<Vec<u16>> {
+    type Error = OpcError;
+
+    #[inline]
+    fn try_from(s: &str) -> Result<Self, Self::Error> {
+        Self::try_from_str(s)
+    }
+}
+
+impl TryFrom<String> for LocalPointer<Vec<u16>> {
+    type Error = OpcError;
+
+    #[inline]
+    fn try_from(s: String) -> Result<Self, Self::Error> {
+        Self::try_from_str(&s)
     }
 }
 
@@ -1035,7 +1064,7 @@ mod tests {
 
     #[test]
     fn test_borrowed_pwstr_and_pcwstr() {
-        let lp = LocalPointer::from("Matrikon.OPC.Simulation.1");
+        let lp = LocalPointer::try_from_str("Matrikon.OPC.Simulation.1").unwrap();
         let borrowed = lp.as_borrowed_pwstr();
         assert!(!borrowed.is_null());
         // SAFETY: Pointer is valid for the lifetime of `lp`.
@@ -1053,5 +1082,32 @@ mod tests {
         assert!(null_borrowed.is_null());
         let null_borrowed_c = null_lp.as_borrowed_pcwstr();
         assert!(null_borrowed_c.is_null());
+    }
+
+    #[test]
+    fn test_local_pointer_try_from_str_null_byte_rejection() {
+        let bad_strings = [
+            "poison\0host",
+            "server\0.prog.id",
+            "\0leading",
+            "trailing\0",
+        ];
+        for bad in bad_strings {
+            let res = LocalPointer::try_from_str(bad);
+            assert!(
+                matches!(res, Err(OpcError::InvalidState(_))),
+                "expected InvalidState for {bad:?}, got {res:?}"
+            );
+
+            let try_res: Result<LocalPointer<Vec<u16>>, _> = bad.try_into();
+            assert!(
+                matches!(try_res, Err(OpcError::InvalidState(_))),
+                "expected InvalidState for TryFrom {bad:?}, got {try_res:?}"
+            );
+        }
+
+        let valid = "Valid.ProgId.1";
+        let lp = LocalPointer::try_from_str(valid).expect("valid string must succeed");
+        assert!(lp.inner().is_some());
     }
 }

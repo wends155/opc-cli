@@ -132,7 +132,7 @@ pub fn create_remote_instance<T: Interface>(
         CLSCTX_REMOTE_SERVER, COAUTHINFO, COSERVERINFO, CoCreateInstanceEx, MULTI_QI,
     };
 
-    let host_lp = crate::raw::memory::LocalPointer::from(host);
+    let host_lp = crate::raw::memory::LocalPointer::try_from_str(host)?;
     let authn_level = authn_level_for(legacy_dcom);
     let auth_info = COAUTHINFO {
         dwAuthnSvc: RPC_C_AUTHN_WINNT,
