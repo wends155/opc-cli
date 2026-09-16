@@ -90,13 +90,10 @@ pub(crate) fn apply_proxy_blanket<T: Interface>(
     legacy_dcom: bool,
 ) -> crate::errors::OpcResult<()> {
     let authn_level = authn_level_for(legacy_dcom);
-    // SAFETY: Interface implementations in windows-core are #[repr(transparent)] wrappers
-    // around *mut c_void vtable pointers. All COM interfaces inherit from IUnknown (first 3
-    // vtable slots: QueryInterface, AddRef, Release). Casting &T to &IUnknown via raw pointer
-    // re-borrow accesses the exact proxy pointer without invoking QueryInterface, ensuring
-    // CoSetProxyBlanket configures the actual proxy used by the caller rather than a transient
-    // copy. The borrow does not call AddRef, and dropping the reference does not call Release.
-    // CoSetProxyBlanket is safe to call on any valid COM proxy pointer with NT authentication.
+    // SAFETY: windows-core interfaces are #[repr(transparent)] *mut c_void wrappers inheriting from IUnknown.
+    // SAFETY: Casting &T to &IUnknown via pointer re-borrow accesses the exact proxy pointer without QueryInterface.
+    // SAFETY: The borrow does not call AddRef, and dropping the reference does not call Release.
+    // SAFETY: CoSetProxyBlanket configures the caller's actual proxy pointer using standard NT security.
     unsafe {
         let unk: &windows::core::IUnknown =
             &*std::ptr::from_ref(proxy).cast::<windows::core::IUnknown>();
@@ -187,9 +184,8 @@ pub(crate) fn create_remote_instance<T: Interface>(
         )
     })?;
 
-    // SAFETY: MULTI_QI requested &T::IID, guaranteeing the returned raw pointer conforms
-    // to T's vtable layout. Interface::into_raw consumes `unk` without calling Release,
-    // and T::from_raw takes ownership of the existing reference count without AddRef.
+    // SAFETY: MULTI_QI requested &T::IID, guaranteeing the returned raw pointer conforms to T's vtable layout.
+    // SAFETY: Interface::into_raw consumes `unk` without Release; T::from_raw takes ownership without AddRef.
     let instance: T = unsafe { T::from_raw(Interface::into_raw(unk)) };
 
     // Apply proxy blanket directly to the caller's target interface instance
