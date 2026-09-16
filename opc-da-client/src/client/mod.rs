@@ -87,7 +87,21 @@ impl OpcDaClient<ComConnector, Unbound> {
         OpcDaClientBuilder::new()
     }
 
-    pub fn connect(
+    /// Constructs a client bound to a local OPC DA server by ProgID or CLSID.
+    ///
+    /// # Errors
+    /// Returns [`OpcError::Worker`] if the COM worker thread initialization fails.
+    ///
+    /// # Examples
+    /// ```no_run
+    /// use opc_da_client::OpcDaClient;
+    ///
+    /// # fn run() -> opc_da_client::OpcResult<()> {
+    /// let client = OpcDaClient::bind_new("Matrikon.OPC.Simulation.1")?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn bind_new(
         server: impl Into<ServerIdentifier>,
     ) -> OpcResult<OpcDaClient<ComConnector, Bound>> {
         let endpoint = OpcServerEndpoint::from(server.into());
@@ -95,13 +109,38 @@ impl OpcDaClient<ComConnector, Unbound> {
         Ok(client.bind(endpoint))
     }
 
-    pub fn connect_remote(
+    /// Constructs a client bound to a remote OPC DA server by host and ProgID or CLSID.
+    ///
+    /// # Errors
+    /// Returns [`OpcError::Worker`] if the COM worker thread initialization fails.
+    pub fn bind_new_remote(
         host: impl Into<String>,
         server: impl Into<ServerIdentifier>,
     ) -> OpcResult<OpcDaClient<ComConnector, Bound>> {
         let endpoint = OpcServerEndpoint::remote(host, server);
         let client = Self::new(ComConnector::new())?;
         Ok(client.bind(endpoint))
+    }
+
+    #[deprecated(
+        since = "0.2.1",
+        note = "Use `bind_new` to construct a bound client, or follow with `.connect_eager().await` to actively probe server liveness."
+    )]
+    pub fn connect(
+        server: impl Into<ServerIdentifier>,
+    ) -> OpcResult<OpcDaClient<ComConnector, Bound>> {
+        Self::bind_new(server)
+    }
+
+    #[deprecated(
+        since = "0.2.1",
+        note = "Use `bind_new_remote` to construct a bound client, or follow with `.connect_eager().await` to actively probe server liveness."
+    )]
+    pub fn connect_remote(
+        host: impl Into<String>,
+        server: impl Into<ServerIdentifier>,
+    ) -> OpcResult<OpcDaClient<ComConnector, Bound>> {
+        Self::bind_new_remote(host, server)
     }
 }
 

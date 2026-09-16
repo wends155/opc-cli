@@ -24,10 +24,10 @@ pub use types::{
     BaseVarType, BrowseDirection, BrowseType, ClientGroupHandle, ClientItemHandle, Clsid,
     DisplayOptionOpcValue, DisplayOptionTimestamp, IntoTags, IntoWriteBatch, OpcQuality,
     OpcServerEndpoint, OpcServerInfo, OpcValue, OpcValueOptionExt, ParseClsidError,
-    ParseQualityError, QualityLimit, QualityMajor, QualitySubstatus, ServerGroupHandle,
-    ServerIdentifier, ServerItemHandle, SystemTimeOptionExt, TagBatch, TagBatchIter, TagCollector,
-    TagExtractError, TagValue, TagValues, VarType, WriteBatch, WriteBatchIntoIter, WriteBatchIter,
-    WriteResult,
+    ParseQualityError, ParseServerIdError, QualityLimit, QualityMajor, QualitySubstatus,
+    ServerGroupHandle, ServerIdentifier, ServerItemHandle, SystemTimeOptionExt, TagBatch,
+    TagBatchIter, TagCollector, TagExtractError, TagValue, TagValues, VarType, WriteBatch,
+    WriteBatchIntoIter, WriteBatchIter, WriteResult,
 };
 
 pub use client::{Bound, OpcDaClient, OpcDaClientBuilder, Unbound};

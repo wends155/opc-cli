@@ -12,8 +12,13 @@ use crate::raw::memory::RemoteArray;
 use crate::types::{ClientItemHandle, OpcQuality, ServerItemHandle, VarType};
 use windows::core::Interface;
 
-fn to_wide_null(s: &str) -> Vec<u16> {
-    s.encode_utf16().chain(std::iter::once(0)).collect()
+fn to_wide_null(s: &str) -> OpcResult<Vec<u16>> {
+    if s.contains('\0') {
+        return Err(OpcError::InvalidState(format!(
+            "Tag ID '{s}' contains forbidden interior null byte"
+        )));
+    }
+    Ok(s.encode_utf16().chain(std::iter::once(0)).collect())
 }
 
 /// RAII container ensuring wide-character strings live as long as the `tagOPCITEMDEF` slice.
@@ -26,10 +31,10 @@ pub(crate) struct ItemDefBatch<'a> {
 }
 
 impl<'a> ItemDefBatch<'a> {
-    pub fn new(items: &'a [GroupItemDef]) -> Self {
+    pub fn new(items: &'a [GroupItemDef]) -> OpcResult<Self> {
         let mut wide_names = Vec::with_capacity(items.len());
         for item in items {
-            wide_names.push(to_wide_null(&item.item_id));
+            wide_names.push(to_wide_null(&item.item_id)?);
         }
 
         let mut defs = Vec::with_capacity(items.len());
@@ -46,11 +51,11 @@ impl<'a> ItemDefBatch<'a> {
             });
         }
 
-        Self {
+        Ok(Self {
             _wide_names: wide_names,
             defs,
             _marker: std::marker::PhantomData,
-        }
+        })
     }
 
     pub fn as_ptr(&self) -> *const crate::raw::bindings::da::tagOPCITEMDEF {
@@ -108,7 +113,7 @@ impl ConnectedGroup for ComGroup {
             "Adding items to OPC group natively via IOPCItemMgt"
         );
 
-        let item_batch = ItemDefBatch::new(items);
+        let item_batch = ItemDefBatch::new(items)?;
 
         let mut results = RemoteArray::new(len);
         let mut errors = RemoteArray::new(len);
@@ -353,5 +358,26 @@ mod tests {
 
         assert!(results[0].pBlob.is_null());
         assert_eq!(results[0].dwBlobSize, 0);
+    }
+
+    #[test]
+    fn test_item_def_batch_rejects_interior_null_bytes() {
+        let valid_items = vec![GroupItemDef {
+            item_id: "Simulation.Valid.Tag".into(),
+            client_handle: ClientItemHandle::new(1),
+            active: true,
+        }];
+        assert!(ItemDefBatch::new(&valid_items).is_ok());
+
+        let invalid_items = vec![GroupItemDef {
+            item_id: "Simulation\0Invalid.Tag".into(),
+            client_handle: ClientItemHandle::new(2),
+            active: true,
+        }];
+        let res = ItemDefBatch::new(&invalid_items);
+        assert!(matches!(
+            res,
+            Err(OpcError::InvalidState(msg)) if msg.contains("forbidden interior null byte")
+        ));
     }
 }

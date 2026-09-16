@@ -9,10 +9,10 @@ use opc_da_client::connector::mock::{MockServerConnector, MockState};
 use opc_da_client::connector::traits::{GroupItemResult, GroupItemState};
 use opc_da_client::errors::hresult::{E_FAIL, OPC_E_BADTYPE, OPC_E_INVALIDITEMID};
 use opc_da_client::errors::{OpcError, OpcResult};
-use opc_da_client::provider::{TagReader, TagWriter};
+use opc_da_client::provider::{TagBrowser, TagReader, TagWriter};
 use opc_da_client::types::{
-    ClientItemHandle, OpcQuality, OpcValue, ServerItemHandle, TagExtractError, TagValue, VarType,
-    WriteBatch, WriteResult,
+    ClientItemHandle, OpcQuality, OpcValue, ServerItemHandle, TagCollector, TagExtractError,
+    TagValue, VarType, WriteBatch, WriteResult,
 };
 use opc_da_client::{Bound, OpcDaClient, Unbound};
 use std::sync::Arc;
@@ -466,4 +466,43 @@ async fn test_tag_io_alternating_batch_reads_multi_group_cache_hit() {
     assert_eq!(batch_b_cached.get_i32("Random.Real8"), Ok(100));
     assert_eq!(state.add_group_count.load(Ordering::Relaxed), 2);
     assert_eq!(state.remove_group_count.load(Ordering::Relaxed), 0);
+}
+
+#[tokio::test]
+async fn test_bound_client_role_traits_reject_mismatched_server() {
+    let state = Arc::new(MockState::default());
+    let connector = MockServerConnector::with_state(state.clone());
+
+    let client = OpcDaClient::builder()
+        .server("Mock.Bound.Server")
+        .with_connector(connector)
+        .build_bound()
+        .expect("building bound client must succeed");
+
+    // 1. Role trait TagReader on mismatched server fails with InvalidState
+    let mismatch_res = TagReader::read_tag_value(&client, "Other.Server", "Tag1").await;
+    assert!(matches!(
+        mismatch_res,
+        Err(OpcError::InvalidState(msg)) if msg.contains("Client is bound to server")
+    ));
+
+    // 2. Role trait TagReader on matching server succeeds
+    let match_res = TagReader::read_tag_value(&client, "Mock.Bound.Server", "Random.Int4").await;
+    assert!(match_res.is_ok());
+
+    // 3. Role trait TagWriter on mismatched server fails with InvalidState
+    let write_mismatch =
+        TagWriter::write_tag_value(&client, "Other.Server", "Tag1", OpcValue::Int(10)).await;
+    assert!(matches!(
+        write_mismatch,
+        Err(OpcError::InvalidState(msg)) if msg.contains("Client is bound to server")
+    ));
+
+    // 4. Role trait TagBrowser on mismatched server fails with InvalidState
+    let browse_mismatch =
+        TagBrowser::browse_tags(&client, "Other.Server", TagCollector::unbounded()).await;
+    assert!(matches!(
+        browse_mismatch,
+        Err(OpcError::InvalidState(msg)) if msg.contains("Client is bound to server")
+    ));
 }

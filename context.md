@@ -1,5 +1,39 @@
 # Project Context Summary
 
+## 2026-09-16: Block F (API Invariants, Security & Error Diagnostics — Findings #14, #16, #17, #18, #19, #20, #27, #29) Completed (`opc-da-client`)
+> 📝 **Context Update:**
+> * **Feature:** Execution of Block F of the modernization roadmap (Findings #14, #16, #17, #18, #19, #20, #27, #29 in `opc-da-client`), completing the full 29-finding remediation cycle. Implemented strict ProgID and CLSID domain invariants, endpoint validation on role traits, explicit client construction semantics, early builder resource validation, RPC connection classification, error tag context preservation, CWE-626 null-byte rejection, and public checked value accessors.
+> * **Changes:**
+>   - **ProgID and CLSID Validation & Construction Invariants (Finding #14):**
+>     - Added `ServerIdentifier::new(s: &str) -> Result<Self, ParseServerIdError>` and `impl FromStr for ServerIdentifier` in `src/types/server.rs`.
+>     - Deprecated `From<&str>` and `From<String>`, implementing them via `s.parse().unwrap_or_else(...)` to respect AST-grep rules.
+>     - Re-exported `ParseServerIdError` in `src/lib.rs`.
+>     - Migrated internal parsing callers in `src/com/connector/server.rs` and `src/connector/traits.rs` to `server_name.parse::<ServerIdentifier>()?`.
+>   - **Bound Server Endpoint Role Guarding (Finding #16):**
+>     - Implemented `validate_bound_server` on `OpcDaClient<C, State>` in `src/client/gateway.rs`. Guarded `TagBrowser::browse_tags`, `TagReader::read_tag_values`, `read_tag_value`, `TagWriter::write_tag_value`, and `write_tag_batch`, returning `OpcError::InvalidState` on endpoint mismatch.
+>     - Added integration test `test_bound_client_role_traits_reject_mismatched_server` in `tests/tag_io_integration_test.rs`.
+>   - **Explicit Construction Semantics (Finding #17):**
+>     - Added `OpcDaClient::bind_new(server)` and `OpcDaClient::bind_new_remote(host, server)` in `src/client/mod.rs`.
+>     - Deprecated `OpcDaClient::connect` and `connect_remote`.
+>     - Migrated documentation examples and README to use `bind_new`.
+>   - **Builder Early Precondition Hardening (Finding #18):**
+>     - Added `if self.server.is_none()` early guard in `OpcDaClientBuilder::build_bound` before invoking `self.build()?`, preventing wasteful worker thread and COM MTA apartment allocation on invalid configs.
+>   - **RPC Disconnect Classification (Finding #19):**
+>     - Updated `OpcError::is_connection_error(&self)` to inspect `OpcError::Server(_, code)` with `self::hresult::is_connection_hresult(windows_core::HRESULT((*code).cast_signed()))`.
+>     - Correctly classifies RPC drops (`0x800706BA`, `0x800706BE`) as connection errors.
+>   - **Tag Context Retention in Errors (Finding #20):**
+>     - Hardened `From<TagExtractError> for OpcError` to retain tag identifier context across `Internal`, `Server`, and `Connection` error variants while preserving original HRESULT codes.
+>     - Formatted `TypeMismatch` error strings with `Tag '{tag}': `.
+>   - **CWE-626 Null-Byte Rejection (Finding #27):**
+>     - Hardened `to_wide_null` and `ItemDefBatch::new` in `src/com/connector/group.rs` to reject interior null bytes (`\0`) with `OpcError::InvalidState`.
+>     - Updated `ComGroup::add_items` to propagate validation errors.
+>   - **Diagnostic Checked Value Getter (Finding #29):**
+>     - Promoted `TagValues::get_value_checked` to `pub fn` with comprehensive documentation and examples.
+>   - **Verification:**
+>     - Full 9-gate quality pipeline (`pwsh -File scripts/verify.ps1`) exited 0 with all 475+ workspace tests, 89 doctests, and 2 compile-fail doctests passing with zero warnings under `-D warnings`.
+> * **New Constraints:** Server identifiers must be constructed via `ServerIdentifier::new` or `.parse::<ServerIdentifier>()`. Bound client role traits must validate requested server against bound endpoint. `OpcDaClient::bind_new` must be used instead of deprecated `connect`. All tag strings passing into COM FFI must be validated for interior null bytes.
+> * **Pruned:** Closed Findings #14, #16, #17, #18, #19, #20, #27, and #29 from `review_report.md`. Entire 29-finding modernization roadmap for `opc-da-client` is now 100% complete.
+
 ## 2026-09-16: Block E (Hot-Path Performance & Allocation Optimization — Findings #3, #4, #11, #12, #13, #26, #28) Completed (`opc-da-client`)
 > 📝 **Context Update:**
 > * **Feature:** Execution of Block E of the modernization roadmap (Findings #3, #4, #11, #12, #13, #26, #28 in `opc-da-client`), eliminating unnecessary allocations in tag batches and read paths, bounding tag batch sizes, preventing active group thrashing via multi-group LRU caching, bounding connection pool capacity, amortizing browse mutex lock contention, and mitigating Head-of-Line blocking with cooperative cancellation.

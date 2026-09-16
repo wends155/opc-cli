@@ -7,8 +7,8 @@ use crate::connector::ServerBackend;
 use crate::errors::{OpcError, OpcResult};
 use crate::provider::{ServerDiscovery, TagBrowser, TagReader, TagWriter};
 use crate::types::{
-    IntoTags, IntoWriteBatch, OpcServerInfo, OpcValue, TagBatch, TagCollector, TagValue, TagValues,
-    WriteBatch, WriteResult,
+    IntoTags, IntoWriteBatch, OpcServerEndpoint, OpcServerInfo, OpcValue, TagBatch, TagCollector,
+    TagValue, TagValues, WriteBatch, WriteResult,
 };
 
 impl<C: ServerBackend + 'static> OpcDaClient<C, Unbound> {
@@ -85,12 +85,31 @@ impl<C: ServerBackend + 'static, State: Send + Sync + 'static> ServerDiscovery
     }
 }
 
+impl<C: ServerBackend + 'static, State: Send + Sync + 'static> OpcDaClient<C, State> {
+    pub(crate) fn validate_bound_server(&self, server: &str) -> OpcResult<OpcServerEndpoint> {
+        let requested_ep: OpcServerEndpoint = server.parse()?;
+        if let Some(bound_ep) = &self.endpoint {
+            let has_explicit_host = server.contains('\\') || server.contains('/');
+            if requested_ep.identifier() != bound_ep.identifier()
+                || (has_explicit_host && requested_ep.host() != bound_ep.host())
+            {
+                return Err(OpcError::InvalidState(format!(
+                    "Client is bound to server '{bound_ep}', but request targeted '{server}'"
+                )));
+            }
+            Ok(bound_ep.clone())
+        } else {
+            Ok(requested_ep)
+        }
+    }
+}
+
 impl<C: ServerBackend + 'static, State: Send + Sync + 'static> TagBrowser
     for OpcDaClient<C, State>
 {
     #[tracing::instrument(level = "info", skip(self, collector), err)]
     async fn browse_tags(&self, server: &str, collector: TagCollector) -> OpcResult<Vec<String>> {
-        let endpoint = server.parse()?;
+        let endpoint = self.validate_bound_server(server)?;
         self.dispatch_request(|reply| ComRequest::BrowseTags {
             endpoint,
             collector,
@@ -103,7 +122,7 @@ impl<C: ServerBackend + 'static, State: Send + Sync + 'static> TagBrowser
 impl<C: ServerBackend + 'static, State: Send + Sync + 'static> TagReader for OpcDaClient<C, State> {
     #[tracing::instrument(level = "info", skip(self, tags), fields(tag_count = tags.len()), err)]
     async fn read_tag_values(&self, server: &str, tags: TagBatch) -> OpcResult<TagValues> {
-        let endpoint = server.parse()?;
+        let endpoint = self.validate_bound_server(server)?;
         self.dispatch_request(|reply| ComRequest::ReadTagValues {
             endpoint,
             tags,
@@ -114,7 +133,7 @@ impl<C: ServerBackend + 'static, State: Send + Sync + 'static> TagReader for Opc
 
     #[tracing::instrument(level = "info", skip(self), err)]
     async fn read_tag_value(&self, server: &str, tag_id: &str) -> OpcResult<TagValue> {
-        let endpoint = server.parse()?;
+        let endpoint = self.validate_bound_server(server)?;
         let tags = TagBatch::from_str_lenient(tag_id);
         let values = self
             .dispatch_request(|reply| ComRequest::ReadTagValues {
@@ -137,7 +156,7 @@ impl<C: ServerBackend + 'static, State: Send + Sync + 'static> TagWriter for Opc
         tag_id: &str,
         value: OpcValue,
     ) -> OpcResult<WriteResult> {
-        let endpoint = server.parse()?;
+        let endpoint = self.validate_bound_server(server)?;
         let tag_id_owned = tag_id.to_string();
         self.dispatch_request(|reply| ComRequest::WriteTagValue {
             endpoint,
@@ -154,7 +173,7 @@ impl<C: ServerBackend + 'static, State: Send + Sync + 'static> TagWriter for Opc
         server: &str,
         writes: WriteBatch,
     ) -> OpcResult<Vec<WriteResult>> {
-        let endpoint = server.parse()?;
+        let endpoint = self.validate_bound_server(server)?;
         self.dispatch_request(|reply| ComRequest::WriteTagValues {
             endpoint,
             writes,

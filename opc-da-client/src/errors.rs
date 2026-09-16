@@ -131,6 +131,9 @@ impl OpcError {
         match self {
             Self::Connection(_) | Self::Timeout(_) => true,
             Self::Com { source } => self::hresult::is_connection_hresult(source.code()),
+            Self::Server(_, code) => {
+                self::hresult::is_connection_hresult(windows_core::HRESULT((*code).cast_signed()))
+            }
             Self::Worker(w) => w.is_connection_error(),
             _ => false,
         }
@@ -390,6 +393,15 @@ mod tests {
 
         let state_err = OpcError::InvalidState("bad state".into());
         assert!(!state_err.is_connection_error());
+
+        let rpc_server_err = OpcError::Server("RPC down".into(), 0x8007_06BA);
+        assert!(rpc_server_err.is_connection_error());
+
+        let rpc_dne_server_err = OpcError::Server("RPC call failed".into(), 0x8007_06BE);
+        assert!(rpc_dne_server_err.is_connection_error());
+
+        let access_denied_server_err = OpcError::Server("Access denied".into(), 0x8007_0005);
+        assert!(!access_denied_server_err.is_connection_error());
 
         #[cfg(feature = "opc-da-backend")]
         {

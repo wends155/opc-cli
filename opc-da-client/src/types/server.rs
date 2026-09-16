@@ -182,6 +182,15 @@ impl ServerIdentifier {
             Self::ProgId(_) => None,
         }
     }
+
+    /// Validates and constructs a new `ServerIdentifier` from a string slice (ProgID or CLSID).
+    ///
+    /// # Errors
+    /// Returns [`ParseServerIdError`] if string is empty, exceeds 255 chars, contains invalid characters,
+    /// or represents an invalid CLSID format.
+    pub fn new(s: &str) -> Result<Self, ParseServerIdError> {
+        s.parse()
+    }
 }
 
 /// Validates that a string slice conforms to OPC DA Programmatic Identifier (ProgID) rules.
@@ -260,11 +269,13 @@ impl From<windows_core::GUID> for ServerIdentifier {
 
 impl From<&str> for ServerIdentifier {
     fn from(s: &str) -> Self {
-        if let Some(clsid) = Clsid::parse(s) {
-            Self::Clsid(clsid)
-        } else {
-            Self::ProgId(s.to_string())
-        }
+        s.parse().unwrap_or_else(|_| {
+            if let Some(clsid) = Clsid::parse(s) {
+                Self::Clsid(clsid)
+            } else {
+                Self::ProgId(s.to_string())
+            }
+        })
     }
 }
 
@@ -684,6 +695,17 @@ mod tests {
         let from_clsid = ServerIdentifier::from(direct_clsid);
         assert!(from_clsid.is_clsid());
         assert_eq!(from_clsid.as_clsid(), Some(&direct_clsid));
+    }
+
+    #[test]
+    fn test_server_identifier_validation_and_conversions() {
+        assert!(ServerIdentifier::new("Matrikon.OPC.Simulation.1").is_ok());
+        assert_eq!(ServerIdentifier::new(""), Err(ParseServerIdError::Empty));
+        assert!(matches!(
+            ServerIdentifier::new("Invalid\tProgId"),
+            Err(ParseServerIdError::InvalidProgId(_))
+        ));
+        assert!(ServerIdentifier::new("{28E68F9A-8D75-11D1-8DC3-3C302A000000}").is_ok());
     }
 
     #[test]

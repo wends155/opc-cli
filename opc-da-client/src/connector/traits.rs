@@ -239,7 +239,8 @@ pub trait ServerConnector: Send + Sync {
     /// # Errors
     /// Returns an [`OpcError`] if connection fails.
     fn connect(&self, server_name: &str) -> OpcResult<Self::Server> {
-        self.connect_identifier(&ServerIdentifier::ProgId(server_name.to_string()))
+        let identifier: ServerIdentifier = server_name.parse()?;
+        self.connect_identifier(&identifier)
     }
 }
 

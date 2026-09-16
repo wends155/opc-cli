@@ -162,7 +162,16 @@ impl<C: ServerBackend + Default + 'static> OpcDaClientBuilder<C> {
     }
 
     /// Builds the `OpcDaClient` directly in the [`Bound`] typestate.
+    ///
+    /// # Errors
+    /// Returns [`OpcError::InvalidState`] if no server identifier has been configured.
+    /// Returns [`OpcError::Worker`] if worker thread initialization fails.
     pub fn build_bound(self) -> OpcResult<OpcDaClient<C, Bound>> {
+        if self.server.is_none() {
+            return Err(OpcError::InvalidState(
+                "Cannot build bound client without configuring server identifier".into(),
+            ));
+        }
         let unbound = self.build()?;
         let ep = unbound.endpoint.clone().ok_or_else(|| {
             OpcError::InvalidState(

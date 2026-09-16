@@ -28,7 +28,7 @@ OPC DA is deeply coupled to Windows COM/DCOM, which poses significant architectu
 ## Features
 
 - **Compile-Time Typestate Client (`OpcDaClient<C, State>`)**: Zero-cost typestates `Unbound` (gateway for discovery) and `Bound` (session for reading/writing), guaranteeing infallible endpoint access during active sessions via `.endpoint(&self)`.
-- **Fluent Client API & Direct Connect**: Ergonomic `OpcDaClient::builder()`, direct local shortcut `OpcDaClient::connect(server)`, remote DCOM shortcut `OpcDaClient::connect_remote(host, server)`, and typestate builder `build_bound()`.
+- **Fluent Client API & Direct Connect**: Ergonomic `OpcDaClient::builder()`, direct local shortcut `OpcDaClient::bind_new(server)`, remote DCOM shortcut `OpcDaClient::bind_new_remote(host, server)`, and typestate builder `build_bound()`.
 - **Eager Server Liveness Probe (`connect_eager`)**: Actively probes remote server responsiveness on connection via `ConnectedServer::ping()` and high-priority `ComRequest::Ping`, detecting unreachable servers upfront before entering cyclic polling loops.
 - **Zero-Allocation Batch Reads (`TagBatch` & `IntoTags`)**: Bound `read_tags` and `read_tag` accept static slices (`&["Tag1", "Tag2"]`), fixed-size arrays (`["Tag1", "Tag2"]`), single tag strings, or owned vectors (`Vec<String>`) with zero intermediate allocations.
 - **Inherent Typed Numeric Accessors**: Read individual scalar tags directly on `OpcDaClient<Bound>` without manual `Variant` unpacking (`read_f32`, `read_i64`, `read_u32`, `read_u64`, `read_f64`, `read_i32`, `read_bool`, `read_string`).
@@ -104,7 +104,7 @@ use opc_da_client::{OpcDaClient, OpcResult};
 #[tokio::main]
 async fn main() -> OpcResult<()> {
     // 1. Connect directly to a local or remote OPC server
-    let client = OpcDaClient::connect("Matrikon.OPC.Simulation.1")?;
+    let client = OpcDaClient::bind_new("Matrikon.OPC.Simulation.1")?;
 
     // 2. Read tag batch with zero intermediate allocation (accepts arrays, slices, or Vec<String>)
     let values = client.read_tags(["Random.Int4", "Random.Real8", "Random.String"]).await?;
@@ -128,7 +128,7 @@ use opc_da_client::{OpcDaClient, OpcResult};
 #[tokio::main]
 async fn main() -> OpcResult<()> {
     // 1. Bind to server
-    let client = OpcDaClient::connect("Matrikon.OPC.Simulation.1")?;
+    let client = OpcDaClient::bind_new("Matrikon.OPC.Simulation.1")?;
 
     // 2. Actively probe server liveness via high-priority ComRequest::Ping
     client.connect_eager().await?;
@@ -146,7 +146,7 @@ use opc_da_client::{OpcDaClient, OpcResult};
 
 #[tokio::main]
 async fn main() -> OpcResult<()> {
-    let client = OpcDaClient::connect("Matrikon.OPC.Simulation.1")?;
+    let client = OpcDaClient::bind_new("Matrikon.OPC.Simulation.1")?;
 
     // Direct scalar reads on bound session:
     let temp_f32: f32 = client.read_f32("Random.Real4").await?;
@@ -172,7 +172,7 @@ use opc_da_client::{OpcDaClient, OpcResult, OpcValue};
 
 #[tokio::main]
 async fn main() -> OpcResult<()> {
-    let client = OpcDaClient::connect("Matrikon.OPC.Simulation.1")?;
+    let client = OpcDaClient::bind_new("Matrikon.OPC.Simulation.1")?;
 
     // Single COM group and single atomic SyncIO::Write roundtrip
     let results = client.write_tags([
@@ -200,7 +200,7 @@ use std::time::Duration;
 
 #[tokio::main]
 async fn main() -> OpcResult<()> {
-    let client = OpcDaClient::connect("Matrikon.OPC.Simulation.1")?;
+    let client = OpcDaClient::bind_new("Matrikon.OPC.Simulation.1")?;
 
     // Starts background polling task with active group caching (>75% latency reduction)
     let mut rx = client.subscribe(["Random.Int4", "Random.Real8"], Duration::from_millis(500));
@@ -287,7 +287,7 @@ use opc_da_client::{OpcDaClient, OpcResult};
 #[tokio::main]
 async fn main() -> OpcResult<()> {
     // Direct CLSID connection bypasses local ProgID registry lookup:
-    let client = OpcDaClient::connect(r"\\192.168.1.50\{F8582CF2-88FB-11D0-B850-00C0F0104305}")?;
+    let client = OpcDaClient::bind_new(r"\\192.168.1.50\{F8582CF2-88FB-11D0-B850-00C0F0104305}")?;
     client.connect_eager().await?;
 
     let val = client.read_f64("Random.Real8").await?;
@@ -358,7 +358,7 @@ Write typed values (`Int`, `Float`, `Bool`, `String`, or raw Rust primitives) to
 
 #### Option A: Ergonomic Bound Session (`client.write_tag` / `client.write_tags`)
 
-When using a bound client session (`OpcDaClient::connect(server)?`), the server endpoint is bound at connection time. You do not repeat the server argument on each call, and methods accept native Rust primitives directly (`42_i32`, `3.14_f64`, `true`, `"active"`) via `impl Into<OpcValue>`:
+When using a bound client session (`OpcDaClient::bind_new(server)?`), the server endpoint is bound at connection time. You do not repeat the server argument on each call, and methods accept native Rust primitives directly (`42_i32`, `3.14_f64`, `true`, `"active"`) via `impl Into<OpcValue>`:
 
 ```rust,no_run
 use opc_da_client::{OpcDaClient, OpcResult, OpcValue};
@@ -366,7 +366,7 @@ use opc_da_client::{OpcDaClient, OpcResult, OpcValue};
 #[tokio::main]
 async fn main() -> OpcResult<()> {
     // 1. Bound Session: Server is bound at connection time
-    let client = OpcDaClient::connect("Matrikon.OPC.Simulation.1")?;
+    let client = OpcDaClient::bind_new("Matrikon.OPC.Simulation.1")?;
 
     // Highly ergonomic: write single tag with native Rust primitive:
     let result = client.write_tag("Bucket Brigade.Int4", 42_i32).await?;
@@ -538,7 +538,7 @@ use opc_da_client::{OpcDaClient, OpcResult, OpcValue};
 
 #[tokio::main]
 async fn main() -> OpcResult<()> {
-    let client = OpcDaClient::connect("Matrikon.OPC.Simulation.1")?;
+    let client = OpcDaClient::bind_new("Matrikon.OPC.Simulation.1")?;
 
     // 0.2.x (Deprecated):
     // client.write("Tag1", OpcValue::Int(10)).await?;

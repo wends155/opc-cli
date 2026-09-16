@@ -295,15 +295,28 @@ impl TagExtractError {
 impl From<TagExtractError> for OpcError {
     fn from(err: TagExtractError) -> Self {
         match err {
-            TagExtractError::ReadFailed { source, .. } => source,
-            TagExtractError::TypeMismatch {
-                value, expected, ..
-            } => Self::Conversion(crate::errors::ConversionError::TypeMismatch {
-                actual: value,
-                expected,
-            }),
             TagExtractError::NotRequested(tag) => Self::TagNotRequested(tag),
             TagExtractError::NoValue(tag) => Self::TagNoValue(tag),
+            TagExtractError::ReadFailed { tag, source } => match source {
+                Self::Internal(msg) if !msg.contains(&tag) => {
+                    Self::Internal(format!("Tag '{tag}': {msg}"))
+                }
+                Self::Server(msg, code) if !msg.contains(&tag) => {
+                    Self::Server(format!("Tag '{tag}': {msg}"), code)
+                }
+                Self::Connection(msg) if !msg.contains(&tag) => {
+                    Self::Connection(format!("Tag '{tag}': {msg}"))
+                }
+                other => other,
+            },
+            TagExtractError::TypeMismatch {
+                tag,
+                value,
+                expected,
+            } => Self::Conversion(crate::errors::ConversionError::TypeMismatch {
+                actual: format!("{value} (Tag '{tag}')"),
+                expected,
+            }),
         }
     }
 }
@@ -432,8 +445,13 @@ impl TagValues {
         self.get(tag).and_then(|tv| tv.value())
     }
 
-    /// Helper to look up an item and validate that it has an available value.
-    fn get_value_checked(&self, tag: &str) -> Result<&OpcValue, TagExtractError> {
+    /// Looks up an OPC value by tag identifier with strict error checking.
+    ///
+    /// # Errors
+    /// Returns [`TagExtractError::NotRequested`] if the tag was not requested.
+    /// Returns [`TagExtractError::NoValue`] if the tag returned empty/null.
+    /// Returns [`TagExtractError::ReadFailed`] if the individual item read failed on the server.
+    pub fn get_value_checked(&self, tag: &str) -> Result<&OpcValue, TagExtractError> {
         let item = self
             .get(tag)
             .ok_or_else(|| TagExtractError::NotRequested(tag.to_string()))?;
@@ -1028,6 +1046,64 @@ mod tests {
         let tv = TagValue::new("TagX", Some(OpcValue::Int(10)), OpcQuality::GOOD, None);
         assert!(tv.is_good());
         assert_eq!(tv.tag_id, "TagX");
+    }
+
+    #[test]
+    fn test_tag_extract_error_preserves_tag_context() {
+        let err_internal = OpcError::from(TagExtractError::ReadFailed {
+            tag: "Tag1".into(),
+            source: OpcError::Internal("Bad quality".into()),
+        });
+        assert!(err_internal.to_string().contains("Tag 'Tag1': Bad quality"));
+
+        let err_server = OpcError::from(TagExtractError::ReadFailed {
+            tag: "Tag1".into(),
+            source: OpcError::Server("Unknown item".into(), 0xC004_0007),
+        });
+        assert!(err_server.to_string().contains("Tag 'Tag1': Unknown item"));
+
+        let err_conn = OpcError::from(TagExtractError::ReadFailed {
+            tag: "Tag1".into(),
+            source: OpcError::Connection("Disconnected".into()),
+        });
+        assert!(err_conn.to_string().contains("Tag 'Tag1': Disconnected"));
+
+        let err_mismatch = OpcError::from(TagExtractError::TypeMismatch {
+            tag: "Tag1".into(),
+            value: "42".to_string(),
+            expected: "f64",
+        });
+        assert!(err_mismatch.to_string().contains("Tag 'Tag1'"));
+    }
+
+    #[test]
+    fn test_tag_values_get_value_checked() {
+        let tvs = TagValues::new(vec![
+            TagValue::new("GoodTag", Some(OpcValue::Int(100)), OpcQuality::GOOD, None),
+            TagValue::with_error(
+                "BadTag",
+                OpcQuality::BAD_CONFIG_ERROR,
+                OpcError::Internal("Device fault".into()),
+            ),
+            TagValue::new("NullTag", None, OpcQuality::BAD_CONFIG_ERROR, None),
+        ]);
+
+        assert_eq!(
+            tvs.get_value_checked("GoodTag").unwrap(),
+            &OpcValue::Int(100)
+        );
+        assert!(matches!(
+            tvs.get_value_checked("MissingTag"),
+            Err(TagExtractError::NotRequested(_))
+        ));
+        assert!(matches!(
+            tvs.get_value_checked("BadTag"),
+            Err(TagExtractError::ReadFailed { .. })
+        ));
+        assert!(matches!(
+            tvs.get_value_checked("NullTag"),
+            Err(TagExtractError::NoValue(_))
+        ));
     }
 
     #[test]

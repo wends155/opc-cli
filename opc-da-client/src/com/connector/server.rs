@@ -257,7 +257,8 @@ impl ServerConnector for ComConnector {
 
     #[tracing::instrument(level = "info", skip(self), err)]
     fn connect(&self, server_name: &str) -> OpcResult<Self::Server> {
-        self.connect_identifier(&ServerIdentifier::from(server_name))
+        let identifier: ServerIdentifier = server_name.parse()?;
+        self.connect_identifier(&identifier)
     }
 }
 
