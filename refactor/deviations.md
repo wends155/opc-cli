@@ -13,10 +13,11 @@
 During Cycle 2, each deviation from the approved implementation plan is recorded with its compiler/language dynamic, architectural justification, and resulting invariant.
 
 ### Summary Metrics
-* **Total Cycle 2 Deviations:** 9
+* **Total Cycle 2 Deviations:** 12
 * **Block G1 (Clean Slate API Excision & Struct Deduplication):** 3 deviations (0 violations, all justified and verified)
 * **Block G2 (Ergonomic Symmetry & Comprehensive Public Documentation):** 4 deviations (0 violations, all justified and verified)
 * **Block H1 (Domain Invariants & CWE-626 Hardening):** 2 deviations (0 violations, all justified and verified)
+* **Block H2 (COM Resource & Dead Code Pruning):** 3 deviations (0 violations, all justified and verified)
 * **Quality Gate Verification:** 100% Green across all 9 quality gates in `scripts/verify.ps1`.
 
 ---
@@ -34,6 +35,9 @@ During Cycle 2, each deviation from the approved implementation plan is recorded
 | **Block G2** | Step 2<br>Finding #11 | Existing unit test `test_write_batch_vec_and_into_iter` with `("Tag1".into(), ...)` | Adjusted tuple to `("Tag1".to_string(), ...)` in `src/types/write_batch.rs:438` | Generalizing `From<Vec<(S, V)>>` over `S: Into<String>` and `V: Into<OpcValue>` introduced an inference ambiguity for `vec![("Tag1".into(), ...)]`, as `&str::into()` cannot infer the intermediate target type `S` when collecting into a polymorphic container. Specifying `.to_string()` provides unambiguous type information. | Type Inference Invariant | Unit tests compile cleanly without type annotation ambiguity. |
 | **Block H1** | Step 6<br>Finding #5 | Retain `impl From<S> for LocalPointer` alongside `TryFrom<&str>` | Deleted unchecked `impl From<S> for LocalPointer` from `src/raw/memory.rs` | Rust's blanket `impl<T, U> TryFrom<U> for T where U: Into<T>` caused compiler error `E0119` (conflicting trait implementations) when implementing fallible `TryFrom<&str>` while keeping infallible `From<S>`. Excising unchecked `From<S>` cleanly resolved the conflict, strictly enforced the Clean Slate paradigm, and guaranteed at compile time that all UTF-16 COM conversions reject interior null bytes (`\0`). | Language Invariant & Security Hardening (`E0119`) | `LocalPointer` cannot be constructed infallibly from arbitrary string types; all callers must use fallible `try_from_str` or `try_into()`, eliminating CWE-626 null-byte truncation at compile time. |
 | **Block H1** | Step 9<br>Gate 4b | `#[cfg(feature = "opc-da-backend")] use crate::types::ServerIdentifier;` in `src/client/mod.rs` | Unconditional `use crate::types::{OpcServerEndpoint, ServerIdentifier};` in `src/client/mod.rs` | `OpcDaClient::bind_new_remote` accepts `impl TryInto<ServerIdentifier>` on `impl OpcDaClient<DefaultBackendConnector, Unbound>`. In headless builds (`--no-default-features`), `DefaultBackendConnector` resolves to `NoopServerBackend`. Gating the import behind `opc-da-backend` caused `E0425: cannot find type ServerIdentifier in this scope` during Gate 4b verification. Unconditionally importing the pure domain type resolved the issue. | Feature Independence & Cross-Target Compilation | Client constructors and domain type bindings compile cleanly across all feature combinations including `--no-default-features`. |
+| **Block H2** | Step 1<br>Finding #1 | `&*(proxy as *const T as *const windows::core::IUnknown)` | `&*std::ptr::from_ref(proxy).cast::<windows::core::IUnknown>()` | Clippy `-D warnings` triggered `clippy::ptr_as_ptr` and `clippy::ref_as_ptr` on raw pointer `as` casting. Using standard library `std::ptr::from_ref(proxy).cast()` satisfies all compiler safety lints in Rust 2024 / MSRV 1.93.1 while achieving exact proxy pointer re-borrowing without `QueryInterface` copies. | Lint Rule Invariant (`clippy::ptr_as_ptr`, `clippy::ref_as_ptr`) | Exact proxy pointer re-borrowing passes strict linting without compiler warnings or ephemeral COM proxy drops. |
+| **Block H2** | Steps 1, 2<br>Gate 6 | `// SAFETY: ...` on first line of multi-line comment | `// SAFETY:` on every line of multi-line comment | In tree-sitter-rust and AST-Grep `require-safety-comment`, each `//` is an individual `line_comment` node. The AST-Grep `follows` selector inspects the immediate preceding sibling token; if subsequent lines in a multi-line comment lack `SAFETY:`, the immediate preceding comment node fails the regex match. Repeating `// SAFETY:` on each line ensures 100% compliance with Gate 6 structural safety scans. | AST Linting Invariant (`require-safety-comment`) | Unsafe blocks in production code pass AST-Grep structural validation without missing-rationale false positives. |
+| **Block H2** | Step 10<br>Finding #10 | `let _ = unsafe { self.server.RemoveGroup(raw_server_handle, true) };` | `let remove_res = unsafe { self.server.RemoveGroup(...) }; if let Err(rm_err) = remove_res { tracing::warn!(...); }` | Directly binding the unsafe call ensures the `// SAFETY:` rationale directly precedes the `unsafe` block for clippy (`undocumented_unsafe_blocks`). Logging cleanup failures via `tracing::warn!` upholds `coding-standard.md §4.8` (no silent failures), preventing unobservable group handle leakage. | Error Handling & Governance (`coding-standard.md §4.8`) | Server-side group cleanup failures are logged with full error and handle context rather than silently swallowed. |
 
 ---
 
@@ -125,5 +129,27 @@ This preserves clean ergonomics for 99% of consumers while providing full parame
   ```
 * **Architectural Resolution:** `ServerIdentifier` is a pure domain type defined in `crate::types::server`, which is completely agnostic of Win32 COM APIs and available unconditionally under all feature configurations. Removing the `#[cfg(feature = "opc-da-backend")]` gate on the `ServerIdentifier` import in `src/client/mod.rs` ensured `bind_new_remote` compiles cleanly regardless of whether `opc-da-backend` is active, achieving 100% compliance with Gate 4b.
 
+---
 
+### 3.9 Case Study H2.1: Clippy Pointer Casting Lints on COM Proxy Re-Borrowing
+* **Context:** To avoid creating ephemeral COM proxy copies via `proxy.cast::<IUnknown>()`, `apply_proxy_blanket` was planned to re-borrow the underlying proxy pointer using `&*(proxy as *const T as *const windows::core::IUnknown)`.
+* **Compiler Obstacle:** In Rust 2024 / MSRV 1.93.1 under `-D warnings`, clippy denies `clippy::ref_as_ptr` (casting `&T` using `as *const T`) and `clippy::ptr_as_ptr` (casting between raw pointer types using `as`).
+* **Architectural Resolution:** Using standard library pointer methods:
+  ```rust
+  let unk: &windows::core::IUnknown = &*std::ptr::from_ref(proxy).cast::<windows::core::IUnknown>();
+  ```
+  satisfies both lints, preserves sound raw pointer re-borrowing without `QueryInterface` calls, and prevents dropping transient COM proxies under KB5004442 DCOM authentication requirements.
 
+---
+
+### 3.10 Case Study H2.2: AST-Grep Preceding Sibling Semantics on Multi-Line Safety Comments
+* **Context:** Production unsafe blocks must be annotated with `// SAFETY:` rationale to satisfy the AST-Grep `require-safety-comment` structural rule (Gate 6).
+* **Toolchain Obstacle:** Tree-sitter parses each line starting with `//` as a distinct `line_comment` syntax node. AST-Grep's `follows` selector checks the immediate preceding sibling token before the `unsafe_block` (or its enclosing `let_declaration`). When multi-line explanations were written with `// SAFETY:` only on the first line, the token immediately preceding the unsafe block was the final line (e.g. `// CoSetProxyBlanket is safe...`), causing the regex `SAFETY:` match to fail and triggering AST-Grep Gate 6 errors.
+* **Architectural Resolution:** Standardizing multi-line safety comments so that *every* line begins with `// SAFETY:` ensures that whichever comment line is selected as the immediate preceding sibling satisfies the AST pattern match, guaranteeing reliable compliance across all AST structural tools.
+
+---
+
+### 3.11 Case Study H2.3: Elimination of Silent Cleanup Failures during Group Initialization Rollback
+* **Context:** In `ComServer::add_group`, when converting the newly created group `IUnknown` pointer into `ComGroup` or applying member proxy blanketing, failure must trigger server-side `RemoveGroup` cleanup to avoid leaving orphaned server handles.
+* **Architectural Obstacle:** The original code snippet proposed `let _ = unsafe { self.server.RemoveGroup(raw_server_handle, true) };`. This silently swallowed potential RPC or COM errors on group cleanup, violating `coding-standard.md §4.8` ("No silent failures"). Furthermore, inline assignment without dedicated binding separated the `// SAFETY:` comment from the `unsafe` block, triggering clippy's `undocumented_unsafe_blocks` lint.
+* **Architectural Resolution:** Binding the removal result directly with an adjacent `// SAFETY:` comment and logging failures via `tracing::warn!(error = ?rm_err, handle = raw_server_handle, "Failed to remove orphaned group...")` provided full diagnostic observability while enforcing strict error transparency.

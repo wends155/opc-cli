@@ -1,5 +1,35 @@
 # Project Context Summary
 
+## 2026-09-17: Block H2 (COM Resource & Dead Code Pruning — Findings #1, #4, #10) Completed (`opc-da-client`)
+> 📝 **Context Update:**
+> * **Feature:** Execution of Block H2 of Cycle 2 modernization (Findings #1, #4, #10 in `opc-da-client`), hardening DCOM proxy blanketing to bind directly to the caller's target interface proxy pointer (KB5004442 compliance), enforcing cast-first-blanket-second sequencing on remote instance activation, pruning unread COM interface fields from `ComGroup` (8 → 2) and `ComServer` (5 → 2) to restore OPC DA 2.05a server compatibility, adding recursive member proxy blanketing with `RemoveGroup` rollback on error in `add_group`, deleting dead code (`connect_server_identifier`, `RPC_C_IMP_LEVEL_IMPERSONATE`), scoping `com::security` internals to `pub(crate)`, and excising duplicate tests.
+> * **Changes:**
+>   - **Exact Proxy Blanketing & Remote Activation (Finding #1):**
+>     - Refactored `apply_proxy_blanket` to re-borrow the caller's exact interface proxy pointer as `&IUnknown` via `std::ptr::from_ref(proxy).cast::<windows::core::IUnknown>()`, avoiding `clippy::ptr_as_ptr` / `clippy::ref_as_ptr` and preventing transient `QueryInterface` proxy copies from dropping and failing modern DCOM RPC with `0x80070005`.
+>     - Refactored `create_remote_instance` to cast the `MULTI_QI` raw pointer to target type `T` first (`T::from_raw(Interface::into_raw(unk))`), applying proxy blanketing directly to the returned interface instance.
+>     - Added unit test `test_dcom_security_level_derives_and_mapping` verifying defaults, conversions, and copy/debug traits.
+>   - **ISP Interface Pruning on `ComGroup` & `ComServer` (Finding #4):**
+>     - Pruned `ComGroup` from 8 interface fields to 2 active fields (`item_mgt: IOPCItemMgt`, `sync_io: IOPCSyncIO`). Reduced `TryFrom<IUnknown>` from 8 queries to 2, preventing connection aborts on OPC DA 2.05a servers lacking optional DA 2.0/3.0 interfaces.
+>     - Pruned `ComServer` from 5 fields to 2 active fields (`server: IOPCServer`, `browse_server_address_space: Option<IOPCBrowseServerAddressSpace>`) + `legacy_dcom`. Streamlined `connect_endpoint_with_legacy` to eliminate redundant queries and blanketing for unread interfaces `common`, `item_properties`, and `server_public_groups`.
+>     - Removed all `#[allow(dead_code)]` suppressions on `ComGroup` and `ComServer`.
+>   - **Child Member Proxy Blanketing & Rollback Resilience (Finding #10):**
+>     - Added `ComGroup::apply_proxy_blanket(&self, legacy_dcom: bool)` method blanketing both `item_mgt` and `sync_io`.
+>     - Wired `apply_proxy_blanket` into `ComServer::add_group`, eliminating manual `IUnknown` casting and configuring security on group member proxies immediately upon creation.
+>     - Added best-effort `RemoveGroup` rollback on `try_into()` or blanketing failure, logging warnings with `tracing::warn!` to prevent orphaned server-side group allocations without silent failures (`coding-standard.md §4.8`).
+>   - **Dead Code Excision & Module Encapsulation (Findings #1, #10):**
+>     - Excised uncalled bypass helper `connect_server_identifier` (CWE-1188) and unused constant `RPC_C_IMP_LEVEL_IMPERSONATE` (CWE-250).
+>     - Scoped all top-level constants, `DcomSecurityLevel`, and helper functions in `com::security` from `pub` to `pub(crate)`.
+>     - Excised duplicate security tests from `server.rs::tests` along with orphaned security imports.
+>     - Added `test_com_server_struct_shape_and_unsupported_browse` with `dummy_iface` verifying structural invariants and `NotImplemented` error paths.
+>   - **Quality Pipeline Verification:**
+>     - Full 9-gate verification pipeline (`pwsh -File scripts/verify.ps1`) exited 0 with all 524 workspace tests (doc-tests at 124, 2 compile-fail), zero AST-Grep violations, and zero compiler/clippy warnings under `-D warnings`.
+> * **New Constraints:**
+>   - COM proxy blanketing must use pointer re-borrowing via `std::ptr::from_ref(proxy).cast()`, never `proxy.cast::<IUnknown>()`.
+>   - Every line of multi-line safety comments must begin with `// SAFETY:` for AST-Grep rule compliance.
+>   - New COM interface fields must not be added to `ComServer` or `ComGroup` unless actively used by public client operations.
+>   - Child COM proxies must be blanketed at construction time, and failure must clean up server-side allocations with structured warning logging.
+> * **Pruned:** Closed Findings #1, #4, and #10 from `refactor/cycle2_blockH_review.md`. Sub-Block H2 is 100% complete. Ready for Sub-Block H3 (Case Normalization & Tag Ergonomics — Findings #2, #7, #8).
+
 ## 2026-09-16: Block H1 (Domain Invariants & CWE-626 Hardening — Findings #3, #5, #6, #9) Completed (`opc-da-client`)
 > 📝 **Context Update:**
 > * **Feature:** Execution of Block H1 of Cycle 2 modernization (Findings #3, #5, #6, #9 in `opc-da-client`), remediating hyphen discrimination heuristic in `ServerIdentifier::from_str`, mitigating CWE-626 null-byte truncation in `LocalPointer` and endpoint ingestion, implementing Clean Slate removal of infallible `From<&str>` / `From<String>` on domain types, introducing `OpcServerEndpoint::local_prog_id` / `remote_prog_id` helpers, enforcing fail-early constructor validation in `bind_new` and `bind_new_remote`, and providing non-clobbering deferred error accumulation in `OpcDaClientBuilder`.
