@@ -88,16 +88,9 @@ impl Drop for ItemResultsBlobGuard<'_> {
 }
 
 /// COM-backed [`ConnectedGroup`].
-#[allow(dead_code)]
 pub struct ComGroup {
     pub(crate) item_mgt: crate::raw::bindings::da::IOPCItemMgt,
-    pub(crate) group_state_mgt: crate::raw::bindings::da::IOPCGroupStateMgt,
-    pub(crate) public_group_state_mgt: Option<crate::raw::bindings::da::IOPCPublicGroupStateMgt>,
     pub(crate) sync_io: crate::raw::bindings::da::IOPCSyncIO,
-    pub(crate) async_io: Option<crate::raw::bindings::da::IOPCAsyncIO>,
-    pub(crate) async_io2: crate::raw::bindings::da::IOPCAsyncIO2,
-    pub(crate) connection_point_container: windows::Win32::System::Com::IConnectionPointContainer,
-    pub(crate) data_object: Option<windows::Win32::System::Com::IDataObject>,
 }
 
 impl ConnectedGroup for ComGroup {
@@ -271,19 +264,26 @@ impl ConnectedGroup for ComGroup {
     }
 }
 
+impl ComGroup {
+    /// Applies DCOM security blanketing to all group member interface proxies.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`OpcError`] if `CoSetProxyBlanket` fails on any member proxy.
+    pub(crate) fn apply_proxy_blanket(&self, legacy_dcom: bool) -> OpcResult<()> {
+        crate::com::security::apply_proxy_blanket(&self.item_mgt, legacy_dcom)?;
+        crate::com::security::apply_proxy_blanket(&self.sync_io, legacy_dcom)?;
+        Ok(())
+    }
+}
+
 impl TryFrom<windows::core::IUnknown> for ComGroup {
     type Error = windows::core::Error;
 
     fn try_from(unknown: windows::core::IUnknown) -> Result<Self, Self::Error> {
         Ok(Self {
             item_mgt: unknown.cast()?,
-            group_state_mgt: unknown.cast()?,
-            public_group_state_mgt: unknown.cast().ok(),
             sync_io: unknown.cast()?,
-            async_io: unknown.cast().ok(),
-            async_io2: unknown.cast()?,
-            connection_point_container: unknown.cast()?,
-            data_object: unknown.cast().ok(),
         })
     }
 }
@@ -311,13 +311,7 @@ mod tests {
         let group = std::mem::ManuallyDrop::new(unsafe {
             ComGroup {
                 item_mgt: dummy_iface(),
-                group_state_mgt: dummy_iface(),
-                public_group_state_mgt: None,
                 sync_io: dummy_iface(),
-                async_io: None,
-                async_io2: dummy_iface(),
-                connection_point_container: dummy_iface(),
-                data_object: None,
             }
         });
 
