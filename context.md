@@ -1,5 +1,59 @@
 # Project Context Summary
 
+## 2026-09-16: Block G2 (Ergonomic Symmetry & Comprehensive Public Documentation — Findings #5, #11, #15) Completed (`opc-da-client`)
+> 📝 **Context Update:**
+> * **Feature:** Execution of Block G2 of Cycle 2 modernization (Findings #5, #11, #15 in `opc-da-client`), delivering ergonomic symmetry across `WriteBatch` conversions, generic `Unbound` gateway method parameters, shorthand aliases, and achieving 100% rustdoc documentation coverage across all public client methods, typestates, collections, and builder methods.
+> * **Changes:**
+>   - **Generic `WriteBatch` Conversions (Finding #11):**
+>     - Replaced concrete `(String, OpcValue)` and array conversions with 6 generic `From` implementations in `src/types/write_batch.rs` accepting `S: Into<String>` and `V: Into<OpcValue>` for `(S, V)`, `[(S, V); N]`, `&[(S, V); N]`, `Vec<(S, V)>`, `&[(S, V)]`, and `FromIterator<(S, V)>`.
+>     - Preserved zero-copy `From<Arc<[(String, OpcValue)]>>`.
+>     - Added unit test `test_generic_into_write_batch_conversions`.
+>   - **Unbound Gateway Generic Ergonomics (Finding #11):**
+>     - Updated `OpcDaClient<C, Unbound>::write_tag_batch` to accept `impl IntoWriteBatch` and `write_tag_value` to accept `impl Into<OpcValue>` in `src/client/gateway.rs`.
+>     - Streamlined `#[tracing::instrument]` on `write_tag_batch` to `skip(self, writes)`.
+>     - Added unit tests `test_unbound_write_tag_value_generic_primitives` and `test_unbound_write_tag_batch_into_write_batch` in `src/client/tests.rs`.
+>   - **Unbound Gateway Shorthand Aliases (Finding #11):**
+>     - Added 5 inherent shorthand methods to `OpcDaClient<C, Unbound>`: `read_tags`, `read_tag`, `write_tags`, `write_tag`, and `browse`.
+>     - Added unit tests `test_unbound_shorthand_aliases` and `test_unbound_write_tag_generic_into_opc_value`.
+>   - **Strict Error Distinction & Doctest for `get_value_checked` (Finding #15):**
+>     - Enhanced `TagValues::get_value_checked` in `src/types/collection.rs` with `#[must_use = "..."]`, `# Panics`, and runnable doctest using `OpcValue::Float`.
+>   - **Comprehensive Public Documentation (Finding #5):**
+>     - Added full rustdoc blocks (Summary, Details, `# Errors`, `# Panics`, and ````rust,no_run` examples) to all 13 inherent `Bound` methods in `src/client/session.rs`.
+>     - Added full rustdoc blocks across all 12 inherent `Unbound` gateway methods and shorthand aliases in `src/client/gateway.rs`.
+>     - Documented `connect_eager` in `src/client/typestate.rs`, `bind_new_remote` and `OpcDaClient::new` in `src/client/mod.rs`, and all `OpcDaClientBuilder` constructors and build methods in `src/client/builder.rs`.
+>   - **Quality Pipeline Verification:**
+>     - Full 9-gate quality pipeline (`pwsh -File scripts/verify.ps1`) exited 0 with all 523 workspace tests (doc-tests increased to 126) and zero warnings under `-D warnings`.
+> * **New Constraints:** `write_tag_batch` and `write_tags` on `Unbound` accept `impl IntoWriteBatch`. Primitives passed into `write_tag_value` and `write_tag` do not require explicit `OpcValue` wrapping. Doc comments in library crates must never use `println!` (Gate 7 enforcement).
+> * **Pruned:** Closed Findings #5, #11, and #15 from `refactor/cycle2_review.md`. Modernization Block G is now 100% complete across both phases (G1 and G2).
+
+## 2026-09-16: Block G1 (Clean Slate API Excision & Struct Deduplication — Findings #1, #4, #16, #17, #19) Completed (`opc-da-client`)
+> 📝 **Context Update:**
+> * **Feature:** Execution of Block G1 of Cycle 2 modernization (Findings #1, #4, #16, #17, #19 in `opc-da-client`), excising obsolete v0.1/v0.2 APIs (`connect`, `connect_remote`, `write_tag_values`), consolidating triplicate `OpcDaClient` and `OpcDaClientBuilder` struct declarations via `DefaultBackendConnector`, introducing the synchronous `NoopServerBackend` fallback for offline/headless builds, re-exporting `ParseEndpointError`, `DefaultOpcDaClient`, and `windows_core::HRESULT` at root facades, and purging 100% of `#[allow(deprecated)]` suppressions across the crate.
+> * **Changes:**
+>   - **Headless Fallback Backend (Finding #17):**
+>     - Implemented synchronous `NoopServerBackend`, `NoopConnectedServer`, and `NoopConnectedGroup` in `src/connector/traits.rs`. Returns `OpcError::NotImplemented` for active operations and succeeds on disconnect/ping.
+>     - Added unit test `test_noop_server_backend_behavior`.
+>   - **Struct Deduplication & Default Backend Selection (Findings #16, #17):**
+>     - Defined `DefaultBackendConnector` type alias in `src/client/mod.rs` selecting `ComConnector` (`opc-da-backend`), `MockServerConnector` (`test-support`), or `NoopServerBackend` (headless).
+>     - Consolidated 3 duplicate `OpcDaClient` structs into single generic `pub struct OpcDaClient<C: ServerBackend + 'static = DefaultBackendConnector, State = Unbound>`.
+>     - Consolidated 3 duplicate `OpcDaClientBuilder` structs in `src/client/builder.rs` into single generic `pub struct OpcDaClientBuilder<C = DefaultBackendConnector>`.
+>     - Implemented unambiguous `OpcDaClientBuilder::new()` targeting `DefaultBackendConnector` to prevent `E0283` inference ambiguities.
+>   - **Clean Slate Deprecation Excision (Finding #1):**
+>     - Excised `OpcDaClient::connect` and `connect_remote` from `src/client/mod.rs`.
+>     - Excised `TagWriter::write_tag_values` from `src/provider.rs` and delegation arm in `src/client/gateway.rs`.
+>     - Purged `write_tag_values` from `MockOpcProvider` and `MockTagWriter`.
+>     - Purged all `#[allow(deprecated)]` annotations from `src/provider.rs` and `src/types/server.rs`, reaching zero deprecation suppressions across the entire crate.
+>   - **Public Root Re-exports & Diagnostics (Findings #4, #19):**
+>     - Re-exported `ParseEndpointError` and `DefaultOpcDaClient` in `src/lib.rs`.
+>     - Re-exported `windows_core::HRESULT` in `src/errors/hresult.rs`.
+>     - Added runnable doctest to `format_hresult` and removed `#[allow(dead_code)]`.
+>     - Made `#![doc = include_str!("../README.md")]` in `src/lib.rs` unconditional.
+>     - Pruned `write_tag_values` from `opc-da-client/README.md`.
+>   - **Verification:**
+>     - Full 9-gate quality pipeline (`pwsh -File scripts/verify.ps1`) exited 0 with all 484 workspace tests (baseline 480, +4 new tests) and 90 doctests passing with zero warnings under `-D warnings`.
+> * **New Constraints:** `OpcDaClient` must be constructed via `OpcDaClient::builder().build_bound()` or `bind_new`. Batch writes must be issued via `write_tag_batch` or `write_tags` (never `write_tag_values`). `OpcDaClientBuilder::new()` provides the default connector. Zero `#[allow(deprecated)]` allowed in `opc-da-client`.
+> * **Pruned:** Closed Findings #1, #4, #16, #17, and #19 from `refactor/cycle2_review.md`. Removed obsolete tests for `write_tag_values` and `connect`/`connect_remote`.
+
 ## 2026-09-16: Block F (API Invariants, Security & Error Diagnostics — Findings #14, #16, #17, #18, #19, #20, #27, #29) Completed (`opc-da-client`)
 > 📝 **Context Update:**
 > * **Feature:** Execution of Block F of the modernization roadmap (Findings #14, #16, #17, #18, #19, #20, #27, #29 in `opc-da-client`), completing the full 29-finding remediation cycle. Implemented strict ProgID and CLSID domain invariants, endpoint validation on role traits, explicit client construction semantics, early builder resource validation, RPC connection classification, error tag context preservation, CWE-626 null-byte rejection, and public checked value accessors.

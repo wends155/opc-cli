@@ -311,22 +311,6 @@ pub trait TagWriter: Send + Sync {
             Ok(results)
         }
     }
-
-    /// Write typed values to multiple OPC DA tags in a batch.
-    ///
-    /// # Deprecated
-    /// Use [`TagWriter::write_tag_batch`] instead.
-    #[deprecated(since = "0.2.0", note = "Use write_tag_batch instead")]
-    fn write_tag_values(
-        &self,
-        server: &str,
-        writes: &[(String, OpcValue)],
-    ) -> impl std::future::Future<Output = OpcResult<Vec<WriteResult>>> + Send {
-        async {
-            self.write_tag_batch(server, crate::types::WriteBatch::Owned(writes.to_vec()))
-                .await
-        }
-    }
 }
 
 /// Composite asynchronous OPC DA service provider abstraction.
@@ -335,13 +319,11 @@ pub trait TagWriter: Send + Sync {
 ///
 /// All asynchronous role methods are bound by Return Type Notation (RTN) to yield [`Send`]
 /// futures so they can safely cross thread boundaries in asynchronous runtimes.
-#[allow(deprecated)]
 pub trait OpcProvider:
     ServerDiscovery + TagBrowser + TagReader + TagWriter + Send + Sync + 'static
 {
 }
 
-#[allow(deprecated)]
 impl<T> OpcProvider for T where
     T: ServerDiscovery + TagBrowser + TagReader + TagWriter + Send + Sync + 'static
 {
@@ -349,7 +331,7 @@ impl<T> OpcProvider for T where
 
 #[cfg(feature = "test-support")]
 mod mock {
-    #![allow(clippy::struct_field_names, deprecated)]
+    #![allow(clippy::struct_field_names)]
     use super::{
         OpcResult, OpcServerInfo, OpcValue, ServerDiscovery, TagBatch, TagBrowser, TagCollector,
         TagReader, TagValue, TagValues, TagWriter, WriteResult,
@@ -384,11 +366,6 @@ mod mock {
                 &self,
                 server: &str,
                 writes: crate::types::WriteBatch,
-            ) -> OpcResult<Vec<WriteResult>>;
-            async fn write_tag_values(
-                &self,
-                server: &str,
-                writes: &[(String, OpcValue)],
             ) -> OpcResult<Vec<WriteResult>>;
         }
     }
@@ -437,11 +414,6 @@ mod mock {
                 &self,
                 server: &str,
                 writes: crate::types::WriteBatch,
-            ) -> OpcResult<Vec<WriteResult>>;
-            async fn write_tag_values(
-                &self,
-                server: &str,
-                writes: &[(String, OpcValue)],
             ) -> OpcResult<Vec<WriteResult>>;
         }
     }
@@ -495,7 +467,6 @@ mod tests {
     }
 
     #[tokio::test]
-    #[allow(deprecated)]
     async fn test_provider_default_read_tag_value() {
         struct TestProvider;
         impl ServerDiscovery for TestProvider {
@@ -540,20 +511,6 @@ mod tests {
         assert_eq!(val.tag_id, "Tag.1");
         assert_eq!(val.value(), Some(&OpcValue::Int(42)));
 
-        let batch_write = p
-            .write_tag_values(
-                "Server.A",
-                &[
-                    ("Tag.1".into(), OpcValue::Int(10)),
-                    ("Tag.2".into(), OpcValue::Int(20)),
-                ],
-            )
-            .await
-            .unwrap();
-        assert_eq!(batch_write.len(), 2);
-        assert!(batch_write[0].is_success());
-        assert!(batch_write[1].is_success());
-
         let batch_direct = p
             .write_tag_batch(
                 "Server.A",
@@ -570,8 +527,7 @@ mod tests {
     }
 
     #[tokio::test]
-    #[allow(deprecated)]
-    async fn test_provider_default_write_tag_values_partial_failure() {
+    async fn test_provider_default_write_tag_batch_partial_failure() {
         struct FailingProvider;
         impl ServerDiscovery for FailingProvider {
             async fn list_servers(&self, _host: &str) -> OpcResult<Vec<String>> {
@@ -605,12 +561,12 @@ mod tests {
 
         let p = FailingProvider;
         let results = p
-            .write_tag_values(
+            .write_tag_batch(
                 "Server.A",
-                &[
+                crate::types::WriteBatch::Owned(vec![
                     ("Tag.Fail".into(), OpcValue::Int(1)),
                     ("Tag.Pass".into(), OpcValue::Int(2)),
-                ],
+                ]),
             )
             .await
             .unwrap();
@@ -734,16 +690,6 @@ mod tests {
             Ok(results)
         });
 
-        // 5b. write_tag_values expectation (ensures deprecated slice contract is preserved)
-        mock.expect_write_tag_values().returning(|server, writes| {
-            assert_eq!(server, "Matrikon.OPC.Simulation.1");
-            let results = writes
-                .iter()
-                .map(|(tag, _)| WriteResult::success(tag))
-                .collect();
-            Ok(results)
-        });
-
         // 6. write_tag_value expectation
         mock.expect_write_tag_value()
             .returning(|_, tag, _| Ok(WriteResult::success(tag)));
@@ -789,15 +735,6 @@ mod tests {
             .unwrap();
         assert_eq!(write_results.len(), 1);
         assert!(write_results[0].is_success());
-
-        // Test deprecated write_tag_values backward compatibility
-        #[allow(deprecated)]
-        let deprecated_results = provider
-            .write_tag_values("Matrikon.OPC.Simulation.1", &writes)
-            .await
-            .unwrap();
-        assert_eq!(deprecated_results.len(), 1);
-        assert!(deprecated_results[0].is_success());
 
         // Test write_tag_value
         let single_write = provider

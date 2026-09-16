@@ -447,10 +447,33 @@ impl TagValues {
 
     /// Looks up an OPC value by tag identifier with strict error checking.
     ///
+    /// Unlike [`TagValues::get_value`], which collapses errors into `None`, this method distinguishes
+    /// between tags that were never requested, tags that returned null/empty, and tags that failed.
+    ///
     /// # Errors
-    /// Returns [`TagExtractError::NotRequested`] if the tag was not requested.
-    /// Returns [`TagExtractError::NoValue`] if the tag returned empty/null.
-    /// Returns [`TagExtractError::ReadFailed`] if the individual item read failed on the server.
+    ///
+    /// Returns [`TagExtractError::NotRequested`] if `tag` was not present in this read batch.
+    /// Returns [`TagExtractError::NoValue`] if the server returned a null or empty variant.
+    /// Returns [`TagExtractError::ReadFailed`] if the item read failed on the server with an [`OpcError`].
+    ///
+    /// # Panics
+    ///
+    /// This function does not panic.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use opc_da_client::types::{OpcQuality, OpcValue, TagExtractError, TagValue, TagValues};
+    ///
+    /// let item = TagValue::new("Sensor.Temp", Some(OpcValue::Float(72.5)), OpcQuality::GOOD, None);
+    /// let values = TagValues::new(vec![item]);
+    ///
+    /// let val = values.get_value_checked("sensor.temp").unwrap();
+    /// assert_eq!(val, &OpcValue::Float(72.5));
+    ///
+    /// assert!(matches!(values.get_value_checked("Missing.Tag").unwrap_err(), TagExtractError::NotRequested(_)));
+    /// ```
+    #[must_use = "handling the Result distinguishes unrequested tags from server read failures"]
     pub fn get_value_checked(&self, tag: &str) -> Result<&OpcValue, TagExtractError> {
         let item = self
             .get(tag)

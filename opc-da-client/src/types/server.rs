@@ -1174,10 +1174,9 @@ mod tests {
     }
 
     #[test]
-    fn test_endpoint_deprecated_from_str_behavior() {
+    fn test_endpoint_from_str_behavior() {
         use std::str::FromStr;
 
-        #[allow(deprecated)]
         let ep: OpcServerEndpoint = r"\\192.168.1.50\Matrikon.OPC.Simulation.1".into();
         assert_eq!(ep.host.as_deref(), Some("192.168.1.50"));
         assert_eq!(ep.identifier.to_string(), "Matrikon.OPC.Simulation.1");

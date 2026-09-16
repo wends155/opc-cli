@@ -1,5 +1,5 @@
 #![allow(unsafe_code)]
-#![cfg_attr(feature = "opc-da-backend", doc = include_str!("../README.md"))]
+#![doc = include_str!("../README.md")]
 
 pub mod client;
 pub mod connector;
@@ -24,16 +24,13 @@ pub use types::{
     BaseVarType, BrowseDirection, BrowseType, ClientGroupHandle, ClientItemHandle, Clsid,
     DisplayOptionOpcValue, DisplayOptionTimestamp, IntoTags, IntoWriteBatch, OpcQuality,
     OpcServerEndpoint, OpcServerInfo, OpcValue, OpcValueOptionExt, ParseClsidError,
-    ParseQualityError, ParseServerIdError, QualityLimit, QualityMajor, QualitySubstatus,
-    ServerGroupHandle, ServerIdentifier, ServerItemHandle, SystemTimeOptionExt, TagBatch,
-    TagBatchIter, TagCollector, TagExtractError, TagValue, TagValues, VarType, WriteBatch,
-    WriteBatchIntoIter, WriteBatchIter, WriteResult,
+    ParseEndpointError, ParseQualityError, ParseServerIdError, QualityLimit, QualityMajor,
+    QualitySubstatus, ServerGroupHandle, ServerIdentifier, ServerItemHandle, SystemTimeOptionExt,
+    TagBatch, TagBatchIter, TagCollector, TagExtractError, TagValue, TagValues, VarType,
+    WriteBatch, WriteBatchIntoIter, WriteBatchIter, WriteResult,
 };
 
-pub use client::{Bound, OpcDaClient, OpcDaClientBuilder, Unbound};
-
-#[cfg(feature = "opc-da-backend")]
-pub use client::DefaultOpcDaClient;
+pub use client::{Bound, DefaultOpcDaClient, OpcDaClient, OpcDaClientBuilder, Unbound};
 
 #[cfg(feature = "opc-da-backend")]
 pub use com::{
@@ -91,5 +88,20 @@ mod tests {
         let err: ParseQualityError = "INVALID".parse::<super::OpcQuality>().unwrap_err();
         let _: &dyn std::error::Error = &err;
         assert!(err.to_string().contains("Invalid OPC quality string"));
+    }
+
+    #[test]
+    fn test_parse_endpoint_error_reexport() {
+        use super::ParseEndpointError;
+        let err: ParseEndpointError = "".parse::<super::OpcServerEndpoint>().unwrap_err();
+        let _: &dyn std::error::Error = &err;
+        assert!(err.to_string().contains("cannot be empty"));
+    }
+
+    #[test]
+    fn test_default_opc_da_client_reexport() {
+        use super::DefaultOpcDaClient;
+        fn assert_send<T: Send>() {}
+        assert_send::<DefaultOpcDaClient>();
     }
 }

@@ -609,7 +609,6 @@ async fn main() -> OpcResult<()> {
 | `OpcDaClient::write` | 0.3.0 | 0.4.0 / 1.0.0 | `OpcDaClient::write_tag` |
 | `OpcDaClient::write_batch` | 0.3.0 | 0.4.0 / 1.0.0 | `OpcDaClient::write_tags` |
 | `OpcDaClient::list_servers_on` | 0.2.1 | 0.4.0 / 1.0.0 | `ServerDiscovery::list_servers` |
-| `TagWriter::write_tag_values` | 0.2.0 | 0.4.0 / 1.0.0 | `TagWriter::write_tag_batch` |
 | `opc_da_client::com::connector::{traits, mock}` | 0.3.0 | 0.3.0 (Clean Break) | `opc_da_client::connector::*` |
 
 Deprecated items will trigger compiler warnings starting in `0.3.0` and will remain backward-compatible throughout the `0.3.x` release lifecycle before being removed in `0.4.0`.
@@ -622,7 +621,7 @@ Deprecated items will trigger compiler warnings starting in `0.3.0` and will rem
 | `ServerDiscovery` | `pub trait` | Segregated role trait for server discovery (`list_servers`, `list_server_details`). |
 | `TagBrowser` | `pub trait` | Segregated role trait for namespace navigation (`browse_tags`). |
 | `TagReader` | `pub trait` | Segregated role trait for reading tag values (`read_tag_values`, `read_tag_value`). |
-| `TagWriter` | `pub trait` | Segregated role trait for writing tag values (`write_tag_value`, `write_tag_batch`, deprecated `write_tag_values`). |
+| `TagWriter` | `pub trait` | Segregated role trait for writing tag values (`write_tag_value`, `write_tag_batch`). |
 | `OpcDaClient<C, State>` | `pub struct` | Primary client facade parameterized by state (`Unbound` gateway vs `Bound` session) with inherent session methods (`read_tag`, `read_tags`, `write_tag`, `write_tags`, `subscribe`). |
 | `Unbound` | `pub struct` | Typestate marker representing an unbound multi-server gateway. |
 | `Bound` | `pub struct` | Typestate marker representing a server-bound active session with infallible `endpoint(&self)`. |

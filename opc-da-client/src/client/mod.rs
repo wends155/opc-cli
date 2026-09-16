@@ -25,35 +25,21 @@ use crate::types::OpcServerEndpoint;
 use crate::types::ServerIdentifier;
 
 #[cfg(feature = "opc-da-backend")]
-pub type DefaultOpcDaClient<State = Unbound> = OpcDaClient<ComConnector, State>;
+pub type DefaultBackendConnector = ComConnector;
 
-/// High-level client facade parameterized by connector backend `C` and typestate `State`.
-#[cfg(feature = "opc-da-backend")]
-pub struct OpcDaClient<C: ServerBackend + 'static = ComConnector, State = Unbound> {
-    pub(crate) worker: Arc<ComWorker<C>>,
-    pub(crate) endpoint: Option<OpcServerEndpoint>,
-    pub(crate) timeout: Option<Duration>,
-    pub(crate) _state: std::marker::PhantomData<State>,
-}
-
-/// High-level client facade parameterized by connector backend `C` and typestate `State`.
 #[cfg(all(not(feature = "opc-da-backend"), any(test, feature = "test-support")))]
-pub struct OpcDaClient<
-    C: ServerBackend + 'static = crate::connector::MockServerConnector,
-    State = Unbound,
-> {
-    pub(crate) worker: Arc<ComWorker<C>>,
-    pub(crate) endpoint: Option<OpcServerEndpoint>,
-    pub(crate) timeout: Option<Duration>,
-    pub(crate) _state: std::marker::PhantomData<State>,
-}
+pub type DefaultBackendConnector = crate::connector::MockServerConnector;
 
-/// High-level client facade parameterized by connector backend `C` and typestate `State`.
 #[cfg(all(
     not(feature = "opc-da-backend"),
     not(any(test, feature = "test-support"))
 ))]
-pub struct OpcDaClient<C: ServerBackend + 'static, State = Unbound> {
+pub type DefaultBackendConnector = crate::connector::NoopServerBackend;
+
+pub type DefaultOpcDaClient<State = Unbound> = OpcDaClient<DefaultBackendConnector, State>;
+
+/// High-level client facade parameterized by connector backend `C` and typestate `State`.
+pub struct OpcDaClient<C: ServerBackend + 'static = DefaultBackendConnector, State = Unbound> {
     pub(crate) worker: Arc<ComWorker<C>>,
     pub(crate) endpoint: Option<OpcServerEndpoint>,
     pub(crate) timeout: Option<Duration>,
@@ -80,13 +66,16 @@ impl<C: ServerBackend + 'static, State> std::fmt::Debug for OpcDaClient<C, State
     }
 }
 
-#[cfg(feature = "opc-da-backend")]
-impl OpcDaClient<ComConnector, Unbound> {
+impl OpcDaClient<DefaultBackendConnector, Unbound> {
+    /// Creates a new default client builder targeting the default backend connector.
     #[must_use]
-    pub fn builder() -> OpcDaClientBuilder<ComConnector> {
+    pub fn builder() -> OpcDaClientBuilder<DefaultBackendConnector> {
         OpcDaClientBuilder::new()
     }
+}
 
+#[cfg(feature = "opc-da-backend")]
+impl OpcDaClient<ComConnector, Unbound> {
     /// Constructs a client bound to a local OPC DA server by ProgID or CLSID.
     ///
     /// # Errors
@@ -111,8 +100,26 @@ impl OpcDaClient<ComConnector, Unbound> {
 
     /// Constructs a client bound to a remote OPC DA server by host and ProgID or CLSID.
     ///
+    /// Normalizes localhost strings, creates a background COM worker thread, and binds to the target endpoint.
+    ///
     /// # Errors
+    ///
     /// Returns [`OpcError::Worker`] if the COM worker thread initialization fails.
+    ///
+    /// # Panics
+    ///
+    /// This function does not panic.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,no_run
+    /// # use opc_da_client::{OpcDaClient, errors::OpcResult};
+    /// # fn run() -> OpcResult<()> {
+    /// let client = OpcDaClient::bind_new_remote("192.168.1.10", "Matrikon.OPC.Simulation.1")?;
+    /// assert!(client.endpoint().is_remote());
+    /// # Ok(())
+    /// # }
+    /// ```
     pub fn bind_new_remote(
         host: impl Into<String>,
         server: impl Into<ServerIdentifier>,
@@ -120,35 +127,6 @@ impl OpcDaClient<ComConnector, Unbound> {
         let endpoint = OpcServerEndpoint::remote(host, server);
         let client = Self::new(ComConnector::new())?;
         Ok(client.bind(endpoint))
-    }
-
-    #[deprecated(
-        since = "0.2.1",
-        note = "Use `bind_new` to construct a bound client, or follow with `.connect_eager().await` to actively probe server liveness."
-    )]
-    pub fn connect(
-        server: impl Into<ServerIdentifier>,
-    ) -> OpcResult<OpcDaClient<ComConnector, Bound>> {
-        Self::bind_new(server)
-    }
-
-    #[deprecated(
-        since = "0.2.1",
-        note = "Use `bind_new_remote` to construct a bound client, or follow with `.connect_eager().await` to actively probe server liveness."
-    )]
-    pub fn connect_remote(
-        host: impl Into<String>,
-        server: impl Into<ServerIdentifier>,
-    ) -> OpcResult<OpcDaClient<ComConnector, Bound>> {
-        Self::bind_new_remote(host, server)
-    }
-}
-
-#[cfg(all(not(feature = "opc-da-backend"), any(test, feature = "test-support")))]
-impl OpcDaClient<crate::connector::MockServerConnector, Unbound> {
-    #[must_use]
-    pub fn builder() -> OpcDaClientBuilder<crate::connector::MockServerConnector> {
-        OpcDaClientBuilder::default()
     }
 }
 
@@ -158,6 +136,32 @@ impl<C: ServerBackend + 'static> OpcDaClient<C, Unbound> {
     pub fn builder_with_connector(connector: C) -> OpcDaClientBuilder<C> {
         OpcDaClientBuilder::new_with_connector(connector)
     }
+
+    /// Constructs an unbound client initialized with the specified backend connector.
+    ///
+    /// Starts a dedicated background worker thread managing the lifecycle of connector `C`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`OpcError::Worker`] if spawning or initializing the background worker thread fails.
+    ///
+    /// # Panics
+    ///
+    /// This function does not panic.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,no_run
+    /// # #[cfg(feature = "opc-da-backend")]
+    /// # fn run() -> opc_da_client::OpcResult<()> {
+    /// use opc_da_client::{ComConnector, OpcDaClient};
+    ///
+    /// let connector = ComConnector::new();
+    /// let client = OpcDaClient::new(connector)?;
+    /// assert!(client.endpoint().is_none());
+    /// # Ok(())
+    /// # }
+    /// ```
     #[tracing::instrument(level = "info", skip(connector), err)]
     pub fn new(connector: C) -> OpcResult<Self> {
         let worker = ComWorker::start(Arc::new(connector))?;

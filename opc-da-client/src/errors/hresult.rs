@@ -1,6 +1,6 @@
 //! Low-level Win32 COM HRESULT constants, diagnostics, and formatters.
 
-use windows_core::HRESULT;
+pub use windows_core::HRESULT;
 
 pub const E_POINTER: HRESULT = HRESULT(0x8000_4003_u32.cast_signed());
 pub const E_FAIL: HRESULT = HRESULT(0x8000_4005_u32.cast_signed());
@@ -62,7 +62,15 @@ pub fn friendly_hresult_hint(hr: HRESULT) -> Option<&'static str> {
 }
 
 /// Formats an HRESULT with a hexadecimal representation and optional friendly hint.
-#[allow(dead_code)]
+///
+/// # Examples
+///
+/// ```
+/// use opc_da_client::errors::hresult::{format_hresult, E_POINTER};
+///
+/// let formatted = format_hresult(E_POINTER);
+/// assert!(formatted.starts_with("0x80004003"));
+/// ```
 #[must_use]
 pub fn format_hresult(hr: HRESULT) -> String {
     let hex = format!("0x{:08X}", hr.0.cast_unsigned());

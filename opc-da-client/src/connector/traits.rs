@@ -336,9 +336,137 @@ pub trait ConnectedGroup {
     fn write(&self, items: &[ItemWrite]) -> OpcResult<Vec<Result<(), OpcError>>>;
 }
 
+// ── Headless Fallback Backend ──────────────────────────────────────
+
+/// A no-op backend connector used as the default type parameter when running in headless
+/// or offline environments without active COM or mock feature flags.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct NoopServerBackend;
+
+impl ServerCatalogDiscovery for NoopServerBackend {
+    fn enumerate_servers(&self, _host: &str) -> OpcResult<Vec<String>> {
+        Ok(Vec::new())
+    }
+
+    fn enumerate_server_details(&self, _host: &str) -> OpcResult<Vec<OpcServerInfo>> {
+        Ok(Vec::new())
+    }
+}
+
+impl ServerConnector for NoopServerBackend {
+    type Server = NoopConnectedServer;
+
+    fn connect_identifier(&self, id: &ServerIdentifier) -> OpcResult<Self::Server> {
+        Err(OpcError::NotImplemented(format!(
+            "No active OPC DA backend configured to connect to '{id}'"
+        )))
+    }
+}
+
+/// A no-op connected server facade.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct NoopConnectedServer;
+
+impl ConnectedServer for NoopConnectedServer {
+    type Group = NoopConnectedGroup;
+    type ItemIterator = std::iter::Empty<OpcResult<String>>;
+
+    fn ping(&self) -> OpcResult<()> {
+        Ok(())
+    }
+
+    fn query_organization(&self) -> OpcResult<NamespaceType> {
+        Err(OpcError::NotImplemented(
+            "Noop backend has no address space".into(),
+        ))
+    }
+
+    fn browse_opc_item_ids(
+        &self,
+        _: BrowseType,
+        _: Option<&str>,
+        _: VarType,
+        _: u32,
+    ) -> OpcResult<Self::ItemIterator> {
+        Ok(std::iter::empty())
+    }
+
+    fn change_browse_position(&self, _: BrowseDirection, _: &str) -> OpcResult<()> {
+        Err(OpcError::NotImplemented(
+            "Noop backend cannot navigate branches".into(),
+        ))
+    }
+
+    fn get_item_id(&self, _: &str) -> OpcResult<String> {
+        Err(OpcError::NotImplemented(
+            "Noop backend cannot resolve item IDs".into(),
+        ))
+    }
+
+    fn add_group(&self, _: &GroupConfig<'_>) -> OpcResult<CreatedGroup<Self::Group>> {
+        Err(OpcError::NotImplemented(
+            "Noop backend cannot add groups".into(),
+        ))
+    }
+
+    fn remove_group(&self, _: ServerGroupHandle, _: GroupRemovalMode) -> OpcResult<()> {
+        Ok(())
+    }
+}
+
+/// A no-op connected group facade.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct NoopConnectedGroup;
+
+impl ConnectedGroup for NoopConnectedGroup {
+    fn add_items(&self, _: &[GroupItemDef]) -> OpcResult<Vec<GroupItemResult>> {
+        Ok(Vec::new())
+    }
+
+    fn read(
+        &self,
+        _: DataSource,
+        _: &[ServerItemHandle],
+    ) -> OpcResult<Vec<Result<GroupItemState, OpcError>>> {
+        Ok(Vec::new())
+    }
+
+    fn write(&self, _: &[ItemWrite]) -> OpcResult<Vec<Result<(), OpcError>>> {
+        Ok(Vec::new())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_noop_server_backend_behavior() {
+        let backend = NoopServerBackend;
+        assert!(backend.enumerate_servers("localhost").unwrap().is_empty());
+        assert!(
+            backend
+                .enumerate_server_details("localhost")
+                .unwrap()
+                .is_empty()
+        );
+        assert!(
+            backend
+                .connect_identifier(&ServerIdentifier::ProgId("Server.A".into()))
+                .is_err()
+        );
+        let server = NoopConnectedServer;
+        assert!(server.ping().is_ok());
+        assert!(
+            server
+                .remove_group(ServerGroupHandle::new(1), GroupRemovalMode::default())
+                .is_ok()
+        );
+        let group = NoopConnectedGroup;
+        assert!(group.add_items(&[]).unwrap().is_empty());
+        assert!(group.read(DataSource::Device, &[]).unwrap().is_empty());
+        assert!(group.write(&[]).unwrap().is_empty());
+    }
 
     #[test]
     fn test_group_config_ephemeral_and_builders() {

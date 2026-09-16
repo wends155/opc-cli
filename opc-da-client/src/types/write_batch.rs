@@ -329,24 +329,43 @@ impl Iterator for WriteBatchIntoIter {
 
 impl ExactSizeIterator for WriteBatchIntoIter {}
 
-impl From<Vec<(String, OpcValue)>> for WriteBatch {
+impl<S: Into<String>, V: Into<OpcValue>> From<(S, V)> for WriteBatch {
     #[inline]
-    fn from(v: Vec<(String, OpcValue)>) -> Self {
-        Self::Owned(v)
+    fn from((tag, val): (S, V)) -> Self {
+        Self::Single(tag.into(), val.into())
     }
 }
 
-impl From<(String, OpcValue)> for WriteBatch {
+impl<S: Into<String>, V: Into<OpcValue>, const N: usize> From<[(S, V); N]> for WriteBatch {
     #[inline]
-    fn from((tag, val): (String, OpcValue)) -> Self {
-        Self::Single(tag, val)
+    fn from(arr: [(S, V); N]) -> Self {
+        Self::Owned(arr.into_iter().map(|(t, v)| (t.into(), v.into())).collect())
     }
 }
 
-impl From<(&str, OpcValue)> for WriteBatch {
+impl<S: AsRef<str>, V: Clone + Into<OpcValue>, const N: usize> From<&[(S, V); N]> for WriteBatch {
     #[inline]
-    fn from((tag, val): (&str, OpcValue)) -> Self {
-        Self::Single(tag.to_string(), val)
+    fn from(arr: &[(S, V); N]) -> Self {
+        Self::from(&arr[..])
+    }
+}
+
+impl<S: Into<String>, V: Into<OpcValue>> From<Vec<(S, V)>> for WriteBatch {
+    #[inline]
+    fn from(vec: Vec<(S, V)>) -> Self {
+        Self::Owned(vec.into_iter().map(|(t, v)| (t.into(), v.into())).collect())
+    }
+}
+
+impl<S: AsRef<str>, V: Clone + Into<OpcValue>> From<&[(S, V)]> for WriteBatch {
+    #[inline]
+    fn from(slice: &[(S, V)]) -> Self {
+        Self::Owned(
+            slice
+                .iter()
+                .map(|(t, v)| (t.as_ref().to_owned(), v.clone().into()))
+                .collect(),
+        )
     }
 }
 
@@ -357,41 +376,14 @@ impl From<Arc<[(String, OpcValue)]>> for WriteBatch {
     }
 }
 
-impl From<&[(String, OpcValue)]> for WriteBatch {
+impl<S: Into<String>, V: Into<OpcValue>> FromIterator<(S, V)> for WriteBatch {
     #[inline]
-    fn from(s: &[(String, OpcValue)]) -> Self {
-        Self::Owned(s.to_vec())
-    }
-}
-
-impl From<&[(&str, OpcValue)]> for WriteBatch {
-    #[inline]
-    fn from(s: &[(&str, OpcValue)]) -> Self {
+    fn from_iter<T: IntoIterator<Item = (S, V)>>(iter: T) -> Self {
         Self::Owned(
-            s.iter()
-                .map(|(t, v)| ((*t).to_string(), (*v).clone()))
+            iter.into_iter()
+                .map(|(tag, val)| (tag.into(), val.into()))
                 .collect(),
         )
-    }
-}
-
-impl<const N: usize> From<[(String, OpcValue); N]> for WriteBatch {
-    #[inline]
-    fn from(arr: [(String, OpcValue); N]) -> Self {
-        Self::Owned(arr.into())
-    }
-}
-
-impl<const N: usize> From<[(&str, OpcValue); N]> for WriteBatch {
-    #[inline]
-    fn from(arr: [(&str, OpcValue); N]) -> Self {
-        Self::Owned(arr.into_iter().map(|(t, v)| (t.to_string(), v)).collect())
-    }
-}
-
-impl<S: Into<String>> FromIterator<(S, OpcValue)> for WriteBatch {
-    fn from_iter<I: IntoIterator<Item = (S, OpcValue)>>(iter: I) -> Self {
-        Self::Owned(iter.into_iter().map(|(t, v)| (t.into(), v)).collect())
     }
 }
 
@@ -443,8 +435,8 @@ mod tests {
     #[test]
     fn test_write_batch_vec_and_into_iter() {
         let wb = vec![
-            ("Tag1".into(), OpcValue::Int(1)),
-            ("Tag2".into(), OpcValue::Int(2)),
+            ("Tag1".to_string(), OpcValue::Int(1)),
+            ("Tag2".to_string(), OpcValue::Int(2)),
         ]
         .into_write_batch();
         assert_eq!(wb.len(), 2);
@@ -496,5 +488,39 @@ mod tests {
             err.error(),
             Some(&OpcError::Connection("Disconnected".into()))
         );
+    }
+
+    #[test]
+    fn test_generic_into_write_batch_conversions() {
+        let arr_batch = [("Tag.1", 1.0f64), ("Tag.2", 2.0f64)].into_write_batch();
+        assert_eq!(arr_batch.len(), 2);
+        let items: Vec<(&str, &OpcValue)> = arr_batch.iter().collect();
+        assert_eq!(items[0], ("Tag.1", &OpcValue::Float(1.0)));
+        assert_eq!(items[1], ("Tag.2", &OpcValue::Float(2.0)));
+
+        let ref_arr_batch = (&[("Tag.Ref1", 10i32), ("Tag.Ref2", 20i32)]).into_write_batch();
+        assert_eq!(ref_arr_batch.len(), 2);
+
+        let single_batch = ("Tag.Solo", 42i32).into_write_batch();
+        assert_eq!(single_batch.len(), 1);
+        let items: Vec<(&str, &OpcValue)> = single_batch.iter().collect();
+        assert_eq!(items[0], ("Tag.Solo", &OpcValue::Int(42)));
+
+        let vec_batch = vec![("Tag.Bool".to_string(), true)].into_write_batch();
+        assert_eq!(vec_batch.len(), 1);
+        let items: Vec<(&str, &OpcValue)> = vec_batch.iter().collect();
+        assert_eq!(items[0], ("Tag.Bool", &OpcValue::Bool(true)));
+
+        let slice_data = [("Tag.Str1", "running"), ("Tag.Str2", "stopped")];
+        let slice_batch = (&slice_data[..]).into_write_batch();
+        assert_eq!(slice_batch.len(), 2);
+        let items: Vec<(&str, &OpcValue)> = slice_batch.iter().collect();
+        assert_eq!(items[0], ("Tag.Str1", &OpcValue::String("running".into())));
+        assert_eq!(items[1], ("Tag.Str2", &OpcValue::String("stopped".into())));
+
+        let iter_batch: WriteBatch = [("Tag.Iter1", 999i32), ("Tag.Iter2", 1000i32)]
+            .into_iter()
+            .collect();
+        assert_eq!(iter_batch.len(), 2);
     }
 }

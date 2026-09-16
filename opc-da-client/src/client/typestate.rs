@@ -84,6 +84,29 @@ impl<C: ServerBackend + 'static> OpcDaClient<C, Bound> {
     }
 
     /// Eagerly verifies active connectivity and reachability to the configured OPC DA server.
+    ///
+    /// Sends an asynchronous ping request to the background COM worker to verify that the
+    /// configured server can be instantiated and reached on the network or locally.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`OpcError::Connection`] if the server cannot be instantiated or reached,
+    /// [`OpcError::Timeout`] if connectivity verification exceeds the configured timeout,
+    /// or [`OpcError::Worker`] if communication with the background worker fails.
+    ///
+    /// # Panics
+    ///
+    /// This function does not panic.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,no_run
+    /// # use opc_da_client::{OpcDaClient, errors::OpcResult};
+    /// # async fn run<C: opc_da_client::connector::ServerBackend + 'static>(client: &OpcDaClient<C, opc_da_client::client::typestate::Bound>) -> OpcResult<()> {
+    /// client.connect_eager().await?;
+    /// # Ok(())
+    /// # }
+    /// ```
     #[tracing::instrument(level = "info", skip(self), err)]
     pub async fn connect_eager(&self) -> OpcResult<()> {
         self.dispatch_request(|reply| crate::com::worker::ComRequest::Ping {

@@ -245,3 +245,144 @@ fn test_client_bind_unbind_lifecycle() {
         ServerIdentifier::from("Matrikon.OPC.Simulation.1")
     );
 }
+
+fn setup_mock_client() -> (
+    OpcDaClient<MockServerConnector, Unbound>,
+    std::sync::Arc<MockState>,
+) {
+    let state = std::sync::Arc::new(MockState::default());
+    let connector = MockServerConnector::with_state(state.clone());
+    let client = OpcDaClient::new(connector).expect("mock client should initialize");
+    (client, state)
+}
+
+#[tokio::test]
+#[allow(clippy::similar_names)]
+async fn test_unbound_write_tag_value_generic_primitives() {
+    let (client, _state) = setup_mock_client();
+
+    let res_f64 = client
+        .write_tag_value("Mock.Server.1", "Sensor.Temp", 42.5f64)
+        .await
+        .expect("write f64 primitive must succeed");
+    assert!(res_f64.is_success());
+    assert_eq!(res_f64.tag_id, "Sensor.Temp");
+
+    let res_i32 = client
+        .write_tag_value("Mock.Server.1", "Motor.Speed", 100i32)
+        .await
+        .expect("write i32 primitive must succeed");
+    assert!(res_i32.is_success());
+
+    let res_bool = client
+        .write_tag_value("Mock.Server.1", "Switch.Enabled", true)
+        .await
+        .expect("write bool primitive must succeed");
+    assert!(res_bool.is_success());
+
+    let res_str = client
+        .write_tag_value("Mock.Server.1", "System.Status", "RUNNING")
+        .await
+        .expect("write &str primitive must succeed");
+    assert!(res_str.is_success());
+}
+
+#[tokio::test]
+async fn test_unbound_write_tag_batch_into_write_batch() {
+    let (client, _state) = setup_mock_client();
+
+    let res_arr = client
+        .write_tag_batch("Mock.Server.1", [("Tag.1", 1.0f64), ("Tag.2", 2.0f64)])
+        .await
+        .expect("write array batch must succeed");
+    assert_eq!(res_arr.len(), 2);
+    assert_eq!(res_arr[0].tag_id, "Tag.1");
+    assert_eq!(res_arr[1].tag_id, "Tag.2");
+
+    let slice_data = [("Tag.3", 3.0f64), ("Tag.4", 4.0f64)];
+    let res_slice = client
+        .write_tag_batch("Mock.Server.1", &slice_data[..])
+        .await
+        .expect("write slice batch must succeed");
+    assert_eq!(res_slice.len(), 2);
+
+    let res_ref_arr = client
+        .write_tag_batch("Mock.Server.1", &slice_data)
+        .await
+        .expect("write array ref batch must succeed");
+    assert_eq!(res_ref_arr.len(), 2);
+
+    let res_single = client
+        .write_tag_batch("Mock.Server.1", ("Tag.Solo", 42i32))
+        .await
+        .expect("write single tuple batch must succeed");
+    assert_eq!(res_single.len(), 1);
+    assert!(res_single[0].is_success());
+}
+
+#[tokio::test]
+async fn test_unbound_shorthand_aliases() {
+    let (client, _state) = setup_mock_client();
+
+    let tag_val = client
+        .read_tag("Mock.Server.1", "Random.Int4")
+        .await
+        .expect("read_tag alias must succeed");
+    assert_eq!(tag_val.tag_id, "Random.Int4");
+    assert!(tag_val.is_good());
+
+    let tag_vals = client
+        .read_tags("Mock.Server.1", ["Random.Int4", "Random.Real8"])
+        .await
+        .expect("read_tags alias must succeed");
+    assert_eq!(tag_vals.len(), 2);
+    assert!(tag_vals.get("Random.Int4").is_some());
+    assert!(tag_vals.get("Random.Real8").is_some());
+
+    let write_single = client
+        .write_tag("Mock.Server.1", "Random.Int4", 99i32)
+        .await
+        .expect("write_tag alias must succeed");
+    assert_eq!(write_single.tag_id, "Random.Int4");
+    assert!(write_single.is_success());
+
+    let write_multi = client
+        .write_tags("Mock.Server.1", [("Tag.A", 10i32), ("Tag.B", 20i32)])
+        .await
+        .expect("write_tags alias must succeed");
+    assert_eq!(write_multi.len(), 2);
+    assert_eq!(write_multi[0].tag_id, "Tag.A");
+    assert_eq!(write_multi[1].tag_id, "Tag.B");
+    assert!(write_multi[0].is_success());
+    assert!(write_multi[1].is_success());
+
+    let collector = crate::types::TagCollector::new(50);
+    let tags = client
+        .browse("Mock.Server.1", collector)
+        .await
+        .expect("browse alias must succeed");
+    assert!(!tags.is_empty());
+}
+
+#[tokio::test]
+async fn test_unbound_write_tag_generic_into_opc_value() {
+    let (client, _state) = setup_mock_client();
+
+    let res1 = client
+        .write_tag("Mock.Server.1", "Tag.F64", 123.456f64)
+        .await
+        .unwrap();
+    assert!(res1.is_success());
+
+    let res2 = client
+        .write_tag("Mock.Server.1", "Tag.Str", "operational")
+        .await
+        .unwrap();
+    assert!(res2.is_success());
+
+    let res3 = client
+        .write_tag("Mock.Server.1", "Tag.Flag", false)
+        .await
+        .unwrap();
+    assert!(res3.is_success());
+}
