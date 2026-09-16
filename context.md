@@ -1,5 +1,40 @@
 # Project Context Summary
 
+## 2026-09-16: Block H1 (Domain Invariants & CWE-626 Hardening — Findings #3, #5, #6, #9) Completed (`opc-da-client`)
+> 📝 **Context Update:**
+> * **Feature:** Execution of Block H1 of Cycle 2 modernization (Findings #3, #5, #6, #9 in `opc-da-client`), remediating hyphen discrimination heuristic in `ServerIdentifier::from_str`, mitigating CWE-626 null-byte truncation in `LocalPointer` and endpoint ingestion, implementing Clean Slate removal of infallible `From<&str>` / `From<String>` on domain types, introducing `OpcServerEndpoint::local_prog_id` / `remote_prog_id` helpers, enforcing fail-early constructor validation in `bind_new` and `bind_new_remote`, and providing non-clobbering deferred error accumulation in `OpcDaClientBuilder`.
+> * **Changes:**
+>   - **Hyphen Heuristic Remediation (Finding #3):**
+>     - Refactored `ServerIdentifier::from_str` to parse CLSIDs directly using `Clsid::parse` rather than inspecting for hyphens (`.contains('-')`). Industrial ProgIDs with hyphens (`KEPServerEX-V6.1`, `ABB.IndustrialIT-Server.1`) now parse cleanly as `ServerIdentifier::ProgId`.
+>     - Added unit tests `test_hyphenated_prog_ids_parse_as_prog_id` in `src/types/server.rs`.
+>   - **CWE-626 Null-Byte Rejection (Finding #5):**
+>     - Added interior null byte (`\0`) rejection to `ServerIdentifier::from_str` and `OpcServerEndpoint::from_str`, returning explicit parse errors.
+>     - Implemented `LocalPointer::try_from_str` and `TryFrom<&str>` in `src/raw/memory.rs`, returning `OpcError::InvalidState` upon encountering interior null bytes. Deleted unchecked `impl From<S> for LocalPointer`.
+>     - Migrated 5 COM server call sites in `src/com/connector/server.rs` and 1 in `src/com/security.rs` to `try_from_str`.
+>   - **Clean Slate TryFrom Paradigm (Findings #3, #6):**
+>     - Removed infallible `impl From<&str>` and `impl From<String>` for `ServerIdentifier` and `OpcServerEndpoint`, eliminating silent syntax error swallowing via `unwrap_or_else`.
+>     - Implemented symmetrical `TryFrom<&str>` and `TryFrom<String>` returning `ParseServerIdError` and `ParseEndpointError`. Added `OpcServerEndpoint::new(s: &str) -> Result<Self, ParseEndpointError>`.
+>     - Implemented `From<std::convert::Infallible> for OpcError` in `src/errors.rs`.
+>   - **Convenience Constructors & Test Call Site Migration (Finding #6):**
+>     - Introduced `OpcServerEndpoint::local_prog_id` and `remote_prog_id` taking `impl Into<String>`.
+>     - Retained `OpcServerEndpoint::local` and `remote` taking `impl Into<ServerIdentifier>` (`Clsid`, `GUID`, `ServerIdentifier`).
+>     - Migrated all 80 test call sites across `src/com/worker/tests.rs` (39), `pool.rs` (16), `read.rs` (5), `browse.rs` (3), `write.rs` (2), `connector/mock/tests.rs` (4), `client/tests.rs` (13), and integration tests.
+>   - **Fail-Early Constructor Validation (Findings #6, #9):**
+>     - Anchored `OpcDaClient::bind_new` and `bind_new_remote` on `DefaultBackendConnector`, accepting `impl TryInto<OpcServerEndpoint>` and `impl TryInto<ServerIdentifier>`, and validating endpoints *before* initializing the backend connector and spawning worker threads.
+>   - **Builder Non-Clobbering Deferred Error Accumulation (Findings #6, #9):**
+>     - Added `server_err: Option<OpcError>` to `OpcDaClientBuilder`.
+>     - Used `self.server_err.get_or_insert_with(...)` in `.host()` and `.server()`, preserving the first encountered validation error.
+>     - Added early error checking in `build_internal` and `build_bound`, preventing worker thread spawning on invalid configurations.
+>     - Preserved fluent builder ergonomics for all 28 existing `.server("literal")` calls across integration tests via generic `impl TryInto<ServerIdentifier>`.
+>   - **Quality Pipeline Verification:**
+>     - Full 9-gate quality pipeline (`pwsh -File scripts/verify.ps1`) exited 0 with all 524 workspace tests (doc-tests at 124, 2 compile-fail) and zero warnings under `-D warnings`.
+> * **New Constraints:**
+>   - `ServerIdentifier` and `OpcServerEndpoint` must be constructed using `try_from`, `.parse()`, or `new()`.
+>   - Raw ProgID string fixtures in tests should use `OpcServerEndpoint::local_prog_id` or `remote_prog_id`.
+>   - `LocalPointer::try_from_str` must be used for passing UTF-16 strings to COM APIs.
+>   - Constructors and builders must validate endpoints prior to worker thread initialization.
+> * **Pruned:** Closed Findings #3, #5, #6, and #9 from `refactor/cycle2_blockH_review.md`. Sub-Block H1 is 100% complete. Ready for Sub-Block H2 (COM Interface Pruning & Security Blanketing — Findings #1, #4, #10).
+> 
 ## 2026-09-16: Block G2 (Ergonomic Symmetry & Comprehensive Public Documentation — Findings #5, #11, #15) Completed (`opc-da-client`)
 > 📝 **Context Update:**
 > * **Feature:** Execution of Block G2 of Cycle 2 modernization (Findings #5, #11, #15 in `opc-da-client`), delivering ergonomic symmetry across `WriteBatch` conversions, generic `Unbound` gateway method parameters, shorthand aliases, and achieving 100% rustdoc documentation coverage across all public client methods, typestates, collections, and builder methods.
