@@ -13,9 +13,10 @@
 During Cycle 2, each deviation from the approved implementation plan is recorded with its compiler/language dynamic, architectural justification, and resulting invariant.
 
 ### Summary Metrics
-* **Total Cycle 2 Deviations:** 7
+* **Total Cycle 2 Deviations:** 9
 * **Block G1 (Clean Slate API Excision & Struct Deduplication):** 3 deviations (0 violations, all justified and verified)
 * **Block G2 (Ergonomic Symmetry & Comprehensive Public Documentation):** 4 deviations (0 violations, all justified and verified)
+* **Block H1 (Domain Invariants & CWE-626 Hardening):** 2 deviations (0 violations, all justified and verified)
 * **Quality Gate Verification:** 100% Green across all 9 quality gates in `scripts/verify.ps1`.
 
 ---
@@ -31,6 +32,8 @@ During Cycle 2, each deviation from the approved implementation plan is recorded
 | **Block G2** | Step 14<br>Finding #11 | `client.write_tag_batch(server, writes.into()).await` in `tests/batch_write_test.rs:46` | `client.write_tag_batch(server, writes).await` | `OpcDaClient<C, Unbound>::write_tag_batch` was upgraded to accept `impl IntoWriteBatch` directly. Chaining `.into()` became redundant and caused a compiler type-inference ambiguity error (`E0282`) under `-D warnings`. Passing `writes` directly aligns with the new generic signature. | Type Inference & API Ergonomics | Integration test directly exercises generic parameter polymorphism without extraneous manual conversions. |
 | **Block G2** | Steps 10, 11<br>Finding #5 | Doc comment examples using `println!("{:?}", ...);` across `session.rs` and `gateway.rs` | Doc comment examples using `assert!(...);` or `let _ = ...;` bindings | Gate 7 (Forbidden Pattern Scanner in `scripts/verify.ps1`) enforces a strict zero-tolerance scan (`rg "\b(println!|dbg!|todo!)" opc-da-client/src/`) for production and doc code in library crates. Replacing `println!` with testable assertions and discarded bindings respects the forbidden pattern guard while keeping doctests compilable and runnable. | Governance & Code Standard (`coding-standard.md §4.8`) | 100% zero-forbidden-macro compliance across all source and doc comments in `opc-da-client`. |
 | **Block G2** | Step 2<br>Finding #11 | Existing unit test `test_write_batch_vec_and_into_iter` with `("Tag1".into(), ...)` | Adjusted tuple to `("Tag1".to_string(), ...)` in `src/types/write_batch.rs:438` | Generalizing `From<Vec<(S, V)>>` over `S: Into<String>` and `V: Into<OpcValue>` introduced an inference ambiguity for `vec![("Tag1".into(), ...)]`, as `&str::into()` cannot infer the intermediate target type `S` when collecting into a polymorphic container. Specifying `.to_string()` provides unambiguous type information. | Type Inference Invariant | Unit tests compile cleanly without type annotation ambiguity. |
+| **Block H1** | Step 6<br>Finding #5 | Retain `impl From<S> for LocalPointer` alongside `TryFrom<&str>` | Deleted unchecked `impl From<S> for LocalPointer` from `src/raw/memory.rs` | Rust's blanket `impl<T, U> TryFrom<U> for T where U: Into<T>` caused compiler error `E0119` (conflicting trait implementations) when implementing fallible `TryFrom<&str>` while keeping infallible `From<S>`. Excising unchecked `From<S>` cleanly resolved the conflict, strictly enforced the Clean Slate paradigm, and guaranteed at compile time that all UTF-16 COM conversions reject interior null bytes (`\0`). | Language Invariant & Security Hardening (`E0119`) | `LocalPointer` cannot be constructed infallibly from arbitrary string types; all callers must use fallible `try_from_str` or `try_into()`, eliminating CWE-626 null-byte truncation at compile time. |
+| **Block H1** | Step 9<br>Gate 4b | `#[cfg(feature = "opc-da-backend")] use crate::types::ServerIdentifier;` in `src/client/mod.rs` | Unconditional `use crate::types::{OpcServerEndpoint, ServerIdentifier};` in `src/client/mod.rs` | `OpcDaClient::bind_new_remote` accepts `impl TryInto<ServerIdentifier>` on `impl OpcDaClient<DefaultBackendConnector, Unbound>`. In headless builds (`--no-default-features`), `DefaultBackendConnector` resolves to `NoopServerBackend`. Gating the import behind `opc-da-backend` caused `E0425: cannot find type ServerIdentifier in this scope` during Gate 4b verification. Unconditionally importing the pure domain type resolved the issue. | Feature Independence & Cross-Target Compilation | Client constructors and domain type bindings compile cleanly across all feature combinations including `--no-default-features`. |
 
 ---
 
@@ -88,5 +91,39 @@ This preserves clean ergonomics for 99% of consumers while providing full parame
 * **Context:** In `src/types/write_batch.rs`, `From<Vec<(String, OpcValue)>>` was replaced with `From<Vec<(S, V)>>` generic over `S: Into<String>` and `V: Into<OpcValue>`.
 * **Compiler Obstacle:** In existing unit test `test_write_batch_vec_and_into_iter`, the vector was instantiated as `vec![("Tag1".into(), OpcValue::Int(1))]`. Previously, Rust inferred that `.into()` targeted `String` because the concrete parameter was `Vec<(String, OpcValue)>`. With `Vec<(S, V)>`, `&str::into()` cannot deduce what intermediate type `S` should be before converting to `WriteBatch`, emitting type inference error `E0282`.
 * **Resolution:** The literal was updated to `"Tag1".to_string()`, providing an unambiguous type declaration while keeping the test's intent and assertions intact.
+
+---
+
+### 3.7 Case Study H1.1: Blanket `TryFrom` Conflict and the Clean Slate Deletion of `From<S>` (`E0119`)
+* **Context:** In `src/raw/memory.rs`, the original plan contemplated retaining `impl<S: AsRef<str>> From<S> for LocalPointer<Vec<u16>>` while adding `TryFrom<&str>` to reject interior null bytes (`\0`).
+* **Compiler Obstacle:** In standard Rust core library, there is a blanket implementation:
+  ```rust
+  impl<T, U> TryFrom<U> for T where U: Into<T> {
+      type Error = Infallible;
+      fn try_from(value: U) -> Result<Self, Self::Error> {
+          Ok(U::into(value))
+      }
+  }
+  ```
+  Because `LocalPointer<Vec<u16>>` implemented `From<S>` for `S: AsRef<str>`, every `&str` already implemented `Into<LocalPointer<Vec<u16>>>`. Consequently, the compiler automatically synthesized `impl TryFrom<&str> for LocalPointer<Vec<u16>>` with `type Error = Infallible`. Attempting to implement an explicit `impl TryFrom<&str> for LocalPointer<Vec<u16>>` with `type Error = OpcError` resulted in:
+  ```text
+  error[E0119]: conflicting implementations of trait `TryFrom<&str>` for type `raw::memory::LocalPointer<Vec<u16>>`
+  ```
+* **Architectural Resolution:** Rather than trying to preserve infallible string conversions that silently bypass null-byte validation, `impl From<S> for LocalPointer` was completely deleted. This eliminated the conflicting blanket implementation, allowed `TryFrom<&str>` (with `Error = OpcError`) to be implemented cleanly, and forced all 6 COM call sites in `com/connector/server.rs` and `com/security.rs` to explicitly handle fallible conversion via `LocalPointer::try_from_str(s)?`. This perfectly aligned with the Clean Slate security mandate for Block H1.
+
+---
+
+### 3.8 Case Study H1.2: Feature Independence in Typestate Constructors under Zero-Default Features (`Gate 4b`)
+* **Context:** `OpcDaClient::bind_new` and `bind_new_remote` were updated to accept generic endpoints and server identifiers anchored on `impl OpcDaClient<DefaultBackendConnector, Unbound>`.
+* **Toolchain Obstacle:** Workspace Gate 4b executes `cargo check -p opc-da-client --no-default-features` to verify that the crate builds cleanly on non-Windows platforms or headless environments where `opc-da-backend` is disabled. Under `--no-default-features`, `DefaultBackendConnector` defaults to `crate::connector::NoopServerBackend`. However, `ServerIdentifier` was previously imported in `client/mod.rs` with `#[cfg(feature = "opc-da-backend")]`. When `bind_new_remote` was compiled under `--no-default-features`, rustc failed with:
+  ```text
+  error[E0425]: cannot find type `ServerIdentifier` in this scope
+     --> opc-da-client\src\client\mod.rs:129:30
+      |
+  129 |         server: impl TryInto<ServerIdentifier, Error: Into<OpcError>>,
+      |                              ^^^^^^^^^^^^^^^^ not found in this scope
+  ```
+* **Architectural Resolution:** `ServerIdentifier` is a pure domain type defined in `crate::types::server`, which is completely agnostic of Win32 COM APIs and available unconditionally under all feature configurations. Removing the `#[cfg(feature = "opc-da-backend")]` gate on the `ServerIdentifier` import in `src/client/mod.rs` ensured `bind_new_remote` compiles cleanly regardless of whether `opc-da-backend` is active, achieving 100% compliance with Gate 4b.
+
 
 
