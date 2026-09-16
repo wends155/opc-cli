@@ -8,6 +8,9 @@ use crate::types::{BrowseType, NamespaceType, ServerIdentifier, TagCollector, Va
 /// Maximum recursion depth allowed during depth-first namespace traversal.
 pub const DEFAULT_MAX_BROWSE_DEPTH: usize = 50;
 
+/// Chunk size for batching leaf tag ingestion to minimize collector mutex contention.
+pub const BROWSE_CHUNK_SIZE: usize = 256;
+
 /// Browses available OPC DA item IDs on a server, attempting fast flat enumeration
 /// first and falling back to recursive depth-first branch exploration.
 #[tracing::instrument(
@@ -43,72 +46,9 @@ pub fn handle_browse<S: ConnectedServer>(
     })?;
 
     if org == NamespaceType::Flat {
-        let string_iter = opc_server
-            .browse_opc_item_ids(BrowseType::Leaf, Some(""), VarType::EMPTY, 0)
-            .inspect_err(|e| {
-                log_opc_err!(
-                    e,
-                    "browse_flat:leaves",
-                    server = %server_id
-                );
-            })?;
-        for tag_res in string_iter {
-            let tag = tag_res.inspect_err(|e| {
-                log_opc_err!(
-                    e,
-                    "browse_flat:leaf_item",
-                    server = %server_id
-                );
-            })?;
-            if !collector.push(tag) {
-                break;
-            }
-        }
+        browse_flat_namespace(server_id, collector, opc_server)?;
     } else {
-        let use_flat = match opc_server.browse_opc_item_ids(
-            BrowseType::Flat,
-            Some(""),
-            VarType::EMPTY,
-            0,
-        ) {
-            Ok(mut flat_enum) => match flat_enum.next() {
-                Some(Ok(first_tag)) => {
-                    tracing::info!("OPC_FLAT browse supported — using fast flat enumeration");
-                    if collector.push(first_tag) {
-                        for tag_res in flat_enum {
-                            match tag_res {
-                                Ok(tag) => {
-                                    if !collector.push(tag) {
-                                        break;
-                                    }
-                                }
-                                Err(e) => {
-                                    log_opc_err!(
-                                        &e,
-                                        "browse_flat:enum_item",
-                                        server = %server_id
-                                    );
-                                }
-                            }
-                        }
-                    }
-                    true
-                }
-                Some(Err(e)) => {
-                    tracing::debug!(error = ?e, "OPC_FLAT first item error, falling back to recursive");
-                    false
-                }
-                None => {
-                    tracing::debug!("OPC_FLAT returned no items, falling back to recursive");
-                    false
-                }
-            },
-            Err(e) => {
-                tracing::debug!(error = ?e, "OPC_FLAT not supported, falling back to recursive");
-                false
-            }
-        };
-
+        let use_flat = try_fast_flat_browse(server_id, collector, opc_server);
         if !use_flat {
             browse_recursive(opc_server, collector, 0)?;
         }
@@ -120,6 +60,111 @@ pub fn handle_browse<S: ConnectedServer>(
         "browse_tags completed"
     );
     Ok(result)
+}
+
+fn browse_flat_namespace<S: ConnectedServer>(
+    server_id: &ServerIdentifier,
+    collector: &TagCollector,
+    opc_server: &S,
+) -> OpcResult<()> {
+    let string_iter = opc_server
+        .browse_opc_item_ids(BrowseType::Leaf, Some(""), VarType::EMPTY, 0)
+        .inspect_err(|e| {
+            log_opc_err!(
+                e,
+                "browse_flat:leaves",
+                server = %server_id
+            );
+        })?;
+    let mut chunk = Vec::with_capacity(BROWSE_CHUNK_SIZE);
+    for tag_res in string_iter {
+        if collector.is_cancelled() || collector.is_full() {
+            break;
+        }
+        let tag = match tag_res {
+            Ok(tag) => tag,
+            Err(e) => {
+                log_opc_err!(
+                    &e,
+                    "browse_flat:leaf_item",
+                    server = %server_id
+                );
+                continue;
+            }
+        };
+        chunk.push(tag);
+        if chunk.len() >= BROWSE_CHUNK_SIZE {
+            let _ = collector.push_batch(std::mem::replace(
+                &mut chunk,
+                Vec::with_capacity(BROWSE_CHUNK_SIZE),
+            ));
+            if collector.is_cancelled() || collector.is_full() {
+                break;
+            }
+        }
+    }
+    if !chunk.is_empty() {
+        let _ = collector.push_batch(chunk);
+    }
+    Ok(())
+}
+
+fn try_fast_flat_browse<S: ConnectedServer>(
+    server_id: &ServerIdentifier,
+    collector: &TagCollector,
+    opc_server: &S,
+) -> bool {
+    match opc_server.browse_opc_item_ids(BrowseType::Flat, Some(""), VarType::EMPTY, 0) {
+        Ok(mut flat_enum) => match flat_enum.next() {
+            Some(Ok(first_tag)) => {
+                tracing::info!("OPC_FLAT browse supported — using fast flat enumeration");
+                let mut chunk = Vec::with_capacity(BROWSE_CHUNK_SIZE);
+                chunk.push(first_tag);
+                for tag_res in flat_enum {
+                    if collector.is_cancelled() || collector.is_full() {
+                        break;
+                    }
+                    match tag_res {
+                        Ok(tag) => {
+                            chunk.push(tag);
+                            if chunk.len() >= BROWSE_CHUNK_SIZE {
+                                let _ = collector.push_batch(std::mem::replace(
+                                    &mut chunk,
+                                    Vec::with_capacity(BROWSE_CHUNK_SIZE),
+                                ));
+                                if collector.is_cancelled() || collector.is_full() {
+                                    break;
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            log_opc_err!(
+                                &e,
+                                "browse_flat:enum_item",
+                                server = %server_id
+                            );
+                        }
+                    }
+                }
+                if !chunk.is_empty() {
+                    let _ = collector.push_batch(chunk);
+                }
+                true
+            }
+            Some(Err(e)) => {
+                tracing::debug!(error = ?e, "OPC_FLAT first item error, falling back to recursive");
+                false
+            }
+            None => {
+                tracing::debug!("OPC_FLAT returned no items, falling back to recursive");
+                false
+            }
+        },
+        Err(e) => {
+            tracing::debug!(error = ?e, "OPC_FLAT not supported, falling back to recursive");
+            false
+        }
+    }
 }
 
 /// Recursively traverses OPC branches and accumulates leaf item IDs into the collector.
@@ -248,5 +293,17 @@ mod tests {
         let tags = handle_browse(&server_id, &collector, &server)
             .expect("cancelled browse should return empty ok");
         assert!(tags.is_empty());
+    }
+
+    #[test]
+    fn test_handle_browse_flat_chunked_batch_push() {
+        let server = MockConnectedServer::default();
+        let server_id = ServerIdentifier::from("Test.Server");
+        let collector = TagCollector::new(1000);
+
+        let tags = handle_browse(&server_id, &collector, &server)
+            .expect("browse flat operation should succeed");
+        assert_eq!(tags.len(), collector.len());
+        assert_eq!(collector.snapshot(), tags);
     }
 }

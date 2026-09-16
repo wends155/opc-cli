@@ -5,15 +5,22 @@ use crate::connector::traits::{
 };
 use crate::errors::{OpcError, OpcResult};
 use crate::log_opc_err;
+use crate::types::TagBatch;
 use crate::types::{
     NamespaceType, OpcServerEndpoint, ServerGroupHandle, ServerItemHandle, VarType,
 };
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 /// Circuit breaker cooldown period for unreachable endpoints (5 seconds).
 pub(crate) const CIRCUIT_BREAKER_COOLDOWN: Duration = Duration::from_secs(5);
+
+/// Maximum number of cached active groups retained per pooled server.
+pub(crate) const MAX_ACTIVE_GROUPS: usize = 4;
+
+/// Maximum number of active server connections retained in the connection pool.
+pub(crate) const MAX_ACTIVE_CONNECTIONS: usize = 32;
 
 /// Cached active group holding server handle, group proxy, item handles, and tag IDs.
 #[allow(dead_code)]
@@ -32,37 +39,101 @@ pub(crate) struct CachedGroup<G> {
     pub(crate) rejected_errors: Vec<(usize, OpcError)>,
 }
 
-/// A connected server instance held in the connection pool with an optional cached active group.
+/// A connected server instance held in the connection pool with bounded LRU active groups.
 pub(crate) struct PooledServer<S: ConnectedServer> {
     /// Connected server facade instance.
     pub(crate) server: S,
-    /// Optional cached active group reused across consecutive reads of identical tag batches.
-    pub(crate) active_group: Option<CachedGroup<S::Group>>,
+    /// Bounded LRU active groups reused across consecutive or interleaved reads.
+    pub(crate) active_groups: VecDeque<CachedGroup<S::Group>>,
+    /// Timestamp of the last access for LRU connection pool eviction.
+    pub(crate) last_used: Instant,
 }
 
 impl<S: ConnectedServer> PooledServer<S> {
-    /// Creates a new pooled server wrapper without an active group.
+    /// Creates a new pooled server wrapper without active groups.
     #[must_use]
     pub(crate) fn new(server: S) -> Self {
         Self {
             server,
-            active_group: None,
+            active_groups: VecDeque::new(),
+            last_used: Instant::now(),
         }
     }
 
-    /// Explicitly removes and clears the cached active group from the server if one exists.
-    pub(crate) fn clear_active_group(&mut self) {
-        if let Some(cached) = self.active_group.take() {
-            let _ = self
-                .server
-                .remove_group(cached.server_handle, GroupRemovalMode::Force);
+    /// Searches for a cached active group whose tag list matches `tags`.
+    pub(crate) fn find_active_group_idx(&self, tags: &TagBatch) -> Option<usize> {
+        self.active_groups.iter().position(|g| {
+            g.tags.len() == tags.len() && g.tags.iter().zip(tags.iter_str()).all(|(a, b)| a == b)
+        })
+    }
+
+    /// Promotes a cached group to the most-recently-used (MRU) position (front).
+    pub(crate) fn promote_group(&mut self, idx: usize) {
+        if idx > 0
+            && idx < self.active_groups.len()
+            && let Some(group) = self.active_groups.remove(idx)
+        {
+            self.active_groups.push_front(group);
         }
+    }
+
+    /// Inserts a newly registered active group at the MRU position (front),
+    /// evicting the least-recently-used group if capacity exceeds [`MAX_ACTIVE_GROUPS`].
+    pub(crate) fn insert_active_group(&mut self, group: CachedGroup<S::Group>) {
+        if self.active_groups.len() >= MAX_ACTIVE_GROUPS
+            && let Some(lru) = self.active_groups.pop_back()
+        {
+            let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                let _ = self
+                    .server
+                    .remove_group(lru.server_handle, GroupRemovalMode::Force);
+            }));
+        }
+        self.active_groups.push_front(group);
+    }
+
+    /// Removes and disarms a specific active group at index `idx` (e.g. on length mismatch).
+    pub(crate) fn remove_active_group(&mut self, idx: usize) -> Option<CachedGroup<S::Group>> {
+        if idx < self.active_groups.len() {
+            let group = self.active_groups.remove(idx)?;
+            let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                let _ = self
+                    .server
+                    .remove_group(group.server_handle, GroupRemovalMode::Force);
+            }));
+            Some(group)
+        } else {
+            None
+        }
+    }
+
+    /// Explicitly removes and clears all cached active groups from the server.
+    pub(crate) fn clear_active_groups(&mut self) {
+        for group in self.active_groups.drain(..) {
+            let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                let _ = self
+                    .server
+                    .remove_group(group.server_handle, GroupRemovalMode::Force);
+            }));
+        }
+    }
+
+    /// Backward-compatible alias for existing callers/tests.
+    pub(crate) fn clear_active_group(&mut self) {
+        self.clear_active_groups();
+    }
+
+    /// Returns `true` if this pooled server maintains at least one active group.
+    #[cfg(test)]
+    #[must_use]
+    pub(crate) fn has_active_groups(&self) -> bool {
+        !self.active_groups.is_empty()
     }
 }
 
 impl<S: ConnectedServer> Drop for PooledServer<S> {
     fn drop(&mut self) {
-        self.clear_active_group();
+        self.clear_active_groups();
     }
 }
 
@@ -196,6 +267,22 @@ impl<S: ConnectedServer> ConnectionPool<S> {
             false
         }
     }
+
+    /// Evicts the least-recently-used connection if capacity is full, excluding the given target endpoint.
+    pub(crate) fn evict_lru_connection(&mut self, exclude: &OpcServerEndpoint) {
+        if self.connections.len() >= MAX_ACTIVE_CONNECTIONS {
+            let oldest_key = self
+                .connections
+                .iter()
+                .filter(|(ep, _)| *ep != exclude)
+                .min_by_key(|(_, srv)| srv.last_used)
+                .map(|(ep, _)| ep.clone());
+
+            if let Some(oldest) = oldest_key {
+                self.evict(&oldest);
+            }
+        }
+    }
 }
 
 /// Declares whether a pooled operation may be transparently retried on connection failure.
@@ -240,9 +327,11 @@ where
 
     let server_ref = if let Some(srv) = pool.connections.get_mut(endpoint) {
         tracing::trace!(server = %endpoint, "Cache hit");
+        srv.last_used = Instant::now();
         srv
     } else {
         tracing::debug!(server = %endpoint, "Cache miss, connecting");
+        pool.evict_lru_connection(endpoint);
         let srv = match connector.connect_endpoint(endpoint) {
             Ok(s) => s,
             Err(e) => {
@@ -290,6 +379,7 @@ where
                 }
             };
             let mut fresh_pooled = PooledServer::new(fresh_srv);
+            fresh_pooled.last_used = Instant::now();
             let result = operation(&mut fresh_pooled);
             if let Err(ref op_e) = result {
                 log_opc_err!(
@@ -303,6 +393,7 @@ where
                 }
             }
             tracing::info!(server = %endpoint, "Reconnection successful, pool updated");
+            pool.evict_lru_connection(endpoint);
             pool.connections.insert(endpoint.clone(), fresh_pooled);
             result
         }
@@ -449,9 +540,7 @@ mod tests {
             &endpoint,
             RetryPolicy::Idempotent,
             |pooled| {
-                if let Some(cached) = &pooled.active_group
-                    && cached.tags == tags_a
-                {
+                if pooled.active_groups.iter().any(|g| g.tags == tags_a) {
                     return Ok("hit");
                 }
                 let group_config = GroupConfig::ephemeral("opc-group-1");
@@ -465,7 +554,7 @@ mod tests {
                     })
                     .collect();
                 let _ = created.group.add_items(&item_defs)?;
-                pooled.active_group = Some(CachedGroup {
+                pooled.insert_active_group(CachedGroup {
                     tags: tags_a.clone(),
                     group: created.group,
                     server_handle: created.server_handle,
@@ -488,9 +577,7 @@ mod tests {
             &endpoint,
             RetryPolicy::Idempotent,
             |pooled| {
-                if let Some(cached) = &pooled.active_group
-                    && cached.tags == tags_a
-                {
+                if pooled.active_groups.iter().any(|g| g.tags == tags_a) {
                     return Ok("hit");
                 }
                 Ok("miss")
@@ -508,9 +595,7 @@ mod tests {
             &endpoint,
             RetryPolicy::Idempotent,
             |pooled| {
-                if let Some(cached) = &pooled.active_group
-                    && cached.tags == tags_b
-                {
+                if pooled.active_groups.iter().any(|g| g.tags == tags_b) {
                     return Ok("hit");
                 }
                 pooled.clear_active_group();
@@ -525,7 +610,7 @@ mod tests {
                     })
                     .collect();
                 let _ = created.group.add_items(&item_defs)?;
-                pooled.active_group = Some(CachedGroup {
+                pooled.insert_active_group(CachedGroup {
                     tags: tags_b.clone(),
                     group: created.group,
                     server_handle: created.server_handle,
@@ -562,7 +647,7 @@ mod tests {
         );
         assert!(res4.is_ok());
         let srv = pool.connections.get(&endpoint).unwrap();
-        assert!(srv.active_group.is_none());
+        assert!(!srv.has_active_groups());
     }
 
     #[test]
@@ -651,7 +736,7 @@ mod tests {
             |pooled| {
                 let group_config = GroupConfig::ephemeral("test-group");
                 let created = pooled.server.add_group(&group_config)?;
-                pooled.active_group = Some(CachedGroup {
+                pooled.insert_active_group(CachedGroup {
                     tags: vec!["Tag1".to_string()],
                     group: created.group,
                     server_handle: created.server_handle,
@@ -736,5 +821,283 @@ mod tests {
             pool.record_failure(ep);
         }
         assert!(pool.failure_cooldowns.len() <= MAX_COOLDOWNS);
+    }
+
+    #[test]
+    fn test_active_groups_multi_slot_caching_hit_both() {
+        use crate::connector::{ConnectedServer, GroupConfig};
+        use crate::types::{IntoTags, ServerItemHandle};
+
+        let state = Arc::new(MockState::default());
+        let connector = Arc::new(MockServerConnector::with_state(state.clone()));
+        let mut pool = ConnectionPool::new();
+        let endpoint = OpcServerEndpoint::local("Matrikon.OPC.Simulation.1");
+
+        let batch_a = ["Tag1", "Tag2"].into_tag_batch();
+        let batch_b = ["Tag3", "Tag4"].into_tag_batch();
+
+        // 1. Read Batch A -> cache miss, adds group
+        let res1 = dispatch_with_retry(
+            &mut pool,
+            &connector,
+            &endpoint,
+            RetryPolicy::Idempotent,
+            |pooled| {
+                if let Some(idx) = pooled.find_active_group_idx(&batch_a) {
+                    pooled.promote_group(idx);
+                    return Ok("hit_a");
+                }
+                let created = pooled.server.add_group(&GroupConfig::ephemeral("g-a"))?;
+                pooled.insert_active_group(CachedGroup {
+                    tags: batch_a.iter_str().map(String::from).collect(),
+                    group: created.group,
+                    server_handle: created.server_handle,
+                    server_item_handles: vec![ServerItemHandle::new(1), ServerItemHandle::new(2)],
+                    valid_indices: vec![0, 1],
+                    rejected_errors: Vec::new(),
+                });
+                Ok("miss_a")
+            },
+        );
+        assert_eq!(res1.unwrap(), "miss_a");
+        assert_eq!(state.add_group_count.load(Ordering::SeqCst), 1);
+
+        // 2. Read Batch B -> cache miss, adds second group (retains Batch A)
+        let res2 = dispatch_with_retry(
+            &mut pool,
+            &connector,
+            &endpoint,
+            RetryPolicy::Idempotent,
+            |pooled| {
+                if let Some(idx) = pooled.find_active_group_idx(&batch_b) {
+                    pooled.promote_group(idx);
+                    return Ok("hit_b");
+                }
+                let created = pooled.server.add_group(&GroupConfig::ephemeral("g-b"))?;
+                pooled.insert_active_group(CachedGroup {
+                    tags: batch_b.iter_str().map(String::from).collect(),
+                    group: created.group,
+                    server_handle: created.server_handle,
+                    server_item_handles: vec![ServerItemHandle::new(3), ServerItemHandle::new(4)],
+                    valid_indices: vec![0, 1],
+                    rejected_errors: Vec::new(),
+                });
+                Ok("miss_b")
+            },
+        );
+        assert_eq!(res2.unwrap(), "miss_b");
+        assert_eq!(state.add_group_count.load(Ordering::SeqCst), 2);
+        assert_eq!(state.remove_group_count.load(Ordering::SeqCst), 0);
+
+        // 3. Read Batch A again -> cache hit! No recreation
+        let res3 = dispatch_with_retry(
+            &mut pool,
+            &connector,
+            &endpoint,
+            RetryPolicy::Idempotent,
+            |pooled| {
+                if let Some(idx) = pooled.find_active_group_idx(&batch_a) {
+                    pooled.promote_group(idx);
+                    return Ok("hit_a");
+                }
+                Ok("miss_unexpected")
+            },
+        );
+        assert_eq!(res3.unwrap(), "hit_a");
+        assert_eq!(state.add_group_count.load(Ordering::SeqCst), 2);
+        assert_eq!(state.remove_group_count.load(Ordering::SeqCst), 0);
+
+        // 4. Read Batch B again -> cache hit! No recreation
+        let res4 = dispatch_with_retry(
+            &mut pool,
+            &connector,
+            &endpoint,
+            RetryPolicy::Idempotent,
+            |pooled| {
+                if let Some(idx) = pooled.find_active_group_idx(&batch_b) {
+                    pooled.promote_group(idx);
+                    return Ok("hit_b");
+                }
+                Ok("miss_unexpected")
+            },
+        );
+        assert_eq!(res4.unwrap(), "hit_b");
+        assert_eq!(state.add_group_count.load(Ordering::SeqCst), 2);
+        assert_eq!(state.remove_group_count.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn test_active_groups_lru_eviction_at_capacity() {
+        use crate::connector::{ConnectedServer, GroupConfig};
+        use crate::types::{IntoTags, ServerItemHandle};
+
+        let state = Arc::new(MockState::default());
+        let connector = Arc::new(MockServerConnector::with_state(state.clone()));
+        let mut pool = ConnectionPool::new();
+        let endpoint = OpcServerEndpoint::local("Matrikon.OPC.Simulation.1");
+
+        // Insert 4 distinct batches (Batch 1..=4)
+        for i in 1..=4 {
+            let tags = vec![format!("Tag{i}")];
+            let _ = dispatch_with_retry(
+                &mut pool,
+                &connector,
+                &endpoint,
+                RetryPolicy::Idempotent,
+                |pooled| {
+                    let created = pooled
+                        .server
+                        .add_group(&GroupConfig::ephemeral(&format!("g-{i}")))?;
+                    pooled.insert_active_group(CachedGroup {
+                        tags: tags.clone(),
+                        group: created.group,
+                        server_handle: created.server_handle,
+                        server_item_handles: vec![ServerItemHandle::new(1)],
+                        valid_indices: vec![0],
+                        rejected_errors: Vec::new(),
+                    });
+                    Ok(())
+                },
+            );
+        }
+
+        let srv = pool.connections.get(&endpoint).unwrap();
+        assert_eq!(srv.active_groups.len(), 4);
+        assert_eq!(state.add_group_count.load(Ordering::SeqCst), 4);
+        assert_eq!(state.remove_group_count.load(Ordering::SeqCst), 0);
+
+        // Insert Batch 5 -> evicts Batch 1 (LRU at back)
+        let _ = dispatch_with_retry(
+            &mut pool,
+            &connector,
+            &endpoint,
+            RetryPolicy::Idempotent,
+            |pooled| {
+                let created = pooled.server.add_group(&GroupConfig::ephemeral("g-5"))?;
+                pooled.insert_active_group(CachedGroup {
+                    tags: vec!["Tag5".to_string()],
+                    group: created.group,
+                    server_handle: created.server_handle,
+                    server_item_handles: vec![ServerItemHandle::new(1)],
+                    valid_indices: vec![0],
+                    rejected_errors: Vec::new(),
+                });
+                Ok(())
+            },
+        );
+
+        let srv = pool.connections.get(&endpoint).unwrap();
+        assert_eq!(srv.active_groups.len(), 4);
+        assert_eq!(state.add_group_count.load(Ordering::SeqCst), 5);
+        assert_eq!(state.remove_group_count.load(Ordering::SeqCst), 1);
+        // Batch 1 is gone
+        assert!(
+            srv.find_active_group_idx(&["Tag1"].into_tag_batch())
+                .is_none()
+        );
+        // Batch 5 is MRU at front
+        assert_eq!(
+            srv.find_active_group_idx(&["Tag5"].into_tag_batch()),
+            Some(0)
+        );
+    }
+
+    #[test]
+    fn test_active_groups_single_group_invalidation() {
+        use crate::connector::{ConnectedServer, GroupConfig};
+        use crate::types::ServerItemHandle;
+
+        let state = Arc::new(MockState::default());
+        let connector = Arc::new(MockServerConnector::with_state(state.clone()));
+        let mut pool = ConnectionPool::new();
+        let endpoint = OpcServerEndpoint::local("Matrikon.OPC.Simulation.1");
+
+        // Insert Group A and Group B
+        let _ = dispatch_with_retry(
+            &mut pool,
+            &connector,
+            &endpoint,
+            RetryPolicy::Idempotent,
+            |pooled| {
+                let g1 = pooled.server.add_group(&GroupConfig::ephemeral("g1"))?;
+                pooled.insert_active_group(CachedGroup {
+                    tags: vec!["TagA".to_string()],
+                    group: g1.group,
+                    server_handle: g1.server_handle,
+                    server_item_handles: vec![ServerItemHandle::new(1)],
+                    valid_indices: vec![0],
+                    rejected_errors: Vec::new(),
+                });
+                let g2 = pooled.server.add_group(&GroupConfig::ephemeral("g2"))?;
+                pooled.insert_active_group(CachedGroup {
+                    tags: vec!["TagB".to_string()],
+                    group: g2.group,
+                    server_handle: g2.server_handle,
+                    server_item_handles: vec![ServerItemHandle::new(2)],
+                    valid_indices: vec![0],
+                    rejected_errors: Vec::new(),
+                });
+                Ok(())
+            },
+        );
+
+        let srv = pool.connections.get_mut(&endpoint).unwrap();
+        assert_eq!(srv.active_groups.len(), 2);
+
+        // Invalidate MRU group at index 0 (TagB)
+        let removed = srv.remove_active_group(0);
+        assert!(removed.is_some());
+        assert_eq!(removed.unwrap().tags, vec!["TagB".to_string()]);
+        assert_eq!(srv.active_groups.len(), 1);
+        assert_eq!(state.remove_group_count.load(Ordering::SeqCst), 1);
+
+        // Group A remains intact
+        assert_eq!(srv.active_groups[0].tags, vec!["TagA".to_string()]);
+    }
+
+    #[test]
+    fn test_connection_pool_bounded_lru_eviction() {
+        let state = Arc::new(MockState::default());
+        let connector = Arc::new(MockServerConnector::with_state(state.clone()));
+        let mut pool = ConnectionPool::new();
+
+        // Populate 32 connections (MAX_ACTIVE_CONNECTIONS)
+        for i in 1..=32 {
+            let ep = OpcServerEndpoint::local(format!("Server.{i}"));
+            let _ =
+                dispatch_with_retry(&mut pool, &connector, &ep, RetryPolicy::Idempotent, |_| {
+                    Ok(())
+                });
+        }
+        assert_eq!(pool.len(), 32);
+        assert_eq!(state.connect_count.load(Ordering::SeqCst), 32);
+
+        // Access Server.1 to refresh its last_used timestamp
+        let ep1 = OpcServerEndpoint::local("Server.1");
+        let _ = dispatch_with_retry(&mut pool, &connector, &ep1, RetryPolicy::Idempotent, |_| {
+            Ok(())
+        });
+        assert_eq!(pool.len(), 32);
+        assert_eq!(state.connect_count.load(Ordering::SeqCst), 32);
+
+        // Connect to 33rd endpoint -> evicts LRU (Server.2)
+        let ep33 = OpcServerEndpoint::local("Server.33");
+        let _ = dispatch_with_retry(
+            &mut pool,
+            &connector,
+            &ep33,
+            RetryPolicy::Idempotent,
+            |_| Ok(()),
+        );
+
+        assert_eq!(pool.len(), 32);
+        assert_eq!(state.connect_count.load(Ordering::SeqCst), 33);
+        // Server.1 was refreshed, so it is still in the pool
+        assert!(pool.connections.contains_key(&ep1));
+        // Server.33 is in the pool
+        assert!(pool.connections.contains_key(&ep33));
+        // Server.2 was the oldest unrefreshed, so it was evicted
+        let ep2 = OpcServerEndpoint::local("Server.2");
+        assert!(!pool.connections.contains_key(&ep2));
     }
 }

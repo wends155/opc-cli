@@ -11,6 +11,9 @@ use crate::types::{
     TagValues,
 };
 
+/// Maximum allowed tag batch size for reading to prevent buffer overruns and COM OOM.
+pub(crate) const MAX_TAG_BATCH_SIZE: usize = 10_000;
+
 /// Executes synchronous device tag reading through the pooled server's active OPC group,
 /// reusing cached group handles when tag batches match and populating values, qualities,
 /// timestamps, and granular errors into a [`TagValues`] collection.
@@ -31,6 +34,13 @@ pub fn handle_read<S: ConnectedServer>(
         return Ok(TagValues::new(Vec::new()));
     }
 
+    if tags.len() > MAX_TAG_BATCH_SIZE {
+        return Err(OpcError::InvalidState(format!(
+            "Tag batch size {} exceeds maximum allowed limit of {MAX_TAG_BATCH_SIZE}",
+            tags.len()
+        )));
+    }
+
     #[cfg(feature = "dev-diagnostics")]
     tracing::trace!(
         server = %endpoint,
@@ -41,13 +51,10 @@ pub fn handle_read<S: ConnectedServer>(
     let start = std::time::Instant::now();
 
     // Check active group cache hit
-    let is_cache_hit = pooled.active_group.as_ref().is_some_and(|cached| {
-        cached.tags.len() == tags.len()
-            && cached.tags.iter().zip(tags.iter_str()).all(|(a, b)| a == b)
-    });
+    if let Some(idx) = pooled.find_active_group_idx(tags) {
+        pooled.promote_group(idx);
 
-    if is_cache_hit {
-        let read_res = if let Some(cached) = pooled.active_group.as_ref()
+        let read_res = if let Some(cached) = pooled.active_groups.front()
             && !cached.server_item_handles.is_empty()
         {
             Some(
@@ -70,44 +77,22 @@ pub fn handle_read<S: ConnectedServer>(
                     server = %endpoint.identifier,
                     "Cached active group read failed with non-connection error; invalidating group and retrying via fresh registration"
                 );
-                pooled.clear_active_group();
+                pooled.remove_active_group(0);
                 None // Evicts group and falls through to cache-miss registration below
             }
         };
 
         if let Some(states) = states_opt {
-            let (tag_values_res, should_clear) = if let Some(cached) = &pooled.active_group {
-                let mut tag_values: Vec<TagValue> = cached
-                    .tags
-                    .iter()
-                    .map(|tag_id| TagValue {
-                        tag_id: tag_id.clone(),
-                        outcome: Err(OpcError::Internal("Not read".into())),
-                        quality: OpcQuality::BAD_CONFIG_ERROR,
-                        timestamp: None,
-                    })
-                    .collect();
-
-                // Populate remembered errors for items that were rejected during add_items
-                for &(idx, ref err) in &cached.rejected_errors {
-                    tag_values[idx].quality = OpcQuality::BAD_CONFIG_ERROR;
-                    tag_values[idx].outcome = Err(err.clone());
-                }
-
-                let populate_res = if let Some(item_states) = states {
-                    populate_item_states(
-                        item_states,
-                        &cached.valid_indices,
-                        &cached.tags,
-                        &endpoint.identifier,
-                        &mut tag_values,
-                    )
-                } else {
-                    Ok(())
-                };
-
-                match populate_res {
-                    Ok(()) => (Ok(tag_values), false),
+            let (tag_values_res, should_clear) = if let Some(cached) = pooled.active_groups.front()
+            {
+                match assemble_tag_values(
+                    &cached.tags,
+                    &cached.valid_indices,
+                    &cached.rejected_errors,
+                    states,
+                    &endpoint.identifier,
+                ) {
+                    Ok(values) => (Ok(values), false),
                     Err(e) => (Err(e), true),
                 }
             } else {
@@ -128,7 +113,7 @@ pub fn handle_read<S: ConnectedServer>(
                         "Cached active group item state size mismatch; invalidating group"
                     );
                 }
-                pooled.clear_active_group();
+                pooled.remove_active_group(0);
             }
 
             let tag_values = tag_values_res?;
@@ -142,31 +127,19 @@ pub fn handle_read<S: ConnectedServer>(
         }
     }
 
-    // Cache miss: remove previous active group
-    pooled.clear_active_group();
-
+    // Cache miss: multi-group LRU cache retains prior active groups up to MAX_ACTIVE_GROUPS
     let tag_ids: Vec<String> = tags.iter_str().map(ToString::to_string).collect();
-    let reg =
-        super::register_item_group(&pooled.server, &endpoint.identifier, "opc-read", &tag_ids)?;
-    let group = reg.group;
-    let mut group_guard = reg.group_guard;
-    let results = reg.item_results;
-
-    let mut tag_values: Vec<TagValue> = tag_ids
-        .iter()
-        .map(|tag_id| TagValue {
-            tag_id: tag_id.clone(),
-            outcome: Err(OpcError::Internal("Not read".into())),
-            quality: OpcQuality::BAD_CONFIG_ERROR,
-            timestamp: None,
-        })
-        .collect();
+    let super::RegisteredItemGroup {
+        group,
+        mut group_guard,
+        item_results: results,
+    } = super::register_item_group(&pooled.server, &endpoint.identifier, "opc-read", &tag_ids)?;
 
     let (server_handles, valid_indices, rejected_errors) =
-        partition_item_results(&results, &tag_ids, &endpoint.identifier, &mut tag_values);
+        partition_item_results(&results, &tag_ids, &endpoint.identifier);
 
-    if !server_handles.is_empty() {
-        let item_states = group
+    let item_states = if !server_handles.is_empty() {
+        let states = group
             .read(DataSource::Device, &server_handles)
             .inspect_err(|e| {
                 log_opc_err!(
@@ -176,19 +149,23 @@ pub fn handle_read<S: ConnectedServer>(
                     handle_count = server_handles.len()
                 );
             })?;
+        Some(states)
+    } else {
+        None
+    };
 
-        populate_item_states(
-            item_states,
-            &valid_indices,
-            &tag_ids,
-            &endpoint.identifier,
-            &mut tag_values,
-        )?;
-    }
+    let tag_values = assemble_tag_values(
+        &tag_ids,
+        &valid_indices,
+        &rejected_errors,
+        item_states,
+        &endpoint.identifier,
+    )?;
 
     let server_handle = group_guard.disarm();
+    drop(group_guard);
 
-    pooled.active_group = Some(CachedGroup {
+    pooled.insert_active_group(CachedGroup {
         tags: tag_ids,
         group,
         server_handle,
@@ -210,7 +187,6 @@ fn partition_item_results(
     results: &[GroupItemResult],
     tag_ids: &[String],
     server_id: &ServerIdentifier,
-    tag_values: &mut [TagValue],
 ) -> (Vec<ServerItemHandle>, Vec<usize>, Vec<(usize, OpcError)>) {
     let mut server_handles = Vec::with_capacity(results.len());
     let mut valid_indices = Vec::with_capacity(results.len());
@@ -225,8 +201,6 @@ fn partition_item_results(
                 error = %err_msg,
                 "read_tag_values: add_items rejected tag"
             );
-            tag_values[idx].quality = OpcQuality::BAD_CONFIG_ERROR;
-            tag_values[idx].outcome = Err(err.clone());
             rejected_errors.push((idx, err.clone()));
         } else {
             server_handles.push(item_result.server_handle);
@@ -237,51 +211,77 @@ fn partition_item_results(
     (server_handles, valid_indices, rejected_errors)
 }
 
-/// Writes device states into pre-allocated [`TagValue`] entries by original index.
-fn populate_item_states(
-    item_states: Vec<OpcResult<GroupItemState>>,
+/// Assembles final [`TagValue`] instances directly from item states and rejected errors in a single pass.
+///
+/// Pre-allocates exact capacity and maps each tag by index without generating throwaway placeholder strings.
+pub(crate) fn assemble_tag_values(
+    tags: &[String],
     valid_indices: &[usize],
-    tag_ids: &[String],
+    rejected_errors: &[(usize, OpcError)],
+    item_states: Option<Vec<OpcResult<GroupItemState>>>,
     server_id: &ServerIdentifier,
-    tag_values: &mut [TagValue],
-) -> OpcResult<()> {
-    if item_states.len() != valid_indices.len() {
+) -> OpcResult<Vec<TagValue>> {
+    let mut tag_values = Vec::with_capacity(tags.len());
+    let states = item_states.unwrap_or_default();
+
+    if states.len() != valid_indices.len() {
         let err = OpcError::Internal(format!(
-            "server returned mismatched read result array size: expected {}, got {}",
+            "Server {server_id} returned mismatched read result array size: expected {} items, got {}",
             valid_indices.len(),
-            item_states.len()
+            states.len()
         ));
         log_opc_err!(
             &err,
             "read_tag_values:mismatched",
             server = %server_id,
             expected = valid_indices.len(),
-            actual = item_states.len()
+            actual = states.len()
         );
         return Err(err);
     }
 
-    for (state_res, &idx) in item_states.into_iter().zip(valid_indices) {
-        match state_res {
-            Ok(state) => {
-                tag_values[idx].outcome = Ok(state.value);
-                tag_values[idx].quality = state.quality;
-                tag_values[idx].timestamp = Some(state.timestamp);
-            }
-            Err(e) => {
-                log_opc_err!(
-                    &e,
-                    "read_tag_values:per_item",
-                    server = %server_id,
-                    tag = %tag_ids[idx]
-                );
-                tag_values[idx].outcome = Err(e);
-                tag_values[idx].quality = OpcQuality::BAD_COMM_FAILURE;
-                tag_values[idx].timestamp = None;
-            }
+    let mut state_iter = states.into_iter();
+    let mut reject_iter = rejected_errors.iter().peekable();
+
+    for (idx, tag_id) in tags.iter().enumerate() {
+        if let Some((rej_idx, err)) = reject_iter.peek()
+            && *rej_idx == idx
+        {
+            let err = err.clone();
+            reject_iter.next();
+            tag_values.push(TagValue {
+                tag_id: tag_id.clone(),
+                outcome: Err(err.clone()),
+                quality: OpcQuality::BAD_CONFIG_ERROR,
+                timestamp: None,
+            });
+        } else if let Some(state_res) = state_iter.next() {
+            let (outcome, quality, timestamp) = match state_res {
+                Ok(state) => (Ok(state.value), state.quality, Some(state.timestamp)),
+                Err(e) => {
+                    log_opc_err!(
+                        &e,
+                        "read_tag_values:per_item",
+                        server = %server_id,
+                        tag = %tag_id
+                    );
+                    (Err(e), OpcQuality::BAD_COMM_FAILURE, None)
+                }
+            };
+            tag_values.push(TagValue {
+                tag_id: tag_id.clone(),
+                outcome,
+                quality,
+                timestamp,
+            });
+        } else {
+            return Err(OpcError::Internal(format!(
+                "Unexpected state exhaustion at index {idx} on server {server_id}"
+            )));
         }
     }
-    Ok(())
+
+    Ok(tag_values)
 }
 
 #[cfg(test)]
@@ -330,7 +330,7 @@ mod tests {
         assert!(res.is_ok());
         assert_eq!(state.add_group_count.load(Ordering::Relaxed), 1);
         assert_eq!(state.remove_group_count.load(Ordering::Relaxed), 0);
-        assert!(pooled.active_group.is_some());
+        assert!(pooled.has_active_groups());
 
         // Second read with same tags (cache hit): no new group created or removed
         let res2 = handle_read(&endpoint, &tags, &mut pooled);
@@ -341,5 +341,40 @@ mod tests {
         // Explicit clear active group triggers remove_group
         pooled.clear_active_group();
         assert_eq!(state.remove_group_count.load(Ordering::Relaxed), 1);
+    }
+
+    #[test]
+    fn test_handle_read_rejects_exceeding_max_batch_size() {
+        let server = MockConnectedServer::default();
+        let mut pooled = PooledServer::new(server);
+        let endpoint = OpcServerEndpoint::local("Test.Server");
+
+        let tags_vec: Vec<String> = (0..=MAX_TAG_BATCH_SIZE)
+            .map(|i| format!("Tag.{i}"))
+            .collect();
+        let tags = TagBatch::from(tags_vec);
+
+        let err = handle_read(&endpoint, &tags, &mut pooled)
+            .expect_err("batch exceeding limit must fail");
+        assert!(
+            matches!(err, OpcError::InvalidState(ref msg) if msg.contains("exceeds maximum allowed limit"))
+        );
+    }
+
+    #[test]
+    fn test_handle_read_cache_hit_zero_sentinel_errors() {
+        let server = MockConnectedServer::default();
+        let mut pooled = PooledServer::new(server);
+        let endpoint = OpcServerEndpoint::local("Test.Server");
+        let tags = TagBatch::from_static(&["Random.Int4"]);
+
+        // First read (miss)
+        let _ = handle_read(&endpoint, &tags, &mut pooled).unwrap();
+
+        // Second read (hit)
+        let res = handle_read(&endpoint, &tags, &mut pooled).unwrap();
+        let tag_val = res.get("Random.Int4").unwrap();
+        assert!(tag_val.value().is_some());
+        assert!(tag_val.error().is_none());
     }
 }

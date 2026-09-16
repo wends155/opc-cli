@@ -9,6 +9,10 @@ pub(crate) enum TagBatchRepr {
     Static(&'static [&'static str]),
     /// Single static string slice literal (e.g. `"Random.Int4"`).
     StaticSingle(&'static str),
+    /// Small static array up to 4 elements stored inline without heap allocation.
+    StaticSmall([&'static str; 4], u8),
+    /// Shared reference-counted static slice for arrays > 4 elements.
+    StaticArc(Arc<[&'static str]>),
     /// Single inline tag string up to 31 bytes (zero-allocation dynamic single-tag reads).
     InlineSingle([u8; 31], u8),
     /// Shared reference-counted slice of strings.
@@ -24,11 +28,12 @@ pub(crate) enum TagBatchRepr {
 ///
 /// # Allocation Semantics
 ///
-/// * **Zero-Allocation**: Borrowed static slices `&["Tag1", "Tag2"]` (`&'static [&'static str]`) or
-///   references to fixed-size arrays `&["Tag1", "Tag2"]` map directly to internal static storage without heap allocation.
-/// * **Heap Allocation**: Passing fixed-size arrays by value `["Tag1", "Tag2"]` (`[&'static str; N]`)
-///   allocates owned [`String`] instances. When optimal throughput is required in hot loops,
-///   prefer passing borrowed slice references `&["Tag1", "Tag2"]`.
+/// * **Zero-Allocation**: Borrowed static slices `&["Tag1", "Tag2"]` (`&'static [&'static str]`),
+///   references to fixed-size arrays `&["Tag1", "Tag2"]`, and fixed-size arrays up to 4 elements
+///   passed by value `["Tag1", "Tag2"]` (`[&'static str; N]`) map directly to internal static
+///   storage (`StaticSmall`) without heap allocation.
+/// * **Shared Static Arc**: Passing fixed-size arrays > 4 elements by value `["T1", ..., "T5"]`
+///   allocates a single reference-counted static slice (`StaticArc`) with zero [`String`] allocations.
 #[derive(Debug, Clone)]
 pub struct TagBatch {
     pub(crate) repr: TagBatchRepr,
@@ -111,6 +116,8 @@ impl TagBatch {
             TagBatchRepr::StaticSingle(_)
             | TagBatchRepr::InlineSingle(_, _)
             | TagBatchRepr::OwnedSingle(_) => 1,
+            TagBatchRepr::StaticSmall(_, len) => *len as usize,
+            TagBatchRepr::StaticArc(slice) => slice.len(),
             TagBatchRepr::Shared(slice) => slice.len(),
             TagBatchRepr::Owned(vec) => vec.len(),
         }
@@ -166,6 +173,12 @@ impl TagBatch {
             TagBatchRepr::StaticSingle(s) => Self {
                 repr: TagBatchRepr::StaticSingle(s),
             },
+            TagBatchRepr::StaticSmall(buf, len) => Self {
+                repr: TagBatchRepr::StaticSmall(buf, len),
+            },
+            TagBatchRepr::StaticArc(slice) => Self {
+                repr: TagBatchRepr::StaticArc(slice),
+            },
             TagBatchRepr::InlineSingle(buf, len) => Self {
                 repr: TagBatchRepr::InlineSingle(buf, len),
             },
@@ -201,6 +214,11 @@ impl TagBatch {
         match &self.repr {
             TagBatchRepr::Static(slice) => TagBatchIter::Static(slice.iter()),
             TagBatchRepr::StaticSingle(s) => TagBatchIter::Single(Some(*s)),
+            TagBatchRepr::StaticSmall(buf, len) => {
+                let valid_len = (*len as usize).min(4);
+                TagBatchIter::Static(buf[..valid_len].iter())
+            }
+            TagBatchRepr::StaticArc(slice) => TagBatchIter::Static(slice.iter()),
             TagBatchRepr::InlineSingle(buf, len) => {
                 let s = Self::inline_as_str(buf, *len);
                 TagBatchIter::Single(Some(s))
@@ -239,6 +257,11 @@ impl TagBatch {
         match self.repr {
             TagBatchRepr::Static(slice) => slice.iter().map(|&s| s.to_string()).collect(),
             TagBatchRepr::StaticSingle(s) => vec![s.to_string()],
+            TagBatchRepr::StaticSmall(buf, len) => {
+                let valid_len = (len as usize).min(4);
+                buf[..valid_len].iter().map(|&s| s.to_string()).collect()
+            }
+            TagBatchRepr::StaticArc(slice) => slice.iter().map(|&s| s.to_string()).collect(),
             TagBatchRepr::InlineSingle(buf, len) => {
                 let s = Self::inline_as_str(&buf, len);
                 vec![s.to_string()]
@@ -333,13 +356,27 @@ impl<const N: usize> IntoTags for &'static [&'static str; N] {
 
 /// Converts a fixed-size array by value into a [`TagBatch`].
 ///
-/// Note: This performs heap allocations to allocate owned [`String`] elements.
-/// For zero-allocation batch reads, pass a borrowed slice reference instead (e.g. `&["Tag1", "Tag2"]`).
+/// Fixed-size arrays with $N \le 4$ are stored inline via [`TagBatchRepr::StaticSmall`]
+/// with zero heap allocations. Arrays with $N > 4$ are stored via [`TagBatchRepr::StaticArc`],
+/// allocating only a single slice wrapper without individual [`String`] allocations.
 impl<const N: usize> IntoTags for [&'static str; N] {
     #[inline]
     fn into_tag_batch(self) -> TagBatch {
-        TagBatch {
-            repr: TagBatchRepr::Owned(self.into_iter().map(String::from).collect()),
+        match N {
+            0 => TagBatch::empty(),
+            1 => TagBatch {
+                repr: TagBatchRepr::StaticSingle(self.first().copied().unwrap_or_default()),
+            },
+            2..=4 => {
+                let mut buf = [""; 4];
+                buf[..N].copy_from_slice(&self);
+                TagBatch {
+                    repr: TagBatchRepr::StaticSmall(buf, u8::try_from(N).unwrap_or(4)),
+                }
+            }
+            _ => TagBatch {
+                repr: TagBatchRepr::StaticArc(Arc::from(self.as_slice())),
+            },
         }
     }
 }
@@ -695,5 +732,66 @@ mod tests {
         assert_eq!(s33.len(), 33);
         let batch_33 = TagBatch::from_str_lenient(&s33);
         assert_eq!(batch_33.iter_str().next(), Some(s33.as_str()));
+    }
+
+    #[test]
+    fn test_into_tag_batch_static_array_zero_allocation() {
+        // N = 0
+        let b0: TagBatch = [].into_tag_batch();
+        assert_eq!(b0.len(), 0);
+        assert!(b0.is_empty());
+        assert_eq!(b0.into_vec(), Vec::<String>::new());
+
+        // N = 1
+        let b1 = ["Tag1"].into_tag_batch();
+        assert_eq!(b1.len(), 1);
+        assert_eq!(b1.iter_str().collect::<Vec<_>>(), vec!["Tag1"]);
+        assert!(matches!(b1.repr, TagBatchRepr::StaticSingle("Tag1")));
+        assert_eq!(b1.into_vec(), vec!["Tag1".to_string()]);
+
+        // N = 2..=4 (StaticSmall)
+        let b2 = ["Tag1", "Tag2"].into_tag_batch();
+        assert_eq!(b2.len(), 2);
+        assert_eq!(b2.iter_str().collect::<Vec<_>>(), vec!["Tag1", "Tag2"]);
+        assert!(matches!(b2.repr, TagBatchRepr::StaticSmall(_, 2)));
+        assert_eq!(b2.clone().into_shareable().len(), 2);
+        assert_eq!(b2.into_vec(), vec!["Tag1".to_string(), "Tag2".to_string()]);
+
+        let b4 = ["T1", "T2", "T3", "T4"].into_tag_batch();
+        assert_eq!(b4.len(), 4);
+        assert_eq!(
+            b4.iter_str().collect::<Vec<_>>(),
+            vec!["T1", "T2", "T3", "T4"]
+        );
+        assert!(matches!(b4.repr, TagBatchRepr::StaticSmall(_, 4)));
+        assert_eq!(
+            b4.into_vec(),
+            vec![
+                "T1".to_string(),
+                "T2".to_string(),
+                "T3".to_string(),
+                "T4".to_string()
+            ]
+        );
+
+        // N > 4 (StaticArc)
+        let b5 = ["T1", "T2", "T3", "T4", "T5"].into_tag_batch();
+        assert_eq!(b5.len(), 5);
+        assert_eq!(
+            b5.iter_str().collect::<Vec<_>>(),
+            vec!["T1", "T2", "T3", "T4", "T5"]
+        );
+        assert!(matches!(b5.repr, TagBatchRepr::StaticArc(_)));
+        assert_eq!(b5.clone().into_shareable().len(), 5);
+        assert_eq!(
+            b5.into_vec(),
+            vec![
+                "T1".to_string(),
+                "T2".to_string(),
+                "T3".to_string(),
+                "T4".to_string(),
+                "T5".to_string()
+            ]
+        );
     }
 }

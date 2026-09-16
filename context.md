@@ -1,5 +1,32 @@
 # Project Context Summary
 
+## 2026-09-16: Block E (Hot-Path Performance & Allocation Optimization — Findings #3, #4, #11, #12, #13, #26, #28) Completed (`opc-da-client`)
+> 📝 **Context Update:**
+> * **Feature:** Execution of Block E of the modernization roadmap (Findings #3, #4, #11, #12, #13, #26, #28 in `opc-da-client`), eliminating unnecessary allocations in tag batches and read paths, bounding tag batch sizes, preventing active group thrashing via multi-group LRU caching, bounding connection pool capacity, amortizing browse mutex lock contention, and mitigating Head-of-Line blocking with cooperative cancellation.
+> * **Changes:**
+>   - **Zero Heap String Allocations for Array Literals (Finding #28):**
+>     - Extended `TagBatchRepr` with `StaticSmall([&'static str; 4], u8)` and `StaticArc(Arc<[&'static str]>)` in `src/types/batch.rs`.
+>     - Arrays $N \le 4$ are stored inline with zero heap allocations; $N > 4$ allocate a single slice without individual tag `String` clones.
+>   - **Elimination of Sentinel Error Allocations (Finding #3):**
+>     - Implemented single-pass `assemble_tag_values` in `src/com/worker/read.rs`, mapping COM item states directly into `TagValue` without allocating placeholder `"Not read"` error strings on cache hits or misses.
+>   - **Tag Batch Upper Bound Enforcement (Finding #26):**
+>     - Enforced `MAX_TAG_BATCH_SIZE = 10_000` entry guard in `handle_read`, failing fast on oversized requests to prevent COM buffer overruns and OOM faults.
+>   - **Bounded Multi-Group LRU Caching (Finding #12):**
+>     - Replaced single-slot group caching in `PooledServer` (`src/com/worker/pool.rs`) with `VecDeque<CachedGroup<S::Group>>` bounded by `MAX_ACTIVE_GROUPS = 4`. Group eviction is protected with `std::panic::catch_unwind(AssertUnwindSafe(...))`.
+>   - **Bounded Connection Capacity with LRU Pruning (Finding #13):**
+>     - Enforced `MAX_ACTIVE_CONNECTIONS = 32` on `ConnectionPool` with `evict_lru_connection`, evicting the least-recently-used idle endpoint proxy when at capacity while preserving the active dispatch target.
+>   - **Amortized Browse Mutex Contention via 256-Item Chunking (Finding #4):**
+>     - Flat and fast-flat namespace enumeration in `src/com/worker/browse.rs` buffers leaf items into 256-item local chunks before acquiring the collector lock via `push_batch`, reducing mutex acquisition frequency by 99.6%.
+>   - **Cooperative Cancellation & HoL Blocking Mitigation (Finding #11):**
+>     - Embedded cooperative cancellation checks (`collector.is_cancelled() || collector.is_full()`) at 256-item chunk boundaries in `handle_browse`, enabling fast-bailouts on client timeout or drop.
+>   - **Unit & Integration Regression Coverage:**
+>     - Added unit tests in `batch.rs`, `pool.rs`, `read.rs`, and `browse.rs`.
+>     - Added `test_tag_io_alternating_batch_reads_multi_group_cache_hit` in `tests/tag_io_integration_test.rs`, asserting zero group recreations across alternating batch reads.
+>   - **Verification:**
+>     - Full 9-gate quality pipeline (`pwsh -File scripts/verify.ps1`) exited 0 with all 474+ workspace tests and 90 doctests passing with zero warnings under `-D warnings`.
+> * **New Constraints:** Fixed-size tag arrays $N \le 4$ must use `StaticSmall` to guarantee zero heap allocations. Active groups per connection must not exceed `MAX_ACTIVE_GROUPS = 4`. Tag batch size must not exceed `MAX_TAG_BATCH_SIZE = 10_000`. Browse flat enumeration must use 256-item chunking via `push_batch`.
+> * **Pruned:** Closed Findings #3, #4, #11, #12, #13, #26, and #28 from `review_report.md`.
+
 ## 2026-09-16: Block D (Worker Resilience, Concurrency & Panic Safety — Findings #5, #6, #7, #8, #15, #25) Completed (`opc-da-client`)
 > 📝 **Context Update:**
 > * **Feature:** Execution of Block D of the modernization roadmap (Findings #5, #6, #7, #8, #15, #25 in `opc-da-client`), hardening background COM MTA worker thread resilience, bounding channel request queue depth, enforcing write non-idempotency safety, safeguarding COM teardown panics, and eliminating active group cache poisoning.

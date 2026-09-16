@@ -417,3 +417,53 @@ async fn test_tag_io_active_group_cache_hit() {
     assert_eq!(state.add_group_count.load(Ordering::Relaxed), 1);
     assert_eq!(state.read_count.load(Ordering::Relaxed), 3);
 }
+
+#[tokio::test]
+#[allow(clippy::similar_names)]
+async fn test_tag_io_alternating_batch_reads_multi_group_cache_hit() {
+    let state = Arc::new(MockState::default());
+    let connector =
+        MockServerConnector::with_state(state.clone()).with_tag_values(vec![OpcValue::Int(100)]);
+
+    let client = OpcDaClient::builder()
+        .server("Mock.MultiCache.Server")
+        .with_connector(connector)
+        .build_bound()
+        .expect("building bound client must succeed");
+
+    // Read Batch A (First time -> Cache miss, registers group A)
+    let batch_a_initial = client
+        .read_tags(&["Random.Int4"])
+        .await
+        .expect("read batch A 1");
+    assert_eq!(batch_a_initial.get_i32("Random.Int4"), Ok(100));
+    assert_eq!(state.add_group_count.load(Ordering::Relaxed), 1);
+    assert_eq!(state.remove_group_count.load(Ordering::Relaxed), 0);
+
+    // Read Batch B (First time -> Cache miss, registers group B without evicting group A)
+    let batch_b_initial = client
+        .read_tags(&["Random.Real8"])
+        .await
+        .expect("read batch B 1");
+    assert_eq!(batch_b_initial.get_i32("Random.Real8"), Ok(100));
+    assert_eq!(state.add_group_count.load(Ordering::Relaxed), 2);
+    assert_eq!(state.remove_group_count.load(Ordering::Relaxed), 0);
+
+    // Read Batch A again (Cache hit! Multi-group LRU reuses group A without recreation)
+    let batch_a_cached = client
+        .read_tags(&["Random.Int4"])
+        .await
+        .expect("read batch A 2");
+    assert_eq!(batch_a_cached.get_i32("Random.Int4"), Ok(100));
+    assert_eq!(state.add_group_count.load(Ordering::Relaxed), 2);
+    assert_eq!(state.remove_group_count.load(Ordering::Relaxed), 0);
+
+    // Read Batch B again (Cache hit! Multi-group LRU reuses group B without recreation)
+    let batch_b_cached = client
+        .read_tags(&["Random.Real8"])
+        .await
+        .expect("read batch B 2");
+    assert_eq!(batch_b_cached.get_i32("Random.Real8"), Ok(100));
+    assert_eq!(state.add_group_count.load(Ordering::Relaxed), 2);
+    assert_eq!(state.remove_group_count.load(Ordering::Relaxed), 0);
+}
