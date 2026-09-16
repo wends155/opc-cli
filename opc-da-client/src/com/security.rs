@@ -10,31 +10,27 @@ use windows::Win32::System::Com::{
 use windows::core::Interface;
 
 /// Standard OPC Foundation OPCEnum CLSID (`{13486D51-4821-11D2-A494-3CB306C10000}`) for remote server discovery.
-pub const CLSID_OPC_SERVER_LIST: windows::core::GUID =
+pub(crate) const CLSID_OPC_SERVER_LIST: windows::core::GUID =
     windows::core::GUID::from_u128(0x1348_6d51_4821_11d2_a494_3cb3_06c1_0000);
 
 /// RPC authentication level for connect (`RPC_C_AUTHN_LEVEL_CONNECT` = 2).
-pub const RPC_C_AUTHN_LEVEL_CONNECT: u32 = 2;
+pub(crate) const RPC_C_AUTHN_LEVEL_CONNECT: u32 = 2;
 
 /// RPC authentication level for packet integrity (`RPC_C_AUTHN_LEVEL_PKT_INTEGRITY` = 5).
-pub const RPC_C_AUTHN_LEVEL_PKT_INTEGRITY: u32 = 5;
+pub(crate) const RPC_C_AUTHN_LEVEL_PKT_INTEGRITY: u32 = 5;
 
 /// NTLM / Kerberos Windows NT authentication service (`RPC_C_AUTHN_WINNT` = 10).
-pub const RPC_C_AUTHN_WINNT: u32 = 10;
+pub(crate) const RPC_C_AUTHN_WINNT: u32 = 10;
 
 /// Default authorization service (`RPC_C_AUTHZ_NONE` = 0).
-pub const RPC_C_AUTHZ_NONE: u32 = 0;
+pub(crate) const RPC_C_AUTHZ_NONE: u32 = 0;
 
 /// Impersonation level identify (`RPC_C_IMP_LEVEL_IDENTIFY` = 2).
-pub const RPC_C_IMP_LEVEL_IDENTIFY: u32 = 2;
-
-/// Impersonation level impersonate (`RPC_C_IMP_LEVEL_IMPERSONATE` = 3).
-#[allow(dead_code)]
-pub const RPC_C_IMP_LEVEL_IMPERSONATE: u32 = 3;
+pub(crate) const RPC_C_IMP_LEVEL_IDENTIFY: u32 = 2;
 
 /// DCOM authentication security level for remote RPC connections.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum DcomSecurityLevel {
+pub(crate) enum DcomSecurityLevel {
     /// Modern Windows default (post-KB5004442): packet integrity authentication (`RPC_C_AUTHN_LEVEL_PKT_INTEGRITY` = 5).
     #[default]
     PacketIntegrity,
@@ -46,7 +42,7 @@ impl DcomSecurityLevel {
     /// Maps from a boolean flag where `true` indicates legacy DCOM connect mode.
     #[inline]
     #[must_use]
-    pub const fn from_legacy_flag(legacy_dcom: bool) -> Self {
+    pub(crate) const fn from_legacy_flag(legacy_dcom: bool) -> Self {
         if legacy_dcom {
             Self::Connect
         } else {
@@ -57,7 +53,7 @@ impl DcomSecurityLevel {
     /// Returns the raw Win32 RPC authentication level constant.
     #[inline]
     #[must_use]
-    pub const fn rpc_authn_level(self) -> u32 {
+    pub(crate) const fn rpc_authn_level(self) -> u32 {
         match self {
             Self::Connect => RPC_C_AUTHN_LEVEL_CONNECT,
             Self::PacketIntegrity => RPC_C_AUTHN_LEVEL_PKT_INTEGRITY,
@@ -72,7 +68,7 @@ impl DcomSecurityLevel {
 /// is used.
 #[inline]
 #[must_use]
-pub const fn authn_level_for(legacy_dcom: bool) -> u32 {
+pub(crate) const fn authn_level_for(legacy_dcom: bool) -> u32 {
     DcomSecurityLevel::from_legacy_flag(legacy_dcom).rpc_authn_level()
 }
 
@@ -88,17 +84,24 @@ pub const fn authn_level_for(legacy_dcom: bool) -> u32 {
 ///
 /// # Errors
 ///
-/// Returns [`crate::errors::OpcError`] if interface casting or `CoSetProxyBlanket` fails.
-pub fn apply_proxy_blanket<T: Interface>(
+/// Returns [`crate::errors::OpcError`] if `CoSetProxyBlanket` returns a failure HRESULT.
+pub(crate) fn apply_proxy_blanket<T: Interface>(
     proxy: &T,
     legacy_dcom: bool,
 ) -> crate::errors::OpcResult<()> {
     let authn_level = authn_level_for(legacy_dcom);
-    let unk: windows::core::IUnknown = proxy.cast().map_err(crate::errors::OpcError::from)?;
-    // SAFETY: Calling CoSetProxyBlanket on valid COM interface pointer with standard NT security.
+    // SAFETY: Interface implementations in windows-core are #[repr(transparent)] wrappers
+    // around *mut c_void vtable pointers. All COM interfaces inherit from IUnknown (first 3
+    // vtable slots: QueryInterface, AddRef, Release). Casting &T to &IUnknown via raw pointer
+    // re-borrow accesses the exact proxy pointer without invoking QueryInterface, ensuring
+    // CoSetProxyBlanket configures the actual proxy used by the caller rather than a transient
+    // copy. The borrow does not call AddRef, and dropping the reference does not call Release.
+    // CoSetProxyBlanket is safe to call on any valid COM proxy pointer with NT authentication.
     unsafe {
+        let unk: &windows::core::IUnknown =
+            &*std::ptr::from_ref(proxy).cast::<windows::core::IUnknown>();
         CoSetProxyBlanket(
-            &unk,
+            unk,
             RPC_C_AUTHN_WINNT,
             RPC_C_AUTHZ_NONE,
             None,
@@ -123,7 +126,7 @@ pub fn apply_proxy_blanket<T: Interface>(
 /// # Errors
 ///
 /// Returns [`crate::errors::OpcError`] if remote activation or interface query fails.
-pub fn create_remote_instance<T: Interface>(
+pub(crate) fn create_remote_instance<T: Interface>(
     clsid: &windows::core::GUID,
     host: &str,
     legacy_dcom: bool,
@@ -184,10 +187,15 @@ pub fn create_remote_instance<T: Interface>(
         )
     })?;
 
-    // Apply proxy blanket to the remote instance
-    apply_proxy_blanket(&unk, legacy_dcom)?;
+    // SAFETY: MULTI_QI requested &T::IID, guaranteeing the returned raw pointer conforms
+    // to T's vtable layout. Interface::into_raw consumes `unk` without calling Release,
+    // and T::from_raw takes ownership of the existing reference count without AddRef.
+    let instance: T = unsafe { T::from_raw(Interface::into_raw(unk)) };
 
-    unk.cast().map_err(Into::into)
+    // Apply proxy blanket directly to the caller's target interface instance
+    apply_proxy_blanket(&instance, legacy_dcom)?;
+
+    Ok(instance)
 }
 
 #[cfg(test)]
@@ -218,5 +226,45 @@ mod tests {
             CLSID_OPC_SERVER_LIST,
             windows::core::GUID::from_u128(0x1348_6d51_4821_11d2_a494_3cb3_06c1_0000)
         );
+    }
+
+    #[test]
+    fn test_dcom_security_level_derives_and_mapping() {
+        // Verify default value
+        let default_level = DcomSecurityLevel::default();
+        assert_eq!(default_level, DcomSecurityLevel::PacketIntegrity);
+
+        // Verify clone, copy, and equality
+        let copied = default_level;
+        assert_eq!(copied, DcomSecurityLevel::PacketIntegrity);
+        assert_ne!(copied, DcomSecurityLevel::Connect);
+
+        // Verify debug formatting
+        assert_eq!(format!("{default_level:?}"), "PacketIntegrity");
+        assert_eq!(format!("{:?}", DcomSecurityLevel::Connect), "Connect");
+
+        // Verify from_legacy_flag mapping
+        assert_eq!(
+            DcomSecurityLevel::from_legacy_flag(false),
+            DcomSecurityLevel::PacketIntegrity
+        );
+        assert_eq!(
+            DcomSecurityLevel::from_legacy_flag(true),
+            DcomSecurityLevel::Connect
+        );
+
+        // Verify rpc_authn_level translation
+        assert_eq!(
+            DcomSecurityLevel::PacketIntegrity.rpc_authn_level(),
+            RPC_C_AUTHN_LEVEL_PKT_INTEGRITY
+        );
+        assert_eq!(
+            DcomSecurityLevel::Connect.rpc_authn_level(),
+            RPC_C_AUTHN_LEVEL_CONNECT
+        );
+
+        // Verify authn_level_for helper
+        assert_eq!(authn_level_for(false), RPC_C_AUTHN_LEVEL_PKT_INTEGRITY);
+        assert_eq!(authn_level_for(true), RPC_C_AUTHN_LEVEL_CONNECT);
     }
 }
