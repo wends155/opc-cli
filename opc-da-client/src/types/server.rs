@@ -227,14 +227,24 @@ impl FromStr for ServerIdentifier {
         if trimmed.is_empty() {
             return Err(ParseServerIdError::Empty);
         }
-
-        if trimmed.starts_with('{') || trimmed.contains('-') {
-            let clsid = Clsid::from_str(trimmed).map_err(ParseServerIdError::InvalidClsid)?;
-            Ok(Self::Clsid(clsid))
-        } else {
-            validate_prog_id(trimmed)?;
-            Ok(Self::ProgId(trimmed.to_string()))
+        if trimmed.contains('\0') {
+            return Err(ParseServerIdError::InvalidProgId(trimmed.to_string()));
         }
+
+        // 1. If explicit curly braces wrap the string, it MUST be a valid CLSID
+        if trimmed.starts_with('{') {
+            let clsid = Clsid::from_str(trimmed).map_err(ParseServerIdError::InvalidClsid)?;
+            return Ok(Self::Clsid(clsid));
+        }
+
+        // 2. Attempt zero-allocation branchless CLSID parsing for unbracketed standard GUIDs
+        if let Some(clsid) = Clsid::parse(trimmed) {
+            return Ok(Self::Clsid(clsid));
+        }
+
+        // 3. Otherwise validate as ProgID (which legitimately permits hyphens)
+        validate_prog_id(trimmed)?;
+        Ok(Self::ProgId(trimmed.to_string()))
     }
 }
 
@@ -570,6 +580,11 @@ impl FromStr for OpcServerEndpoint {
         if trimmed.is_empty() {
             return Err(ParseEndpointError::Empty);
         }
+        if trimmed.contains('\0') {
+            return Err(ParseEndpointError::InvalidFormat(
+                "Endpoint string cannot contain interior null bytes".to_string(),
+            ));
+        }
 
         // Check for URI scheme: <scheme>://<host>/<server>
         if let Some(pos) = trimmed.find("://") {
@@ -646,6 +661,78 @@ impl From<String> for OpcServerEndpoint {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_hyphenated_prog_ids_parse_as_prog_id() {
+        let ids = [
+            "KEPServerEX-V6.1",
+            "Schneider-OpcServer.1",
+            "ABB.IndustrialIT-Server.1",
+            "My-Custom-Server.DA.2",
+        ];
+        for id in ids {
+            let parsed: ServerIdentifier = id
+                .parse()
+                .expect("hyphenated ProgID should parse successfully");
+            assert!(
+                matches!(parsed, ServerIdentifier::ProgId(ref s) if s == id),
+                "expected ProgId({id}), got {parsed:?}"
+            );
+        }
+
+        // Verify CLSIDs still parse correctly
+        let bracketed = "{28E68F9A-8D75-11D1-8DC3-3C302A000000}";
+        let parsed_bracketed: ServerIdentifier = bracketed
+            .parse()
+            .expect("valid bracketed CLSID should parse");
+        assert!(matches!(parsed_bracketed, ServerIdentifier::Clsid(_)));
+
+        let unbracketed = "28E68F9A-8D75-11D1-8DC3-3C302A000000";
+        let parsed_unbracketed: ServerIdentifier = unbracketed
+            .parse()
+            .expect("valid unbracketed CLSID should parse");
+        assert!(matches!(parsed_unbracketed, ServerIdentifier::Clsid(_)));
+
+        // Verify malformed bracketed GUID returns InvalidClsid error
+        let bad_guid = "{not-a-valid-guid-at-all}";
+        let err = bad_guid.parse::<ServerIdentifier>().unwrap_err();
+        assert!(matches!(err, ParseServerIdError::InvalidClsid(_)));
+    }
+
+    #[test]
+    fn test_server_identifier_null_byte_rejection() {
+        let bad_prog_ids = [
+            "Server\0Name",
+            "\0LeadingNull",
+            "TrailingNull\0",
+            "Embedded\0Null.ProgId.1",
+        ];
+        for id in bad_prog_ids {
+            let res = id.parse::<ServerIdentifier>();
+            assert!(
+                matches!(res, Err(ParseServerIdError::InvalidProgId(_))),
+                "expected InvalidProgId for {id:?}, got {res:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_opc_server_endpoint_parse_null_byte_rejection() {
+        let bad_endpoints = [
+            "\\\\host\0name\\Server",
+            "//host\0name/Server",
+            "opc.da://host\0name/Server",
+            "host\0name/Server",
+            "host\0name\\Server",
+        ];
+        for ep_str in bad_endpoints {
+            let res = ep_str.parse::<OpcServerEndpoint>();
+            assert!(
+                matches!(res, Err(ParseEndpointError::InvalidFormat(_))),
+                "expected InvalidFormat for {ep_str:?}, got {res:?}"
+            );
+        }
+    }
 
     #[test]
     fn test_server_info_from_prog_ids_empty() {
