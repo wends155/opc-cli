@@ -73,18 +73,6 @@ pub(crate) fn connect_endpoint(
     Ok(server)
 }
 
-/// Resolve an OPC DA server [`ServerIdentifier`] to a connected COM [`crate::raw::bindings::da::IOPCServer`] instance.
-#[allow(dead_code)]
-#[tracing::instrument(level = "info", err)]
-pub(crate) fn connect_server_identifier(
-    identifier: &ServerIdentifier,
-) -> OpcResult<crate::raw::bindings::da::IOPCServer> {
-    connect_endpoint(
-        &crate::types::OpcServerEndpoint::from(identifier.clone()),
-        false,
-    )
-}
-
 /// Real COM-backed server connector implementation.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub struct ComConnector {
@@ -170,31 +158,6 @@ impl ComConnector {
     ) -> OpcResult<ComServer> {
         let server = connect_endpoint(endpoint, legacy_dcom)?;
 
-        let common: crate::raw::bindings::comn::IOPCCommon = server.cast()?;
-        apply_proxy_blanket(&common, legacy_dcom)?;
-
-        let item_properties: Option<crate::raw::bindings::da::IOPCItemProperties> =
-            server.cast().ok();
-        if let Some(ref ip) = item_properties
-            && let Err(e) = apply_proxy_blanket(ip, legacy_dcom)
-        {
-            tracing::warn!(
-                error = ?e,
-                "Failed to apply proxy blanket to IOPCItemProperties"
-            );
-        }
-
-        let server_public_groups: Option<crate::raw::bindings::da::IOPCServerPublicGroups> =
-            server.cast().ok();
-        if let Some(ref spg) = server_public_groups
-            && let Err(e) = apply_proxy_blanket(spg, legacy_dcom)
-        {
-            tracing::warn!(
-                error = ?e,
-                "Failed to apply proxy blanket to IOPCServerPublicGroups"
-            );
-        }
-
         let browse_server_address_space: Option<
             crate::raw::bindings::da::IOPCBrowseServerAddressSpace,
         > = server.cast().ok();
@@ -209,9 +172,6 @@ impl ComConnector {
 
         Ok(ComServer {
             server,
-            common,
-            item_properties,
-            server_public_groups,
             browse_server_address_space,
             legacy_dcom,
         })
@@ -263,12 +223,8 @@ impl ServerConnector for ComConnector {
 }
 
 /// COM-backed [`ConnectedServer`].
-#[allow(dead_code)]
 pub struct ComServer {
     pub(crate) server: crate::raw::bindings::da::IOPCServer,
-    pub(crate) common: crate::raw::bindings::comn::IOPCCommon,
-    pub(crate) item_properties: Option<crate::raw::bindings::da::IOPCItemProperties>,
-    pub(crate) server_public_groups: Option<crate::raw::bindings::da::IOPCServerPublicGroups>,
     pub(crate) browse_server_address_space:
         Option<crate::raw::bindings::da::IOPCBrowseServerAddressSpace>,
     pub(crate) legacy_dcom: bool,
@@ -394,10 +350,33 @@ impl ConnectedServer for ComServer {
                     "Failed to add group, returned null",
                 ),
             }),
-            Some(group) => {
-                let unknown: windows::core::IUnknown = group.cast()?;
-                apply_proxy_blanket(&unknown, self.legacy_dcom)?;
-                let group: ComGroup = unknown.try_into()?;
+            Some(group_unk) => {
+                let init_result =
+                    group_unk
+                        .try_into()
+                        .map_err(OpcError::from)
+                        .and_then(|group: ComGroup| {
+                            group.apply_proxy_blanket(self.legacy_dcom)?;
+                            Ok(group)
+                        });
+
+                let group = match init_result {
+                    Ok(g) => g,
+                    Err(e) => {
+                        // Best-effort cleanup of server-side group allocation
+                        // SAFETY: self.server is a valid IOPCServer COM pointer and raw_server_handle was allocated by AddGroup.
+                        let remove_res =
+                            unsafe { self.server.RemoveGroup(raw_server_handle, true) };
+                        if let Err(rm_err) = remove_res {
+                            tracing::warn!(
+                                error = ?rm_err,
+                                handle = raw_server_handle,
+                                "Failed to remove orphaned group after initialization failure"
+                            );
+                        }
+                        return Err(e);
+                    }
+                };
 
                 Ok(CreatedGroup {
                     group,
@@ -425,29 +404,52 @@ impl ConnectedServer for ComServer {
 
 #[cfg(test)]
 mod tests {
-    use crate::com::security::{
-        CLSID_OPC_SERVER_LIST, RPC_C_AUTHN_LEVEL_CONNECT, RPC_C_AUTHN_LEVEL_PKT_INTEGRITY,
-        authn_level_for,
-    };
-
-    #[test]
-    fn test_clsid_opc_server_list_constant() {
-        assert_eq!(
-            CLSID_OPC_SERVER_LIST,
-            windows::core::GUID::from_u128(0x1348_6d51_4821_11d2_a494_3cb3_06c1_0000)
-        );
-        let formatted = format!("{CLSID_OPC_SERVER_LIST:?}");
-        assert!(
-            formatted
-                .to_lowercase()
-                .contains("13486d51-4821-11d2-a494-3cb306c10000")
-        );
+    unsafe fn dummy_iface<T: windows::core::Interface>() -> T {
+        struct DummyObject {
+            _vtable: &'static [usize; 32],
+        }
+        static DUMMY_VTABLE: [usize; 32] = [0; 32];
+        static DUMMY_OBJ: DummyObject = DummyObject {
+            _vtable: &DUMMY_VTABLE,
+        };
+        // SAFETY: Pointer is non-null and points to a static dummy object.
+        unsafe { windows::core::Interface::from_raw((&raw const DUMMY_OBJ).cast_mut().cast()) }
     }
 
     #[test]
-    fn test_authn_level_selection() {
-        assert_eq!(authn_level_for(false), RPC_C_AUTHN_LEVEL_PKT_INTEGRITY);
-        assert_eq!(authn_level_for(true), RPC_C_AUTHN_LEVEL_CONNECT);
+    fn test_com_server_struct_shape_and_unsupported_browse() {
+        use super::ComServer;
+        use crate::connector::traits::ConnectedServer;
+        use crate::errors::OpcError;
+        use crate::types::{BrowseDirection, BrowseType, VarType};
+
+        // SAFETY: Synthetic dummy COM interface pointers wrapped in ManuallyDrop
+        // to prevent calling Release on synthetic COM pointers.
+        let server = std::mem::ManuallyDrop::new(unsafe {
+            ComServer {
+                server: dummy_iface(),
+                browse_server_address_space: None,
+                legacy_dcom: true,
+            }
+        });
+
+        assert!(server.legacy_dcom);
+        assert!(matches!(
+            server.query_organization(),
+            Err(OpcError::NotImplemented(_))
+        ));
+        assert!(matches!(
+            server.browse_opc_item_ids(BrowseType::Branch, None, VarType::EMPTY, 0),
+            Err(OpcError::NotImplemented(_))
+        ));
+        assert!(matches!(
+            server.change_browse_position(BrowseDirection::To, "Root"),
+            Err(OpcError::NotImplemented(_))
+        ));
+        assert!(matches!(
+            server.get_item_id("Simulation.Random"),
+            Err(OpcError::NotImplemented(_))
+        ));
     }
 
     #[test]
