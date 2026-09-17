@@ -13,7 +13,7 @@
 During Cycle 2, each deviation from the approved implementation plan is recorded with its compiler/language dynamic, architectural justification, and resulting invariant.
 
 ### Summary Metrics
-* **Total Cycle 2 Deviations:** 18
+* **Total Cycle 2 Deviations:** 22
 * **Block G1 (Clean Slate API Excision & Struct Deduplication):** 3 deviations (0 violations, all justified and verified)
 * **Block G2 (Ergonomic Symmetry & Comprehensive Public Documentation):** 4 deviations (0 violations, all justified and verified)
 * **Block H1 (Domain Invariants & CWE-626 Hardening):** 2 deviations (0 violations, all justified and verified)
@@ -21,6 +21,7 @@ During Cycle 2, each deviation from the approved implementation plan is recorded
 * **Sub-Block H3a (Server Identity & Host Canonicalization):** 2 deviations (0 violations, all justified and verified)
 * **Sub-Block H3b (Worker Active Group Caching & Batch Defense):** 2 deviations (0 violations, all justified and verified)
 * **Sub-Block H3c (Batch Ergonomics & Public Conversions):** 2 deviations (0 violations, all justified and verified)
+* **Sub-Block I1 (COM Worker Hygiene & Buffer Reuse):** 4 deviations (0 violations, all justified and verified)
 * **Quality Gate Verification:** 100% Green across all 9 quality gates in `scripts/verify.ps1`.
 
 ---
@@ -47,6 +48,10 @@ During Cycle 2, each deviation from the approved implementation plan is recorded
 | **Sub-Block H3b** | Step 12<br>Finding #5 | `(format!("Tag.{i}"), OpcValue::Int(i as i32))` in batch write tests | `(format!("Tag.{i}"), OpcValue::Int(i as i64))` in batch write tests | Rust compiler error `E0308` ("mismatched types: expected `i64`, found `i32`"). The domain model defines `OpcValue::Int(i64)` (`src/types/value.rs:24`), not `i32`. Casting loop indices to `i64` accurately conforms to the domain type variant definition. | Type Correctness (`E0308`) | Test fixtures construct `OpcValue::Int` variants with strictly valid 64-bit integer payloads without type errors. |
 | **Sub-Block H3c** | Step 7<br>Finding #7 | `OpcValue::Float(3.14159)` in test cases | `OpcValue::Float(std::f64::consts::PI)` in `src/types/value.rs:795` | Rust clippy `-D warnings` triggered `clippy::approx_constant` on the literal `3.14159`. Replacing with `std::f64::consts::PI` eliminates the linter failure while accurately testing the float variant. | Lint Rule Invariant (`clippy::approx_constant`) | Float variants in test suites conform to standard library constant precision rules. |
 | **Sub-Block H3c** | Step 13<br>Finding #8 | `Arc::from(vec![(tag, val)].into_boxed_slice())` | `Arc::from([(tag, val)])` in `src/types/write_batch.rs:186` | Standard library `From<[T; N]> for Arc<[T]>` directly constructs a boxed slice Arc from a 1-element array without intermediate `Vec` heap allocation or re-allocation. Pre-approved during interview. | Performance & Zero-Intermediate Allocation Optimization | Single write batch sharing wraps into Arc with zero intermediate vector overhead. |
+| **Sub-Block I1** | Step 6<br>Finding #3 | `GroupItemResult { server_handle: ..., error: ... }` in test fixture | `GroupItemResult { server_handle: ..., canonical_type: VarType::EMPTY, error: ... }` in `tests/connection_pool_test.rs` | Rust compiler error `E0063`: missing field `canonical_type` on struct `GroupItemResult`. The domain struct definition (`src/connector/traits.rs:83`) requires `canonical_type: VarType`. Providing `VarType::EMPTY` satisfies struct construction invariants for mock test doubles without invalidating server error assertions. | Type Correctness & Test Fixture Conformance (`E0063`) | Test fixtures constructing `GroupItemResult` explicitly supply `canonical_type` conforming to the domain struct contract. |
+| **Sub-Block I1** | Step 7<br>Finding #4 | `Arc::new(MockServerConnector::with_state(state.clone()))` in connection pool test | `Arc::new(MockServerConnector::with_state(state))` in `tests/connection_pool_test.rs:188` | Clippy `-D warnings` triggered `clippy::redundant_clone` because the local binding `state` was dropped immediately after without further reads or references. Passing `state` by move avoids unnecessary atomic reference count increments. | Lint Rule Invariant (`clippy::redundant_clone`) | Test setup transfers ownership directly without redundant clones when bindings are not subsequently accessed. |
+| **Sub-Block I1** | Step 10<br>Finding #1 | In-place buffer reuse via `chunk.drain(..)` in `browse_flat_namespace` and `try_fast_flat_browse` | Scoped `#[allow(clippy::iter_with_drain)]` on `browse_flat_namespace` and `try_fast_flat_browse` in `src/com/worker/browse.rs` | Clippy nursery lint `iter_with_drain` denies calling `drain(..)` under `-D warnings` and suggests `into_iter()`. However, calling `into_iter()` drops and deallocates the underlying `Vec` buffer, directly violating Plan Objective O1 (reusing a single pre-allocated 256-item vector buffer across intermediate and terminal flushes to eliminate ~39 heap allocations per 10k tags). Scoped suppression preserves the high-performance buffer-reuse invariant while passing zero-warning linter checks. | Performance Optimization & Nursery Lint Exemption | In-place vector buffer reuse is preserved across browse batch pushes without buffer re-allocation or lint failure. |
+| **Sub-Block I1** | Step 12<br>Finding #2 | Action 1: "Remove unused import `ConnectedGroup` from line 12" in `src/com/worker.rs` | Retained `use crate::connector::ConnectedGroup;` in `src/com/worker.rs` | In Rust, calling trait methods requires the trait to be in scope. `src/com/worker.rs:94` calls `group.add_items(&item_defs)` where `group: S::Group` and `add_items` is defined on trait `ConnectedGroup`. Removing the import triggered compiler error `E0599: no method named add_items found for associated type <S as traits::ConnectedServer>::Group in the current scope`. Retaining the trait import satisfies Rust's trait visibility requirements. | Language Invariant & Trait Visibility (`E0599`) | `ConnectedGroup` trait remains in scope in `worker.rs` to allow dispatch of group management trait methods. |
 
 ---
 
@@ -239,3 +244,86 @@ This preserves clean ergonomics for 99% of consumers while providing full parame
 * **Context:** In `WriteBatch::into_shareable` (`src/types/write_batch.rs:186`), `Single(tag, val)` is converted into a shareable `WriteBatch::Shared(Arc<[(String, OpcValue)]>)` to allow $O(1)$ cloning across async worker channels.
 * **Optimization Decision:** The initial baseline used `Arc::from(vec![(tag, val)].into_boxed_slice())`, which requires 2 heap allocations (allocating the `Vec`, then allocating the `Arc` header and buffer) and 1 heap deallocation (`into_boxed_slice()`). Rust standard library provides `impl<T, const N: usize> From<[T; N]> for Arc<[T]>`. Implementing `Self::Single(tag, val) => Self::Shared(Arc::from([(tag, val)]))` directly constructs the `Arc` slice from a 1-element fixed-size array in a single heap allocation with zero intermediate buffers.
 * **Architectural Resolution:** Direct array construction reduces heap allocation overhead by 50% on single-write sharing, verified by `test_write_batch_into_shareable_lifecycle`.
+
+---
+
+### 3.18 Case Study I1.1: Mandatory Domain Struct Fields in Test Fixtures (`E0063`)
+* **Context:** In Step 6 of Sub-Block I1, `tests/connection_pool_test.rs` was updated to test mock read error handling when `MockServerGroup::add_items` returns simulated item-level rejection errors.
+* **Compiler Obstacle:** The plan's test snippet constructed `GroupItemResult` with only `server_handle` and `error`:
+  ```rust
+  GroupItemResult {
+      server_handle: 0,
+      error: Some(OpcError::Custom("Item rejected".into())),
+  }
+  ```
+  However, in `src/connector/traits.rs:83`, `GroupItemResult` defines three mandatory fields:
+  ```rust
+  pub struct GroupItemResult {
+      pub server_handle: u32,
+      pub canonical_type: VarType,
+      pub error: Option<OpcError>,
+  }
+  ```
+  Rust compiler emitted `E0063`:
+  ```text
+  error[E0063]: missing field `canonical_type` in initializer of `GroupItemResult`
+     --> tests/connection_pool_test.rs:245:21
+      |
+  245 |                     GroupItemResult {
+      |                     ^^^^^^^^^^^^^^^ missing `canonical_type`
+  ```
+* **Architectural Resolution:** Test fixtures must strictly adhere to domain type invariants. Adding `canonical_type: VarType::EMPTY` satisfied struct construction while preserving the test's intent to verify item-level error extraction during group registration.
+
+---
+
+### 3.19 Case Study I1.2: Clippy Redundant Clone on Trait Mock Ownership Transfer (`clippy::redundant_clone`)
+* **Context:** In Step 7 of Sub-Block I1, `test_connection_pool_server_down_eviction` was added to `tests/connection_pool_test.rs` to verify pool reconnection lifecycle behavior.
+* **Compiler Obstacle:** The test initialized the mock connector using:
+  ```rust
+  let state = Arc::new(AtomicBool::new(true));
+  let connector = Arc::new(MockServerConnector::with_state(state.clone()));
+  ```
+  Because `state` was never read, cloned, or referenced again within the scope of the test function, rustc/clippy under `-D warnings` triggered:
+  ```text
+  error: redundant clone
+     --> tests/connection_pool_test.rs:188:73
+      |
+  188 |         let connector = Arc::new(MockServerConnector::with_state(state.clone()));
+      |                                                                       ^^^^^^^^ help: remove this
+  ```
+* **Architectural Resolution:** Moving `state` directly into `MockServerConnector::with_state(state)` transferred ownership without an extraneous atomic reference increment, satisfying Clippy's zero-warning constraint.
+
+---
+
+### 3.20 Case Study I1.3: Nursery Lint `iter_with_drain` Conflict with In-Place Buffer Reuse
+* **Context:** Plan Objective O1 and Step 10 mandated replacing `std::mem::replace(&mut chunk, Vec::with_capacity(BATCH_CHUNK_SIZE))` with `chunk.drain(..)` in `browse_flat_namespace` and `try_fast_flat_browse` (`src/com/worker/browse.rs`). The purpose was in-place vector buffer reuse: allocating a single 256-element vector once and streaming drained batches into `collector.push_batch(chunk.drain(..))`, eliminating ~39 intermediate heap allocations for large 10,000-tag namespaces.
+* **Compiler Obstacle:** Under `-D warnings`, Clippy triggered nursery lint `clippy::iter_with_drain`:
+  ```text
+  error: `drain(..)` used on a `Vec` where `into_iter()` could be used
+     --> opc-da-client/src/com/worker/browse.rs:114:41
+      |
+  114 |                 let _ = collector.push_batch(chunk.drain(..));
+      |                                         ^^^^^^^^^^^^ help: use `into_iter()` instead
+  ```
+  However, following Clippy's recommendation to use `into_iter()` would consume and deallocate the vector buffer on every 256-tag chunk boundary. This would force re-allocating a new `Vec::with_capacity` on the subsequent iteration, directly defeating the performance objective of zero-allocation buffer reuse.
+* **Architectural Resolution:** Applied scoped attribute `#[allow(clippy::iter_with_drain)]` to both `browse_flat_namespace` and `try_fast_flat_browse`. Documented inline rationale explaining that `drain(..)` is intentionally used to retain the backing capacity across loop iterations, preventing repeated heap re-allocations while satisfying `-D warnings`.
+
+---
+
+### 3.21 Case Study I1.4: In-Scope Trait Requirements for Associated Type Method Dispatch (`E0599`)
+* **Context:** Step 12 Action 1 recommended: "Remove unused import `ConnectedGroup` from line 12" in `src/com/worker.rs`, assuming it was an unreferenced symbol.
+* **Compiler Obstacle:** In `src/com/worker.rs:94`, the worker dispatches item registration against the server's active group:
+  ```rust
+  let item_results = group.add_items(&item_defs);
+  ```
+  Here, `group` has associated type `<S as ConnectedServer>::Group`. The method `add_items` is declared on trait `crate::connector::ConnectedGroup`. In Rust, invoking a trait method requires that trait to be in scope. Removing `use crate::connector::ConnectedGroup;` caused rustc to fail with:
+  ```text
+  error[E0599]: no method named `add_items` found for associated type `<S as traits::ConnectedServer>::Group` in the current scope
+    --> opc-da-client/src/com/worker.rs:94:32
+     |
+  94 |         let item_results = group.add_items(&item_defs);
+     |                                  ^^^^^^^^^ method not found in `<S as traits::ConnectedServer>::Group`
+     |
+     = help: items from traits can only be used if the trait is in scope
+  ```
+* **Architectural Resolution:** Retained `use crate::connector::ConnectedGroup;` in `src/com/worker.rs`. While the symbol name `ConnectedGroup` is not mentioned literally as a type annotation in the function body, its presence in scope is strictly required for dynamic trait method dispatch on associated types.
