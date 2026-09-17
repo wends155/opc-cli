@@ -13,6 +13,38 @@ impl<C: ServerBackend + 'static> OpcDaClient<C, Bound> {
     /// Spawns a background Tokio task that periodically polls the configured tags on the bound
     /// server and streams updates through a Tokio [`mpsc::Receiver`]. Dropping the receiver
     /// automatically terminates the background polling loop.
+    ///
+    /// # Arguments
+    ///
+    /// * `tags` - Tag batch or convertible source to poll. Accepts any type implementing [`IntoTags`]
+    ///   (e.g., `&str`, `[&str; N]`, `&[&str]`, `&TagBatch`, or `Vec<String>`).
+    /// * `interval` - Polling interval duration. Clamped to a minimum of 10 milliseconds to prevent
+    ///   accidental worker starvation.
+    ///
+    /// # Returns
+    ///
+    /// A Tokio [`Receiver<TagValues>`] streaming polled tag updates on each tick.
+    ///
+    /// # Panics
+    ///
+    /// This function does not panic.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,no_run
+    /// # use opc_da_client::{Bound, DefaultOpcDaClient};
+    /// # use std::time::Duration;
+    /// # async fn run(client: &DefaultOpcDaClient<Bound>) {
+    /// let mut rx = client.subscribe(["Sensor.1", "Sensor.2"], Duration::from_millis(500));
+    /// if let Some(values) = rx.recv().await {
+    ///     if let Some(value) = values.get_value("Sensor.1") {
+    ///         let _ = value;
+    ///     }
+    /// }
+    /// // Dropping `rx` shuts down the background polling loop.
+    /// drop(rx);
+    /// # }
+    /// ```
     #[tracing::instrument(level = "info", skip(self, tags))]
     pub fn subscribe(&self, tags: impl IntoTags, interval: Duration) -> Receiver<TagValues> {
         let interval = interval.max(Duration::from_millis(10));

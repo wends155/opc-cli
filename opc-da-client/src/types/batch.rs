@@ -846,7 +846,10 @@ mod tests {
         let b_static = TagBatch::from("Sensor.1");
 
         assert!(matches!(b_inline.repr, TagBatchRepr::InlineSingle(_, 8)));
-        assert!(matches!(b_static.repr, TagBatchRepr::StaticSingle("Sensor.1")));
+        assert!(matches!(
+            b_static.repr,
+            TagBatchRepr::StaticSingle("Sensor.1")
+        ));
 
         assert_eq!(b_inline, b_static);
         assert_eq!(b_inline.len(), b_static.len());
@@ -869,7 +872,10 @@ mod tests {
         let single_slice: &[&str] = &[d1.as_str()];
         let single_batch = single_slice.into_tag_batch();
         assert_eq!(single_batch.len(), 1);
-        assert!(matches!(single_batch.repr, TagBatchRepr::InlineSingle(_, _)));
+        assert!(matches!(
+            single_batch.repr,
+            TagBatchRepr::InlineSingle(_, _)
+        ));
         assert_eq!(single_batch.iter_str().next(), Some("Temp.1"));
 
         let d2 = format!("Temp.{}", 2);

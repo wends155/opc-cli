@@ -792,7 +792,7 @@ mod tests {
         let cases = vec![
             OpcValue::Int(-12345),
             OpcValue::UInt(67890),
-            OpcValue::Float(3.14159),
+            OpcValue::Float(std::f64::consts::PI),
             OpcValue::Bool(true),
             OpcValue::String("OPC DA Tag".to_string()),
             OpcValue::Empty,
