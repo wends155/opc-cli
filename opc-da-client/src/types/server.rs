@@ -30,7 +30,8 @@ pub(crate) fn normalize_host_str(host: Option<&str>) -> Option<&str> {
 /// Normalizes a host string, returning `None` if it represents the local machine.
 ///
 /// Strings that are empty, whitespace-only, `"localhost"`, `"127.0.0.1"`, or `"::1"`
-/// (case-insensitive) are normalized to `None`. All other hosts return `Some(trimmed_host)`.
+/// (case-insensitive) are normalized to `None`. All other hosts return
+/// `Some(lowercase_host)` using ASCII case folding.
 ///
 /// # Arguments
 ///
@@ -38,10 +39,10 @@ pub(crate) fn normalize_host_str(host: Option<&str>) -> Option<&str> {
 ///
 /// # Returns
 ///
-/// Returns `Some(String)` containing the trimmed remote host, or `None` if the host represents localhost.
+/// Returns `Some(String)` containing the lowercase remote host, or `None` if the host represents localhost.
 #[must_use]
 pub(crate) fn normalize_host(host: Option<&str>) -> Option<String> {
-    normalize_host_str(host).map(str::to_string)
+    normalize_host_str(host).map(str::to_ascii_lowercase)
 }
 
 /// Determines if a host specification represents a remote machine without heap allocations.
@@ -628,7 +629,7 @@ impl FromStr for OpcServerEndpoint {
                 if server.is_empty() {
                     return Err(ParseEndpointError::MissingServer(trimmed.to_string()));
                 }
-                let host = normalize_host_str(Some(raw_host)).map(str::to_string);
+                let host = normalize_host(Some(raw_host));
                 let identifier = ServerIdentifier::from_str(server)?;
                 return Ok(Self { host, identifier });
             }
@@ -649,7 +650,7 @@ impl FromStr for OpcServerEndpoint {
                 if server.is_empty() {
                     return Err(ParseEndpointError::MissingServer(trimmed.to_string()));
                 }
-                let host = normalize_host_str(Some(raw_host)).map(str::to_string);
+                let host = normalize_host(Some(raw_host));
                 let identifier = ServerIdentifier::from_str(server)?;
                 return Ok(Self { host, identifier });
             }
@@ -666,7 +667,7 @@ impl FromStr for OpcServerEndpoint {
             if server.is_empty() {
                 return Err(ParseEndpointError::MissingServer(trimmed.to_string()));
             }
-            let host = normalize_host_str(Some(raw_host)).map(str::to_string);
+            let host = normalize_host(Some(raw_host));
             let identifier = ServerIdentifier::from_str(server)?;
             return Ok(Self { host, identifier });
         }
@@ -1418,5 +1419,59 @@ mod tests {
             Some("   ".to_string()),
         );
         assert_eq!(trimmed_info.host(), None);
+    }
+
+    #[test]
+    fn test_normalize_host_lowercases_remote() {
+        assert_eq!(
+            normalize_host(Some("SCADA-01")),
+            Some("scada-01".to_string())
+        );
+        assert_eq!(
+            normalize_host(Some("Remote-PLC-01")),
+            Some("remote-plc-01".to_string())
+        );
+        assert_eq!(
+            normalize_host(Some("  SCADA-NODE-01  ")),
+            Some("scada-node-01".to_string())
+        );
+        assert_eq!(
+            normalize_host(Some("192.168.1.50")),
+            Some("192.168.1.50".to_string())
+        );
+        assert_eq!(normalize_host(Some("localhost")), None);
+        assert_eq!(normalize_host(Some("LOCALHOST")), None);
+        assert_eq!(normalize_host(Some("127.0.0.1")), None);
+        assert_eq!(normalize_host(Some("::1")), None);
+        assert_eq!(normalize_host(None), None);
+        assert_eq!(normalize_host_str(Some("SCADA-01")), Some("SCADA-01"));
+    }
+
+    #[test]
+    fn test_endpoint_from_str_canonicalizes_host() {
+        use std::collections::HashSet;
+        use std::str::FromStr;
+
+        let ep_unc =
+            OpcServerEndpoint::from_str(r"\\SCADA-NODE1\Matrikon.OPC.Simulation.1").unwrap();
+        assert_eq!(ep_unc.host(), Some("scada-node1"));
+
+        let ep_slash =
+            OpcServerEndpoint::from_str("//SCADA-NODE1/Matrikon.OPC.Simulation.1").unwrap();
+        assert_eq!(ep_slash.host(), Some("scada-node1"));
+
+        let ep_uri =
+            OpcServerEndpoint::from_str("opc.da://SCADA-NODE1/Matrikon.OPC.Simulation.1").unwrap();
+        assert_eq!(ep_uri.host(), Some("scada-node1"));
+
+        let ep_raw = OpcServerEndpoint::from_str("SCADA-NODE1/Matrikon.OPC.Simulation.1").unwrap();
+        assert_eq!(ep_raw.host(), Some("scada-node1"));
+
+        // O5: Connection pool deduplication guarantee
+        let ep_upper = OpcServerEndpoint::from_str(r"\\SCADA-01\Server.1").unwrap();
+        let ep_lower = OpcServerEndpoint::from_str(r"\\scada-01\Server.1").unwrap();
+        assert_eq!(ep_upper, ep_lower);
+        let pool: HashSet<OpcServerEndpoint> = HashSet::from([ep_upper, ep_lower]);
+        assert_eq!(pool.len(), 1, "Case-varying endpoints must deduplicate");
     }
 }
