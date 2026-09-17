@@ -340,10 +340,18 @@ impl IntoTags for TagBatch {
     }
 }
 
-impl IntoTags for &'static [&'static str] {
+impl IntoTags for &[&str] {
     #[inline]
     fn into_tag_batch(self) -> TagBatch {
-        TagBatch::from_static(self)
+        if self.is_empty() {
+            TagBatch::empty()
+        } else if self.len() == 1 {
+            TagBatch::from_str_lenient(self[0])
+        } else {
+            TagBatch {
+                repr: TagBatchRepr::Owned(self.iter().map(|&s| s.to_owned()).collect()),
+            }
+        }
     }
 }
 
@@ -381,12 +389,10 @@ impl<const N: usize> IntoTags for [&'static str; N] {
     }
 }
 
-impl IntoTags for &'static str {
+impl IntoTags for &str {
     #[inline]
     fn into_tag_batch(self) -> TagBatch {
-        TagBatch {
-            repr: TagBatchRepr::StaticSingle(self),
-        }
+        TagBatch::from_str_lenient(self)
     }
 }
 
@@ -423,6 +429,20 @@ impl IntoTags for String {
         TagBatch {
             repr: TagBatchRepr::OwnedSingle(self),
         }
+    }
+}
+
+impl IntoTags for &TagBatch {
+    #[inline]
+    fn into_tag_batch(self) -> TagBatch {
+        self.clone()
+    }
+}
+
+impl From<&Self> for TagBatch {
+    #[inline]
+    fn from(batch: &Self) -> Self {
+        batch.clone()
     }
 }
 
@@ -793,5 +813,110 @@ mod tests {
                 "T5".to_string()
             ]
         );
+    }
+
+    #[test]
+    fn test_into_tags_dynamic_str_stack_sso() {
+        let dynamic_tag = format!("Sensor.{}", 42);
+        let batch = dynamic_tag.as_str().into_tag_batch();
+        assert_eq!(batch.len(), 1);
+        assert!(!batch.is_empty());
+        assert!(matches!(batch.repr, TagBatchRepr::InlineSingle(_, 9)));
+        assert_eq!(batch.iter_str().next(), Some("Sensor.42"));
+        assert_eq!(batch.into_vec(), vec!["Sensor.42".to_string()]);
+
+        let dynamic_31 = format!("{:0<31}", "Tag");
+        assert_eq!(dynamic_31.len(), 31);
+        let batch_31 = dynamic_31.as_str().into_tag_batch();
+        assert!(matches!(batch_31.repr, TagBatchRepr::InlineSingle(_, 31)));
+
+        let dynamic_32 = format!("{:0<32}", "Tag");
+        assert_eq!(dynamic_32.len(), 32);
+        let batch_32 = dynamic_32.as_str().into_tag_batch();
+        assert!(matches!(batch_32.repr, TagBatchRepr::OwnedSingle(_)));
+
+        let dynamic_utf8 = format!("圧力_{}", 100);
+        let batch_utf8 = dynamic_utf8.as_str().into_tag_batch();
+        assert!(matches!(batch_utf8.repr, TagBatchRepr::InlineSingle(_, _)));
+    }
+
+    #[test]
+    fn test_tag_batch_representation_divergence_equivalence() {
+        let b_inline = "Sensor.1".into_tag_batch();
+        let b_static = TagBatch::from("Sensor.1");
+
+        assert!(matches!(b_inline.repr, TagBatchRepr::InlineSingle(_, 8)));
+        assert!(matches!(b_static.repr, TagBatchRepr::StaticSingle("Sensor.1")));
+
+        assert_eq!(b_inline, b_static);
+        assert_eq!(b_inline.len(), b_static.len());
+        assert_eq!(b_inline.is_empty(), b_static.is_empty());
+        assert_eq!(
+            b_inline.iter_str().collect::<Vec<_>>(),
+            b_static.iter_str().collect::<Vec<_>>()
+        );
+        assert_eq!(b_inline.into_vec(), b_static.into_vec());
+    }
+
+    #[test]
+    fn test_into_tags_borrowed_slice() {
+        let empty_slice: &[&str] = &[];
+        let empty_batch = empty_slice.into_tag_batch();
+        assert_eq!(empty_batch.len(), 0);
+        assert!(empty_batch.is_empty());
+
+        let d1 = format!("Temp.{}", 1);
+        let single_slice: &[&str] = &[d1.as_str()];
+        let single_batch = single_slice.into_tag_batch();
+        assert_eq!(single_batch.len(), 1);
+        assert!(matches!(single_batch.repr, TagBatchRepr::InlineSingle(_, _)));
+        assert_eq!(single_batch.iter_str().next(), Some("Temp.1"));
+
+        let d2 = format!("Temp.{}", 2);
+        let d3 = format!("Temp.{}", 3);
+        let multi_slice: &[&str] = &[d1.as_str(), d2.as_str(), d3.as_str()];
+        let multi_batch = multi_slice.into_tag_batch();
+        assert_eq!(multi_batch.len(), 3);
+        assert!(matches!(multi_batch.repr, TagBatchRepr::Owned(_)));
+        assert_eq!(
+            multi_batch.iter_str().collect::<Vec<_>>(),
+            vec!["Temp.1", "Temp.2", "Temp.3"]
+        );
+
+        let batch_survives = {
+            let local_a = format!("Local.{}", "A");
+            let local_b = format!("Local.{}", "B");
+            let local_slice: &[&str] = &[local_a.as_str(), local_b.as_str()];
+            local_slice.into_tag_batch()
+        };
+        assert_eq!(batch_survives.len(), 2);
+    }
+
+    #[test]
+    fn test_into_tags_batch_ref() {
+        let original = ["Sensor.A", "Sensor.B"].into_tag_batch();
+        let cloned_via_into_tags = (&original).into_tag_batch();
+        assert_eq!(cloned_via_into_tags, original);
+        assert_eq!(cloned_via_into_tags.len(), 2);
+
+        let cloned_via_from: TagBatch = (&original).into();
+        assert_eq!(cloned_via_from, original);
+
+        assert_eq!(original.len(), 2);
+        assert_eq!(
+            original.iter_str().collect::<Vec<_>>(),
+            vec!["Sensor.A", "Sensor.B"]
+        );
+
+        let single_orig = TagBatch::from_str_lenient("Sensor.Single");
+        let single_cloned = (&single_orig).into_tag_batch();
+        assert_eq!(single_cloned, single_orig);
+
+        // Edge case: empty batch reference
+        let empty_orig = TagBatch::empty();
+        let empty_cloned = (&empty_orig).into_tag_batch();
+        assert_eq!(empty_cloned, empty_orig);
+        assert_eq!(empty_cloned.len(), 0);
+        assert!(empty_cloned.is_empty());
     }
 }
