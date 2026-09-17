@@ -240,6 +240,13 @@ impl From<&str> for OpcValue {
     }
 }
 
+impl From<&Self> for OpcValue {
+    #[inline]
+    fn from(val: &Self) -> Self {
+        val.clone()
+    }
+}
+
 #[allow(
     clippy::use_self,
     clippy::cast_possible_truncation,
@@ -778,5 +785,23 @@ mod tests {
         let ts_epoch = Some(SystemTime::UNIX_EPOCH);
         assert_eq!(format!("{}", ts_epoch.display()), "N/A");
         assert_eq!(format!("{}", ts_epoch.display_or("Custom")), "Custom");
+    }
+
+    #[test]
+    fn test_opc_value_from_ref() {
+        let cases = vec![
+            OpcValue::Int(-12345),
+            OpcValue::UInt(67890),
+            OpcValue::Float(3.14159),
+            OpcValue::Bool(true),
+            OpcValue::String("OPC DA Tag".to_string()),
+            OpcValue::Empty,
+            OpcValue::Null,
+        ];
+
+        for val in &cases {
+            let cloned = OpcValue::from(val);
+            assert_eq!(&cloned, val);
+        }
     }
 }
