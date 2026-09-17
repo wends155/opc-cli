@@ -1,5 +1,6 @@
 //! Tag writing engine with validation, native batching, and result mapping.
 
+use super::MAX_TAG_BATCH_SIZE;
 use crate::connector::{ConnectedGroup, ConnectedServer, ItemWrite};
 use crate::errors::{OpcError, OpcResult};
 use crate::log_opc_err;
@@ -22,6 +23,13 @@ pub fn handle_write_batch<S: ConnectedServer>(
 ) -> OpcResult<Vec<WriteResult>> {
     if writes.is_empty() {
         return Ok(Vec::new());
+    }
+
+    if writes.len() > MAX_TAG_BATCH_SIZE {
+        return Err(OpcError::InvalidState(format!(
+            "Write batch size {} exceeds maximum allowed limit of {MAX_TAG_BATCH_SIZE}",
+            writes.len(),
+        )));
     }
 
     #[cfg(feature = "dev-diagnostics")]
@@ -249,6 +257,89 @@ mod tests {
                 .unwrap()
                 .to_string()
                 .contains("Tag3 rejected in write")
+        );
+    }
+
+    #[test]
+    fn test_handle_write_batch_exceeds_max_limit() {
+        let state = std::sync::Arc::new(crate::connector::mock::MockState::default());
+        let server = crate::connector::mock::MockConnectedServer {
+            state: state.clone(),
+            ..Default::default()
+        };
+        let server_id = ServerIdentifier::try_from("Test.Server").unwrap();
+
+        let writes_vec: Vec<(String, OpcValue)> = (0..=MAX_TAG_BATCH_SIZE)
+            .map(|i| {
+                #[allow(clippy::cast_possible_wrap)]
+                (format!("Tag.{i}"), OpcValue::Int(i as i64))
+            })
+            .collect();
+        let writes = writes_vec.into_write_batch();
+
+        let err = handle_write_batch(&server_id, &writes, &server)
+            .expect_err("batch exceeding limit must be rejected");
+        assert!(
+            matches!(err, OpcError::InvalidState(ref msg) if msg.contains("exceeds maximum allowed limit")),
+            "Expected InvalidState error, got: {err:?}"
+        );
+        assert_eq!(
+            state
+                .add_group_count
+                .load(std::sync::atomic::Ordering::Relaxed),
+            0,
+            "No COM group allocation should occur"
+        );
+    }
+
+    #[test]
+    fn test_handle_write_batch_empty() {
+        let state = std::sync::Arc::new(crate::connector::mock::MockState::default());
+        let server = crate::connector::mock::MockConnectedServer {
+            state: state.clone(),
+            ..Default::default()
+        };
+        let server_id = ServerIdentifier::try_from("Test.Server").unwrap();
+        let writes = WriteBatch::empty();
+
+        let results = handle_write_batch(&server_id, &writes, &server)
+            .expect("empty write batch must succeed");
+        assert!(results.is_empty());
+        assert_eq!(
+            state
+                .add_group_count
+                .load(std::sync::atomic::Ordering::Relaxed),
+            0,
+            "No COM groups must be allocated for empty batch"
+        );
+    }
+
+    #[test]
+    fn test_handle_write_batch_at_max_limit() {
+        let state = std::sync::Arc::new(crate::connector::mock::MockState::default());
+        let server = crate::connector::mock::MockConnectedServer {
+            state: state.clone(),
+            ..Default::default()
+        };
+        let server_id = ServerIdentifier::try_from("Test.Server").unwrap();
+
+        let writes_vec: Vec<(String, OpcValue)> = (0..MAX_TAG_BATCH_SIZE)
+            .map(|i| {
+                #[allow(clippy::cast_possible_wrap)]
+                (format!("Tag.{i}"), OpcValue::Int(i as i64))
+            })
+            .collect();
+        let writes = writes_vec.into_write_batch();
+
+        let results = handle_write_batch(&server_id, &writes, &server)
+            .expect("batch at maximum limit must proceed");
+        assert_eq!(results.len(), MAX_TAG_BATCH_SIZE);
+        assert_eq!(
+            state
+                .add_group_count
+                .load(std::sync::atomic::Ordering::Relaxed),
+            1,
+            "Exactly 1 COM group should be registered"
         );
     }
 }
