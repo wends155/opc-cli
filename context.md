@@ -145,6 +145,7 @@
 >     - Full 9-gate quality pipeline (`pwsh -File scripts/verify.ps1`) exited 0 with all 523 workspace tests (doc-tests increased to 126) and zero warnings under `-D warnings`.
 > * **New Constraints:** `write_tag_batch` and `write_tags` on `Unbound` accept `impl IntoWriteBatch`. Primitives passed into `write_tag_value` and `write_tag` do not require explicit `OpcValue` wrapping. Doc comments in library crates must never use `println!` (Gate 7 enforcement).
 > * **Pruned:** Closed Findings #5, #11, and #15 from `refactor/cycle2_review.md`. Modernization Block G is now 100% complete across both phases (G1 and G2).
+> * **Artifact Consolidation:** Consolidated all Block G component review, plan, and task documents into [`refactor/post_implementation_blockG.md`](file:///c:/Users/WSALIGAN/code/opc-cli/refactor/post_implementation_blockG.md) and pruned the individual markdown files.
 
 ## 2026-09-16: Block G1 (Clean Slate API Excision & Struct Deduplication — Findings #1, #4, #16, #17, #19) Completed (`opc-da-client`)
 > 📝 **Context Update:**
