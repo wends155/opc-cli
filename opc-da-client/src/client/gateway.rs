@@ -377,9 +377,12 @@ impl<C: ServerBackend + 'static, State: Send + Sync + 'static> OpcDaClient<C, St
         let requested_ep: OpcServerEndpoint = server.parse()?;
         if let Some(bound_ep) = &self.endpoint {
             let has_explicit_host = server.contains('\\') || server.contains('/');
-            if requested_ep.identifier() != bound_ep.identifier()
-                || (has_explicit_host && requested_ep.host() != bound_ep.host())
-            {
+            let mismatch = if has_explicit_host {
+                !requested_ep.matches(bound_ep)
+            } else {
+                !requested_ep.identifier().matches(bound_ep.identifier())
+            };
+            if mismatch {
                 return Err(OpcError::InvalidState(format!(
                     "Client is bound to server '{bound_ep}', but request targeted '{server}'"
                 )));

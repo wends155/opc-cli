@@ -437,3 +437,62 @@ fn test_client_bind_new_fail_early_on_invalid_endpoint() {
         "bind_new_remote must reject null host early"
     );
 }
+
+#[test]
+fn test_validate_bound_server_mixed_case() {
+    let connector = MockServerConnector::new();
+
+    // Local bound: case-varying ProgID
+    let local_client = OpcDaClient::builder()
+        .with_connector(connector.clone())
+        .server("Matrikon.OPC.Simulation.1")
+        .build_bound()
+        .expect("must build");
+    local_client
+        .validate_bound_server("matrikon.opc.simulation.1")
+        .expect("case-varying ProgID must validate");
+
+    // Remote bound: case-varying host + ProgID (UNC)
+    let remote_client = OpcDaClient::builder()
+        .with_connector(connector)
+        .host("SCADA-01")
+        .server("Matrikon.OPC.Simulation.1")
+        .build_bound()
+        .expect("must build");
+    remote_client
+        .validate_bound_server(r"\\scada-01\matrikon.opc.simulation.1")
+        .expect("case-varying UNC must validate");
+}
+
+#[test]
+fn test_validate_bound_server_host_mismatch() {
+    let connector = MockServerConnector::new();
+
+    let remote_client = OpcDaClient::builder()
+        .with_connector(connector.clone())
+        .host("host1")
+        .server("Server.1")
+        .build_bound()
+        .expect("must build");
+
+    let err = remote_client
+        .validate_bound_server(r"\\host2\Server.1")
+        .unwrap_err();
+    assert!(matches!(err, OpcError::InvalidState(_)));
+
+    let err2 = remote_client
+        .validate_bound_server(r"\\host1\Other.2")
+        .unwrap_err();
+    assert!(matches!(err2, OpcError::InvalidState(_)));
+
+    // Local bound rejects explicit remote host
+    let local_client = OpcDaClient::builder()
+        .with_connector(connector)
+        .server("Server.1")
+        .build_bound()
+        .expect("must build");
+    let err3 = local_client
+        .validate_bound_server(r"\\host1\Server.1")
+        .unwrap_err();
+    assert!(matches!(err3, OpcError::InvalidState(_)));
+}

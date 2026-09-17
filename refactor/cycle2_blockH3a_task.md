@@ -9,10 +9,10 @@
 - [x] Step 7: [MODIFY] `opc-da-client/src/types/server.rs` — [+] `ServerIdentifier::matches` (L~185)
 - [x] Step 8: [TEST] `opc-da-client/src/types/server.rs` — [+] `test_endpoint_matches`
 - [x] Step 9: [MODIFY] `opc-da-client/src/types/server.rs` — [+] `OpcServerEndpoint::matches` (L~526) - 🔒 CHECKPOINT 2
-- [/] Step 10: [TEST] `opc-da-client/src/client/tests.rs` — [+] `test_validate_bound_server_mixed_case`
-- [ ] Step 11: [MODIFY] `opc-da-client/src/client/gateway.rs` — [~] `validate_bound_server` (L376-391)
-- [ ] Step 12: [TEST] `opc-da-client/src/client/tests.rs` — [+] `test_validate_bound_server_host_mismatch` - 🔒 CHECKPOINT 3
-- [ ] Step 13: [MODIFY] `opc-da-client/src/types/server.rs` — [~] `OpcServerEndpoint::local` (L460-514)
+- [x] Step 10: [TEST] `opc-da-client/src/client/tests.rs` — [+] `test_validate_bound_server_mixed_case`
+- [x] Step 11: [MODIFY] `opc-da-client/src/client/gateway.rs` — [~] `validate_bound_server` (L376-391)
+- [x] Step 12: [TEST] `opc-da-client/src/client/tests.rs` — [+] `test_validate_bound_server_host_mismatch` - 🔒 CHECKPOINT 3
+- [/] Step 13: [MODIFY] `opc-da-client/src/types/server.rs` — [~] `OpcServerEndpoint::local` (L460-514)
 - [ ] Step 14: [MODIFY] `opc-da-client/src/types/server.rs` — verification (`cargo test --doc`) - 🔒 CHECKPOINT 4
 
 ## Builder Notes
