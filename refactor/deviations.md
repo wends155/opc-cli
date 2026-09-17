@@ -13,13 +13,14 @@
 During Cycle 2, each deviation from the approved implementation plan is recorded with its compiler/language dynamic, architectural justification, and resulting invariant.
 
 ### Summary Metrics
-* **Total Cycle 2 Deviations:** 16
+* **Total Cycle 2 Deviations:** 18
 * **Block G1 (Clean Slate API Excision & Struct Deduplication):** 3 deviations (0 violations, all justified and verified)
 * **Block G2 (Ergonomic Symmetry & Comprehensive Public Documentation):** 4 deviations (0 violations, all justified and verified)
 * **Block H1 (Domain Invariants & CWE-626 Hardening):** 2 deviations (0 violations, all justified and verified)
 * **Block H2 (COM Resource & Dead Code Pruning):** 3 deviations (0 violations, all justified and verified)
 * **Sub-Block H3a (Server Identity & Host Canonicalization):** 2 deviations (0 violations, all justified and verified)
 * **Sub-Block H3b (Worker Active Group Caching & Batch Defense):** 2 deviations (0 violations, all justified and verified)
+* **Sub-Block H3c (Batch Ergonomics & Public Conversions):** 2 deviations (0 violations, all justified and verified)
 * **Quality Gate Verification:** 100% Green across all 9 quality gates in `scripts/verify.ps1`.
 
 ---
@@ -44,6 +45,8 @@ During Cycle 2, each deviation from the approved implementation plan is recorded
 | **Sub-Block H3a** | Step 8<br>TDD Protocol | Direct addition of `test_endpoint_matches` expecting RED | Added minimal stub `pub fn matches(&self, _other: &Self) -> bool { false }` before test addition | Adding a test referencing a non-existent method causes `E0599` (compiler error), which halts compilation before assertions can execute. To uphold the strict TDD contract where RED signifies a compilable, executing test that fails an assertion, a `false`-returning stub was introduced so `cargo test` compiled and reported a clean runtime assertion failure, followed by GREEN implementation in Step 9. | TDD Methodology & Compilable RED Phase | All TDD RED phases compile cleanly and verify runtime assertion failures. |
 | **Sub-Block H3b** | Step 9<br>Finding #2 | `tags: impl ExactSizeIterator<Item = &str>` in `assemble_tag_values` | `tags: impl ExactSizeIterator<Item = &'a str>` with named lifetime `<'a>` in `assemble_tag_values` | Rust compiler error `E0658` ("anonymous lifetimes in `impl Trait` are unstable"). In Rust 2024 / MSRV 1.93.1, elided/anonymous lifetimes inside associated type trait bounds in function argument position require a named lifetime parameter. Introducing `<'a>` resolves `E0658` on stable Rust without nightly `#![feature(...)]` gates. | Language Invariant (`E0658`) / Compiler Stability | Clean compilation on stable Rust toolchain without nightly feature dependencies. |
 | **Sub-Block H3b** | Step 12<br>Finding #5 | `(format!("Tag.{i}"), OpcValue::Int(i as i32))` in batch write tests | `(format!("Tag.{i}"), OpcValue::Int(i as i64))` in batch write tests | Rust compiler error `E0308` ("mismatched types: expected `i64`, found `i32`"). The domain model defines `OpcValue::Int(i64)` (`src/types/value.rs:24`), not `i32`. Casting loop indices to `i64` accurately conforms to the domain type variant definition. | Type Correctness (`E0308`) | Test fixtures construct `OpcValue::Int` variants with strictly valid 64-bit integer payloads without type errors. |
+| **Sub-Block H3c** | Step 7<br>Finding #7 | `OpcValue::Float(3.14159)` in test cases | `OpcValue::Float(std::f64::consts::PI)` in `src/types/value.rs:795` | Rust clippy `-D warnings` triggered `clippy::approx_constant` on the literal `3.14159`. Replacing with `std::f64::consts::PI` eliminates the linter failure while accurately testing the float variant. | Lint Rule Invariant (`clippy::approx_constant`) | Float variants in test suites conform to standard library constant precision rules. |
+| **Sub-Block H3c** | Step 13<br>Finding #8 | `Arc::from(vec![(tag, val)].into_boxed_slice())` | `Arc::from([(tag, val)])` in `src/types/write_batch.rs:186` | Standard library `From<[T; N]> for Arc<[T]>` directly constructs a boxed slice Arc from a 1-element array without intermediate `Vec` heap allocation or re-allocation. Pre-approved during interview. | Performance & Zero-Intermediate Allocation Optimization | Single write batch sharing wraps into Arc with zero intermediate vector overhead. |
 
 ---
 
@@ -213,3 +216,26 @@ This preserves clean ergonomics for 99% of consumers while providing full parame
       |                                      ------------- ^^^^^^^^ expected `i64`, found `i32`
   ```
 * **Architectural Resolution:** Casting loop index `i` via `i as i64` accurately conforms to the domain type specification, allowing test fixtures to compile cleanly and assert boundary conditions without type mismatch diagnostics.
+
+---
+
+### 3.16 Case Study H3c.1: Linter Precision Guard via `std::f64::consts::PI` (`clippy::approx_constant`)
+* **Context:** In `src/types/value.rs`, unit test `test_opc_value_from_ref` tests `From<&OpcValue> for OpcValue` across all domain variants, including `OpcValue::Float(3.14159)`.
+* **Compiler Obstacle:** Under `-D warnings`, Clippy triggered `clippy::approx_constant`:
+  ```text
+  error: approximate value of `f{32, 64}::consts::PI` found
+     --> opc-da-client\src\types\value.rs:795:29
+      |
+  795 |             OpcValue::Float(3.14159),
+      |                             ^^^^^^^
+      |
+      = help: consider using the constant directly
+  ```
+* **Architectural Resolution:** Using `std::f64::consts::PI` eliminates the linter diagnostic under `-D warnings` while accurately testing float equality across clones.
+
+---
+
+### 3.17 Case Study H3c.2: Direct Fixed-Size Array Conversion for Zero-Intermediate-Allocation Arc Sharing
+* **Context:** In `WriteBatch::into_shareable` (`src/types/write_batch.rs:186`), `Single(tag, val)` is converted into a shareable `WriteBatch::Shared(Arc<[(String, OpcValue)]>)` to allow $O(1)$ cloning across async worker channels.
+* **Optimization Decision:** The initial baseline used `Arc::from(vec![(tag, val)].into_boxed_slice())`, which requires 2 heap allocations (allocating the `Vec`, then allocating the `Arc` header and buffer) and 1 heap deallocation (`into_boxed_slice()`). Rust standard library provides `impl<T, const N: usize> From<[T; N]> for Arc<[T]>`. Implementing `Self::Single(tag, val) => Self::Shared(Arc::from([(tag, val)]))` directly constructs the `Arc` slice from a 1-element fixed-size array in a single heap allocation with zero intermediate buffers.
+* **Architectural Resolution:** Direct array construction reduces heap allocation overhead by 50% on single-write sharing, verified by `test_write_batch_into_shareable_lifecycle`.
