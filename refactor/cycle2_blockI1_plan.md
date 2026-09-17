@@ -62,6 +62,7 @@ Iterative architectural upgrades across Cycle 2 modernized the Windows COM worke
 | 1 | `refactor/cycle2_blockI1_review.md` | Multi-Agent (5 Flash Lenses) | ✅ Approved | Synthesized 12 findings into 4 targeted modules; confirmed zero public API breakages. |
 | 2 | Architect Alignment Interview | Main Agent + User | ✅ Approved | Finalized decisions A1-A7: fail-fast parity check, dual dispatch zero-alloc, test conversion. |
 | 3 | `plan-reviewer` | `flash` (Gemini 3.8 Flash High) | ✅ Approved (Post-Revision) | Fixed Step 11 mock hook & closure signature; added `NamespaceType::Flat` coverage in Step 9; provided exact `while` loop snippet in Step 8; added dedicated unit test for `partition_item_results` in Step 6; clarified allocation placement in Step 4. |
+| 4 | Architect & 7-Lens Planners Audit | Multi-Agent (7 Flash Planners + Main Agent) | ✅ Approved & Enhanced | Corrected Step 6 Action 6 variable scoping and missing field typo (`results` and `&tag_ids`); standardized parity mismatch error format across Step 3/4; reinforced stable Rust while loop guard in Step 8; ensured consistent chunk.drain(..) buffer reuse in Step 10; formalized architectural invariants A1-A5. |
 
 ---
 
@@ -215,6 +216,7 @@ fn test_assemble_tag_values_parity_mismatch_fails_fast() {
 
     let server_id = ServerIdentifier::try_from("Test.Server").unwrap();
     let requested_tags = ["tag1", "tag2", "tag3"];
+    let tag_count = requested_tags.len();
 
     // Underflow Parity Mismatch
     let valid_indices_underflow = vec![0];
@@ -233,10 +235,15 @@ fn test_assemble_tag_values_parity_mismatch_fails_fast() {
         states_underflow,
         &server_id,
     );
+    let expected_underflow_msg = format!(
+        "Server {server_id} tag count parity mismatch: expected {tag_count} tags, got {} valid and {} rejected",
+        valid_indices_underflow.len(),
+        rejected_errors_underflow.len()
+    );
     assert!(
         matches!(
             underflow_res,
-            Err(OpcError::Internal(ref msg)) if msg.contains("parity mismatch") || msg.contains("tag count mismatch")
+            Err(OpcError::Internal(ref msg)) if msg == &expected_underflow_msg
         ),
         "Expected OpcError::Internal for underflow parity mismatch, got: {underflow_res:?}"
     );
@@ -269,10 +276,15 @@ fn test_assemble_tag_values_parity_mismatch_fails_fast() {
         states_overflow,
         &server_id,
     );
+    let expected_overflow_msg = format!(
+        "Server {server_id} tag count parity mismatch: expected {tag_count} tags, got {} valid and {} rejected",
+        valid_indices_overflow.len(),
+        rejected_errors_overflow.len()
+    );
     assert!(
         matches!(
             overflow_res,
-            Err(OpcError::Internal(ref msg)) if msg.contains("parity mismatch") || msg.contains("tag count mismatch")
+            Err(OpcError::Internal(ref msg)) if msg == &expected_overflow_msg
         ),
         "Expected OpcError::Internal for overflow parity mismatch, got: {overflow_res:?}"
     );
@@ -341,7 +353,7 @@ fn test_assemble_tag_values_parity_mismatch_fails_fast() {
   3. Stream tracing log directly with `error = %err`.
   4. Move `err` directly into `rejected_errors.push((idx, err))` without `.clone()`.
   5. Use `tag_ids.get(idx).map_or("<unknown>", String::as_str)` for defensive tag name lookup.
-  6. In `handle_read` L137, update call to pass `item_results` by value (`partition_item_results(item_results, &tags.tag_ids, &endpoint.identifier)`).
+  6. In `handle_read` L137, update call to pass `results` by value and use existing local `tag_ids` (`partition_item_results(results, &tag_ids, &endpoint.identifier)`).
   7. Add dedicated unit test in `read.rs::tests`:
 ```rust
     #[test]
@@ -431,15 +443,15 @@ fn test_connection_pool_len_and_lifecycle() {
         while self.active_groups.len() >= MAX_ACTIVE_GROUPS {
             if let Some(lru) = self.active_groups.pop_back() {
                 let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    let _ = self
-                        .server
-                        .remove_group(lru.server_handle, GroupRemovalMode::Force);
+                    let _ = self.server.remove_group(lru.server_handle, GroupRemovalMode::Force);
                 }));
             }
         }
         self.active_groups.push_front(group);
     }
 ```
+    > [!NOTE]
+    > `while self.active_groups.len() >= MAX_ACTIVE_GROUPS && let Some(...)` must NOT be used because it requires nightly `#![feature(let_chains)]` (`E0658`). The nested `if let Some(lru) = self.active_groups.pop_back()` inside `while self.active_groups.len() >= MAX_ACTIVE_GROUPS` is required on stable Rust (MSRV 1.93.1).
   3. Delete `pub(crate) fn clear_active_group(&mut self)` (lines 125-128).
   4. In `ConnectionPool::evict` line 268, change `pooled.clear_active_group()` to `pooled.clear_active_groups()`.
   5. Replace `len` and `is_empty` (lines 240-251): delete `is_empty`, scope `len` to `#[cfg(test)]`, and remove `#[allow(dead_code)]`:
@@ -541,7 +553,7 @@ fn test_connection_pool_len_and_lifecycle() {
 #### Step 10: [MODIFY] `opc-da-client/src/com/worker/browse.rs` — [~] `browse_flat_namespace` & `try_fast_flat_browse` (L96-108, L130-151)
 - **Pre:** Step 9 passed
 - **Target:** `browse_flat_namespace` L96-108 and `try_fast_flat_browse` L130-151
-- **Action:** Replace `std::mem::replace(&mut chunk, Vec::with_capacity(BROWSE_CHUNK_SIZE))` with `chunk.drain(..)` across intermediate chunk flushes and terminal flushes:
+- **Action:** Replace `std::mem::replace(&mut chunk, Vec::with_capacity(BROWSE_CHUNK_SIZE))` with `chunk.drain(..)` across intermediate chunk flushes, and ensure the terminal batch push consistently uses `chunk.drain(..)` (replacing `collector.push_batch(chunk)`):
 ```rust
 // browse_flat_namespace (lines 96-108):
 if chunk.len() >= BROWSE_CHUNK_SIZE {
@@ -550,7 +562,7 @@ if chunk.len() >= BROWSE_CHUNK_SIZE {
         break;
     }
 }
-// ... after loop ...
+// ... after loop (terminal batch push) ...
 if !chunk.is_empty() {
     let _ = collector.push_batch(chunk.drain(..));
 }
@@ -562,7 +574,7 @@ if chunk.len() >= BROWSE_CHUNK_SIZE {
         break;
     }
 }
-// ... after loop ...
+// ... after loop (terminal batch push) ...
 if !chunk.is_empty() {
     let _ = collector.push_batch(chunk.drain(..));
 }
@@ -679,3 +691,30 @@ pwsh -File scripts/verify.ps1
 | **Steps** | 13 (4 Test, 8 Modify, 1 Check) |
 | **Checkpoints** | 5 (4 Component Group Checkpoints + 1 Final Checkpoint) |
 | **Estimated Effort** | Medium |
+
+---
+
+## ✅ Reviewer Findings & Audit Resolutions
+
+All reviewer findings across Cycles 1 through 3, along with the multi-lens deep audit from Cycle 4, have been categorized into Code-Level and Architectural domains and fully resolved in the plan. **Zero unresolved findings remain.**
+
+### 1. Code-Level Issues Resolution Matrix
+
+| Issue ID | Location | Original Defect / Review Finding | Resolution Applied in Plan | Verification Method | Status |
+|---|---|---|---|---|---|
+| **C1** | Step 6, Action 6 (`read.rs:137`) | Calling `partition_item_results(item_results, &tags.tag_ids, ...)` causes `E0425` (variable `item_results` not in scope) and `E0609` (`tag_ids` field does not exist on `&TagBatch`). | Corrected call signature to `partition_item_results(results, &tag_ids, &endpoint.identifier)` using actual bound variable `results` and existing local `let tag_ids: Vec<String>` from line 129. | AST syntax inspection; Step 6 unit test | `✅ Resolved` |
+| **C2** | Step 3 & Step 4 (`read.rs:221-239`) | Error message literal inconsistency between test assertion and implementation string. | Standardized verbatim on `"Server {server_id} tag count parity mismatch: expected {tag_count} tags, got {} valid and {} rejected"` in both Step 3 exact test assertion and Step 4 implementation. | `cargo test --lib com::worker::read::tests::test_assemble_tag_values_parity_mismatch_fails_fast` | `✅ Resolved` |
+| **C3** | Step 8 (`pool.rs:87-97`) | Potential regression to unstable `while ... && let Some(...)` syntax requiring nightly `#![feature(let_chains)]` (`E0658`). | Reaffirmed stable Rust 2024 (MSRV 1.93.1) construct: `while self.active_groups.len() >= MAX_ACTIVE_GROUPS { if let Some(lru) = self.active_groups.pop_back() { ... } }` with explicit diagnostic note. | `cargo check --lib` on stable Rust | `✅ Resolved` |
+| **C4** | Step 10 (`browse.rs:96-151`) | Inconsistent buffer draining in terminal batch pushes (mixing `chunk.drain(..)` with moving `chunk`). | Standardized terminal flush in both `browse_flat_namespace` and `try_fast_flat_browse` to consistently execute `if !chunk.is_empty() { let _ = collector.push_batch(chunk.drain(..)); }`. | `rg "std::mem::replace\(&mut chunk" opc-da-client/src/com/worker/browse.rs` yields 0 matches | `✅ Resolved` |
+
+### 2. Architectural Invariants Formalization Matrix
+
+| Invariant ID | Target Component | Architectural Principle | Hardened Specification & Guarantees | Planner Lens | Status |
+|---|---|---|---|---|---|
+| **A1** | [`worker.rs:568-588`](file:///c:/Users/WSALIGAN/code/opc-cli/opc-da-client/src/com/worker.rs#L568) | Zero-Allocation Panic Containment | `OpcServerEndpoint` contains only immutable data (`Option<String>`, `ProgId`/`Clsid`) and natively implements `RefUnwindSafe + UnwindSafe`. Passing borrowed `&OpcServerEndpoint` across `std::panic::AssertUnwindSafe(|| { ... })` eliminates defensive heap allocations on the 99.999% normal path while safely enabling `pool.remove(endpoint)` during panic unwinds. | Concurrency / Perf | `✅ Verified` |
+| **A2** | [`worker.rs:404-408`](file:///c:/Users/WSALIGAN/code/opc-cli/opc-da-client/src/com/worker.rs#L404) | Actor Footgun Excision | `PriorityRequestQueue::clear()` silently dropped pending oneshot reply channels, causing callers to suffer broken pipe `RecvError`s without an actionable error message. Excision of `clear()` enforces the actor invariant: *all queued requests either execute or receive a structured `OpcError` via `drain_and_reject`*. | Concurrency / API | `✅ Verified` |
+| **A3** | [`read.rs:215-241`](file:///c:/Users/WSALIGAN/code/opc-cli/opc-da-client/src/com/worker/read.rs#L215) | Industrial ICS Sensor Parity (CWE-682) | Upfront 3-way parity check (`tag_count == valid_indices.len() + rejected_errors.len()`) strictly validates index conservation before capacity reservation, preventing sensor tag misattribution. On parity violation, returns `Err(OpcError::Internal)` and triggers immediate active group cache eviction (`pooled.remove_active_group(0)`). | Security / Types | `✅ Verified` |
+| **A4** | [`read.rs:184-241`](file:///c:/Users/WSALIGAN/code/opc-cli/opc-da-client/src/com/worker/read.rs#L184) | Asymmetric Ownership Architecture | Consuming owned `Vec<GroupItemResult>` in `partition_item_results` eliminates `err.clone()` on cache misses, while retaining borrowed `rejected_errors: &[(usize, OpcError)]` in `assemble_tag_values` prevents deep cloning on recurring steady-state cache hits. | Types / Perf | `✅ Verified` |
+| **A5** | [`browse.rs:65-170`](file:///c:/Users/WSALIGAN/code/opc-cli/opc-da-client/src/com/worker/browse.rs#L65) | Bounded Ceilings & Cancellation (CWE-400) | Reusing a single 256-item buffer (`BROWSE_CHUNK_SIZE = 256`) via `chunk.drain(..)` amortizes vector allocations to 1 for arbitrarily large namespaces ($\approx 39 \rightarrow 1$ for 10,000 tags), while polling `collector.is_cancelled() \|\| collector.is_full()` after every chunk flush bounds cancellation latency to $\le 256$ items. | Security / Concurrency / Perf | `✅ Verified` |
+| **A6** | [`write.rs`](file:///c:/Users/WSALIGAN/code/opc-cli/opc-da-client/src/com/worker/write.rs) | Boundary Isolation Defense | Confirmed that CWE-626 null byte rejection on write batches is strictly isolated and deferred to Sub-Block I2, maintaining an uncompromised release boundary with zero half-baked mutations in Sub-Block I1. | Security / Module | `✅ Verified` |
+
