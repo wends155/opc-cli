@@ -30,6 +30,7 @@
 >   - `From<&WriteBatch>` must be used rather than direct `impl IntoWriteBatch for &WriteBatch` to avoid blanket trait coherence collisions.
 >   - `TagValues::contains` applies ASCII case-folding (`A-Z` / `a-z`); non-ASCII characters require exact casing.
 > * **Pruned:** Closed Findings #6, #7, #8, #9, and #10a from `refactor/cycle2_blockh3c_review.md`. Sub-Block H3c is 100% complete. Cycle 2 Modernization (Block H) is officially complete!
+> * **Artifact Consolidation:** Consolidated all 12 Block H component review, plan, and task documents into [`refactor/post_implementation_blockH.md`](file:///c:/Users/WSALIGAN/code/opc-cli/refactor/post_implementation_blockH.md) and pruned the individual markdown files.
 
 ## 2026-09-17: Sub-Block H3b (Worker Active Group Caching & Batch Defense — Findings #1, #2, #5) Completed (`opc-da-client`)
 > 📝 **Context Update:**
