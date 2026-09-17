@@ -12,8 +12,10 @@
 - [x] Step 10: [TEST] `opc-da-client/src/client/tests.rs` — [+] `test_validate_bound_server_mixed_case`
 - [x] Step 11: [MODIFY] `opc-da-client/src/client/gateway.rs` — [~] `validate_bound_server` (L376-391)
 - [x] Step 12: [TEST] `opc-da-client/src/client/tests.rs` — [+] `test_validate_bound_server_host_mismatch` - 🔒 CHECKPOINT 3
-- [/] Step 13: [MODIFY] `opc-da-client/src/types/server.rs` — [~] `OpcServerEndpoint::local` (L460-514)
-- [ ] Step 14: [MODIFY] `opc-da-client/src/types/server.rs` — verification (`cargo test --doc`) - 🔒 CHECKPOINT 4
+- [x] Step 13: [MODIFY] `opc-da-client/src/types/server.rs` — [~] `OpcServerEndpoint::local` (L460-514)
+- [x] Step 14: [MODIFY] `opc-da-client/src/types/server.rs` — verification (`cargo test --doc`) - 🔒 CHECKPOINT 4
 
 ## Builder Notes
-<!-- Informational only: 💡 suggestions, ⚠️ observations -->
+- 💡 Step 2: Doc comment for `normalize_host` synchronized to explicitly mention ASCII lowercase canonicalization.
+- 💡 Step 5 & 8: Minimal stubs added during TDD red phase to allow clean compilation and runtime assertion failures.
+- 💡 Step 13: Cleaned up orphaned doc block on `pub fn new` and reconnected doc comments with doctest on `pub fn local` using `ServerIdentifier::new().unwrap()`.

@@ -488,20 +488,6 @@ pub struct OpcServerEndpoint {
 }
 
 impl OpcServerEndpoint {
-    /// Creates a new endpoint targeting the local machine.
-    ///
-    /// # Arguments
-    ///
-    /// * `identifier` - The ProgID or CLSID identifying the target server.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use opc_da_client::types::OpcServerEndpoint;
-    ///
-    /// let ep = OpcServerEndpoint::local_prog_id("Matrikon.OPC.Simulation.1");
-    /// assert!(!ep.is_remote());
-    /// ```
     /// Parses an endpoint from a string representation.
     ///
     /// Symmetrical with [`ServerIdentifier::new`].
@@ -536,6 +522,23 @@ impl OpcServerEndpoint {
         }
     }
 
+    /// Creates a new endpoint targeting the local machine.
+    ///
+    /// # Arguments
+    ///
+    /// * `identifier` - The ProgID or CLSID identifying the target server.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use opc_da_client::types::{OpcServerEndpoint, ServerIdentifier};
+    ///
+    /// let id = ServerIdentifier::new("Matrikon.OPC.Simulation.1").unwrap();
+    /// let ep = OpcServerEndpoint::local(id);
+    /// assert!(!ep.is_remote());
+    /// assert_eq!(ep.host(), None);
+    /// assert_eq!(ep.identifier().to_string(), "Matrikon.OPC.Simulation.1");
+    /// ```
     #[must_use]
     pub fn local(identifier: impl Into<ServerIdentifier>) -> Self {
         Self {
