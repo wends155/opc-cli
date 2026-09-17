@@ -13,11 +13,12 @@
 During Cycle 2, each deviation from the approved implementation plan is recorded with its compiler/language dynamic, architectural justification, and resulting invariant.
 
 ### Summary Metrics
-* **Total Cycle 2 Deviations:** 12
+* **Total Cycle 2 Deviations:** 14
 * **Block G1 (Clean Slate API Excision & Struct Deduplication):** 3 deviations (0 violations, all justified and verified)
 * **Block G2 (Ergonomic Symmetry & Comprehensive Public Documentation):** 4 deviations (0 violations, all justified and verified)
 * **Block H1 (Domain Invariants & CWE-626 Hardening):** 2 deviations (0 violations, all justified and verified)
 * **Block H2 (COM Resource & Dead Code Pruning):** 3 deviations (0 violations, all justified and verified)
+* **Sub-Block H3b (Worker Active Group Caching & Batch Defense):** 2 deviations (0 violations, all justified and verified)
 * **Quality Gate Verification:** 100% Green across all 9 quality gates in `scripts/verify.ps1`.
 
 ---
@@ -38,6 +39,8 @@ During Cycle 2, each deviation from the approved implementation plan is recorded
 | **Block H2** | Step 1<br>Finding #1 | `&*(proxy as *const T as *const windows::core::IUnknown)` | `&*std::ptr::from_ref(proxy).cast::<windows::core::IUnknown>()` | Clippy `-D warnings` triggered `clippy::ptr_as_ptr` and `clippy::ref_as_ptr` on raw pointer `as` casting. Using standard library `std::ptr::from_ref(proxy).cast()` satisfies all compiler safety lints in Rust 2024 / MSRV 1.93.1 while achieving exact proxy pointer re-borrowing without `QueryInterface` copies. | Lint Rule Invariant (`clippy::ptr_as_ptr`, `clippy::ref_as_ptr`) | Exact proxy pointer re-borrowing passes strict linting without compiler warnings or ephemeral COM proxy drops. |
 | **Block H2** | Steps 1, 2<br>Gate 6 | `// SAFETY: ...` on first line of multi-line comment | `// SAFETY:` on every line of multi-line comment | In tree-sitter-rust and AST-Grep `require-safety-comment`, each `//` is an individual `line_comment` node. The AST-Grep `follows` selector inspects the immediate preceding sibling token; if subsequent lines in a multi-line comment lack `SAFETY:`, the immediate preceding comment node fails the regex match. Repeating `// SAFETY:` on each line ensures 100% compliance with Gate 6 structural safety scans. | AST Linting Invariant (`require-safety-comment`) | Unsafe blocks in production code pass AST-Grep structural validation without missing-rationale false positives. |
 | **Block H2** | Step 10<br>Finding #10 | `let _ = unsafe { self.server.RemoveGroup(raw_server_handle, true) };` | `let remove_res = unsafe { self.server.RemoveGroup(...) }; if let Err(rm_err) = remove_res { tracing::warn!(...); }` | Directly binding the unsafe call ensures the `// SAFETY:` rationale directly precedes the `unsafe` block for clippy (`undocumented_unsafe_blocks`). Logging cleanup failures via `tracing::warn!` upholds `coding-standard.md §4.8` (no silent failures), preventing unobservable group handle leakage. | Error Handling & Governance (`coding-standard.md §4.8`) | Server-side group cleanup failures are logged with full error and handle context rather than silently swallowed. |
+| **Sub-Block H3b** | Step 9<br>Finding #2 | `tags: impl ExactSizeIterator<Item = &str>` in `assemble_tag_values` | `tags: impl ExactSizeIterator<Item = &'a str>` with named lifetime `<'a>` in `assemble_tag_values` | Rust compiler error `E0658` ("anonymous lifetimes in `impl Trait` are unstable"). In Rust 2024 / MSRV 1.93.1, elided/anonymous lifetimes inside associated type trait bounds in function argument position require a named lifetime parameter. Introducing `<'a>` resolves `E0658` on stable Rust without nightly `#![feature(...)]` gates. | Language Invariant (`E0658`) / Compiler Stability | Clean compilation on stable Rust toolchain without nightly feature dependencies. |
+| **Sub-Block H3b** | Step 12<br>Finding #5 | `(format!("Tag.{i}"), OpcValue::Int(i as i32))` in batch write tests | `(format!("Tag.{i}"), OpcValue::Int(i as i64))` in batch write tests | Rust compiler error `E0308` ("mismatched types: expected `i64`, found `i32`"). The domain model defines `OpcValue::Int(i64)` (`src/types/value.rs:24`), not `i32`. Casting loop indices to `i64` accurately conforms to the domain type variant definition. | Type Correctness (`E0308`) | Test fixtures construct `OpcValue::Int` variants with strictly valid 64-bit integer payloads without type errors. |
 
 ---
 
@@ -153,3 +156,37 @@ This preserves clean ergonomics for 99% of consumers while providing full parame
 * **Context:** In `ComServer::add_group`, when converting the newly created group `IUnknown` pointer into `ComGroup` or applying member proxy blanketing, failure must trigger server-side `RemoveGroup` cleanup to avoid leaving orphaned server handles.
 * **Architectural Obstacle:** The original code snippet proposed `let _ = unsafe { self.server.RemoveGroup(raw_server_handle, true) };`. This silently swallowed potential RPC or COM errors on group cleanup, violating `coding-standard.md §4.8` ("No silent failures"). Furthermore, inline assignment without dedicated binding separated the `// SAFETY:` comment from the `unsafe` block, triggering clippy's `undocumented_unsafe_blocks` lint.
 * **Architectural Resolution:** Binding the removal result directly with an adjacent `// SAFETY:` comment and logging failures via `tracing::warn!(error = ?rm_err, handle = raw_server_handle, "Failed to remove orphaned group...")` provided full diagnostic observability while enforcing strict error transparency.
+
+---
+
+### 3.12 Case Study H3b.1: Anonymous Lifetime Instability in Trait Position (`E0658`)
+* **Context:** In `src/com/worker/read.rs`, `assemble_tag_values` was upgraded to stream tag string slices via `tags: impl ExactSizeIterator<Item = &str>` directly from `TagBatch::iter_str()`, eliminating throwaway vector allocations and ensuring caller tag casing is preserved deterministically.
+* **Compiler Obstacle:** In Rust 2024 (MSRV 1.93.1), eliding lifetime parameters on reference types nested within trait bounds in function argument position triggers compiler error `E0658`:
+  ```text
+  error[E0658]: anonymous lifetimes in `impl Trait` are unstable
+     --> opc-da-client\src\com\worker\read.rs:216:42
+      |
+  216 |     tags: impl ExactSizeIterator<Item = &str>,
+      |                                          ^ expected named lifetime parameter
+      |
+  help: consider introducing a named lifetime parameter
+      |
+  215 ~ pub(crate) fn assemble_tag_values<'a>(
+  216 ~     tags: impl ExactSizeIterator<Item = &'a str>,
+      |
+  ```
+* **Architectural Resolution:** Declaring an explicit named lifetime parameter `pub(crate) fn assemble_tag_values<'a>(tags: impl ExactSizeIterator<Item = &'a str>, ...)` resolved `E0658` cleanly on stable Rust. This maintains full zero-allocation streaming for both `TagBatchIter<'a>` and array iterator `[&'a str; N]::into_iter()` across tests and production code paths without requiring nightly compiler features.
+
+---
+
+### 3.13 Case Study H3b.2: Domain Type Conformance for `OpcValue::Int` in Test Fixtures (`E0308`)
+* **Context:** In `src/com/worker/write.rs`, unit tests `test_handle_write_batch_exceeds_max_limit` and `test_handle_write_batch_at_max_limit` generate synthetic batches of size $N = 10{,}001$ and $N = 10{,}000$ to verify the `MAX_TAG_BATCH_SIZE` upper-bound admission guard.
+* **Compiler Obstacle:** The test skeleton originally used `(format!("Tag.{i}"), OpcValue::Int(i as i32))`. In `opc-da-client`, `OpcValue::Int(i64)` stores a 64-bit integer (`src/types/value.rs:24`), not `i32` (`OpcValue` has no 32-bit integer variant; `VT_I4` COM values are widened to `i64`). Rust emitted:
+  ```text
+  error[E0308]: mismatched types
+     --> opc-da-client\src\com\worker\write.rs:268:52
+      |
+  268 |                 (format!("Tag.{i}"), OpcValue::Int(i as i32))
+      |                                      ------------- ^^^^^^^^ expected `i64`, found `i32`
+  ```
+* **Architectural Resolution:** Casting loop index `i` via `i as i64` accurately conforms to the domain type specification, allowing test fixtures to compile cleanly and assert boundary conditions without type mismatch diagnostics.
