@@ -1,5 +1,36 @@
 # Project Context Summary
 
+## 2026-09-17: Sub-Block H3c (Batch Ergonomics & Public Conversions — Findings #6, #7, #8, #9, #10a) Completed (`opc-da-client`)
+> 📝 **Context Update:**
+> * **Feature:** Execution of Sub-Block H3c (the final sub-block of Block H and Cycle 2 Modernization in `opc-da-client`), unlocking zero-allocation 31-byte stack SSO for dynamic tag names, generalizing borrowed string slice conversions (`&[&str]`), establishing symmetric non-consuming batch reference conversions (`From<&TagBatch>`, `From<&WriteBatch>`, `From<&OpcValue>`), implementing $O(1)$ single write batch sharing via Direct Array Sharing, adding case-insensitive `TagValues::contains`, and delivering comprehensive Gate 7 compliant documentation and doctests on `OpcDaClient::subscribe`.
+> * **Changes:**
+>   - **Zero-Allocation Stack SSO for Dynamic Tags (Finding #6):**
+>     - Replaced `impl IntoTags for &'static str` with `impl IntoTags for &str`, delegating to `TagBatch::from_str_lenient`. Unlocks 31-byte inline stack storage (`TagBatchRepr::InlineSingle`) for dynamic tag names with zero heap allocations, falling back to `OwnedSingle` for $> 31$ bytes.
+>     - Added `test_into_tags_dynamic_str_stack_sso` and companion test `test_tag_batch_representation_divergence_equivalence` verifying `InlineSingle == StaticSingle` equality across the public API surface.
+>   - **Generic Borrowed String Slice Conversions (Finding #6):**
+>     - Replaced `impl IntoTags for &'static [&'static str]` with `impl IntoTags for &[&str]`, routing $N=0$ to `empty()`, $N=1$ to stack SSO, and $N > 1$ to `Owned` vector using idiomatic `self.iter().map(|&s| s.to_owned()).collect()`.
+>     - Added `test_into_tags_borrowed_slice` verifying slice conversion and lifetime independence.
+>   - **Symmetric Non-Consuming Batch Borrows & Value References (Finding #7):**
+>     - Implemented `impl IntoTags for &TagBatch` and `impl From<&TagBatch> for TagBatch` in `batch.rs`.
+>     - Implemented `impl From<&OpcValue> for OpcValue` in `value.rs`, fulfilling `V: Into<OpcValue>` bound for borrowed write slices.
+>     - Implemented `impl From<&WriteBatch> for WriteBatch` in `write_batch.rs`, satisfying blanket `IntoWriteBatch` without `E0119` trait coherence collisions. Added `# Performance Note` rustdoc on $O(1)$ vs $O(N)$ clone costs.
+>     - Added `test_into_tags_batch_ref`, `test_opc_value_from_ref`, `test_into_write_batch_ref`, and `test_into_write_batch_borrowed_value_tuples` (with empty tuple edge case).
+>   - **$O(1)$ Single Write Batch Sharing (Finding #8):**
+>     - Upgraded `WriteBatch::into_shareable` to wrap `Single(tag, val)` into `Shared(Arc::from([(tag, val)]))` via Direct Array Sharing (1 heap allocation, zero intermediate `Vec` or `Box`).
+>     - Added `test_write_batch_into_shareable_lifecycle` verifying refcounts, drop lifecycle, owned-to-shared, shared idempotency, and empty batches.
+>   - **Case-Insensitive Collection Query Predicate (Finding #9):**
+>     - Added `TagValues::contains(&self, tag: &str) -> bool` delegating to `self.get(tag).is_some()`, utilizing ASCII case-insensitive matching matching OPC DA specifications.
+>     - Added `test_tag_values_contains_case_insensitive`.
+>   - **Public Subscription Documentation & Gate 7 Doctest (Finding #10a):**
+>     - Updated `OpcDaClient::subscribe` rustdoc with `# Arguments`, `# Returns`, `# Panics`, and Gate 7 compliant `# Examples` doctest showcasing `get_value` and `drop(rx)` shutdown with strictly zero forbidden macros.
+>   - **Quality Pipeline Verification:**
+>     - Full 8-gate verification pipeline (`pwsh -File scripts/verify.ps1`) exited 0 with 332 unit tests passing, 128 doc tests passing, zero compiler/clippy warnings under `-D warnings`, zero AST-Grep violations, and zero forbidden macros.
+> * **New Constraints:**
+>   - `From<&str> for TagBatch` is forbidden to prevent E0119 trait collision with `From<&'static str>` (which preserves 0-allocation `StaticSingle` for static literals). Dynamic strings must use `IntoTags for &str`.
+>   - `From<&WriteBatch>` must be used rather than direct `impl IntoWriteBatch for &WriteBatch` to avoid blanket trait coherence collisions.
+>   - `TagValues::contains` applies ASCII case-folding (`A-Z` / `a-z`); non-ASCII characters require exact casing.
+> * **Pruned:** Closed Findings #6, #7, #8, #9, and #10a from `refactor/cycle2_blockh3c_review.md`. Sub-Block H3c is 100% complete. Cycle 2 Modernization (Block H) is officially complete!
+
 ## 2026-09-17: Sub-Block H3b (Worker Active Group Caching & Batch Defense — Findings #1, #2, #5) Completed (`opc-da-client`)
 > 📝 **Context Update:**
 > * **Feature:** Execution of Sub-Block H3b of Cycle 2 modernization (Findings #1, #2, #5 in `opc-da-client`), implementing case-insensitive active group cache matching, ensuring deterministic response tag casing preservation, promoting `MAX_TAG_BATCH_SIZE = 10_000` to `worker.rs`, and enforcing batch write defensive resource bounding.
