@@ -2358,5 +2358,23 @@ emove_group errors now logged instead of silently discarded.
 > * **Pruned:**
 >   - Stale references to `BrowseFilter` and legacy `ItemHandle` in `spec.md`.
 
+## 2026-09-17: Modernization Sub-Block H3a — Server Identity & Host Canonicalization
+> 📝 **Context Update:**
+> * **Feature:** Modernization Sub-Block H3a — Server Identity & Host Canonicalization (`refactor/cycle2_blockH3a_plan.md`, Finding #8 in Cycle 2 Review).
+> * **Changes:**
+>   - Eager Host Lowercase Canonicalization: Updated `normalize_host` in `src/types/server.rs` to map hosts through `str::to_ascii_lowercase`, while preserving `None` for loopback aliases. Routed all 3 host-parsing branches in `<OpcServerEndpoint as FromStr>::from_str` (URI, UNC, raw slash) through `normalize_host`.
+>   - Semantic `matches()` Methods: Implemented `ServerIdentifier::matches(&self, other: &Self) -> bool` with ASCII case-insensitive ProgID comparison and 128-bit numerical CLSID equality (preserving derived byte-exact `PartialEq`, `Eq`, `Hash` for map/set stability). Implemented `OpcServerEndpoint::matches(&self, other: &Self) -> bool` delegating host matching with ASCII case folding and server identifier comparison.
+>   - Client Gateway Session Invariant: Updated `validate_bound_server` in `src/client/gateway.rs` to use `.matches()`, permitting mixed-case ProgID and host queries without triggering false-positive `InvalidState` rejections while preserving hostless query dispatch.
+>   - Connection Pool Deduplication: Added unit test verifying that `HashSet<OpcServerEndpoint>` deduplicates case-varying endpoints (`\\SCADA-01\Server.1` vs `\\scada-01\Server.1`), preventing connection pool key fragmentation.
+>   - Documentation Reconnection: Relocated orphaned documentation block to `OpcServerEndpoint::local` and verified runnable doc-tests pass using `ServerIdentifier::new().unwrap()`.
+>   - Quality Gates: All 9 gates in `scripts/verify.ps1` green. 442 tests passing (+9 new unit/doctests, 0 regressions). Zero occurrences of Unicode `to_lowercase()`.
+> * **New Constraints:**
+>   - Host canonicalization strictly uses ASCII folding (`to_ascii_lowercase()` and `eq_ignore_ascii_case()`). Never use Unicode `.to_lowercase()` across network endpoints (CWE-178).
+>   - `ServerIdentifier` and `OpcServerEndpoint` derived `PartialEq`, `Eq`, and `Hash` MUST remain byte-exact for map/set key stability. Semantic case-insensitive comparisons MUST use `.matches()`.
+>   - `normalize_host_str` must never map null bytes to `None`. Null bytes are strictly rejected at ingress points (`ServerIdentifier::from_str`, `OpcServerEndpoint::from_str`, `OpcDaClientBuilder::host`, `OpcDaClient::bind_new_remote`).
+> * **Pruned:**
+>   - Orphaned doc block misattached to `OpcServerEndpoint::new`.
+>   - Redundant host normalization duplication across `OpcServerEndpoint::from_str` branches.
+
 
 
