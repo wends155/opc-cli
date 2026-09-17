@@ -61,6 +61,7 @@ Iterative architectural upgrades across Cycle 2 modernized the Windows COM worke
 |---|---|---|---|---|
 | 1 | `refactor/cycle2_blockI1_review.md` | Multi-Agent (5 Flash Lenses) | ✅ Approved | Synthesized 12 findings into 4 targeted modules; confirmed zero public API breakages. |
 | 2 | Architect Alignment Interview | Main Agent + User | ✅ Approved | Finalized decisions A1-A7: fail-fast parity check, dual dispatch zero-alloc, test conversion. |
+| 3 | `plan-reviewer` | `flash` (Gemini 3.8 Flash High) | ✅ Approved (Post-Revision) | Fixed Step 11 mock hook & closure signature; added `NamespaceType::Flat` coverage in Step 9; provided exact `while` loop snippet in Step 8; added dedicated unit test for `partition_item_results` in Step 6; clarified allocation placement in Step 4. |
 
 ---
 
@@ -319,6 +320,9 @@ fn test_assemble_tag_values_parity_mismatch_fails_fast() {
         );
         return Err(err);
     }
+
+    // Allocate accumulator vector only after fail-fast parity checks pass
+    let mut tag_values = Vec::with_capacity(tag_count);
 ```
 - **Post:** `GREEN(test_assemble_tag_values_parity_mismatch_fails_fast)`
 
@@ -338,6 +342,31 @@ fn test_assemble_tag_values_parity_mismatch_fails_fast() {
   4. Move `err` directly into `rejected_errors.push((idx, err))` without `.clone()`.
   5. Use `tag_ids.get(idx).map_or("<unknown>", String::as_str)` for defensive tag name lookup.
   6. In `handle_read` L137, update call to pass `item_results` by value (`partition_item_results(item_results, &tags.tag_ids, &endpoint.identifier)`).
+  7. Add dedicated unit test in `read.rs::tests`:
+```rust
+    #[test]
+    fn test_partition_item_results_move_semantics_and_boundary() {
+        let server_id = ServerIdentifier::try_from("Test.Server").unwrap();
+        let tag_ids = vec!["Valid.Tag".to_string()]; // length 1 to test boundary fallback on idx 1
+        let results = vec![
+            GroupItemResult {
+                server_handle: ServerItemHandle::new(101),
+                error: None,
+            },
+            GroupItemResult {
+                server_handle: ServerItemHandle::new(0),
+                error: Some(OpcError::InvalidState("Item rejected".into())),
+            },
+        ];
+
+        let (handles, valid_idx, rejected) = partition_item_results(results, &tag_ids, &server_id);
+        assert_eq!(handles, vec![ServerItemHandle::new(101)]);
+        assert_eq!(valid_idx, vec![0]);
+        assert_eq!(rejected.len(), 1);
+        assert_eq!(rejected[0].0, 1);
+        assert!(matches!(rejected[0].1, OpcError::InvalidState(_)));
+    }
+```
 - **Post:** `CHECK, no err.clone() in partition_item_results (rg "err\.clone\(\)" opc-da-client/src/com/worker/read.rs expects: exactly 1 match in assemble_tag_values)`
 - **🔒 CHECKPOINT 1** (`cargo test -p opc-da-client --lib com::worker::read`)
 
@@ -396,10 +425,24 @@ fn test_connection_pool_len_and_lifecycle() {
 - **Target:** `pool.rs` L26, L87-95, L125-128, L240-251, L268
 - **Action:**
   1. Remove `#[allow(dead_code)]` from `pub(crate) struct CachedGroup<G>` (line 26).
-  2. Change `if self.active_groups.len() >= MAX_ACTIVE_GROUPS` to `while self.active_groups.len() >= MAX_ACTIVE_GROUPS` in `insert_active_group` (lines 87-95).
+  2. Change `if self.active_groups.len() >= MAX_ACTIVE_GROUPS` to `while self.active_groups.len() >= MAX_ACTIVE_GROUPS` in `insert_active_group` (lines 87-95) per IPR Control Flow Override:
+```rust
+    pub(crate) fn insert_active_group(&mut self, group: CachedGroup<S::Group>) {
+        while self.active_groups.len() >= MAX_ACTIVE_GROUPS {
+            if let Some(lru) = self.active_groups.pop_back() {
+                let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    let _ = self
+                        .server
+                        .remove_group(lru.server_handle, GroupRemovalMode::Force);
+                }));
+            }
+        }
+        self.active_groups.push_front(group);
+    }
+```
   3. Delete `pub(crate) fn clear_active_group(&mut self)` (lines 125-128).
   4. In `ConnectionPool::evict` line 268, change `pooled.clear_active_group()` to `pooled.clear_active_groups()`.
-  5. Replace `len` and `is_empty` (lines 240-251): delete `is_empty`, scope `len` to `#[cfg(test)]`, and remove `#[allow(dead_code)]`.
+  5. Replace `len` and `is_empty` (lines 240-251): delete `is_empty`, scope `len` to `#[cfg(test)]`, and remove `#[allow(dead_code)]`:
 ```rust
     #[cfg(test)]
     #[must_use]
@@ -417,7 +460,7 @@ fn test_connection_pool_len_and_lifecycle() {
 #### Step 9: [TEST] `opc-da-client/src/com/worker/browse.rs` — [+] `test_handle_browse_chunk_draining_*` (L270+)
 - **Pre:** Checkpoint 2 passed
 - **Target:** `tests` module in `browse.rs`
-- **Action:** Add 3 comprehensive unit tests exercising multi-chunk draining boundaries ($N=600$), capacity bounding ($N=300$), and clean cancellation:
+- **Action:** Add 4 comprehensive unit tests exercising multi-chunk draining boundaries ($N=600$) under both hierarchical fallback (`try_fast_flat_browse`) and native flat namespace (`browse_flat_namespace`), capacity bounding ($N=300$), and clean cancellation:
 ```rust
     #[test]
     fn test_handle_browse_chunk_draining_preserves_all_tags_across_boundaries() {
@@ -430,6 +473,26 @@ fn test_connection_pool_len_and_lifecycle() {
 
         let tags = handle_browse(&server_id, &collector, &server)
             .expect("browse operation across chunk boundaries should succeed");
+
+        assert_eq!(tags.len(), 600);
+        assert_eq!(collector.len(), 600);
+        assert_eq!(tags, generated_tags);
+        assert_eq!(collector.snapshot(), generated_tags);
+    }
+
+    #[test]
+    fn test_handle_browse_flat_namespace_chunk_draining_with_flat_organization() {
+        let generated_tags: Vec<String> = (0..600)
+            .map(|i| format!("Device.Channel1.Tag{i:04}"))
+            .collect();
+        let server = MockConnectedServer::default()
+            .with_tags(generated_tags.clone())
+            .with_organization(NamespaceType::Flat);
+        let server_id = ServerIdentifier::try_from("Test.Server").unwrap();
+        let collector = TagCollector::new(1000);
+
+        let tags = handle_browse(&server_id, &collector, &server)
+            .expect("browse flat operation across chunk boundaries should succeed");
 
         assert_eq!(tags.len(), 600);
         assert_eq!(collector.len(), 600);
@@ -519,45 +582,43 @@ if !chunk.is_empty() {
 #[tokio::test]
 async fn test_worker_panic_recovery_with_borrowed_endpoint() {
     use crate::com::worker::{ComRequest, ComWorker};
-    use crate::connector::mock::{MockConnectedServer, MockServerConnector, MockState};
-    use crate::types::{OpcServerEndpoint, TagCollector};
+    use crate::connector::mock::{MockServerConnector, MockState};
+    use crate::types::{OpcServerEndpoint, TagBatch};
     use std::sync::Arc;
 
     let state = Arc::new(MockState::default());
     let connector = Arc::new(
         MockServerConnector::with_state(state.clone())
-            .with_browse_fn(|_| panic!("Simulated worker panic during browse")),
+            .with_read_fn(|_, _| panic!("Simulated worker panic during read")),
     );
     let worker = ComWorker::start(connector).unwrap();
-    let (tx, rx) = tokio::sync::oneshot::channel();
     let endpoint = OpcServerEndpoint::local_prog_id("Panic.Server");
-    let collector = TagCollector::new(100);
+    let tags = TagBatch::from_static(&["Panic.Tag"]);
 
-    worker
-        .send_request(ComRequest::BrowseTags {
+    let res = worker
+        .send_request(|reply| ComRequest::ReadTagValues {
             endpoint: endpoint.clone(),
-            collector,
-            reply: tx,
+            tags,
+            reply,
         })
-        .unwrap();
+        .await;
 
-    let res = rx.await.unwrap();
     assert!(
         matches!(
             res,
-            Err(OpcError::Worker(crate::errors::WorkerError::Panic(ref msg))) if msg.contains("Simulated worker panic")
+            Err(OpcError::Worker(crate::errors::WorkerError::Panic(ref msg)))
+                if msg.contains("Simulated worker panic during read")
         ),
         "Expected WorkerError::Panic, got: {res:?}"
     );
 
-    let (tx2, rx2) = tokio::sync::oneshot::channel();
-    worker
-        .send_request(ComRequest::Ping {
+    // Verify worker remains alive and processes subsequent healthy requests
+    let res2 = worker
+        .send_request(|reply| ComRequest::Ping {
             endpoint: OpcServerEndpoint::local_prog_id("Healthy.Server"),
-            reply: tx2,
+            reply,
         })
-        .unwrap();
-    let res2 = rx2.await.unwrap();
+        .await;
     assert!(res2.is_ok());
 }
 ```
