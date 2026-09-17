@@ -1,5 +1,33 @@
 # Project Context Summary
 
+## 2026-09-17: Sub-Block I1 (COM Worker Hygiene, Buffer Reuse & Dead Code Excision) Completed (`opc-da-client`)
+> 📝 **Context Update:**
+> * **Feature:** Execution of Sub-Block I1 of Cycle 2 Modernization in `opc-da-client`, eliminating browse buffer allocation churn via `chunk.drain(..)`, enforcing fail-fast tag count parity checks (CWE-682), migrating read item partition to move semantics without defensive cloning, excising actor footgun `PriorityRequestQueue::clear`, removing unused `ComWorker::start_async*` methods and singular alias `clear_active_group`, upgrading active group LRU eviction to stable `while` loop, and eliminating pre-unwind heap allocations on hot request dispatch paths.
+> * **Changes:**
+>   - **Browse Buffer Reuse & Capacity Bounding (Finding #1, O1):**
+>     - Replaced `std::mem::replace(&mut chunk, Vec::with_capacity(BROWSE_CHUNK_SIZE))` with `chunk.drain(..)` in `browse_flat_namespace` and `try_fast_flat_browse`, reducing ~39 throwaway vector allocations to 1 for 10,000 tags.
+>     - Added 4 unit tests in `browse.rs` validating multi-chunk draining boundaries ($N=600$) across hierarchical and flat namespaces, bounded capacity ($N=300$), and leak-free cancellation.
+>   - **Read Error Move Semantics & Upfront Parity Validation (Findings #2, #3, O2):**
+>     - Refactored `partition_item_results` to accept owned `results: Vec<GroupItemResult>`, moving `err` directly without `.clone()` and streaming logs via structured `error = %err`.
+>     - Added upfront 3-way tag count parity validation (`tag_count == valid.len() + rejected.len()`) in `assemble_tag_values` returning `Err(OpcError::Internal)`, preventing silent state exhaustion (CWE-682).
+>     - Added unit tests in `read.rs` validating fail-fast parity mismatch errors and item partitioning move semantics.
+>   - **Zero-Allocation Hot-Path Dispatch & Panic Containment (Finding #4, O3):**
+>     - Eliminated eager `host.to_string()` in `dispatch_discovery_request` and `endpoint.clone()` in `dispatch_pooled_request`, borrowing `&OpcServerEndpoint` across `AssertUnwindSafe` boundary.
+>     - Added integration test `test_worker_panic_recovery_with_borrowed_endpoint` verifying panic recovery cleanly removes the failed server and keeps the worker thread responsive.
+>   - **Clean Slate Excision & API Hygiene (Finding #5, O4):**
+>     - Excised `PriorityRequestQueue::clear` and converted test to validate explicit `drop(queue)` channel closure.
+>     - Removed uncalled `ComWorker::start_async*` methods, scoped `sender` and `ConnectionPool::len` to `#[cfg(test)]`, deleted `ConnectionPool::is_empty`, and excised singular alias `clear_active_group`.
+>     - Removed `#[allow(dead_code)]` from `CachedGroup`.
+>     - Upgraded `insert_active_group` eviction to a stable `while` loop without nightly `let_chains`.
+>   - **Quality Pipeline Verification (O5):**
+>     - Full 8-gate verification pipeline (`pwsh -File scripts/verify.ps1`) exited 0 with all 570 workspace tests passing (+8 net new tests, 0 regressions), zero compiler/clippy warnings under `-D warnings`, zero AST-Grep violations, and zero forbidden macros.
+> * **New Constraints:**
+>   - Browse chunk flushes must use `chunk.drain(..)`, keeping initial capacity allocated across chunk boundaries.
+>   - Read tag assembly requires upfront tag count parity verification before allocating result vectors.
+>   - Requests dispatched to worker background thread must borrow endpoints across panic boundaries rather than eagerly cloning on normal execution paths.
+>   - Active group cache eviction must use stable `while ... { if let Some(...) { ... } }` loop control flow.
+> * **Pruned:** Closed all 12 findings from `refactor/cycle2_blockI1_review.md`. Sub-Block I1 is 100% complete. Ready for Sub-Block I2 (Batch Write & CWE-626 Hardening).
+
 ## 2026-09-17: Sub-Block H3c (Batch Ergonomics & Public Conversions — Findings #6, #7, #8, #9, #10a) Completed (`opc-da-client`)
 > 📝 **Context Update:**
 > * **Feature:** Execution of Sub-Block H3c (the final sub-block of Block H and Cycle 2 Modernization in `opc-da-client`), unlocking zero-allocation 31-byte stack SSO for dynamic tag names, generalizing borrowed string slice conversions (`&[&str]`), establishing symmetric non-consuming batch reference conversions (`From<&TagBatch>`, `From<&WriteBatch>`, `From<&OpcValue>`), implementing $O(1)$ single write batch sharing via Direct Array Sharing, adding case-insensitive `TagValues::contains`, and delivering comprehensive Gate 7 compliant documentation and doctests on `OpcDaClient::subscribe`.
