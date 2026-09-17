@@ -63,7 +63,11 @@ impl<S: ConnectedServer> PooledServer<S> {
     /// Searches for a cached active group whose tag list matches `tags`.
     pub(crate) fn find_active_group_idx(&self, tags: &TagBatch) -> Option<usize> {
         self.active_groups.iter().position(|g| {
-            g.tags.len() == tags.len() && g.tags.iter().zip(tags.iter_str()).all(|(a, b)| a == b)
+            g.tags.len() == tags.len()
+                && g.tags
+                    .iter()
+                    .zip(tags.iter_str())
+                    .all(|(a, b)| a.eq_ignore_ascii_case(b))
         })
     }
 
@@ -1099,5 +1103,115 @@ mod tests {
         // Server.2 was the oldest unrefreshed, so it was evicted
         let ep2 = OpcServerEndpoint::local_prog_id("Server.2");
         assert!(!pool.connections.contains_key(&ep2));
+    }
+
+    #[test]
+    fn test_active_group_cache_hit_case_insensitive() {
+        use crate::connector::mock::MockConnectedServer;
+        use crate::types::TagBatch;
+        use crate::types::handles::{ServerGroupHandle, ServerItemHandle};
+
+        let server = MockConnectedServer::default();
+        let mut pooled = PooledServer::new(server);
+
+        pooled.insert_active_group(CachedGroup {
+            tags: vec!["TEMP1".to_string(), "DEVICE.SPEED".to_string()],
+            group: pooled.server.group.clone(),
+            server_handle: ServerGroupHandle::new(1),
+            server_item_handles: vec![ServerItemHandle::new(1), ServerItemHandle::new(2)],
+            valid_indices: vec![0, 1],
+            rejected_errors: Vec::new(),
+        });
+
+        let search_batch = TagBatch::from_static(&["temp1", "device.speed"]);
+        assert_eq!(
+            pooled.find_active_group_idx(&search_batch),
+            Some(0),
+            "find_active_group_idx must match cached group when tag names differ only in ASCII casing"
+        );
+    }
+
+    #[test]
+    fn test_active_group_cache_order_sensitive() {
+        use crate::connector::mock::MockConnectedServer;
+        use crate::types::TagBatch;
+        use crate::types::handles::{ServerGroupHandle, ServerItemHandle};
+
+        let server = MockConnectedServer::default();
+        let mut pooled = PooledServer::new(server);
+
+        pooled.insert_active_group(CachedGroup {
+            tags: vec!["TAG_A".to_string(), "TAG_B".to_string()],
+            group: pooled.server.group.clone(),
+            server_handle: ServerGroupHandle::new(1),
+            server_item_handles: vec![ServerItemHandle::new(1), ServerItemHandle::new(2)],
+            valid_indices: vec![0, 1],
+            rejected_errors: Vec::new(),
+        });
+
+        let permuted_batch = TagBatch::from_static(&["TAG_B", "TAG_A"]);
+        assert_eq!(
+            pooled.find_active_group_idx(&permuted_batch),
+            None,
+            "Permuted tag batch must not match cached active group (matching must be strictly positional)"
+        );
+    }
+
+    #[test]
+    fn test_active_group_cache_length_mismatch() {
+        use crate::connector::mock::MockConnectedServer;
+        use crate::types::TagBatch;
+        use crate::types::handles::{ServerGroupHandle, ServerItemHandle};
+
+        let server = MockConnectedServer::default();
+        let mut pooled = PooledServer::new(server);
+
+        pooled.insert_active_group(CachedGroup {
+            tags: vec!["TAG_A".to_string(), "TAG_B".to_string()],
+            group: pooled.server.group.clone(),
+            server_handle: ServerGroupHandle::new(1),
+            server_item_handles: vec![ServerItemHandle::new(1), ServerItemHandle::new(2)],
+            valid_indices: vec![0, 1],
+            rejected_errors: Vec::new(),
+        });
+
+        let shorter = TagBatch::from_static(&["TAG_A"]);
+        assert_eq!(
+            pooled.find_active_group_idx(&shorter),
+            None,
+            "Shorter batch must not match longer cached group"
+        );
+        let longer = TagBatch::from_static(&["TAG_A", "TAG_B", "TAG_C"]);
+        assert_eq!(
+            pooled.find_active_group_idx(&longer),
+            None,
+            "Longer batch must not match shorter cached group"
+        );
+    }
+
+    #[test]
+    fn test_active_group_cache_empty_batch() {
+        use crate::connector::mock::MockConnectedServer;
+        use crate::types::TagBatch;
+        use crate::types::handles::{ServerGroupHandle, ServerItemHandle};
+
+        let server = MockConnectedServer::default();
+        let mut pooled = PooledServer::new(server);
+
+        pooled.insert_active_group(CachedGroup {
+            tags: vec!["TAG_A".to_string()],
+            group: pooled.server.group.clone(),
+            server_handle: ServerGroupHandle::new(1),
+            server_item_handles: vec![ServerItemHandle::new(1)],
+            valid_indices: vec![0],
+            rejected_errors: Vec::new(),
+        });
+
+        let empty = TagBatch::from_static(&[]);
+        assert_eq!(
+            pooled.find_active_group_idx(&empty),
+            None,
+            "Empty batch must not match non-empty cached active group"
+        );
     }
 }
