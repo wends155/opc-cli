@@ -226,7 +226,7 @@ pub struct ComWorker<C: ServerBackend + 'static> {
 
 impl<C: ServerBackend + 'static> ComWorker<C> {
     /// Returns a reference to the request sender channel if active.
-    #[allow(dead_code)]
+    #[cfg(test)]
     #[must_use]
     pub fn sender(&self) -> Option<&mpsc::Sender<ComRequest>> {
         self.sender.as_ref()
@@ -257,42 +257,6 @@ impl<C: ServerBackend + 'static> ComWorker<C> {
         })??;
 
         tracing::debug!("COM worker thread started");
-
-        Ok(Self {
-            sender: Some(tx),
-            handle: Some(handle),
-            _phantom: std::marker::PhantomData,
-        })
-    }
-
-    /// Starts the background COM worker thread asynchronously without blocking the executor.
-    #[allow(dead_code)]
-    pub async fn start_async(connector: Arc<C>) -> Result<Self, OpcError> {
-        Self::start_async_with_initializer::<crate::com::guard::ActiveDefaultComInit>(connector)
-            .await
-    }
-
-    /// Starts the background COM worker thread asynchronously with a specified COM initialization strategy.
-    #[allow(dead_code)]
-    #[tracing::instrument(skip(connector))]
-    pub async fn start_async_with_initializer<I: crate::com::guard::ComInitializer>(
-        connector: Arc<C>,
-    ) -> Result<Self, OpcError> {
-        let (tx, rx) = mpsc::channel(32);
-        let (init_tx, init_rx) = oneshot::channel();
-
-        let handle = std::thread::spawn(move || {
-            run_worker_thread::<C, I, _>(rx, &connector, move |res| {
-                let _ = init_tx.send(res);
-            });
-        });
-
-        init_rx.await.map_err(|e| {
-            tracing::warn!(error = ?e, "COM worker thread disconnected during init");
-            WorkerError::InitializationFailed(e.to_string())
-        })??;
-
-        tracing::debug!("COM worker thread started asynchronously");
 
         Ok(Self {
             sender: Some(tx),
@@ -522,7 +486,6 @@ fn dispatch_discovery_request<R, F>(
         tracing::debug!(op, host = %host, "Caller cancelled discovery request; skipping dispatch");
         return;
     }
-    let host_str = host.to_string();
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| f(host)));
     match result {
         Ok(res) => {
@@ -534,7 +497,7 @@ fn dispatch_discovery_request<R, F>(
             log_opc_err!(
                 &err,
                 op,
-                host = %host_str,
+                host = %host,
             );
             let _ = reply.send(Err(err));
         }
@@ -559,7 +522,6 @@ fn dispatch_pooled_request<C, R, F>(
         tracing::debug!(op, server = %endpoint, "Caller cancelled pooled request; skipping dispatch");
         return;
     }
-    let endpoint_clone = endpoint.clone();
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         pool::dispatch_with_retry(pool, connector, endpoint, retry_policy, &mut f)
     }));
@@ -570,14 +532,14 @@ fn dispatch_pooled_request<C, R, F>(
         }
         Err(payload) => {
             let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                pool.remove(&endpoint_clone);
+                pool.remove(endpoint);
             }));
             let msg = extract_panic_message(&*payload);
             let err: OpcError = WorkerError::Panic(msg).into();
             log_opc_err!(
                 &err,
                 op,
-                server = %endpoint_clone,
+                server = %endpoint,
             );
             let _ = reply.send(Err(err));
         }

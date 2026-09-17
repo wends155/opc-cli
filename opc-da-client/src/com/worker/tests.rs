@@ -1398,3 +1398,46 @@ async fn test_active_group_invalidated_on_read_length_mismatch() {
         "Group must be re-registered after cache invalidation"
     );
 }
+
+#[tokio::test]
+async fn test_worker_panic_recovery_with_borrowed_endpoint() {
+    use crate::com::worker::{ComRequest, ComWorker};
+    use crate::connector::mock::{MockServerConnector, MockState};
+    use crate::types::{OpcServerEndpoint, TagBatch};
+    use std::sync::Arc;
+
+    let state = Arc::new(MockState::default());
+    let connector = Arc::new(
+        MockServerConnector::with_state(state.clone())
+            .with_read_fn(|_, _| panic!("Simulated worker panic during read")),
+    );
+    let worker = ComWorker::start(connector).unwrap();
+    let endpoint = OpcServerEndpoint::local_prog_id("Panic.Server");
+    let tags = TagBatch::from_static(&["Panic.Tag"]);
+
+    let res = worker
+        .send_request(|reply| ComRequest::ReadTagValues {
+            endpoint: endpoint.clone(),
+            tags,
+            reply,
+        })
+        .await;
+
+    assert!(
+        matches!(
+            res,
+            Err(OpcError::Worker(crate::errors::WorkerError::Panic(ref msg)))
+                if msg.contains("Simulated worker panic during read")
+        ),
+        "Expected WorkerError::Panic, got: {res:?}"
+    );
+
+    // Verify worker remains alive and processes subsequent healthy requests
+    let res2 = worker
+        .send_request(|reply| ComRequest::Ping {
+            endpoint: OpcServerEndpoint::local_prog_id("Healthy.Server"),
+            reply,
+        })
+        .await;
+    assert!(res2.is_ok());
+}
