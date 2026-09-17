@@ -35,9 +35,9 @@
 - [x] **🔒 CHECKPOINT 2**: Verify pool module tests pass (`cargo test -p opc-da-client --lib com::worker::pool`)
 
 ### Component Group 4: Browse Buffer Draining & Capacity Bounding
-- [ ] **Step 9: [TEST]** `opc-da-client/src/com/worker/browse.rs` — [+] `test_handle_browse_chunk_draining_*` (L270+)
-- [ ] **Step 10: [MODIFY]** `opc-da-client/src/com/worker/browse.rs` — [~] `browse_flat_namespace` & `try_fast_flat_browse` (L96-108, L130-151)
-- [ ] **🔒 CHECKPOINT 3**: Verify browse module tests pass (`cargo test -p opc-da-client --lib com::worker::browse`)
+- [x] **Step 9: [TEST]** `opc-da-client/src/com/worker/browse.rs` — [+] `test_handle_browse_chunk_draining_*` (L270+)
+- [x] **Step 10: [MODIFY]** `opc-da-client/src/com/worker/browse.rs` — [~] `browse_flat_namespace` & `try_fast_flat_browse` (L96-108, L130-151)
+- [x] **🔒 CHECKPOINT 3**: Verify browse module tests pass (`cargo test -p opc-da-client --lib com::worker::browse`)
 
 ### Component Group 5: Zero-Allocation Request Dispatching & Clean Slate Hygiene
 - [ ] **Step 11: [TEST]** `opc-da-client/src/com/worker/tests.rs` — [+] `test_worker_panic_recovery_with_borrowed_endpoint` (L1300+)

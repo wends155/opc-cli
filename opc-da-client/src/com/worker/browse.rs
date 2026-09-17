@@ -62,6 +62,7 @@ pub fn handle_browse<S: ConnectedServer>(
     Ok(result)
 }
 
+#[allow(clippy::iter_with_drain)]
 fn browse_flat_namespace<S: ConnectedServer>(
     server_id: &ServerIdentifier,
     collector: &TagCollector,
@@ -94,21 +95,19 @@ fn browse_flat_namespace<S: ConnectedServer>(
         };
         chunk.push(tag);
         if chunk.len() >= BROWSE_CHUNK_SIZE {
-            let _ = collector.push_batch(std::mem::replace(
-                &mut chunk,
-                Vec::with_capacity(BROWSE_CHUNK_SIZE),
-            ));
+            let _ = collector.push_batch(chunk.drain(..));
             if collector.is_cancelled() || collector.is_full() {
                 break;
             }
         }
     }
     if !chunk.is_empty() {
-        let _ = collector.push_batch(chunk);
+        let _ = collector.push_batch(chunk.drain(..));
     }
     Ok(())
 }
 
+#[allow(clippy::iter_with_drain)]
 fn try_fast_flat_browse<S: ConnectedServer>(
     server_id: &ServerIdentifier,
     collector: &TagCollector,
@@ -128,10 +127,7 @@ fn try_fast_flat_browse<S: ConnectedServer>(
                         Ok(tag) => {
                             chunk.push(tag);
                             if chunk.len() >= BROWSE_CHUNK_SIZE {
-                                let _ = collector.push_batch(std::mem::replace(
-                                    &mut chunk,
-                                    Vec::with_capacity(BROWSE_CHUNK_SIZE),
-                                ));
+                                let _ = collector.push_batch(chunk.drain(..));
                                 if collector.is_cancelled() || collector.is_full() {
                                     break;
                                 }
@@ -147,7 +143,7 @@ fn try_fast_flat_browse<S: ConnectedServer>(
                     }
                 }
                 if !chunk.is_empty() {
-                    let _ = collector.push_batch(chunk);
+                    let _ = collector.push_batch(chunk.drain(..));
                 }
                 true
             }
@@ -305,5 +301,79 @@ mod tests {
             .expect("browse flat operation should succeed");
         assert_eq!(tags.len(), collector.len());
         assert_eq!(collector.snapshot(), tags);
+    }
+
+    #[test]
+    fn test_handle_browse_chunk_draining_preserves_all_tags_across_boundaries() {
+        let generated_tags: Vec<String> = (0..600)
+            .map(|i| format!("Device.Channel1.Tag{i:04}"))
+            .collect();
+        let server = MockConnectedServer::default().with_tags(generated_tags.clone());
+        let server_id = ServerIdentifier::try_from("Test.Server").unwrap();
+        let collector = TagCollector::new(1000);
+
+        let tags = handle_browse(&server_id, &collector, &server)
+            .expect("browse operation across chunk boundaries should succeed");
+
+        assert_eq!(tags.len(), 600);
+        assert_eq!(collector.len(), 600);
+        assert_eq!(tags, generated_tags);
+        assert_eq!(collector.snapshot(), generated_tags);
+    }
+
+    #[test]
+    fn test_handle_browse_flat_namespace_chunk_draining_with_flat_organization() {
+        let generated_tags: Vec<String> = (0..600)
+            .map(|i| format!("Device.Channel1.Tag{i:04}"))
+            .collect();
+        let server = MockConnectedServer::default()
+            .with_tags(generated_tags.clone())
+            .with_organization(NamespaceType::Flat);
+        let server_id = ServerIdentifier::try_from("Test.Server").unwrap();
+        let collector = TagCollector::new(1000);
+
+        let tags = handle_browse(&server_id, &collector, &server)
+            .expect("browse flat operation across chunk boundaries should succeed");
+
+        assert_eq!(tags.len(), 600);
+        assert_eq!(collector.len(), 600);
+        assert_eq!(tags, generated_tags);
+        assert_eq!(collector.snapshot(), generated_tags);
+    }
+
+    #[test]
+    fn test_handle_browse_chunk_draining_respects_capacity_limits() {
+        let generated_tags: Vec<String> = (0..600)
+            .map(|i| format!("Device.Channel1.Tag{i:04}"))
+            .collect();
+        let server = MockConnectedServer::default().with_tags(generated_tags.clone());
+        let server_id = ServerIdentifier::try_from("Test.Server").unwrap();
+        let collector = TagCollector::new(300);
+
+        let tags = handle_browse(&server_id, &collector, &server)
+            .expect("browse operation with bounded capacity should succeed");
+
+        assert_eq!(tags.len(), 300);
+        assert_eq!(collector.len(), 300);
+        assert!(collector.is_full());
+        assert_eq!(tags, &generated_tags[..300]);
+    }
+
+    #[test]
+    fn test_handle_browse_chunk_draining_cancellation_without_leaks() {
+        let generated_tags: Vec<String> = (0..600)
+            .map(|i| format!("Device.Channel1.Tag{i:04}"))
+            .collect();
+        let server = MockConnectedServer::default().with_tags(generated_tags);
+        let server_id = ServerIdentifier::try_from("Test.Server").unwrap();
+        let collector = TagCollector::new(1000);
+        collector.cancel();
+
+        let tags = handle_browse(&server_id, &collector, &server)
+            .expect("cancelled browse should return empty ok without leak");
+
+        assert!(tags.is_empty());
+        assert_eq!(collector.len(), 0);
+        assert!(collector.is_cancelled());
     }
 }
