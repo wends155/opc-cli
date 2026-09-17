@@ -1,5 +1,28 @@
 # Project Context Summary
 
+## 2026-09-17: Sub-Block H3b (Worker Active Group Caching & Batch Defense — Findings #1, #2, #5) Completed (`opc-da-client`)
+> 📝 **Context Update:**
+> * **Feature:** Execution of Sub-Block H3b of Cycle 2 modernization (Findings #1, #2, #5 in `opc-da-client`), implementing case-insensitive active group cache matching, ensuring deterministic response tag casing preservation, promoting `MAX_TAG_BATCH_SIZE = 10_000` to `worker.rs`, and enforcing batch write defensive resource bounding.
+> * **Changes:**
+>   - **Case-Insensitive Active Group Matching (Finding #1):**
+>     - Refactored `PooledServer::find_active_group_idx` to compare tag identifiers via `a.eq_ignore_ascii_case(b)` in positional zip traversal, eliminating false cache misses and 50–150ms DCOM RPC churn.
+>     - Added 4 unit tests in `pool.rs` verifying case-insensitive matching, positional order sensitivity, length mismatches, and empty batch handling.
+>   - **Deterministic Response Tag Casing & Constant Promotion (Finding #2):**
+>     - Promoted `pub(crate) const MAX_TAG_BATCH_SIZE: usize = 10_000;` from `read.rs` to `worker.rs` as the single canonical ceiling constant.
+>     - Refactored `assemble_tag_values` to accept `tags: impl ExactSizeIterator<Item = &'a str>`, streaming caller casing directly, pre-allocating exact capacity, and eliminating redundant `OpcError` clones.
+>     - Updated both cache hit and miss execution branches in `handle_read` to pass `tags.iter_str()`, ensuring `TagValue.tag_id` consistently matches caller casing.
+>     - Added 1 integration test and 3 unit tests in `read.rs` verifying caller casing preservation across cache hits, array length parity mismatch detection, and error interleaving.
+>   - **Batch Write Resource Bounding (Finding #5):**
+>     - Added entrypoint upper-bound guard in `handle_write_batch`, rejecting write batches $> \text{MAX\_TAG\_BATCH_SIZE}$ with `OpcError::InvalidState` before COM resource allocation (CWE-400 / CWE-770).
+>     - Added 3 unit tests in `write.rs` verifying empty batch short-circuiting, boundary maximum ($10,000$), and boundary rejection ($10,001$).
+>   - **Quality Pipeline Verification:**
+>     - Full 8-gate quality pipeline (`pwsh -File scripts/verify.ps1`) exited 0 with all 453+ unit/integration tests and 128 doc tests passing, zero clippy warnings, zero AST-Grep violations, and zero forbidden macros.
+> * **New Constraints:**
+>   - Active group cache lookup must use positional `eq_ignore_ascii_case`, never byte-exact comparison or set-based sorting.
+>   - All worker batch operations (read and write) must enforce `MAX_TAG_BATCH_SIZE = 10_000` before COM allocations.
+>   - `TagValue.tag_id` returned from reading must strictly preserve caller casing across both cache hits and misses.
+> * **Pruned:** Closed Findings #1, #2, and #5 from `refactor/cycle2_blockh3b_review.md`. Sub-Block H3b is 100% complete. Ready for Sub-Block H3c.
+
 ## 2026-09-17: Block H2 (COM Resource & Dead Code Pruning — Findings #1, #4, #10) Completed (`opc-da-client`)
 > 📝 **Context Update:**
 > * **Feature:** Execution of Block H2 of Cycle 2 modernization (Findings #1, #4, #10 in `opc-da-client`), hardening DCOM proxy blanketing to bind directly to the caller's target interface proxy pointer (KB5004442 compliance), enforcing cast-first-blanket-second sequencing on remote instance activation, pruning unread COM interface fields from `ComGroup` (8 → 2) and `ComServer` (5 → 2) to restore OPC DA 2.05a server compatibility, adding recursive member proxy blanketing with `RemoveGroup` rollback on error in `add_group`, deleting dead code (`connect_server_identifier`, `RPC_C_IMP_LEVEL_IMPERSONATE`), scoping `com::security` internals to `pub(crate)`, and excising duplicate tests.
