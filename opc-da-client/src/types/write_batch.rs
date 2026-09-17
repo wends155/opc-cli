@@ -183,7 +183,7 @@ impl WriteBatch {
     #[must_use]
     pub fn into_shareable(self) -> Self {
         match self {
-            Self::Single(tag, val) => Self::Single(tag, val),
+            Self::Single(tag, val) => Self::Shared(Arc::from([(tag, val)])),
             Self::Shared(slice) => Self::Shared(slice),
             Self::Owned(vec) => Self::Shared(Arc::from(vec.into_boxed_slice())),
         }
@@ -369,6 +369,23 @@ impl<S: AsRef<str>, V: Clone + Into<OpcValue>> From<&[(S, V)]> for WriteBatch {
     }
 }
 
+/// Clones the write batch from a reference.
+///
+/// # Performance Note
+///
+/// * If `batch` is [`WriteBatch::Shared`], this is an O(1) reference-count increment (zero allocations).
+/// * If `batch` is [`WriteBatch::Owned`], this performs an O(N) deep copy of all tag strings and values.
+/// * If `batch` is [`WriteBatch::Single`], this clones the single tag String and OpcValue.
+///
+/// For repeated operations in loops, call [`.into_shareable()`](WriteBatch::into_shareable) once to ensure subsequent
+/// reference conversions are O(1).
+impl From<&Self> for WriteBatch {
+    #[inline]
+    fn from(batch: &Self) -> Self {
+        batch.clone()
+    }
+}
+
 impl From<Arc<[(String, OpcValue)]>> for WriteBatch {
     #[inline]
     fn from(arc: Arc<[(String, OpcValue)]>) -> Self {
@@ -522,5 +539,104 @@ mod tests {
             .into_iter()
             .collect();
         assert_eq!(iter_batch.len(), 2);
+    }
+
+    #[test]
+    fn test_into_write_batch_ref() {
+        let single_orig = ("Motor.Speed", OpcValue::Int(1500)).into_write_batch();
+        let single_ref_batch = (&single_orig).into_write_batch();
+        assert_eq!(single_ref_batch, single_orig);
+        let single_from_ref: WriteBatch = (&single_orig).into();
+        assert_eq!(single_from_ref, single_orig);
+        assert_eq!(single_orig.len(), 1);
+
+        let owned_orig = vec![
+            ("V1".to_string(), OpcValue::Bool(true)),
+            ("V2".to_string(), OpcValue::Bool(false)),
+        ]
+        .into_write_batch();
+        let owned_ref_batch = (&owned_orig).into_write_batch();
+        assert_eq!(owned_ref_batch, owned_orig);
+        assert_eq!(owned_orig.len(), 2);
+    }
+
+    #[test]
+    fn test_into_write_batch_borrowed_value_tuples() {
+        let val_int = OpcValue::Int(42);
+        let val_float = OpcValue::Float(98.6);
+        let val_str = OpcValue::String("Running".to_string());
+
+        let tuple_slice: &[(&str, &OpcValue)] = &[
+            ("Device.Motor.RPM", &val_int),
+            ("Device.Motor.Temp", &val_float),
+            ("Device.Motor.Status", &val_str),
+        ];
+
+        let batch = tuple_slice.into_write_batch();
+        assert_eq!(batch.len(), 3);
+        assert!(!batch.is_empty());
+
+        let items: Vec<(&str, &OpcValue)> = batch.iter().collect();
+        assert_eq!(items.len(), 3);
+        assert_eq!(items[0], ("Device.Motor.RPM", &val_int));
+        assert_eq!(items[1], ("Device.Motor.Temp", &val_float));
+        assert_eq!(items[2], ("Device.Motor.Status", &val_str));
+
+        // Edge case: empty borrowed tuple slice
+        let empty_tuples: &[(&str, &OpcValue)] = &[];
+        let empty_batch = empty_tuples.into_write_batch();
+        assert_eq!(empty_batch.len(), 0);
+        assert!(empty_batch.is_empty());
+    }
+
+    #[test]
+    fn test_write_batch_into_shareable_lifecycle() {
+        // 1. Single variant → Shared with Arc lifecycle
+        let single = WriteBatch::Single("Pump.Pressure".to_string(), OpcValue::Float(101.3));
+        let shareable = single.into_shareable();
+
+        match &shareable {
+            WriteBatch::Shared(arc_slice) => {
+                assert_eq!(arc_slice.len(), 1);
+                assert_eq!(arc_slice[0].0, "Pump.Pressure");
+                assert_eq!(arc_slice[0].1, OpcValue::Float(101.3));
+                assert_eq!(Arc::strong_count(arc_slice), 1);
+
+                let cloned = shareable.clone();
+                assert_eq!(Arc::strong_count(arc_slice), 2);
+                assert_eq!(cloned, shareable);
+
+                drop(cloned);
+                assert_eq!(Arc::strong_count(arc_slice), 1);
+            }
+            _ => panic!("Expected WriteBatch::Shared representation for shareable single"),
+        }
+
+        // 2. Owned variant → Shared
+        let owned = vec![
+            ("M1.Speed".to_string(), OpcValue::Int(1200)),
+            ("M2.Speed".to_string(), OpcValue::Int(1500)),
+        ]
+        .into_write_batch();
+        let shareable_owned = owned.into_shareable();
+        match &shareable_owned {
+            WriteBatch::Shared(arc_slice) => {
+                assert_eq!(arc_slice.len(), 2);
+                assert_eq!(Arc::strong_count(arc_slice), 1);
+                let cloned = shareable_owned.clone();
+                assert_eq!(Arc::strong_count(arc_slice), 2);
+                drop(cloned);
+            }
+            _ => panic!("Expected WriteBatch::Shared for owned batch"),
+        }
+
+        // 3. Shared idempotency
+        let already_shared = shareable_owned.clone().into_shareable();
+        assert_eq!(already_shared, shareable_owned);
+
+        // 4. Empty batch shareable
+        let empty_shareable = WriteBatch::empty().into_shareable();
+        assert_eq!(empty_shareable.len(), 0);
+        assert!(empty_shareable.is_empty());
     }
 }
