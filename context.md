@@ -21,6 +21,7 @@
 >     - Upgraded `insert_active_group` eviction to a stable `while` loop without nightly `let_chains`.
 >   - **Quality Pipeline Verification (O5):**
 >     - Full 8-gate verification pipeline (`pwsh -File scripts/verify.ps1`) exited 0 with all 570 workspace tests passing (+8 net new tests, 0 regressions), zero compiler/clippy warnings under `-D warnings`, zero AST-Grep violations, and zero forbidden macros.
+>     - Documented 4 implementation deviations (I1.1–I1.4) in [`refactor/deviations.md`](file:///c:/Users/WSALIGAN/code/opc-cli/refactor/deviations.md) with 0 violations and 100% verification fidelity.
 > * **New Constraints:**
 >   - Browse chunk flushes must use `chunk.drain(..)`, keeping initial capacity allocated across chunk boundaries.
 >   - Read tag assembly requires upfront tag count parity verification before allocating result vectors.
