@@ -184,6 +184,36 @@ impl ServerIdentifier {
         }
     }
 
+    /// Compares two server identifiers for semantic equivalence under OPC DA naming rules.
+    ///
+    /// Programmatic Identifiers ([`ServerIdentifier::ProgId`]) are compared case-insensitively
+    /// using ASCII folding. Class IDs ([`ServerIdentifier::Clsid`]) are compared for exact
+    /// 128-bit numerical equality. Cross-variant comparisons always return `false` because
+    /// resolving a ProgID to its CLSID requires Windows COM registry activation
+    /// (`CLSIDFromProgID`), which is intentionally excluded from pure in-memory comparison.
+    ///
+    /// Unlike the derived [`PartialEq`] implementation (which is byte-exact for map and set
+    /// key stability), `matches` implements domain-level equivalence.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use opc_da_client::types::ServerIdentifier;
+    ///
+    /// let id1 = ServerIdentifier::new("Matrikon.OPC.Simulation.1").unwrap();
+    /// let id2 = ServerIdentifier::new("matrikon.opc.simulation.1").unwrap();
+    /// assert!(id1.matches(&id2));
+    /// assert_ne!(id1, id2); // Byte-exact structural equality remains false
+    /// ```
+    #[must_use]
+    pub fn matches(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::ProgId(a), Self::ProgId(b)) => a.eq_ignore_ascii_case(b),
+            (Self::Clsid(a), Self::Clsid(b)) => a == b,
+            _ => false,
+        }
+    }
+
     /// Validates and constructs a new `ServerIdentifier` from a string slice (ProgID or CLSID).
     ///
     /// # Errors
@@ -567,6 +597,30 @@ impl OpcServerEndpoint {
     #[must_use]
     pub fn is_remote(&self) -> bool {
         is_remote_host(self.host.as_deref())
+    }
+
+    /// Compares two endpoints for semantic equivalence under OPC DA and network naming rules.
+    ///
+    /// Hostnames are compared case-insensitively using ASCII folding. Server identifiers
+    /// delegate to [`ServerIdentifier::matches`].
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use opc_da_client::types::OpcServerEndpoint;
+    ///
+    /// let ep1 = OpcServerEndpoint::remote_prog_id("HOST-01", "Matrikon.OPC.Simulation.1");
+    /// let ep2 = OpcServerEndpoint::remote_prog_id("host-01", "matrikon.opc.simulation.1");
+    /// assert!(ep1.matches(&ep2));
+    /// ```
+    #[must_use]
+    pub fn matches(&self, other: &Self) -> bool {
+        let host_matches = match (self.host.as_deref(), other.host.as_deref()) {
+            (Some(a), Some(b)) => a.eq_ignore_ascii_case(b),
+            (None, None) => true,
+            _ => false,
+        };
+        host_matches && self.identifier.matches(&other.identifier)
     }
 }
 
@@ -1473,5 +1527,57 @@ mod tests {
         assert_eq!(ep_upper, ep_lower);
         let pool: HashSet<OpcServerEndpoint> = HashSet::from([ep_upper, ep_lower]);
         assert_eq!(pool.len(), 1, "Case-varying endpoints must deduplicate");
+    }
+
+    #[test]
+    fn test_server_identifier_matches_progid() {
+        use std::str::FromStr;
+        let id_mixed = ServerIdentifier::from_str("Matrikon.OPC.Simulation.1").unwrap();
+        let id_lower = ServerIdentifier::from_str("matrikon.opc.simulation.1").unwrap();
+        let id_upper = ServerIdentifier::from_str("MATRIKON.OPC.SIMULATION.1").unwrap();
+        let id_different = ServerIdentifier::from_str("Kepware.KEPServerEX.V6").unwrap();
+
+        assert!(id_mixed.matches(&id_lower));
+        assert!(id_mixed.matches(&id_upper));
+        assert!(id_lower.matches(&id_mixed));
+        assert_ne!(id_mixed, id_lower);
+        assert!(!id_mixed.matches(&id_different));
+
+        let clsid_id =
+            ServerIdentifier::from_str("{28E68F9A-8D75-11D1-8DC3-3C302A000000}").unwrap();
+        assert!(!id_mixed.matches(&clsid_id));
+    }
+
+    #[test]
+    fn test_server_identifier_matches_clsid() {
+        use std::str::FromStr;
+        let id_bracketed =
+            ServerIdentifier::from_str("{28E68F9A-8D75-11D1-8DC3-3C302A000000}").unwrap();
+        let id_unbracketed =
+            ServerIdentifier::from_str("28e68f9a-8d75-11d1-8dc3-3c302a000000").unwrap();
+        assert!(id_bracketed.matches(&id_unbracketed));
+
+        let id_zero = ServerIdentifier::Clsid(Clsid::zeroed());
+        assert!(!id_bracketed.matches(&id_zero));
+
+        let id_prog = ServerIdentifier::from_str("Matrikon.OPC.Simulation.1").unwrap();
+        assert!(!id_bracketed.matches(&id_prog));
+    }
+
+    #[test]
+    fn test_endpoint_matches() {
+        use std::str::FromStr;
+        let ep1 = OpcServerEndpoint::from_str(r"\\SCADA-01\Matrikon.OPC.Simulation.1").unwrap();
+        let ep2 = OpcServerEndpoint::from_str(r"\\scada-01\matrikon.opc.simulation.1").unwrap();
+        assert!(ep1.matches(&ep2));
+
+        let ep_other =
+            OpcServerEndpoint::from_str(r"\\scada-02\matrikon.opc.simulation.1").unwrap();
+        assert!(!ep1.matches(&ep_other));
+
+        let local1 = OpcServerEndpoint::from_str("Matrikon.OPC.Simulation.1").unwrap();
+        let local2 = OpcServerEndpoint::from_str("matrikon.opc.simulation.1").unwrap();
+        assert!(local1.matches(&local2));
+        assert!(!local1.matches(&ep1));
     }
 }

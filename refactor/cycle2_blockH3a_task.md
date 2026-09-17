@@ -4,12 +4,12 @@
 - [x] Step 2: [MODIFY] `opc-da-client/src/types/server.rs` — [~] `normalize_host` (L43-45)
 - [x] Step 3: [TEST] `opc-da-client/src/types/server.rs` — [+] `test_endpoint_from_str_canonicalizes_host`
 - [x] Step 4: [MODIFY] `opc-da-client/src/types/server.rs` — [~] `<OpcServerEndpoint as FromStr>::from_str` (L631, L652, L669) - 🔒 CHECKPOINT 1
-- [/] Step 5: [TEST] `opc-da-client/src/types/server.rs` — [+] `test_server_identifier_matches_progid`
-- [ ] Step 6: [TEST] `opc-da-client/src/types/server.rs` — [+] `test_server_identifier_matches_clsid`
-- [ ] Step 7: [MODIFY] `opc-da-client/src/types/server.rs` — [+] `ServerIdentifier::matches` (L~185)
-- [ ] Step 8: [TEST] `opc-da-client/src/types/server.rs` — [+] `test_endpoint_matches`
-- [ ] Step 9: [MODIFY] `opc-da-client/src/types/server.rs` — [+] `OpcServerEndpoint::matches` (L~526) - 🔒 CHECKPOINT 2
-- [ ] Step 10: [TEST] `opc-da-client/src/client/tests.rs` — [+] `test_validate_bound_server_mixed_case`
+- [x] Step 5: [TEST] `opc-da-client/src/types/server.rs` — [+] `test_server_identifier_matches_progid`
+- [x] Step 6: [TEST] `opc-da-client/src/types/server.rs` — [+] `test_server_identifier_matches_clsid`
+- [x] Step 7: [MODIFY] `opc-da-client/src/types/server.rs` — [+] `ServerIdentifier::matches` (L~185)
+- [x] Step 8: [TEST] `opc-da-client/src/types/server.rs` — [+] `test_endpoint_matches`
+- [x] Step 9: [MODIFY] `opc-da-client/src/types/server.rs` — [+] `OpcServerEndpoint::matches` (L~526) - 🔒 CHECKPOINT 2
+- [/] Step 10: [TEST] `opc-da-client/src/client/tests.rs` — [+] `test_validate_bound_server_mixed_case`
 - [ ] Step 11: [MODIFY] `opc-da-client/src/client/gateway.rs` — [~] `validate_bound_server` (L376-391)
 - [ ] Step 12: [TEST] `opc-da-client/src/client/tests.rs` — [+] `test_validate_bound_server_host_mismatch` - 🔒 CHECKPOINT 3
 - [ ] Step 13: [MODIFY] `opc-da-client/src/types/server.rs` — [~] `OpcServerEndpoint::local` (L460-514)
