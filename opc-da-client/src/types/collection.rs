@@ -422,6 +422,39 @@ impl TagValues {
             .find(|tv| tv.tag_id.eq_ignore_ascii_case(tag))
     }
 
+    /// Returns `true` if the collection contains a tag with the specified identifier (case-insensitive).
+    ///
+    /// Comparison uses ASCII case folding (`A-Z` / `a-z`), matching OPC DA specifications
+    /// and the behavior of [`TagValues::get`]. Non-ASCII characters require exact casing.
+    ///
+    /// # Arguments
+    ///
+    /// * `tag` - Tag identifier string to look up.
+    ///
+    /// # Returns
+    ///
+    /// `true` if a tag with the specified identifier is present in this collection; `false` otherwise.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use opc_da_client::{OpcQuality, OpcValue, TagValue, TagValues};
+    ///
+    /// let values = TagValues::new(vec![TagValue::new(
+    ///     "Channel1.Device1.Sensor1",
+    ///     Some(OpcValue::Int(10)),
+    ///     OpcQuality::GOOD,
+    ///     None,
+    /// )]);
+    /// assert!(values.contains("channel1.device1.sensor1"));
+    /// assert!(!values.contains("Sensor2"));
+    /// ```
+    #[inline]
+    #[must_use]
+    pub fn contains(&self, tag: &str) -> bool {
+        self.get(tag).is_some()
+    }
+
     /// Looks up an OPC value by tag identifier using case-insensitive comparison.
     ///
     /// # Arguments
@@ -1633,5 +1666,38 @@ mod tests {
             formatted,
             "Tag: Device1.Tag1    | Value: Active     | Quality: Good   | Timestamp: N/A"
         );
+    }
+
+    #[test]
+    fn test_tag_values_contains_case_insensitive() {
+        let items = vec![
+            TagValue::new(
+                "Channel1.Device1.SensorA",
+                Some(OpcValue::Int(100)),
+                OpcQuality::GOOD,
+                None,
+            ),
+            TagValue::new(
+                "CHANNEL2.DEVICE2.SENSORB",
+                Some(OpcValue::Float(25.4)),
+                OpcQuality::GOOD,
+                None,
+            ),
+        ];
+        let values = TagValues::new(items);
+
+        assert!(values.contains("Channel1.Device1.SensorA"));
+        assert!(values.contains("channel1.device1.sensora"));
+        assert!(values.contains("CHANNEL1.DEVICE1.SENSORA"));
+        assert!(values.contains("channel2.device2.sensorb"));
+        assert!(values.contains("Channel2.Device2.SensorB"));
+
+        assert!(!values.contains("Channel1.Device1.SensorC"));
+        assert!(!values.contains("NonExistentTag"));
+        assert!(!values.contains(""));
+
+        let empty_values = TagValues::default();
+        assert_eq!(empty_values.len(), 0);
+        assert!(!empty_values.contains("Channel1.Device1.SensorA"));
     }
 }
