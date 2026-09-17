@@ -19,15 +19,15 @@
 ## Global Execution Order
 
 ### Component Group 1: Priority Request Queue Hygiene & Test Scaffolding
-- [ ] **Step 1: [TEST]** `opc-da-client/src/com/worker/tests.rs` — [~] `test_priority_request_queue_drop_drops_senders` (L1017-1045)
-- [ ] **Step 2: [MODIFY]** `opc-da-client/src/com/worker.rs` — [-] `PriorityRequestQueue::clear` (L404-408)
+- [x] **Step 1: [TEST]** `opc-da-client/src/com/worker/tests.rs` — [~] `test_priority_request_queue_drop_drops_senders` (L1017-1045)
+- [x] **Step 2: [MODIFY]** `opc-da-client/src/com/worker.rs` — [-] `PriorityRequestQueue::clear` (L404-408)
 
 ### Component Group 2: Read Engine Parity Validation & Error Move Semantics
-- [ ] **Step 3: [TEST]** `opc-da-client/src/com/worker/read.rs` — [+] `test_assemble_tag_values_parity_mismatch_fails_fast` (L286+)
-- [ ] **Step 4: [MODIFY]** `opc-da-client/src/com/worker/read.rs` — [~] `assemble_tag_values` (L221-241)
-- [ ] **Step 5: [TEST]** `opc-da-client/src/com/worker/read.rs` — [~] `test_group_guard_disarm_on_read` (L341)
-- [ ] **Step 6: [MODIFY]** `opc-da-client/src/com/worker/read.rs` — [~] `partition_item_results` & `handle_read` (L137, L184-210)
-- [ ] **🔒 CHECKPOINT 1**: Verify read module tests pass (`cargo test -p opc-da-client --lib com::worker::read`)
+- [x] **Step 3: [TEST]** `opc-da-client/src/com/worker/read.rs` — [+] `test_assemble_tag_values_parity_mismatch_fails_fast` (L286+)
+- [x] **Step 4: [MODIFY]** `opc-da-client/src/com/worker/read.rs` — [~] `assemble_tag_values` (L221-241)
+- [x] **Step 5: [TEST]** `opc-da-client/src/com/worker/read.rs` — [~] `test_group_guard_disarm_on_read` (L341)
+- [x] **Step 6: [MODIFY]** `opc-da-client/src/com/worker/read.rs` — [~] `partition_item_results` & `handle_read` (L137, L184-210)
+- [x] **🔒 CHECKPOINT 1**: Verify read module tests pass (`cargo test -p opc-da-client --lib com::worker::read`)
 
 ### Component Group 3: Connection Pool Diagnostics & Group Management
 - [ ] **Step 7: [TEST]** `opc-da-client/src/com/worker/pool.rs` — [+] `test_connection_pool_len_and_lifecycle` (L420+) & [~] `test_dispatch_with_retry_active_group_reuse` (L605)

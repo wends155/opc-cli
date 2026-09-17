@@ -1014,7 +1014,7 @@ async fn test_handle_write_batch_vector_length_mismatch_returns_internal_error()
 }
 
 #[tokio::test]
-async fn test_priority_request_queue_clear_drops_senders() {
+async fn test_priority_request_queue_drop_drops_senders() {
     use crate::com::worker::{ComRequest, PriorityRequestQueue};
     let mut queue = PriorityRequestQueue::default();
     let (tx1, rx1) = tokio::sync::oneshot::channel();
@@ -1030,17 +1030,17 @@ async fn test_priority_request_queue_clear_drops_senders() {
     });
 
     assert!(!queue.is_empty());
-    queue.clear();
-    assert!(queue.is_empty());
+    assert_eq!(queue.len(), 2);
 
-    // Dropping queued requests must close their oneshot reply channels
+    drop(queue);
+
     assert!(
         rx1.await.is_err(),
-        "rx1 must receive RecvError after queue.clear()"
+        "rx1 must receive RecvError after drop(queue)"
     );
     assert!(
         rx2.await.is_err(),
-        "rx2 must receive RecvError after queue.clear()"
+        "rx2 must receive RecvError after drop(queue)"
     );
 }
 

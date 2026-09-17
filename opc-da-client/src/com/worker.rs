@@ -401,12 +401,6 @@ impl PriorityRequestQueue {
         self.high.is_empty() && self.low.is_empty()
     }
 
-    #[allow(dead_code)]
-    pub fn clear(&mut self) {
-        self.high.clear();
-        self.low.clear();
-    }
-
     /// Drains all queued requests and sends an explicit error reply to each oneshot channel.
     pub fn drain_and_reject(&mut self, err: &OpcError) {
         for req in self.high.drain(..) {

@@ -134,7 +134,7 @@ pub fn handle_read<S: ConnectedServer>(
     } = super::register_item_group(&pooled.server, &endpoint.identifier, "opc-read", &tag_ids)?;
 
     let (server_handles, valid_indices, rejected_errors) =
-        partition_item_results(&results, &tag_ids, &endpoint.identifier);
+        partition_item_results(results, &tag_ids, &endpoint.identifier);
 
     let item_states = if !server_handles.is_empty() {
         let states = group
@@ -182,7 +182,7 @@ pub fn handle_read<S: ConnectedServer>(
 
 /// Separates valid item handles from rejected tags, recording configuration errors for rejected tags.
 fn partition_item_results(
-    results: &[GroupItemResult],
+    results: Vec<GroupItemResult>,
     tag_ids: &[String],
     server_id: &ServerIdentifier,
 ) -> (Vec<ServerItemHandle>, Vec<usize>, Vec<(usize, OpcError)>) {
@@ -190,16 +190,16 @@ fn partition_item_results(
     let mut valid_indices = Vec::with_capacity(results.len());
     let mut rejected_errors = Vec::new();
 
-    for (idx, item_result) in results.iter().enumerate() {
-        if let Some(ref err) = item_result.error {
-            let err_msg = err.to_string();
+    for (idx, item_result) in results.into_iter().enumerate() {
+        if let Some(err) = item_result.error {
+            let tag_name = tag_ids.get(idx).map_or("<unknown>", String::as_str);
             tracing::warn!(
                 server = %server_id,
-                tag = %tag_ids[idx],
-                error = %err_msg,
+                tag = %tag_name,
+                error = %err,
                 "read_tag_values: add_items rejected tag"
             );
-            rejected_errors.push((idx, err.clone()));
+            rejected_errors.push((idx, err));
         } else {
             server_handles.push(item_result.server_handle);
             valid_indices.push(idx);
@@ -220,8 +220,24 @@ pub(crate) fn assemble_tag_values<'a>(
     server_id: &ServerIdentifier,
 ) -> OpcResult<Vec<TagValue>> {
     let tag_count = tags.len();
-    let mut tag_values = Vec::with_capacity(tag_count);
     let states = item_states.unwrap_or_default();
+
+    if tag_count != valid_indices.len() + rejected_errors.len() {
+        let err = OpcError::Internal(format!(
+            "Server {server_id} tag count parity mismatch: expected {tag_count} tags, got {} valid and {} rejected",
+            valid_indices.len(),
+            rejected_errors.len()
+        ));
+        log_opc_err!(
+            &err,
+            "read_tag_values:parity_mismatch",
+            server = %server_id,
+            tag_count = tag_count,
+            valid_count = valid_indices.len(),
+            rejected_count = rejected_errors.len()
+        );
+        return Err(err);
+    }
 
     if states.len() != valid_indices.len() {
         let err = OpcError::Internal(format!(
@@ -238,6 +254,9 @@ pub(crate) fn assemble_tag_values<'a>(
         );
         return Err(err);
     }
+
+    // Allocate accumulator vector only after fail-fast parity checks pass
+    let mut tag_values = Vec::with_capacity(tag_count);
 
     let mut state_iter = states.into_iter();
     let mut reject_iter = rejected_errors.iter().peekable();
@@ -291,6 +310,87 @@ mod tests {
     use crate::types::{OpcServerEndpoint, TagBatch};
 
     #[test]
+    fn test_assemble_tag_values_parity_mismatch_fails_fast() {
+        use crate::connector::GroupItemState;
+        use crate::types::{ClientItemHandle, OpcQuality, OpcValue, ServerIdentifier};
+
+        let server_id = ServerIdentifier::try_from("Test.Server").unwrap();
+        let requested_tags = ["tag1", "tag2", "tag3"];
+        let tag_count = requested_tags.len();
+
+        // Underflow Parity Mismatch
+        let valid_indices_underflow = vec![0];
+        let rejected_errors_underflow = vec![(1, OpcError::InvalidState("rejected tag2".into()))];
+        let states_underflow = Some(vec![Ok(GroupItemState {
+            client_handle: ClientItemHandle::new(1),
+            value: OpcValue::Int(10),
+            quality: OpcQuality::GOOD,
+            timestamp: std::time::SystemTime::UNIX_EPOCH,
+        })]);
+
+        let underflow_res = assemble_tag_values(
+            requested_tags.into_iter(),
+            &valid_indices_underflow,
+            &rejected_errors_underflow,
+            states_underflow,
+            &server_id,
+        );
+        let expected_underflow_msg = format!(
+            "Server {server_id} tag count parity mismatch: expected {tag_count} tags, got {} valid and {} rejected",
+            valid_indices_underflow.len(),
+            rejected_errors_underflow.len()
+        );
+        assert!(
+            matches!(
+                underflow_res,
+                Err(OpcError::Internal(ref msg)) if msg == &expected_underflow_msg
+            ),
+            "Expected OpcError::Internal for underflow parity mismatch, got: {underflow_res:?}"
+        );
+
+        // Overflow Parity Mismatch
+        let valid_indices_overflow = vec![0, 2];
+        let rejected_errors_overflow = vec![
+            (1, OpcError::InvalidState("rejected 1".into())),
+            (3, OpcError::InvalidState("rejected 3".into())),
+        ];
+        let states_overflow = Some(vec![
+            Ok(GroupItemState {
+                client_handle: ClientItemHandle::new(1),
+                value: OpcValue::Int(10),
+                quality: OpcQuality::GOOD,
+                timestamp: std::time::SystemTime::UNIX_EPOCH,
+            }),
+            Ok(GroupItemState {
+                client_handle: ClientItemHandle::new(3),
+                value: OpcValue::Int(30),
+                quality: OpcQuality::GOOD,
+                timestamp: std::time::SystemTime::UNIX_EPOCH,
+            }),
+        ]);
+
+        let overflow_res = assemble_tag_values(
+            requested_tags.into_iter(),
+            &valid_indices_overflow,
+            &rejected_errors_overflow,
+            states_overflow,
+            &server_id,
+        );
+        let expected_overflow_msg = format!(
+            "Server {server_id} tag count parity mismatch: expected {tag_count} tags, got {} valid and {} rejected",
+            valid_indices_overflow.len(),
+            rejected_errors_overflow.len()
+        );
+        assert!(
+            matches!(
+                overflow_res,
+                Err(OpcError::Internal(ref msg)) if msg == &expected_overflow_msg
+            ),
+            "Expected OpcError::Internal for overflow parity mismatch, got: {overflow_res:?}"
+        );
+    }
+
+    #[test]
     fn test_handle_read_empty_tags_short_circuits() {
         let server = MockConnectedServer::default();
         let mut pooled = PooledServer::new(server);
@@ -338,7 +438,7 @@ mod tests {
         assert_eq!(state.remove_group_count.load(Ordering::Relaxed), 0);
 
         // Explicit clear active group triggers remove_group
-        pooled.clear_active_group();
+        pooled.clear_active_groups();
         assert_eq!(state.remove_group_count.load(Ordering::Relaxed), 1);
     }
 
@@ -515,5 +615,30 @@ mod tests {
         assert_eq!(results[2].tag_id, "tag2");
         assert!(results[2].outcome.is_ok());
         assert_eq!(results[2].quality, OpcQuality::GOOD);
+    }
+
+    #[test]
+    fn test_partition_item_results_move_semantics_and_boundary() {
+        let server_id = ServerIdentifier::try_from("Test.Server").unwrap();
+        let tag_ids = vec!["Valid.Tag".to_string()]; // length 1 to test boundary fallback on idx 1
+        let results = vec![
+            GroupItemResult {
+                server_handle: ServerItemHandle::new(101),
+                canonical_type: crate::types::VarType::EMPTY,
+                error: None,
+            },
+            GroupItemResult {
+                server_handle: ServerItemHandle::new(0),
+                canonical_type: crate::types::VarType::EMPTY,
+                error: Some(OpcError::InvalidState("Item rejected".into())),
+            },
+        ];
+
+        let (handles, valid_idx, rejected) = partition_item_results(results, &tag_ids, &server_id);
+        assert_eq!(handles, vec![ServerItemHandle::new(101)]);
+        assert_eq!(valid_idx, vec![0]);
+        assert_eq!(rejected.len(), 1);
+        assert_eq!(rejected[0].0, 1);
+        assert!(matches!(rejected[0].1, OpcError::InvalidState(_)));
     }
 }
