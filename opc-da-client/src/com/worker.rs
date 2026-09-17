@@ -27,6 +27,12 @@ pub(crate) fn elapsed_ms(start: std::time::Instant) -> u64 {
     u64::try_from(start.elapsed().as_millis()).unwrap_or(u64::MAX)
 }
 
+/// Maximum number of tags or write items permitted in a single COM worker batch operation.
+///
+/// Batches exceeding this limit are rejected immediately with `OpcError::InvalidState`
+/// before any COM resource allocation occurs.
+pub(crate) const MAX_TAG_BATCH_SIZE: usize = 10_000;
+
 static GROUP_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
 
 /// Generates a unique ephemeral group name prefixed with a subsystem tag, PID, and sequence number.

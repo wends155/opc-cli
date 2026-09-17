@@ -1,5 +1,6 @@
 //! Tag reading engine with in-place value population and active group caching.
 
+use super::MAX_TAG_BATCH_SIZE;
 use super::pool::{CachedGroup, PooledServer};
 use crate::connector::{
     ConnectedGroup, ConnectedServer, DataSource, GroupItemResult, GroupItemState,
@@ -10,9 +11,6 @@ use crate::types::{
     OpcQuality, OpcServerEndpoint, ServerIdentifier, ServerItemHandle, TagBatch, TagValue,
     TagValues,
 };
-
-/// Maximum allowed tag batch size for reading to prevent buffer overruns and COM OOM.
-pub(crate) const MAX_TAG_BATCH_SIZE: usize = 10_000;
 
 /// Executes synchronous device tag reading through the pooled server's active OPC group,
 /// reusing cached group handles when tag batches match and populating values, qualities,
@@ -86,7 +84,7 @@ pub fn handle_read<S: ConnectedServer>(
             let (tag_values_res, should_clear) = if let Some(cached) = pooled.active_groups.front()
             {
                 match assemble_tag_values(
-                    &cached.tags,
+                    tags.iter_str(),
                     &cached.valid_indices,
                     &cached.rejected_errors,
                     states,
@@ -155,7 +153,7 @@ pub fn handle_read<S: ConnectedServer>(
     };
 
     let tag_values = assemble_tag_values(
-        &tag_ids,
+        tags.iter_str(),
         &valid_indices,
         &rejected_errors,
         item_states,
@@ -214,14 +212,15 @@ fn partition_item_results(
 /// Assembles final [`TagValue`] instances directly from item states and rejected errors in a single pass.
 ///
 /// Pre-allocates exact capacity and maps each tag by index without generating throwaway placeholder strings.
-pub(crate) fn assemble_tag_values(
-    tags: &[String],
+pub(crate) fn assemble_tag_values<'a>(
+    tags: impl ExactSizeIterator<Item = &'a str>,
     valid_indices: &[usize],
     rejected_errors: &[(usize, OpcError)],
     item_states: Option<Vec<OpcResult<GroupItemState>>>,
     server_id: &ServerIdentifier,
 ) -> OpcResult<Vec<TagValue>> {
-    let mut tag_values = Vec::with_capacity(tags.len());
+    let tag_count = tags.len();
+    let mut tag_values = Vec::with_capacity(tag_count);
     let states = item_states.unwrap_or_default();
 
     if states.len() != valid_indices.len() {
@@ -243,15 +242,15 @@ pub(crate) fn assemble_tag_values(
     let mut state_iter = states.into_iter();
     let mut reject_iter = rejected_errors.iter().peekable();
 
-    for (idx, tag_id) in tags.iter().enumerate() {
+    for (idx, tag_str) in tags.enumerate() {
         if let Some((rej_idx, err)) = reject_iter.peek()
             && *rej_idx == idx
         {
             let err = err.clone();
             reject_iter.next();
             tag_values.push(TagValue {
-                tag_id: tag_id.clone(),
-                outcome: Err(err.clone()),
+                tag_id: tag_str.to_string(),
+                outcome: Err(err),
                 quality: OpcQuality::BAD_CONFIG_ERROR,
                 timestamp: None,
             });
@@ -263,13 +262,13 @@ pub(crate) fn assemble_tag_values(
                         &e,
                         "read_tag_values:per_item",
                         server = %server_id,
-                        tag = %tag_id
+                        tag = %tag_str
                     );
                     (Err(e), OpcQuality::BAD_COMM_FAILURE, None)
                 }
             };
             tag_values.push(TagValue {
-                tag_id: tag_id.clone(),
+                tag_id: tag_str.to_string(),
                 outcome,
                 quality,
                 timestamp,
@@ -376,5 +375,145 @@ mod tests {
         let tag_val = res.get("Random.Int4").unwrap();
         assert!(tag_val.value().is_some());
         assert!(tag_val.error().is_none());
+    }
+
+    #[test]
+    fn test_handle_read_cache_hit_preserves_caller_casing() {
+        let server = MockConnectedServer::default();
+        let mut pooled = PooledServer::new(server);
+        let endpoint = OpcServerEndpoint::local_prog_id("Test.Server");
+
+        // Miss: First read caches uppercase tag "TAG_A"
+        let tags_upper = TagBatch::from_static(&["TAG_A"]);
+        let res1 = handle_read(&endpoint, &tags_upper, &mut pooled).unwrap();
+        assert_eq!(res1.get("TAG_A").unwrap().tag_id, "TAG_A");
+
+        // Hit: Second read requests lowercase tag "tag_a" against cached "TAG_A"
+        let tags_lower = TagBatch::from_static(&["tag_a"]);
+        let res2 = handle_read(&endpoint, &tags_lower, &mut pooled).unwrap();
+        let tag_val = res2
+            .get("tag_a")
+            .expect("TagValues must index using caller casing 'tag_a'");
+        assert_eq!(
+            tag_val.tag_id, "tag_a",
+            "TagValue must preserve caller casing 'tag_a' rather than cached 'TAG_A'"
+        );
+    }
+
+    #[test]
+    fn test_assemble_tag_values_preserves_caller_casing() {
+        use crate::connector::GroupItemState;
+        use crate::types::{ClientItemHandle, OpcQuality, OpcValue, ServerIdentifier};
+
+        let server_id = ServerIdentifier::try_from("Test.Server").unwrap();
+        let requested_tags = ["tag1", "mixedCase_Tag2"];
+        let valid_indices = vec![0, 1];
+        let rejected_errors = vec![];
+        let states = Some(vec![
+            Ok(GroupItemState {
+                client_handle: ClientItemHandle::new(1),
+                value: OpcValue::Int(42),
+                quality: OpcQuality::GOOD,
+                timestamp: std::time::SystemTime::UNIX_EPOCH,
+            }),
+            Ok(GroupItemState {
+                client_handle: ClientItemHandle::new(2),
+                value: OpcValue::String("val2".into()),
+                quality: OpcQuality::GOOD,
+                timestamp: std::time::SystemTime::UNIX_EPOCH,
+            }),
+        ]);
+
+        let results = assemble_tag_values(
+            requested_tags.into_iter(),
+            &valid_indices,
+            &rejected_errors,
+            states,
+            &server_id,
+        )
+        .expect("assemble_tag_values must succeed");
+
+        assert_eq!(results.len(), 2);
+        assert_eq!(results[0].tag_id, "tag1");
+        assert_eq!(results[1].tag_id, "mixedCase_Tag2");
+    }
+
+    #[test]
+    fn test_assemble_tag_values_array_length_parity_mismatch() {
+        use crate::connector::GroupItemState;
+        use crate::types::{ClientItemHandle, OpcQuality, OpcValue, ServerIdentifier};
+
+        let server_id = ServerIdentifier::try_from("Test.Server").unwrap();
+        let requested_tags = ["tag1", "tag2"];
+        let valid_indices = vec![0, 1]; // expects 2 states
+        let rejected_errors = vec![];
+        let states = Some(vec![Ok(GroupItemState {
+            // server returns only 1 state
+            client_handle: ClientItemHandle::new(1),
+            value: OpcValue::Int(42),
+            quality: OpcQuality::GOOD,
+            timestamp: std::time::SystemTime::UNIX_EPOCH,
+        })]);
+
+        let err = assemble_tag_values(
+            requested_tags.into_iter(),
+            &valid_indices,
+            &rejected_errors,
+            states,
+            &server_id,
+        )
+        .expect_err("array length parity mismatch must return error");
+
+        assert!(
+            matches!(err, OpcError::Internal(ref msg) if msg.contains("mismatched read result array size")),
+            "Expected OpcError::Internal with mismatch details, got: {err:?}"
+        );
+    }
+
+    #[test]
+    fn test_assemble_tag_values_mixed_valid_and_rejected() {
+        use crate::connector::GroupItemState;
+        use crate::types::{ClientItemHandle, OpcQuality, OpcValue, ServerIdentifier};
+
+        let server_id = ServerIdentifier::try_from("Test.Server").unwrap();
+        let requested_tags = ["tag0", "tag1", "tag2"];
+        let valid_indices = vec![0, 2];
+        let rejected_errors = vec![(1, OpcError::InvalidState("Item rejected".into()))];
+        let states = Some(vec![
+            Ok(GroupItemState {
+                client_handle: ClientItemHandle::new(0),
+                value: OpcValue::Int(10),
+                quality: OpcQuality::GOOD,
+                timestamp: std::time::SystemTime::UNIX_EPOCH,
+            }),
+            Ok(GroupItemState {
+                client_handle: ClientItemHandle::new(2),
+                value: OpcValue::Int(20),
+                quality: OpcQuality::GOOD,
+                timestamp: std::time::SystemTime::UNIX_EPOCH,
+            }),
+        ]);
+
+        let results = assemble_tag_values(
+            requested_tags.into_iter(),
+            &valid_indices,
+            &rejected_errors,
+            states,
+            &server_id,
+        )
+        .expect("assembly of mixed valid and rejected tags must succeed");
+
+        assert_eq!(results.len(), 3);
+        assert_eq!(results[0].tag_id, "tag0");
+        assert!(results[0].outcome.is_ok());
+        assert_eq!(results[0].quality, OpcQuality::GOOD);
+
+        assert_eq!(results[1].tag_id, "tag1");
+        assert!(results[1].outcome.is_err());
+        assert_eq!(results[1].quality, OpcQuality::BAD_CONFIG_ERROR);
+
+        assert_eq!(results[2].tag_id, "tag2");
+        assert!(results[2].outcome.is_ok());
+        assert_eq!(results[2].quality, OpcQuality::GOOD);
     }
 }
