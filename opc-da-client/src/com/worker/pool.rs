@@ -23,7 +23,6 @@ pub(crate) const MAX_ACTIVE_GROUPS: usize = 4;
 pub(crate) const MAX_ACTIVE_CONNECTIONS: usize = 32;
 
 /// Cached active group holding server handle, group proxy, item handles, and tag IDs.
-#[allow(dead_code)]
 pub(crate) struct CachedGroup<G> {
     /// Tag IDs associated with this cached group in registration order.
     pub(crate) tags: Vec<String>,
@@ -84,14 +83,14 @@ impl<S: ConnectedServer> PooledServer<S> {
     /// Inserts a newly registered active group at the MRU position (front),
     /// evicting the least-recently-used group if capacity exceeds [`MAX_ACTIVE_GROUPS`].
     pub(crate) fn insert_active_group(&mut self, group: CachedGroup<S::Group>) {
-        if self.active_groups.len() >= MAX_ACTIVE_GROUPS
-            && let Some(lru) = self.active_groups.pop_back()
-        {
-            let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                let _ = self
-                    .server
-                    .remove_group(lru.server_handle, GroupRemovalMode::Force);
-            }));
+        while self.active_groups.len() >= MAX_ACTIVE_GROUPS {
+            if let Some(lru) = self.active_groups.pop_back() {
+                let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    let _ = self
+                        .server
+                        .remove_group(lru.server_handle, GroupRemovalMode::Force);
+                }));
+            }
         }
         self.active_groups.push_front(group);
     }
@@ -120,11 +119,6 @@ impl<S: ConnectedServer> PooledServer<S> {
                     .remove_group(group.server_handle, GroupRemovalMode::Force);
             }));
         }
-    }
-
-    /// Backward-compatible alias for existing callers/tests.
-    pub(crate) fn clear_active_group(&mut self) {
-        self.clear_active_groups();
     }
 
     /// Returns `true` if this pooled server maintains at least one active group.
@@ -236,17 +230,10 @@ impl<S: ConnectedServer> ConnectionPool<S> {
     }
 
     /// Number of active connections currently maintained in the pool.
+    #[cfg(test)]
     #[must_use]
-    #[allow(dead_code)]
     pub(crate) fn len(&self) -> usize {
         self.connections.len()
-    }
-
-    /// Returns `true` if the connection pool holds no active connections.
-    #[must_use]
-    #[allow(dead_code)]
-    pub(crate) fn is_empty(&self) -> bool {
-        self.connections.is_empty()
     }
 
     /// Clears all active connections (triggering group cleanups via `Drop`) and resets failure cooldowns.
@@ -265,7 +252,7 @@ impl<S: ConnectedServer> ConnectionPool<S> {
     /// Returns `true` if an active connection was present and evicted.
     pub(crate) fn evict(&mut self, endpoint: &OpcServerEndpoint) -> bool {
         if let Some(mut pooled) = self.connections.remove(endpoint) {
-            pooled.clear_active_group();
+            pooled.clear_active_groups();
             true
         } else {
             false
@@ -419,6 +406,43 @@ mod tests {
     use crate::connector::mock::{MockServerConnector, MockState};
     use crate::errors::OpcError;
     use std::sync::atomic::Ordering;
+
+    #[test]
+    fn test_connection_pool_len_and_lifecycle() {
+        let state = Arc::new(MockState::default());
+        let connector = Arc::new(MockServerConnector::with_state(state));
+        let mut pool = ConnectionPool::new();
+        let endpoint1 = OpcServerEndpoint::local_prog_id("Server.1");
+        let endpoint2 = OpcServerEndpoint::local_prog_id("Server.2");
+
+        assert_eq!(pool.len(), 0);
+
+        let res1 = dispatch_with_retry(
+            &mut pool,
+            &connector,
+            &endpoint1,
+            RetryPolicy::Idempotent,
+            |_| Ok("ok1"),
+        );
+        assert_eq!(res1.unwrap(), "ok1");
+        assert_eq!(pool.len(), 1);
+
+        let res2 = dispatch_with_retry(
+            &mut pool,
+            &connector,
+            &endpoint2,
+            RetryPolicy::Idempotent,
+            |_| Ok("ok2"),
+        );
+        assert_eq!(res2.unwrap(), "ok2");
+        assert_eq!(pool.len(), 2);
+
+        assert!(pool.evict(&endpoint1));
+        assert_eq!(pool.len(), 1);
+
+        pool.clear();
+        assert_eq!(pool.len(), 0);
+    }
 
     #[test]
     fn test_dispatch_cache_hit_avoids_reconnect() {
@@ -602,7 +626,7 @@ mod tests {
                 if pooled.active_groups.iter().any(|g| g.tags == tags_b) {
                     return Ok("hit");
                 }
-                pooled.clear_active_group();
+                pooled.clear_active_groups();
                 let group_config = GroupConfig::ephemeral("opc-group-2");
                 let created = pooled.server.add_group(&group_config)?;
                 let item_defs: Vec<GroupItemDef> = tags_b

@@ -30,9 +30,9 @@
 - [x] **🔒 CHECKPOINT 1**: Verify read module tests pass (`cargo test -p opc-da-client --lib com::worker::read`)
 
 ### Component Group 3: Connection Pool Diagnostics & Group Management
-- [ ] **Step 7: [TEST]** `opc-da-client/src/com/worker/pool.rs` — [+] `test_connection_pool_len_and_lifecycle` (L420+) & [~] `test_dispatch_with_retry_active_group_reuse` (L605)
-- [ ] **Step 8: [MODIFY]** `opc-da-client/src/com/worker/pool.rs` — [~] `insert_active_group`, `evict`, `len`; [-] `clear_active_group`, `is_empty`, `CachedGroup allow(dead_code)` (L26, L87-95, L125-128, L240-251, L268)
-- [ ] **🔒 CHECKPOINT 2**: Verify pool module tests pass (`cargo test -p opc-da-client --lib com::worker::pool`)
+- [x] **Step 7: [TEST]** `opc-da-client/src/com/worker/pool.rs` — [+] `test_connection_pool_len_and_lifecycle` (L420+) & [~] `test_dispatch_with_retry_active_group_reuse` (L605)
+- [x] **Step 8: [MODIFY]** `opc-da-client/src/com/worker/pool.rs` — [~] `insert_active_group`, `evict`, `len`; [-] `clear_active_group`, `is_empty`, `CachedGroup allow(dead_code)` (L26, L87-95, L125-128, L240-251, L268)
+- [x] **🔒 CHECKPOINT 2**: Verify pool module tests pass (`cargo test -p opc-da-client --lib com::worker::pool`)
 
 ### Component Group 4: Browse Buffer Draining & Capacity Bounding
 - [ ] **Step 9: [TEST]** `opc-da-client/src/com/worker/browse.rs` — [+] `test_handle_browse_chunk_draining_*` (L270+)
