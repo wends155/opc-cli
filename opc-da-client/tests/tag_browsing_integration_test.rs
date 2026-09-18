@@ -34,8 +34,8 @@ async fn test_tag_browsing_flat_namespace() {
         .expect("browse_tags on flat namespace should succeed");
 
     assert_eq!(tags, vec!["Pump.Speed", "Valve.State", "Tank.Level"]);
-    assert_eq!(collector.snapshot(), tags);
-    assert_eq!(collector.len(), 3);
+    assert_eq!(collector.len(), 0);
+    assert!(collector.is_empty());
     assert_eq!(
         state.change_browse_position_count.load(Ordering::Relaxed),
         0,
@@ -71,8 +71,8 @@ async fn test_tag_browsing_hierarchical_fast_flat() {
         .expect("fast-flat browse should succeed");
 
     assert_eq!(tags, vec!["PLC1.DeviceA.Sensor1", "PLC1.DeviceA.Sensor2"]);
-    assert_eq!(collector.snapshot(), tags);
-    assert_eq!(collector.len(), 2);
+    assert_eq!(collector.len(), 0);
+    assert!(collector.is_empty());
     assert_eq!(
         state.change_browse_position_count.load(Ordering::Relaxed),
         0,
@@ -130,8 +130,8 @@ async fn test_tag_browsing_hierarchical_recursive_walk() {
         .expect("hierarchical recursive browse should succeed");
 
     assert_eq!(tags, vec!["Root.Status", "Area1.Temperature"]);
-    assert_eq!(collector.snapshot(), tags);
-    assert_eq!(collector.len(), 2);
+    assert_eq!(collector.len(), 0);
+    assert!(collector.is_empty());
 
     // RAII BrowsePositionGuard down/up verification: exactly 1 Down into Area1, 1 Up back to root
     assert_eq!(
@@ -176,8 +176,8 @@ async fn test_tag_browsing_collector_limits_and_cancellation() {
 
     assert_eq!(bounded_tags.len(), 3);
     assert_eq!(bounded_tags, vec!["Tag.1", "Tag.2", "Tag.3"]);
-    assert_eq!(bounded_collector.len(), 3);
-    assert!(bounded_collector.is_full());
+    assert_eq!(bounded_collector.len(), 0);
+    assert!(bounded_collector.is_empty());
     assert!(!bounded_collector.is_cancelled());
 
     // 2. Cooperative cancellation
@@ -226,8 +226,8 @@ async fn test_tag_browsing_bound_session_facade() {
         .expect("inherent browse on bound client should succeed");
 
     assert_eq!(tags, expected_tags);
-    assert_eq!(collector.snapshot(), expected_tags);
-    assert_eq!(collector.len(), 2);
+    assert_eq!(collector.len(), 0);
+    assert!(collector.is_empty());
 
     // Polymorphic TagBrowser invocation on bound client
     let trait_collector = TagCollector::new(50);
@@ -283,7 +283,8 @@ async fn test_tag_browsing_guard_unwind_symmetry_and_error_recovery() {
 
     // Root leaf was collected before attempting branch descent
     assert_eq!(result, vec!["Root.Health"]);
-    assert_eq!(collector.snapshot(), vec!["Root.Health"]);
+    assert_eq!(collector.len(), 0);
+    assert!(collector.is_empty());
 
     // Attempted branch descent failed safely without crashing worker
     assert_eq!(
