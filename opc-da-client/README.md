@@ -646,10 +646,10 @@ Deprecated items will trigger compiler warnings starting in `0.3.0` and will rem
 | `OpcQuality` | `pub struct` | Zero-allocation decomposed 16-bit OPC DA quality word (`major`, `substatus`, `limit`, `raw`). |
 | `ParseQualityError` | `pub struct` | Error returned when parsing an invalid quality string via `FromStr`, with `.raw()` string accessor. |
 | `WriteResult` | `pub struct` | Tag write operation result (`tag_id`, `status: Result<(), OpcError>`, `is_success`, `is_error`, `error`). |
-| `WriteBatch` | `pub enum` | Zero-allocation polymorphic container for tag write payloads (`Single`, `Shared`, `Owned`). |
-| `IntoWriteBatch` | `pub trait` | Universal conversion trait converting single pairs, arrays, slices, and vectors into `WriteBatch`. |
-| `WriteBatchIter` | `pub enum` | Zero-allocation borrowed iterator yielding `(&str, &OpcValue)` for COM marshaling. |
-| `TagCollector` | `pub struct` | Thread-safe, bounded container encapsulating thread-safe tag accumulation, atomic progress reporting, and cooperative cancellation token. |
+| `WriteBatch` | `pub struct` | Opaque zero-allocation batch write container with 31-byte stack SSO and 5 internal variants. |
+| `IntoWriteBatch` | `pub trait` | Universal conversion trait converting single pairs, arrays, slices, and vectors into `WriteBatch` (bound by `Send`). |
+| `WriteBatchIter` | `pub struct` | Monotonic `ExactSizeIterator` yielding `(&str, &OpcValue)` for COM marshaling. |
+| `TagCollector` | `pub struct` | Thread-safe, bounded container with `RwLock` concurrency, lock-free length reporting, cooperative cancellation, and $O(1)$ zero-copy harvest. |
 | `ClientGroupHandle` | `pub struct` | Type-safe opaque handle wrapper for client-side group identification. |
 | `ServerGroupHandle` | `pub struct` | Type-safe opaque handle wrapper for server-side group identification. |
 | `ClientItemHandle` | `pub struct` | Type-safe opaque handle wrapper for client-side item identification. |
