@@ -116,7 +116,7 @@ impl ComConnector {
     ///
     /// # Returns
     ///
-    /// A connected [`ComServer`] instance ready for group creation.
+    /// A connected [`ConnectedServer`](crate::connector::ConnectedServer) instance ready for group creation.
     ///
     /// # Errors
     ///
@@ -146,7 +146,7 @@ impl ComConnector {
     ///
     /// # Returns
     ///
-    /// A connected [`ComServer`] instance ready for group creation.
+    /// A connected [`ConnectedServer`](crate::connector::ConnectedServer) instance ready for group creation.
     ///
     /// # Errors
     ///

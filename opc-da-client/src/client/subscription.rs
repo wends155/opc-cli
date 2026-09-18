@@ -11,7 +11,7 @@ impl<C: ServerBackend + 'static> OpcDaClient<C, Bound> {
     /// Subscribes to a stream of tag value updates polled at the specified interval.
     ///
     /// Spawns a background Tokio task that periodically polls the configured tags on the bound
-    /// server and streams updates through a Tokio [`mpsc::Receiver`]. Dropping the receiver
+    /// server and streams updates through a Tokio [`Receiver`]. Dropping the receiver
     /// automatically terminates the background polling loop.
     ///
     /// # Arguments

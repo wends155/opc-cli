@@ -1,9 +1,12 @@
-# 📋 spec.md — opc-da-client
+# Behavioral Specification
 
-> **Behavioral Source of Truth** for the `opc-da-client` library crate.
-> Defines *what* each module should do — independent of current implementation.
->
-> Last verified against: 966632f
+| Field | Value |
+|-------|-------|
+| **Project** | opc-da-client |
+| **Version** | 0.3.0 |
+| **Last Updated** | 2026-09-18 |
+
+> Last verified against: a46e75e
 
 ---
 
@@ -41,7 +44,6 @@ All methods use native Rust 2024 async trait methods returning `impl Future<Outp
 | :--- | :--- | :--- |
 | `write_tag_value` | `fn write_tag_value(&self, server: &str, tag_id: &str, value: OpcValue) -> impl Future<Output = OpcResult<WriteResult>> + Send` | Write a typed value to a single tag on `server`. |
 | `write_tag_batch` | `fn write_tag_batch(&self, server: &str, writes: WriteBatch) -> impl Future<Output = OpcResult<Vec<WriteResult>>> + Send` | Write typed values to multiple OPC DA tags in a batch using polymorphic `WriteBatch`. |
-| `write_tag_values` | `fn write_tag_values(&self, server: &str, writes: &[(String, OpcValue)]) -> impl Future<Output = OpcResult<Vec<WriteResult>>> + Send` | *(Deprecated since 0.2.0, prefer `write_tag_batch`)* Convenience helper to write multiple tags sequentially on `server`. |
 
 ###### `trait OpcProvider: ServerDiscovery + TagBrowser + TagReader + TagWriter + Send + Sync`
 Composite marker trait representing the full OPC DA client capability set. A blanket implementation is provided for any type implementing all four segregated role traits.
@@ -51,7 +53,7 @@ Pure-Rust mock structs generated via `mockall` for targeted unit testing without
 * `MockServerDiscovery`: Mocks `ServerDiscovery` (`list_servers`, `list_server_details`).
 * `MockTagBrowser`: Mocks `TagBrowser` (`browse_tags`).
 * `MockTagReader`: Mocks `TagReader` (`read_tag_values`, `read_tag_value`).
-* `MockTagWriter`: Mocks `TagWriter` (`write_tag_value`, `write_tag_batch`, `write_tag_values`).
+* `MockTagWriter`: Mocks `TagWriter` (`write_tag_value`, `write_tag_batch`).
 * `MockOpcProvider`: Monolithic mock implementing composite `OpcProvider`.
 
 **Error Conditions:**
@@ -215,6 +217,7 @@ Implemented for:
 | :--- | :--- | :--- |
 | `new(values: Vec<TagValue>)` | `pub fn new(values: Vec<TagValue>) -> Self` | Wraps a vector of tag values. |
 | `get(&self, tag: &str)` | `pub fn get(&self, tag: &str) -> Option<&TagValue>` | Case-insensitive lookup of tag value. |
+| `contains(&self, tag: &str)` | `pub fn contains(&self, tag: &str) -> bool` | Case-insensitive check whether the collection contains the specified tag ID. |
 | `get_index(&self, index: usize)` | `pub fn get_index(&self, index: usize) -> Option<&TagValue>` | Zero-based index lookup of tag value. |
 | `get_value(&self, tag: &str)` | `pub fn get_value(&self, tag: &str) -> Option<&OpcValue>` | Case-insensitive lookup of unwrapped OPC value. |
 | `get_as<T>(&self, tag: &str)` | `pub fn get_as<T>(&self, tag: &str) -> Result<T, TagExtractError> where T: TryFrom<OpcValue, Error = &'static str> + Copy` | Generic typed extraction with lossless conversion. |
@@ -324,17 +327,21 @@ Implemented for:
 * `is_success()`: Returns `true` if write succeeded.
 * `is_error()`: Returns `true` if write failed.
 * `error()`: Returns `Option<&OpcError>`.
+* `is_connection_error(&self) -> bool`: Returns `true` if the write failure was caused by an RPC/transport connection drop.
+
+**Traits:** `Display` (`"{tag_id}: Ok"` or `"{tag_id}: Err({error})"`).
 
 **Derives:** `Debug`, `Clone`, `PartialEq`.
 
 
 ##### `struct TagCollector`
 
-**Purpose:** Thread-safe, bounded container encapsulating thread-safe tag accumulation, lock-free progress reporting, and cooperative cancellation token for OPC tag browsing.
+**Purpose:** Thread-safe, bounded container encapsulating thread-safe tag accumulation, reader-writer lock concurrency, lock-free progress reporting, and cooperative cancellation token for OPC tag browsing.
 
 | Method | Signature | Description |
 | :--- | :--- | :--- |
 | `new` | `pub fn new(max_tags: usize) -> Self` | Creates a collector bounded by `max_tags` (clamped to `[1, MAX_CAPACITY]`). |
+| `with_capacity` | `pub fn with_capacity(capacity: usize, max_tags: usize) -> Self` | Creates a collector pre-allocating buffer space for `capacity` tags, bounded by `max_tags`. |
 | `unbounded` | `pub fn unbounded() -> Self` | Creates an unbounded collector (`max_tags = usize::MAX`). |
 | `max_tags` | `pub fn max_tags(&self) -> usize` | Returns the configured capacity bound. |
 | `len` | `pub fn len(&self) -> usize` | Returns the current count of collected tags without locking. |
@@ -342,15 +349,18 @@ Implemented for:
 | `is_full` | `pub fn is_full(&self) -> bool` | Returns `true` if current count has reached or exceeded `max_tags`. |
 | `cancel` | `pub fn cancel(&self)` | Signals cooperative cancellation token across all clones. |
 | `is_cancelled` | `pub fn is_cancelled(&self) -> bool` | Checks if cancellation has been signalled. |
-| `snapshot` | `pub fn snapshot(&self) -> Vec<String>` | Returns a cloned copy of currently collected tags under lock. |
-| `harvest` | `pub fn harvest(&self) -> Vec<String>` | Drains and returns all collected tags, resetting count to 0. |
+| `clear` | `pub fn clear(&self)` | Drains collected tags and resets atomic counter to 0 with poison recovery. |
+| `snapshot` | `pub fn snapshot(&self) -> Vec<String>` | Returns a cloned copy of currently collected tags under read lock. |
+| `harvest` | `pub fn harvest(&self) -> Vec<String>` | $O(1)$ zero-copy swap draining and returning all collected tags, resetting count to 0. |
 | `push` | `pub fn push(&self, tag: String) -> bool` | Pushes a tag into collector if not full or cancelled. Returns `true` if added. |
-| `push_batch` | `pub fn push_batch(&self, tags: impl IntoIterator<Item = String>) -> usize` | Batch-inserts tags under a single Mutex lock acquisition, atomic count increment, and cooperative cancellation checking. Returns accepted count. |
+| `push_batch` | `pub fn push_batch(&self, tags: impl IntoIterator<Item = String>) -> usize` | Batch-inserts tags under a single write lock acquisition, atomic count increment via RAII drop guard, clamped reservation hints, and cooperative cancellation checking. Returns accepted count. |
 
 **Invariants:**
 * `Clone` performs a shallow reference-counted clone sharing the inner synchronization state.
 * `len()` and `is_cancelled()` are completely lock-free (`AtomicUsize` and `AtomicBool`).
 * `push()` will reject additions once `max_tags` is reached or if cancelled.
+* Inner tags buffer is protected by `std::sync::RwLock<Vec<String>>`, allowing concurrent read inspection without blocking workers.
+* Implements symmetrical poison recovery across `clear`, `snapshot`, `harvest`, `push`, and `push_batch`, resynchronizing atomic `count` with vector length.
 
 **Derives:** `Debug`, `Clone`, `Default`.
 
@@ -426,11 +436,13 @@ Implemented for:
 | `Clsid(Clsid)` | `Clsid` | Direct 128-bit Windows COM Class ID. |
 
 **Conversions & Methods:**
+* `new(s: &str) -> Result<Self, ParseServerIdError>`: Constructs a server identifier, parsing CLSIDs via [`Clsid::parse`] or validating ProgID without interior null bytes.
 * `as_prog_id(&self) -> Option<&str>`: Returns a borrowed reference to the ProgID string if this is a `ProgId` variant.
 * `as_clsid(&self) -> Option<&Clsid>`: Returns a borrowed reference to the CLSID if this is a `Clsid` variant.
 * `is_prog_id(&self) -> bool`: Returns `true` if this is a ProgID variant.
 * `is_clsid(&self) -> bool`: Returns `true` if this is a CLSID variant.
-* `From<&str>` and `From<String>`: Automatically checks if the string matches 128-bit GUID hex syntax (with or without `{}` braces). If valid GUID syntax, coerces directly into `ServerIdentifier::Clsid`; otherwise stores as `ServerIdentifier::ProgId`.
+* `matches(&self, other: &str) -> bool`: Semantic case-insensitive comparison against a ProgID or bracketed CLSID string.
+* `TryFrom<&str>` and `TryFrom<String>`: Fallibly parses string into `ServerIdentifier::Clsid` (if matching GUID hex syntax) or `ServerIdentifier::ProgId`. Rejects interior null bytes (`\0`).
 * `From<Clsid>`: Converts directly to `ServerIdentifier::Clsid`.
 * `From<windows_core::GUID>`: Converts directly to `ServerIdentifier::Clsid` (when `opc-da-backend` is enabled).
 * `Display`: Formats `ProgId` as string literal; formats `Clsid` as canonical `{XXXXXXXX-XXXX-XXXX-XXXX-XXXXXXXXXXXX}`.
@@ -469,18 +481,22 @@ Implemented for:
 | `identifier` | `ServerIdentifier` | Strongly-typed server identifier (ProgID or direct CLSID). |
 
 **Methods:**
+* `new(s: &str) -> Result<Self, ParseEndpointError>`: Constructs an endpoint by parsing a URI, UNC path, or bare ProgID/CLSID.
 * `local(identifier: impl Into<ServerIdentifier>) -> Self`: Creates a local endpoint (`host = None`).
+* `local_prog_id(prog_id: impl Into<String>) -> Self`: Convenience constructor for local ProgID endpoints.
 * `remote(host: impl Into<String>, identifier: impl Into<ServerIdentifier>) -> Self`: Creates a remote endpoint, automatically normalizing localhost aliases to `None`.
+* `remote_prog_id(host: impl Into<String>, prog_id: impl Into<String>) -> Self`: Convenience constructor for remote ProgID endpoints.
 * `host(&self) -> Option<&str>`: Borrows optional target host.
 * `identifier(&self) -> &ServerIdentifier`: Borrows server identifier.
 * `is_remote(&self) -> bool`: Returns `true` if target host is a non-empty remote host (not localhost).
+* `matches(&self, other: &str) -> bool`: Semantic case-insensitive comparison against an endpoint string.
 * `into_parts(self) -> (Option<String>, ServerIdentifier)`: Deconstructs into `(host, identifier)` tuple.
 
 **Traits:**
 * `Display`: Formats remote endpoints as UNC path `r"\\{}\{}"` (e.g. `r"\\192.168.1.10\Matrikon.OPC.Simulation.1"`), and local endpoints as `"{}"`.
 * `std::str::FromStr`: Parses endpoints formatted as UNC (`\\host\server` or `//host/server`) or local server identifiers (`server`). Normalizes localhost aliases to `None`.
-* `From<&str>`: Parses endpoint string slice via `FromStr`.
-* `From<String>`: Parses endpoint string via `FromStr`.
+* `TryFrom<&str>`: Parses endpoint string slice via `FromStr`. Rejects interior null bytes.
+* `TryFrom<String>`: Parses endpoint string via `FromStr`. Rejects interior null bytes.
 
 **Host Normalization Functions (`types/server.rs`):**
 * `normalize_host_str(host: &str) -> Option<&str>`: Strips leading backslashes/slashes, trims whitespace, and maps localhost aliases (`"localhost"`, `"127.0.0.1"`, `"::1"`, `"."`, `""`) to `None`.
@@ -623,13 +639,12 @@ Structured error enum returned when converting or extracting tag values from col
 * `Unbound`: Compile-time typestate representing an unbound multi-server gateway. Suitable for catalog discovery, listing servers, and dynamic ad-hoc operations.
 * `Bound`: Compile-time typestate representing a server-bound active session targeting a specific `OpcServerEndpoint`. Grants infallible access to `endpoint(&self)` and ergonomic session read/write methods.
 
-**Constructors on `OpcDaClient<ComConnector, Unbound>`:**
+**Constructors on `OpcDaClient<DefaultBackendConnector, Unbound>`:**
 | Constructor | Signature | Description |
 | :--- | :--- | :--- |
-| `builder()` | `fn builder() -> OpcDaClientBuilder<ComConnector>` | Creates a fluent builder with default native connector. |
-| `connect(server)` | `fn connect(server: impl Into<ServerIdentifier>) -> OpcResult<OpcDaClient<ComConnector, Bound>>` | Connects directly to a local OPC server, returning a `Bound` client session. |
-| `connect_remote(host, server)` | `fn connect_remote(host: impl Into<String>, server: impl Into<ServerIdentifier>) -> OpcResult<OpcDaClient<ComConnector, Bound>>` | Connects to a remote OPC server via remote DCOM, returning a `Bound` client session. |
-| `connect_eager(server)` | `fn connect_eager(server: impl Into<ServerIdentifier>) -> OpcResult<OpcDaClient<ComConnector, Bound>>` | Connects and eagerly verifies server liveness by performing an immediate root browse ping before returning `Bound` client. |
+| `builder()` | `fn builder() -> OpcDaClientBuilder<DefaultBackendConnector>` | Creates a fluent builder with default native connector. |
+| `bind_new(server)` | `fn bind_new(server: impl TryInto<OpcServerEndpoint, Error: Into<OpcError>>) -> OpcResult<OpcDaClient<DefaultBackendConnector, Bound>>` | Constructs a client bound to an OPC DA server endpoint, validating the target endpoint before initializing the backend connector. |
+| `bind_new_remote(host, server)` | `fn bind_new_remote(host: impl Into<String>, server: impl TryInto<ServerIdentifier, Error: Into<OpcError>>) -> OpcResult<OpcDaClient<DefaultBackendConnector, Bound>>` | Constructs a client bound to a remote OPC DA server by host and server identifier, validating inputs before initializing the backend connector. |
 
 **Constructors & Transitions on `OpcDaClient<C, Unbound>`:**
 | Method | Signature | Description |
@@ -774,8 +789,8 @@ Before calling `browse_recursive`, `browse_tags` attempts `browse_opc_item_ids(B
 - `BrowseDirection`: Strongly-typed enum for address space cursor movement (`Up = 1`, `Down = 2`, `To = 3`). Implements zero-cost `From<BrowseDirection> for u32` and fallible `TryFrom<u32> for BrowseDirection`.
 - `NamespaceType`: Strongly-typed enum indicating server namespace hierarchy (`Hierarchy = 1`, `Flat = 2`). Implements `From<NamespaceType> for u32` and fallible `TryFrom<u32> for NamespaceType`.
 - `TagBatch`: Small String Optimized (SSO) collection of tag IDs with a 31-byte stack inline buffer for single-tag requests, eliminating heap allocations on standard read cycles, with multibyte UTF-8 boundary safety and sequence-based semantic equality.
-- `WriteBatch`: Zero-allocation polymorphic batch write representation (`Single`, `Shared`, `Owned`) with zero-copy contiguous slice projections, borrowed iterator `WriteBatchIter`, and owning iterator `WriteBatchIntoIter`.
-- `IntoWriteBatch`: Universal conversion trait for batch write payloads.
+- `WriteBatch`: Opaque zero-allocation batch write container with 5-variant representation (`StaticSingle`, `InlineSingle` with 31-byte stack SSO, `OwnedSingle`, `Shared`, `Owned`), 72-byte memory layout, borrowed iterator `WriteBatchIter`, and owning iterator `WriteBatchIntoIter`.
+- `IntoWriteBatch`: Universal conversion trait for batch write payloads, bounded by `Send`.
 - `server_info_from_prog_ids(host: &str, prog_ids: Vec<String>) -> Vec<OpcServerInfo>`: Canonical deduplicated helper synthesizing `OpcServerInfo` records from ProgIDs.
 
 ---
@@ -1006,7 +1021,7 @@ Compile-time typestate machine governing client initialization, binding, and ses
 stateDiagram-v2
     [*] --> Unbound : OpcDaClient::new(connector) / default()
     [*] --> Unbound : OpcDaClientBuilder::build()
-    [*] --> Bound : OpcDaClient::connect(endpoint) / connect_remote()
+    [*] --> Bound : OpcDaClient::bind_new(endpoint) / bind_new_remote()
     [*] --> Bound : OpcDaClientBuilder::build_bound()
     Unbound --> Bound : client.bind(endpoint) / bind_remote()
     Bound --> Unbound : (client, ep) = client.unbind()
@@ -1083,7 +1098,7 @@ Defines the behavioral contract of the `opc-cli` binary interface:
 
 ---
 
-## 5. Required Test Coverage
+## 6. Required Test Coverage
 
 ### Unit Tests (in `errors.rs` & `raw/hresult.rs`)
 
@@ -1317,21 +1332,24 @@ Defines the behavioral contract of the `opc-cli` binary interface:
 - [x] `TagValues` methods (`new`, `len`, `is_empty`, `get`, `get_value`, `get_as`, `get_f64`, `get_f32`, `get_i32`, `get_i64`, `get_u32`, `get_u64`, `get_bool`, `get_str`, `into_vec`, `as_slice`, `iter`) — runnable doctests in `types/collection.rs`.
 - [x] `OpcServerEndpoint` methods (`local`, `remote`, `is_remote`) and host normalization functions (`normalize_host_str`, `normalize_host`, `is_remote_host`) — runnable doctests in `types/server.rs`.
 - [x] `OpcDaClientBuilder` methods (`new`, `with_legacy_dcom`, `host`, `server`, `timeout`, `build`, `build_bound`) — runnable doctests in `com/client.rs`.
-- [x] `OpcDaClient` constructors & inherent methods (`builder`, `connect`, `connect_remote`, `bind`, `bind_remote`, `read_tag_values`, `read_f64`, `read_i32`, `read_bool`, `read_string`, `write`, `write_batch`, `subscribe`) — runnable doctests in `com/client.rs`.
-- [x] `OpcProvider` trait methods (`list_servers`, `browse_tags`, `read_tag_value`, `read_tag_values`, `write_tag_value`, `write_tag_values`) — runnable doctests in `provider.rs` backed by `MockOpcProvider` assertions.
+- [x] `OpcDaClient` constructors & inherent methods (`builder`, `bind_new`, `bind_new_remote`, `bind`, `bind_remote`, `read_tag`, `read_tags`, `read_f64`, `read_i32`, `read_bool`, `read_string`, `write_tag`, `write_tags`, `subscribe`) — runnable doctests in `client/session.rs`, `client/gateway.rs`.
+- [x] `OpcProvider` trait methods (`list_servers`, `browse_tags`, `read_tag_value`, `read_tag_values`, `write_tag_value`, `write_tag_batch`) — runnable doctests in `provider.rs` backed by `MockOpcProvider` assertions.
 - [x] `ServerGroupHandle`, `ServerItemHandle`, `OpcQuality`, `BrowseType`, `BrowseDirection` — runnable doctests in `types/handles.rs`, `types/quality.rs`, `types/browse.rs`.
 - [x] `ServerGroupHandle` and `ServerItemHandle` compile-fail non-interchangeability doctests in `types/handles.rs`.
 - [x] `ComGuard` and `ComConnector::connect_endpoint` — internal/offline ignored doctests.
 - [x] Quick Start & Usage Examples (Listing, Reading, Writing, Browsing, Typestates) — runnable doctests in `lib.rs` and `README.md`.
 
-### Integration Test Suites (4 Suites in `opc-da-client/tests/` — 8 Tests)
+### Integration Test Suites (7 Suites in `opc-da-client/tests/`)
 
-- [x] `batch_write_test` — validates multi-item atomic COM group batch write transactions, partial item error handling, and `WriteResult` status mapping.
-- [x] `handle_type_safety_test` — validates opaque newtype wrappers `ServerGroupHandle`, `ServerItemHandle`, `ClientGroupHandle`, `ClientItemHandle` enforcing strict compile-time non-interchangeability.
-- [x] `mock_contract_stability_test` — validates `MockOpcProvider` and `MockServerConnector` contract fidelity across all segregated role traits (`ServerDiscovery`, `TagBrowser`, `TagReader`, `TagWriter`).
+- [x] `batch_write_test` — validates multi-item atomic COM group batch write transactions, partial item error handling, null-byte quarantine, and `WriteResult` status mapping.
 - [x] `typestate_client_test` — validates compile-time `OpcDaClient<C, Unbound>` to `OpcDaClient<C, Bound>` state transitions via `bind`, `bind_remote`, and `unbind`, verifying infallible endpoint access on `Bound`.
+- [x] `server_discovery_integration_test` — validates catalog enumeration, server detail synthesis, and ProgID/CLSID resolution.
+- [x] `tag_browsing_integration_test` — validates hierarchical and flat address space walks, cancellation token propagation, and bounded tag collection.
+- [x] `tag_io_integration_test` — validates synchronous and active group read/write I/O, typestate accessors, and error preservation.
+- [x] `subscription_integration_test` — validates Layer 2 streaming polling subscriptions, `mpsc` updates, and RAII drop cancellation.
+- [x] `resilience_and_pool_integration_test` — validates connection pooling, transparent reconnect on stale connections, active group caching, and circuit breaker cooldowns.
 
-**Total Workspace Test Suite**: 56 CLI unit + 1 CLI integration + 192 client unit + 8 client integration + 2 polyfill = 259 tests + 80 doctests = **339 total tests**.
+**Total Workspace Test Suite**: 611 automated tests (unit, integration, doctests) passing with zero regressions across the 9-gate quality pipeline (`scripts/verify.ps1`).
 
 ### Integration / Manual Tests
 

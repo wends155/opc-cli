@@ -364,8 +364,8 @@ impl<const N: usize> IntoTags for &'static [&'static str; N] {
 
 /// Converts a fixed-size array by value into a [`TagBatch`].
 ///
-/// Fixed-size arrays with $N \le 4$ are stored inline via [`TagBatchRepr::StaticSmall`]
-/// with zero heap allocations. Arrays with $N > 4$ are stored via [`TagBatchRepr::StaticArc`],
+/// Fixed-size arrays with $N \le 4$ are stored inline via `StaticSmall`
+/// with zero heap allocations. Arrays with $N > 4$ are stored via `StaticArc`,
 /// allocating only a single slice wrapper without individual [`String`] allocations.
 impl<const N: usize> IntoTags for [&'static str; N] {
     #[inline]

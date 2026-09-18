@@ -90,9 +90,9 @@ impl<C: ServerBackend + 'static> OpcDaClient<C, Bound> {
     ///
     /// # Errors
     ///
-    /// Returns [`OpcError::Connection`] if the server cannot be instantiated or reached,
-    /// [`OpcError::Timeout`] if connectivity verification exceeds the configured timeout,
-    /// or [`OpcError::Worker`] if communication with the background worker fails.
+    /// Returns [`crate::errors::OpcError::Connection`] if the server cannot be instantiated or reached,
+    /// [`crate::errors::OpcError::Timeout`] if connectivity verification exceeds the configured timeout,
+    /// or [`crate::errors::OpcError::Worker`] if communication with the background worker fails.
     ///
     /// # Panics
     ///

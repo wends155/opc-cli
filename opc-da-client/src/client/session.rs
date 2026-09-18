@@ -343,8 +343,8 @@ impl<C: ServerBackend + 'static> OpcDaClient<C, Bound> {
 
     /// Writes a batch of tag-value pairs to the bound server.
     ///
-    /// Accepts any type convertible into a [`WriteBatch`] via [`IntoWriteBatch`], including
-    /// arrays of tuples `[("Tag", value)]`, slices, vectors, or pre-constructed [`WriteBatch`].
+    /// Accepts any type convertible into a [`crate::types::WriteBatch`] via [`IntoWriteBatch`], including
+    /// arrays of tuples `[("Tag", value)]`, slices, vectors, or pre-constructed [`crate::types::WriteBatch`].
     ///
     /// # Errors
     ///
