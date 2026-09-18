@@ -368,3 +368,59 @@ This preserves clean ergonomics for 99% of consumers while providing full parame
 * **Behavioral Obstacle:** During execution, `browse_recursive` at depth 0 successfully ingested the 300 leaf items (256 chunked + 44 residual). However, `browse_recursive` then proceeded to branch enumeration and recursed into simulated branch `"Random"`. Because `MockConnectedServer` returned the same 300 leaf tags within child branches, `browse_recursive` collected an additional 200 items before hitting the collector's capacity cap ($300 + 200 = 500$). The test assertion `assert_eq!(tags.len(), 300)` failed with `left: 500, right: 300`.
 * **Architectural Resolution:** In accordance with `builder-rules.md §5.1` (Allowed Micro-Decisions on test setup) and Fidelity Hierarchy Priority 1 (Tests define correctness), the mock server setup was chained with `.with_branch_tags(Vec::new())`. This explicitly cleared simulated child branches, ensuring that `browse_recursive` focused strictly on depth-0 leaf chunking without unintended mock branch re-traversal. The test passed with exactly 300 tags, verifying both 256-chunking on the happy path and post-browse zero-allocation harvest semantics.
 
+---
+
+### 3.24 Case Study I4.1: Collection Generic Type Inference Ambiguity (`E0283`) in Mock Provider Test Fixtures
+* **Context:** In Step 7 of Sub-Block I4, mock test fixtures in `opc-da-client/src/provider.rs` were migrated from the open `WriteBatch::Owned` variant to the encapsulated `IntoWriteBatch` trait implementation via `.into_write_batch()`.
+* **Compiler Obstacle:** The initial implementation plan drafted fixture conversions using chained `.into()` calls:
+  ```rust
+  let batch = vec![
+      ("Tag.1".into(), OpcValue::Int(10)),
+      ("Tag.2".into(), OpcValue::Int(20)),
+  ]
+  .into_write_batch();
+  ```
+  The blanket collection conversion is implemented as:
+  ```rust
+  impl<S, V> IntoWriteBatch for Vec<(S, V)>
+  where
+      S: Into<String> + Send,
+      V: Into<OpcValue> + Send,
+  ```
+  When `"Tag.1".into()` is invoked, Rust's type solver attempts to find an intermediate type `S` such that `&str: Into<S>` and `S: Into<String>`. Because multiple intermediate types satisfy this relationship (including `String`, `Cow<'_, str>`, `Box<str>`, and `&str`), the trait solver cannot resolve a unique type for `S`, emitting compiler error `E0283`:
+  ```text
+  error[E0283]: type annotations needed
+     --> opc-da-client/src/provider.rs:518:10
+      |
+  518 |         .into_write_batch();
+      |          ^^^^^^^^^^^^^^^^ cannot infer type for type parameter `S` declared on the trait `IntoWriteBatch`
+  ```
+* **Architectural Resolution:** Rather than adding verbose turbofish annotations (e.g. `vec![("Tag.1".to_string(), ...)]`), the tuples were simplified to use concrete string slices directly:
+  ```rust
+  let batch = vec![
+      ("Tag.1", OpcValue::Int(10)),
+      ("Tag.2", OpcValue::Int(20)),
+  ]
+  .into_write_batch();
+  ```
+  Because `&str` satisfies `Into<String> + Send` directly, the compiler immediately and unambiguously infers `S = &'static str`. This conforms to `builder-rules.md §5.1` (Allowed Micro-Decisions on test setup) and Priority 1 of the Fidelity Hierarchy (Compiler & Safety Invariants), keeping test fixtures clean, readable, and free of extraneous heap allocations before batch conversion.
+
+---
+
+### 3.25 Case Study I4.2: Windows PowerShell 5.1 `Join-Path` Multi-Parameter Incompatibility
+* **Context:** In Step 9 of Sub-Block I4, the universal verification pipeline (`scripts/verify.ps1`) was executed to validate the crate and polyfill builds.
+* **Shell Obstacle:** During execution under Windows PowerShell 5.1 (`powershell.exe`), the script failed with:
+  ```text
+  Join-Path : A positional parameter cannot be found that accepts argument 'compat'.
+  At C:\Users\WSALIGAN\code\opc-cli\scripts\verify.ps1:70 char:18
+  +     $compatDir = Join-Path $PSScriptRoot ".." "compat"
+  +                  ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+  ```
+  In PowerShell Core (`pwsh` 7+), `Join-Path` supports the `[-AdditionalChildPath <string[]>]` dynamic parameter, allowing 3 or more positional arguments like `Join-Path $PSScriptRoot ".." "compat"`. However, in Windows PowerShell 5.1 (the default built-in PowerShell on Windows environments), `Join-Path` only defines two positional parameters: `-Path` and `-ChildPath`. Supplying a third positional argument results in `PositionalParameterNotFound`.
+* **Architectural Resolution:** Rather than chaining multiple `Join-Path` calls (`Join-Path (Join-Path $PSScriptRoot "..") "compat"`), all occurrences were standardized to 2-parameter relative paths:
+  ```powershell
+  $compatDir = Join-Path $PSScriptRoot "..\compat"
+  ```
+  This standardizes path construction across both Windows PowerShell 5.1 and PowerShell 7+, ensuring that the verification pipeline operates consistently and portably regardless of whether invoked from `powershell.exe` or `pwsh.exe`.
+
+
