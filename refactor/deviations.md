@@ -13,7 +13,7 @@
 During Cycle 2, each deviation from the approved implementation plan is recorded with its compiler/language dynamic, architectural justification, and resulting invariant.
 
 ### Summary Metrics
-* **Total Cycle 2 Deviations:** 22
+* **Total Cycle 2 Deviations:** 23
 * **Block G1 (Clean Slate API Excision & Struct Deduplication):** 3 deviations (0 violations, all justified and verified)
 * **Block G2 (Ergonomic Symmetry & Comprehensive Public Documentation):** 4 deviations (0 violations, all justified and verified)
 * **Block H1 (Domain Invariants & CWE-626 Hardening):** 2 deviations (0 violations, all justified and verified)
@@ -22,6 +22,7 @@ During Cycle 2, each deviation from the approved implementation plan is recorded
 * **Sub-Block H3b (Worker Active Group Caching & Batch Defense):** 2 deviations (0 violations, all justified and verified)
 * **Sub-Block H3c (Batch Ergonomics & Public Conversions):** 2 deviations (0 violations, all justified and verified)
 * **Sub-Block I1 (COM Worker Hygiene & Buffer Reuse):** 4 deviations (0 violations, all justified and verified)
+* **Sub-Block I2 (Batch Write Allocation & Defensive Hardening):** 1 deviation (0 violations, all justified and verified)
 * **Quality Gate Verification:** 100% Green across all 9 quality gates in `scripts/verify.ps1`.
 
 ---
@@ -52,6 +53,7 @@ During Cycle 2, each deviation from the approved implementation plan is recorded
 | **Sub-Block I1** | Step 7<br>Finding #4 | `Arc::new(MockServerConnector::with_state(state.clone()))` in connection pool test | `Arc::new(MockServerConnector::with_state(state))` in `tests/connection_pool_test.rs:188` | Clippy `-D warnings` triggered `clippy::redundant_clone` because the local binding `state` was dropped immediately after without further reads or references. Passing `state` by move avoids unnecessary atomic reference count increments. | Lint Rule Invariant (`clippy::redundant_clone`) | Test setup transfers ownership directly without redundant clones when bindings are not subsequently accessed. |
 | **Sub-Block I1** | Step 10<br>Finding #1 | In-place buffer reuse via `chunk.drain(..)` in `browse_flat_namespace` and `try_fast_flat_browse` | Scoped `#[allow(clippy::iter_with_drain)]` on `browse_flat_namespace` and `try_fast_flat_browse` in `src/com/worker/browse.rs` | Clippy nursery lint `iter_with_drain` denies calling `drain(..)` under `-D warnings` and suggests `into_iter()`. However, calling `into_iter()` drops and deallocates the underlying `Vec` buffer, directly violating Plan Objective O1 (reusing a single pre-allocated 256-item vector buffer across intermediate and terminal flushes to eliminate ~39 heap allocations per 10k tags). Scoped suppression preserves the high-performance buffer-reuse invariant while passing zero-warning linter checks. | Performance Optimization & Nursery Lint Exemption | In-place vector buffer reuse is preserved across browse batch pushes without buffer re-allocation or lint failure. |
 | **Sub-Block I1** | Step 12<br>Finding #2 | Action 1: "Remove unused import `ConnectedGroup` from line 12" in `src/com/worker.rs` | Retained `use crate::connector::ConnectedGroup;` in `src/com/worker.rs` | In Rust, calling trait methods requires the trait to be in scope. `src/com/worker.rs:94` calls `group.add_items(&item_defs)` where `group: S::Group` and `add_items` is defined on trait `ConnectedGroup`. Removing the import triggered compiler error `E0599: no method named add_items found for associated type <S as traits::ConnectedServer>::Group in the current scope`. Retaining the trait import satisfies Rust's trait visibility requirements. | Language Invariant & Trait Visibility (`E0599`) | `ConnectedGroup` trait remains in scope in `worker.rs` to allow dispatch of group management trait methods. |
+| **Sub-Block I2** | Step 7 / Step 10<br>Finding #1 | `let server_write_results = Some(vec![Ok(()), Err(OpcError::Com(0x8000_4005))]);` or raw cast `0x8000_4005u32 as i32` | `let server_write_results = Some(vec![Ok(()), Err(OpcError::Com { source: windows_core::Error::from_hresult(crate::errors::hresult::E_FAIL) })]);` in `src/com/worker/write.rs:732` | Clippy `-D warnings` triggered `clippy::cast_possible_wrap` on high-bit raw integer cast `0x8000_4005u32 as i32` for Win32 HRESULT in test fixtures, and `OpcError::Com` is a struct variant `OpcError::Com { source: windows_core::Error }`. Using canonical constant `crate::errors::hresult::E_FAIL` (`HRESULT(0x8000_4005_u32.cast_signed())`) guarantees zero-warning compiler compliance and single-source-of-truth HRESULT error modeling. | Lint Rule Invariant (`clippy::cast_possible_wrap`) & Error Struct Conformance | Test fixtures construct Win32 COM error variants via canonical `crate::errors::hresult` constants rather than ad-hoc inline casts or obsolete tuple syntax. |
 
 ---
 
@@ -327,3 +329,28 @@ This preserves clean ergonomics for 99% of consumers while providing full parame
      = help: items from traits can only be used if the trait is in scope
   ```
 * **Architectural Resolution:** Retained `use crate::connector::ConnectedGroup;` in `src/com/worker.rs`. While the symbol name `ConnectedGroup` is not mentioned literally as a type annotation in the function body, its presence in scope is strictly required for dynamic trait method dispatch on associated types.
+
+---
+
+### 3.22 Case Study I2.1: Clippy Cast-Possible-Wrap on Win32 HRESULT Test Fixture Construction (`clippy::cast_possible_wrap`)
+* **Context:** In Step 7 of Sub-Block I2, unit test `test_assemble_write_results_partial_failure` was added to `src/com/worker/write.rs` to verify result assembly when the COM server returns an `Err(OpcError::Com { ... })` for a specific item write.
+* **Compiler Obstacle:** Initial plan snippets constructed the COM error using either an obsolete tuple variant `OpcError::Com(0x8000_4005)` or a raw high-bit cast:
+  ```rust
+  let server_write_results = Some(vec![
+      Ok(()),
+      Err(OpcError::Com {
+          source: windows_core::Error::from_hresult(windows_core::HRESULT(0x8000_4005u32 as i32)),
+      }),
+  ]);
+  ```
+  This triggered two compiler/linter issues under `-D warnings`:
+  1. `OpcError::Com` is a struct variant with field `source: windows_core::Error` rather than a tuple variant.
+  2. In `windows_core`, `HRESULT` wraps signed `i32`. Casting high-bit Win32 constants like `0x8000_4005u32 as i32` triggers Clippy's `clippy::cast_possible_wrap` lint, which halts verification under `-D warnings`:
+  ```text
+  error: casting `u32` to `i32` may wrap around the value
+     --> opc-da-client/src/com/worker/write.rs:732:73
+      |
+  732 |     source: windows_core::Error::from_hresult(windows_core::HRESULT(0x8000_4005u32 as i32))
+      |                                                                     ^^^^^^^^^^^^^^^^^^^^^^ help: use: `0x8000_4005u32.cast_signed()`
+  ```
+* **Architectural Resolution:** Rather than using inline casts or silencing the lint, the test fixture was updated to reference the repository's canonical HRESULT constant `crate::errors::hresult::E_FAIL` (`HRESULT(0x8000_4005_u32.cast_signed())`). This conforms strictly to the project's single-source-of-truth error modeling, avoids raw integer casts, and passes all 9 quality verification gates cleanly with zero warnings.
