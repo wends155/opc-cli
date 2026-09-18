@@ -1,5 +1,32 @@
 # Project Context Summary
 
+## 2026-09-18: Documentation Synchronization (`/update-doc`) Completed
+> 📝 **Context Update:**
+> * **Feature:** Comprehensive workspace documentation audit and synchronization across `opc-da-client` and `opc-cli` per `/update-doc` workflow.
+> * **Changes:**
+>   - **Rustdoc Warning Remediation (10 Warnings -> 0):**
+>     - Fixed unimported intra-doc links to `WriteBatch` in `client/session.rs` via `crate::types::WriteBatch`.
+>     - Fixed intra-doc link to `Receiver` in `client/subscription.rs`.
+>     - Fixed unimported intra-doc links to `OpcError` variants in `client/typestate.rs` via `crate::errors::OpcError::*`.
+>     - Replaced private intra-doc links to `ComServer` in `com/connector/server.rs` with `ConnectedServer`.
+>     - Replaced private intra-doc links to internal `TagBatchRepr` variants in `types/batch.rs` with verbatim code identifiers.
+>     - `cargo doc --no-deps` now completes with 0 warnings across all workspace crates.
+>   - **Behavioral Specification Alignment (`opc-da-client/spec.md`):**
+>     - Formatted header with standardized metadata table per `spec-rules.md §7` and synchronized verification hash to `40dc46f`.
+>     - Clean Slate deprecation excision: removed obsolete `write_tag_values` and `connect`/`connect_remote` rows.
+>     - Synchronized Cycle 2 domain additions: `bind_new`, `bind_new_remote`, `ServerIdentifier` and `OpcServerEndpoint` `TryFrom` parsing and semantic `matches`, `TagValues::contains`, `WriteResult::is_connection_error` and `Display`, and `TagCollector` reader-writer concurrency with zero-copy `harvest()`.
+>     - Corrected Section 1.5 `WriteBatch` to reflect the 5-variant 72-byte memory layout with 31-byte stack SSO, monotonic `ExactSizeIterator`, and `IntoWriteBatch: Send`.
+>     - Updated typestate transition diagram and test suite metrics (611 automated tests, 7 integration suites).
+>   - **Package Documentation Alignment:**
+>     - Synchronized `opc-da-client/README.md` API Surface table entries (`WriteBatch` as `pub struct`, `WriteBatchIter` as `pub struct`, `TagCollector` with `RwLock` concurrency).
+>     - Verified semantic alignment between `Cargo.toml [package.description]`, `README.md`, and `lib.rs //!` crate-level overviews across workspace.
+>   - **Verification:**
+>     - Universal verification pipeline (`pwsh -File scripts/verify.ps1`) exited 0 across all 9 quality gates with 0 warnings.
+> * **New Constraints:**
+>   - All intra-doc links to items outside the immediate module scope must use canonical crate-relative paths or imported aliases.
+>   - Public doc comments must never link to crate-private or private enum variants via intra-doc link syntax `[...]`.
+> * **Pruned:** Stale references to deprecated v0.1/v0.2 methods in `spec.md` and `README.md` purged.
+>
 ## 2026-09-18: Cycle 2 Modernization Archive Consolidation & Knowledge-RAG Ingestion
 > 📝 **Context Update:**
 > * **Feature:** Cycle 2 Modernization Archive Consolidation, Lessons Learned Extraction, and Knowledge-RAG Integration
