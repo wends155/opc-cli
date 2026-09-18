@@ -1,6 +1,6 @@
-# Task Checklist: Modernization Sub-Block I1 (COM Worker Hygiene & Buffer Reuse)
+# Task Checklist: Modernization Sub-Block I2 (Batch Write Allocation & Defensive Hardening)
 
-> Tracking implementation progress for `refactor/cycle2_blockI1_plan.md`.
+> Tracking implementation progress for [`refactor/cycle2_blockI2_plan.md`](file:///c:/Users/WSALIGAN/code/opc-cli/refactor/cycle2_blockI2_plan.md).
 
 ---
 
@@ -8,42 +8,38 @@
 
 | ID | Objective | Success Criteria |
 |---|---|---|
-| **O1** | **Browse Buffer Reuse** | `chunk.drain(..)` replaces `std::mem::replace` across all flushes in `browse.rs`; unit tests prove zero tags lost over 600 items across multiple boundaries and bounded capacity is respected. |
-| **O2** | **Read Error Ownership & Zero-Alloc Logging** | `partition_item_results` takes owned `results: Vec<GroupItemResult>`; zero `err.clone()` in partition; `error = %err` streams directly into tracing; upfront parity check fails fast on mismatch. |
-| **O3** | **Zero-Alloc Hot-Path Dispatch** | `dispatch_pooled_request` and `dispatch_discovery_request` eliminate pre-unwind `endpoint.clone()` and `host.to_string()` allocations; panic recovery accesses borrowed data safely. |
-| **O4** | **Clean Slate Excision & API Hygiene** | `start_async*`, `PriorityRequestQueue::clear`, `clear_active_group`, and `is_empty` deleted; `test_priority_request_queue_drop_drops_senders` validates `drop(queue)`. |
-| **O5** | **Zero-Warning Workspace Quality Gate** | All 8 verification gates in `scripts/verify.ps1` pass with zero warnings, zero dead code attributes in worker modules, and zero test regressions. |
+| **O1** | **Eliminate Dead Store Allocations** | Happy-path 10k batch reduces heap allocations from 30,005 to 10,004 (-66.7%) and allocator ops from 50,005 to 10,004 (-80.0%) via lazy `Vec<Option<WriteResult>>` slot buffer. |
+| **O2** | **Granular CWE-626 Null-Byte Defense** | Interior null bytes in tag IDs are isolated into `WriteResult::failure` during pre-registration partitioning with `tracing::warn!` telemetry; valid tags proceed to COM registration (prevents CWE-400 batch poisoning DoS). |
+| **O3** | **Two-Stage Defensive Index Mapping** | Strict mathematical 1:1 positional correspondence between input writes and output results enforced via `valid_orig_indices` (Stage 1) and `valid_write_orig_indices` (Stage 2) using safe `.get()` slice indexing and `.zip()` pairing. |
+| **O4** | **Decompose Monolithic Write Engine** | Refactor 112-line `handle_write_batch` into 3 cohesive helper functions (`partition_write_inputs`, `partition_item_registration_results`, `assemble_write_results`), removing `#[allow(clippy::too_many_lines)]`. |
+| **O5** | **Ergonomic Domain Extensions** | Implement `Display` and `is_connection_error(&self) -> bool` on `WriteResult` with runnable `# Examples` doctests and complete rustdoc specifications. |
+| **O6** | **Comprehensive Integration Testing** | Expand `tests/batch_write_test.rs` with multi-tag partial registration failures, partial write failures, null-byte isolation, all-null COM short-circuiting, and verification via `pwsh scripts/verify.ps1`. |
 
 ---
 
 ## Global Execution Order
 
-### Component Group 1: Priority Request Queue Hygiene & Test Scaffolding
-- [x] **Step 1: [TEST]** `opc-da-client/src/com/worker/tests.rs` — [~] `test_priority_request_queue_drop_drops_senders` (L1017-1045)
-- [x] **Step 2: [MODIFY]** `opc-da-client/src/com/worker.rs` — [-] `PriorityRequestQueue::clear` (L404-408)
+### Phase 1: `WriteResult` Domain Ergonomics
+- [ ] **Step 1: [TEST]** `opc-da-client/src/types/write_batch.rs` — [+] `test_write_result_display_formatting`, `test_write_result_is_connection_error`
+- [ ] **Step 2: [MODIFY]** `opc-da-client/src/types/write_batch.rs` — [+] `<WriteResult as Display>::fmt`, `WriteResult::is_connection_error`
+- [ ] **🔒 CHECKPOINT 1**: Verify `WriteResult` unit tests (`cargo test -p opc-da-client --lib types::write_batch::tests`)
 
-### Component Group 2: Read Engine Parity Validation & Error Move Semantics
-- [x] **Step 3: [TEST]** `opc-da-client/src/com/worker/read.rs` — [+] `test_assemble_tag_values_parity_mismatch_fails_fast` (L286+)
-- [x] **Step 4: [MODIFY]** `opc-da-client/src/com/worker/read.rs` — [~] `assemble_tag_values` (L221-241)
-- [x] **Step 5: [TEST]** `opc-da-client/src/com/worker/read.rs` — [~] `test_group_guard_disarm_on_read` (L341)
-- [x] **Step 6: [MODIFY]** `opc-da-client/src/com/worker/read.rs` — [~] `partition_item_results` & `handle_read` (L137, L184-210)
-- [x] **🔒 CHECKPOINT 1**: Verify read module tests pass (`cargo test -p opc-da-client --lib com::worker::read`)
+### Phase 2: Pipeline Helper Decomposition & Defense
+- [ ] **Step 3: [TEST]** `opc-da-client/src/com/worker/write.rs` — [+] `test_partition_write_inputs_clean_tags`, `test_partition_write_inputs_contaminated_tags`, `test_partition_write_inputs_all_null_tags`
+- [ ] **Step 4: [MODIFY]** `opc-da-client/src/com/worker/write.rs` — [+] `partition_write_inputs` with CWE-626 null-byte isolation and `tracing::warn!`
+- [ ] **Step 5: [TEST]** `opc-da-client/src/com/worker/write.rs` — [+] `test_partition_item_registration_results_partial`, `test_partition_item_registration_results_count_mismatch`
+- [ ] **Step 6: [MODIFY]** `opc-da-client/src/com/worker/write.rs` — [+] `partition_item_registration_results` with buffer size check and `.zip()` pairing
+- [ ] **Step 7: [TEST]** `opc-da-client/src/com/worker/write.rs` — [+] `test_assemble_write_results_outcomes`, `test_assemble_write_results_parity_mismatch`, `test_assemble_write_results_unassigned_slots_fallback`
+- [ ] **Step 8: [MODIFY]** `opc-da-client/src/com/worker/write.rs` — [+] `assemble_write_results` with server parity check and fail-safe slot fallback
+- [ ] **🔒 CHECKPOINT 2**: Verify all write helper unit tests (`cargo test -p opc-da-client --lib com::worker::write::tests`)
 
-### Component Group 3: Connection Pool Diagnostics & Group Management
-- [x] **Step 7: [TEST]** `opc-da-client/src/com/worker/pool.rs` — [+] `test_connection_pool_len_and_lifecycle` (L420+) & [~] `test_dispatch_with_retry_active_group_reuse` (L605)
-- [x] **Step 8: [MODIFY]** `opc-da-client/src/com/worker/pool.rs` — [~] `insert_active_group`, `evict`, `len`; [-] `clear_active_group`, `is_empty`, `CachedGroup allow(dead_code)` (L26, L87-95, L125-128, L240-251, L268)
-- [x] **🔒 CHECKPOINT 2**: Verify pool module tests pass (`cargo test -p opc-da-client --lib com::worker::pool`)
+### Phase 3: Monolithic Orchestration Refactoring
+- [ ] **Step 9a: [TEST]** `opc-da-client/src/com/worker/write.rs` — [+] Unit tests for refactored write pipeline (`test_handle_write_batch_granular_null_byte_isolation`, `test_handle_write_batch_all_null_short_circuits`, `test_handle_write_batch_all_rejected_registration_skips_write`, `test_handle_write_scalar_null_byte_returns_failure_result`)
+- [ ] **Step 9b: [MODIFY]** `opc-da-client/src/com/worker/write.rs` — [~] Refactor `handle_write_batch` to 5-stage pipeline, remove `#[allow(clippy::too_many_lines)]`, delegate `handle_write`
+- [ ] **🔒 CHECKPOINT 3**: Verify worker write unit suite (`cargo test -p opc-da-client --lib com::worker::write::tests`)
 
-### Component Group 4: Browse Buffer Draining & Capacity Bounding
-- [x] **Step 9: [TEST]** `opc-da-client/src/com/worker/browse.rs` — [+] `test_handle_browse_chunk_draining_*` (L270+)
-- [x] **Step 10: [MODIFY]** `opc-da-client/src/com/worker/browse.rs` — [~] `browse_flat_namespace` & `try_fast_flat_browse` (L96-108, L130-151)
-- [x] **🔒 CHECKPOINT 3**: Verify browse module tests pass (`cargo test -p opc-da-client --lib com::worker::browse`)
+### Phase 4: Integration Coverage & Quality Gate Verification
+- [ ] **Step 10: [TEST+VERIFY]** `opc-da-client/tests/batch_write_test.rs` — [+] Add 6 integration tests (`test_client_batch_write_partial_rejection_preserves_order`, `test_client_batch_write_interior_null_byte_isolated`, `test_client_batch_write_empty_short_circuits`, `test_client_batch_write_all_rejected_skips_write`, `test_client_batch_write_all_null_short_circuits`, `test_write_result_display_and_connection_error`) and verify full workspace gate (`pwsh scripts/verify.ps1`)
+- [ ] **🔒 FINAL CHECKPOINT**: Full workspace zero-exit gate
 
-### Component Group 5: Zero-Allocation Request Dispatching & Clean Slate Hygiene
-- [x] **Step 11: [TEST]** `opc-da-client/src/com/worker/tests.rs` — [+] `test_worker_panic_recovery_with_borrowed_endpoint` (L1300+)
-- [x] **Step 12: [MODIFY]** `opc-da-client/src/com/worker.rs` — [~] `dispatch_pooled_request`, `dispatch_discovery_request`, `sender`; [-] `start_async*`, `ConnectedGroup` import (L12, L228-234, L268-302, L531, L568-588)
-- [x] **🔒 CHECKPOINT 4**: Verify all worker tests pass (`cargo test -p opc-da-client --lib com::worker`)
-
-### Component Group 6: Verification Pipeline & Final Quality Gate
-- [x] **Step 13: [CHECK]** Workspace Quality Gate — Full repository verification (`pwsh -File scripts/verify.ps1`)
-- [x] **🔒 FINAL CHECKPOINT**: Full workspace zero-exit gate
+## Builder Notes
