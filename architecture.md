@@ -61,7 +61,7 @@ opc-cli/
 │   ├── tests/                  # Integration test suites (batch_write, handle_type_safety, mock_contract, typestate_client)
 │   └── src/
 │       ├── lib.rs              # Library root & public re-exports (zero unreachables, Default MockOpcDaClient)
-│       ├── provider.rs         # OpcProvider trait (read_tag_value, write_tag_values), TagValue, WriteResult, TagCollector (re-exports OpcValue)
+│       ├── provider.rs         # Segregated role traits (ServerDiscovery, TagBrowser, TagReader, TagWriter) & composite OpcProvider (AFIT native async), TagValue, WriteResult, TagCollector
 │       ├── types.rs            # Re-export parent module for domain types
 │       ├── client/             # Typestate client subsystem (Unbound gateway vs Bound session)
 │       │   ├── mod.rs          # Subsystem root, OpcDaClient, re-exports
@@ -69,9 +69,10 @@ opc-cli/
 │       │   ├── typestate.rs    # Compile-time typestates (Unbound, Bound)
 │       │   ├── session.rs      # Inherent session methods sealed to Bound (read, write, subscribe)
 │       │   ├── subscription.rs # Subscription polling stream with shareable tag batches
-│       │   ├── gateway.rs      # Gateway operations for Unbound client (bind, bind_remote, list_servers_on)
+│       │   ├── gateway.rs      # Gateway operations for Unbound client (bind, bind_remote, list_servers, list_server_details)
 │       │   └── tests.rs        # Comprehensive client facade unit tests
 │       ├── types/              # Decomposed modular domain types subsystem
+│       │   ├── clsid.rs        # Clsid 128-bit COM Class ID representation with ParseClsidError
 │       │   ├── handles.rs      # Type-safe handles (ClientGroupHandle, ServerGroupHandle, ClientItemHandle, ServerItemHandle)
 │       │   ├── value.rs        # OpcValue and zero-allocation display adapters
 │       │   ├── quality.rs      # Strongly-typed OpcQuality, QualityMajor, QualityLimit, QualitySubstatus
@@ -80,8 +81,8 @@ opc-cli/
 │       │   ├── server.rs       # ServerIdentifier, OpcServerEndpoint, OpcServerInfo, ServerStatus, GroupState
 │       │   ├── batch.rs        # TagBatch zero-allocation batching and into_shareable
 │       │   ├── collection.rs   # TagValue, TagSuccess, TagFailure, TagResult, TagValues collection
-│       │   ├── collector.rs    # TagCollector
-│       │   ├── write_batch.rs  # WriteBatch, IntoWriteBatch, WriteBatchIter, WriteResult
+│       │   ├── collector.rs    # TagCollector with RwLock concurrency and zero-copy harvest
+│       │   ├── write_batch.rs  # WriteBatch 5-variant layout + 31-byte stack SSO, IntoWriteBatch, WriteBatchIter, WriteResult
 │       │   └── tests.rs        # Domain type test suite
 │       ├── errors/             # Hierarchical error subsystem
 │       │   ├── hresult.rs      # Unconditional Win32 COM HRESULT constants & classification
@@ -155,8 +156,13 @@ opc-cli/
     - `OpcValue`: Expanded enum supporting `Int(i64)`, `UInt(u64)`, `Float(f64)`, `String(String)`, `Bool(bool)`, `Empty`, `Null`.
     - `OpcQuality`: Strongly-typed 16-bit OPC quality word with private fields and getter methods (`major()`, `substatus()`, `limit()`, `raw()`).
     - `TagValue`: Result-like outcome facade (`Result<OpcValue, OpcError>`) with `.outcome()`, `.value()`, `.error()`, preventing incoherent state.
-    - `TagValues`: Collection wrapper for tag values with $O(1)$ indexing, case-insensitive lookups, and lenient typed extractions.
+    - `TagValues`: Collection wrapper for tag values with $O(1)$ indexing, `contains()`, case-insensitive lookups, and lenient typed extractions.
     - `TagBatch`: Zero-allocation polymorphic tag batching (`InlineSingle`, `Borrowed`, `Static`, `Shared`, `Owned`).
+    - `TagCollector`: Thread-safe accumulator with `RwLock<Vec<String>>` concurrency, `push`, `push_batch`, and zero-copy `harvest()`.
+    - `WriteBatch`: Encapsulated 72-byte struct with 5-variant representation (`StaticSingle`, `InlineSingle` with 31-byte stack SSO, `OwnedSingle`, `Shared`, `Owned`) and streaming `WriteBatchIter`.
+    - `Clsid`: Pure 128-bit Windows COM Class ID representation with `#[repr(C)]` layout identical to `GUID`, big-endian `u128` arithmetic, zero heap allocations, multibyte UTF-8 guard, and `ParseClsidError`.
+    - `ServerIdentifier`: Strongly-typed identifier referencing an OPC DA server either by ProgID or CLSID (`Clsid`) with semantic `matches()`.
+    - `OpcServerEndpoint`: Strongly-typed endpoint descriptor with UNC parsing, localhost normalization, and semantic `matches()`.
     - `handles`: Distinct typestates: `ClientGroupHandle`, `ServerGroupHandle`, `ClientItemHandle`, `ServerItemHandle`.
     - `vartype`: Strongly-typed `VarType` and `BaseVarType` COM Automation type discriminants.
     - `server`: `ServerIdentifier`, `OpcServerEndpoint`, `OpcServerInfo`, `ServerStatus`, `GroupState`.
@@ -168,7 +174,7 @@ opc-cli/
 - **Mock Availability**: Provides `MockOpcProvider` via `mockall`, and exports `MockOpcDaClient` type alias and `Default` implementation under `all(feature = "test-support", feature = "opc-da-backend")`.
 
 ### `opc-da-client::provider` (Public Role Traits)
-- **Owns**: Segregated role traits: `ServerDiscovery`, `TagBrowser`, `TagReader`, `TagWriter`, and composite `pub trait OpcProvider: ServerDiscovery + TagBrowser + TagReader + TagWriter`.
+- **Owns**: Segregated role traits: `ServerDiscovery`, `TagBrowser`, `TagReader`, `TagWriter`, and composite `pub trait OpcProvider: ServerDiscovery + TagBrowser + TagReader + TagWriter` with default implementations (`list_server_details`, `read_tag_value`, `write_tag_batch`).
 - **Does NOT Own**: Concrete COM execution or transport marshalling.
 - **Trait Interfaces**: `ServerDiscovery`, `TagBrowser`, `TagReader`, `TagWriter`, `OpcProvider`.
 - **Mock Availability**: Fully mockable via `MockOpcProvider` (compiled when `feature = "test-support"` is active).
@@ -178,11 +184,13 @@ opc-cli/
   - `OpcValue`: Expanded enum supporting `Int(i64)`, `UInt(u64)`, `Float(f64)`, `String(String)`, `Bool(bool)`, `Empty`, `Null`.
   - `OpcQuality`: Strongly-typed 16-bit OPC quality word (`major()`, `substatus()`, `limit()`, `raw()`).
   - `TagValue`: Result-like outcome facade (`Result<OpcValue, OpcError>`) preventing incoherent states.
-  - `TagValues`: Collection wrapper for tag values with $O(1)$ indexing and typed conversions.
+  - `TagValues`: Collection wrapper for tag values with $O(1)$ indexing, `contains()`, and typed conversions.
   - `TagBatch`: Zero-allocation polymorphic tag batching (`InlineSingle`, `Borrowed`, `Static`, `StaticSingle`, `Shared`, `Owned`, `OwnedSingle`).
-  - `TagCollector`: Thread-safe accumulator with `push`, `push_batch`, and `harvest` for cooperative chunking.
+  - `TagCollector`: Thread-safe accumulator with `RwLock<Vec<String>>` concurrency, `push`, `push_batch`, and zero-copy `harvest()` for cooperative chunking.
+  - `WriteBatch`: Encapsulated 72-byte struct with 5-variant representation (`StaticSingle`, `InlineSingle` with 31-byte stack SSO, `OwnedSingle`, `Shared`, `Owned`) and streaming `WriteBatchIter`.
   - `Clsid`: Pure 128-bit Windows COM Class ID representation with `#[repr(C)]` layout identical to `GUID`, big-endian `u128` arithmetic, zero heap allocations, multibyte UTF-8 guard, and `ParseClsidError`.
-  - `ServerIdentifier`: Strongly-typed identifier referencing an OPC DA server either by ProgID or CLSID (`Clsid`) with `as_prog_id()` and `as_clsid()`.
+  - `ServerIdentifier`: Strongly-typed identifier referencing an OPC DA server either by ProgID or CLSID (`Clsid`) with semantic `matches()`.
+  - `OpcServerEndpoint`: Strongly-typed endpoint descriptor with UNC parsing, localhost normalization, and semantic `matches()`.
   - `OpcServerInfo`: Canonical structured server record with ProgID, `Clsid`, user type description, and host.
   - `handles`: Distinct typestates `ClientGroupHandle`, `ServerGroupHandle`, `ClientItemHandle`, `ServerItemHandle`.
   - `browse`: `BrowseType`, `BrowseDirection`, `NamespaceType` with Win32 discriminants.
@@ -207,11 +215,11 @@ opc-cli/
   - Public concrete `OpcDaClient<C, State>` struct implementing `OpcProvider`.
   - Fluent builder `OpcDaClientBuilder` (`builder()`).
   - Typestate transitions (`bind`, `bind_remote`, `unbind`) between compile-time `Unbound` (gateway) and `Bound` (session) states.
-  - Eager connection constructors (`connect`, `connect_remote`, `connect_eager`).
-  - Inherent async readers and writers sealed to `Bound` (`read_tags`, `read_tag`, `read_f64`, `read_i32`, `read_bool`, `read_string`, `write`, `write_batch`, `browse`, `subscribe`).
-  - Remote server discovery (`list_servers_on`) on `Unbound`.
+  - Client constructors (`bind_new`, `bind_new_remote`, `new`) and eager connection initiator (`connect_eager` on `Bound`).
+  - Inherent async readers and writers sealed to `Bound` (`read_tag`, `read_tags`, `read_single_typed`, `read_f64`, `read_i32`, `read_bool`, `read_string`, `read_f32`, `read_i64`, `read_u32`, `read_u64`, `write_tag`, `write_tags`, `browse`, `subscribe`).
+  - Remote server discovery (`list_servers`, `list_server_details`) and gateway reads/writes on `Unbound`.
   - Layer 2 subscription polling stream (`subscribe` with zero-allocation shareable batch clones).
-  - Request dispatch channel management (`mpsc::Sender<ComRequest>`) and public constructors (`OpcDaClient::new`).
+  - Request dispatch channel management (`mpsc::Sender<ComRequest>`) and public constructors (`OpcDaClient::new`, `bind_new`, `bind_new_remote`).
   - `OpcDaClient`, `OpcDaClientBuilder`, and typestates are re-exported at the crate root.
 - **Does NOT Own**: In-apartment Win32 COM operations, unmanaged memory pointers, or direct FFI calls (all delegated across channels to `ComWorker`).
 - **Trait Interfaces**: Implements `OpcProvider`, `ServerDiscovery`, `TagBrowser`, `TagReader`, `TagWriter`.
@@ -392,11 +400,11 @@ The project uses a unified dual-interface build system:
 
 - **Unit Testing**: Mock-based testing using `MockOpcProvider` (`mockall`). TUI navigation flow, state transitions (`CurrentScreen`), loading cancellation on `Esc`, search cycling, `App::handle_key` returning `AppAction`, `DialogState` buffering, `AutoRefresher` tick mechanics, zero-allocation `[Cell; 4]` table row rendering, and telemetry counters (`error_count` vs `bad_quality_count`) are verified without Windows COM dependencies (56 CLI unit tests in `opc-cli`).
 - **CLI Integration Testing**: `tests/app_deref_regression.rs` verifies that view state operations do not rely on implicit `Deref` anti-patterns (1 CLI integration test).
-- **Client & Worker Unit Testing**: `ComWorker`, `com/discovery.rs`, `com/variant.rs` (`ScopedVariant`, `ItemStatesGuard`), `connector/` submodules (`traits.rs`, `guard.rs`, `mock/`), `com/connector/` submodules (`server.rs`, `group.rs`), `com/security.rs`, `raw/memory.rs`, and bindings unit tests use `MockServerConnector` and synthetic allocations to test write paths, tag browsing (flat, hierarchical, cancellation, capacity limits), server connection pooling, active group caching & auto-recovery, stale connection eviction, 2-tier panic isolation and recovery (`test_worker_thread_recovery_after_panic`), worker drop behaviors, tracing instrumentation execution, `GroupGuard` automatic drop cleanup on `add_items` failure, registry inspection validation, non-cloneable remote pointer safe drop, safe slice copying, blob guard double-free prevention, and zero-leak COM memory guards (314 unit tests in `opc-da-client`).
-- **Client Integration Test Suites**: 4 dedicated integration test suites in `opc-da-client/tests/` (`batch_write_test`, `handle_type_safety_test`, `mock_contract_stability_test`, `typestate_client_test`) containing 8 integration tests validating multi-item atomic writes, opaque newtype handle non-interchangeability, mock fidelity, and compile-time typestate transitions (`Unbound` to `Bound`).
-- **Polyfill Unit Testing**: 2 standalone unit tests verifying unaligned address reads in `compat/synch-polyfill` and chunking in `compat/bcrypt-polyfill` (total workspace test suite: 381 compiled tests: 56 CLI unit + 1 CLI integration + 314 client unit + 8 client integration + 2 polyfill).
-- **Doc Testing**: Public API items include runnable and compile-fail doc tests verified via `cargo test --doc --workspace --all-features` (115 doc-tests in `opc-da-client`: 113 passed, 2 ignored, 2 compile-fail, covering typestate client methods, numeric scalar accessors, and UNC endpoint parsing).
-- **Total Test Inventory**: 496 total tests (381 unit/integration + 115 doctests).
+- **Client & Worker Unit Testing**: `ComWorker`, `com/discovery.rs`, `com/variant.rs` (`ScopedVariant`, `ItemStatesGuard`), `connector/` submodules (`traits.rs`, `guard.rs`, `mock/`), `com/connector/` submodules (`server.rs`, `group.rs`), `com/security.rs`, `raw/memory.rs`, and bindings unit tests use `MockServerConnector` and synthetic allocations to test write paths, tag browsing (flat, hierarchical, cancellation, capacity limits), server connection pooling, active group caching & auto-recovery, stale connection eviction, 2-tier panic isolation and recovery (`test_worker_thread_recovery_after_panic`), worker drop behaviors, tracing instrumentation execution, `GroupGuard` automatic drop cleanup on `add_items` failure, registry inspection validation, non-cloneable remote pointer safe drop, safe slice copying, blob guard double-free prevention, and zero-leak COM memory guards (368 unit tests in `opc-da-client`).
+- **Client Integration Test Suites**: 8 dedicated integration test suites in `opc-da-client/tests/` (`batch_write_test`, `domain_pipeline_test`, `resilience_and_pool_integration_test`, `server_discovery_integration_test`, `subscription_integration_test`, `tag_browsing_integration_test`, `tag_io_integration_test`, `typestate_client_test`) containing 47 integration tests validating multi-item atomic writes, domain pipelines, resilience & connection pooling, server catalog discovery, subscription streams, namespace traversal, tag I/O, and typestate transitions (`Unbound` to `Bound`).
+- **Polyfill Unit Testing**: 2 standalone unit tests verifying unaligned address reads in `compat/synch-polyfill` and chunking in `compat/bcrypt-polyfill` (total workspace compiled test suite: 474 compiled tests: 56 CLI unit + 1 CLI integration + 368 client unit + 47 client integration + 2 polyfill).
+- **Doc Testing**: Public API items include runnable and compile-fail doc tests verified via `cargo test --doc --workspace` (154 doc-tests in `opc-da-client`: 152 passed, 2 ignored, 2 compile-fail, covering typestate client methods, numeric scalar accessors, and UNC endpoint parsing).
+- **Total Test Inventory**: 628 automated tests (474 compiled + 154 doctests).
 - **Polyfill Build Gates**: Independent compilation of `compat/*` polyfill crates inside `scripts/verify.ps1`.
 - **AST-Grep Structural Safety Gates**: `sg scan` enforcement of zero unwrap/expect in production library code (`no-panic-or-unwrap`), mandatory `// SAFETY:` rationale on all unsafe blocks (`require-safety-comment`), strict ban on `Deref`/`DerefMut` to `ViewState` on `App` (`no-deref-on-app`), and unaligned pointer dereferencing ban (`no-raw-unaligned-deref`). Rules are validated via ast-grep unit tests before static scans.
 - **Forbidden Pattern Scanner**: Automated `rg` scan ensuring zero `println!`, `dbg!`, `todo!`, or `unimplemented!` macros in library and CLI code.

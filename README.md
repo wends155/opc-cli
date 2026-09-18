@@ -6,18 +6,101 @@
 
 > Interactive TUI and native Windows COM client library for browsing, reading, and writing OPC DA tags
 
-## 🏗️ Architecture
+## Overview
 
-The project is structured as a Cargo workspace with two crates:
+`opc-cli` provides a modern, asynchronous Terminal User Interface (TUI) and high-performance native Windows COM client library for inspecting, browsing, reading, and writing OPC Data Access (OPC DA 2.05a) industrial automation tags on Windows.
 
-- **`opc-cli`**: The interactive TUI application built with `ratatui` + `crossterm`.
-- **`opc-da-client`**: A high-performance native Windows COM/DCOM library (using `windows-rs`) featuring a fluent client API, zero-allocation tag batches, active group caching, native batch write, non-blocking subscription streams, and Windows KB5004442 packet integrity hardening. Abstracts OPC DA communication through the async `OpcProvider` trait, generic over `ServerBackend` for seamless test mocking.
+OPC Data Access is deeply tied to legacy Windows COM and DCOM runtimes, which present significant hurdles in contemporary control systems: strict Multi-Threaded Apartment (MTA) affinity, thread safety constraints, cryptic Win32 HRESULT errors, and mandatory Windows DCOM hardening (KB5004442).
 
-See **[opc-da-client architecture.md](./opc-da-client/architecture.md)** for the full library design, state machine, and data flow diagrams.
+This project resolves these challenges by isolating all low-level COM and DCOM interactions behind a dedicated MTA background worker thread and pure-Rust trait abstractions. Operators and engineers can interactively navigate complex PLC tag trees, inspect decomposed 16-bit OPC qualities, and diagnose field telemetry via an ergonomic, zero-overhead terminal dashboard.
 
-## ✨ Features
+## Installation
 
-- **Server Discovery & UNC Endpoints**: Enumerate OPC DA servers on local hosts and remote OPCEnum catalogs via UNC syntax (`\\host\server` or `\\host\{CLSID}`). *(Full remote DCOM is on the roadmap and not yet supported in 0.3.0; see Remote OPC DA Status below).*
+### Prerequisites
+
+- **Windows OS**: Windows 10+ / Server 2016+ (or Windows 7 SP1 / Server 2008 R2 SP1 with legacy bundle).
+- **OPC Core Components**: Must be installed on the system to resolve OPC ProgIDs and browse server catalogs.
+- **Rust 1.93+**: Required when compiling from source (Rust Edition 2024).
+
+### Building from Source
+
+Install directly via Cargo:
+
+```powershell
+cargo install --path opc-cli
+```
+
+Or build the optimized release binary locally:
+
+```powershell
+cargo build --release --bin opc-cli
+```
+
+The compiled binary will be located at `target/release/opc-cli.exe`.
+
+### Pre-built Releases & Packaging
+
+The repository supports two automated release packaging targets:
+
+#### 1. Modern Release (Windows 10+ / Server 2016+)
+
+```powershell
+make package
+# OR
+pwsh -File scripts/package.ps1 package
+```
+Output: `dist/opc-cli-x64/` and `dist/opc-cli-x64.zip`
+
+#### 2. Legacy Release (Windows 7 SP1 / Server 2008 R2 SP1)
+
+For deployment to offline, air-gapped industrial environments running Windows 7 / Server 2008 R2 (NT 6.1):
+
+```powershell
+make package-win7
+# OR
+pwsh -File scripts/package.ps1 package-win7
+```
+Output: `dist/opc-cli-win7-x64/` and `dist/opc-cli-win7-x64.zip`
+
+**Legacy Bundle Contents:**
+- `opc-cli.exe`: PE-patched executable linked with static CRT (`+crt-static`). Replaces missing `GetSystemTimePreciseAsFileTime` imports with native `GetSystemTimeAsFileTime`.
+- `api-ms-win-core-synch-l1-2-0.dll`: `#![no_std]` polyfill for `WaitOnAddress` and `Sleep` re-export.
+- `api-ms-win-core-winrt-error-l1-1-0.dll`: `#![no_std]` no-op stubs for WinRT error APIs.
+- `bcryptprimitives.dll`: `#![no_std]` polyfill routing `ProcessPrng` to `RtlGenRandom` (`advapi32.dll`).
+- `redist/`: Included OPC Core Components redistributable MSI (if placed in `vendor/redist/`).
+
+## Usage / Quick Start
+
+Launch the interactive TUI directly:
+
+```powershell
+# Run the interactive TUI
+cargo run --bin opc-cli
+
+# Run with debug logging enabled (default is info)
+cargo run --bin opc-cli -- -v
+
+# Run with verbose trace logging enabled (captures detailed argument dumps)
+cargo run --bin opc-cli -- -vv
+```
+
+### Keyboard Controls
+
+| Key | Action | Screen |
+| :--- | :--- | :--- |
+| `Enter` | Navigate forward / Confirm input | All |
+| `Esc` | Navigate back | All |
+| `Space` | Toggle tag selection | Tag List |
+| `s` | Enter search/filter mode | Tag List |
+| `Tab` / `Shift+Tab` | Cycle through search matches | Tag List (search) |
+| `w` | Enter write mode for selected tag | Tag Values |
+| `↑` / `↓` | Navigate lists | All lists |
+| `PgUp` / `PgDn` | Page through lists (20 items) | All lists |
+| `q` / `Q` | Quit application | Home |
+
+## Features / Feature Flags
+
+- **Server Discovery & UNC Endpoints**: Enumerate OPC DA servers on local hosts and remote OPCEnum catalogs via UNC syntax (`\\host\server` or `\\host\{CLSID}`).
 - **Typestate Client, Liveness Ping & COM Isolation**: Zero-cost compile-time `Unbound` (gateway) and `Bound` (session) typestates with direct `connect` / `build_bound` shortcuts, eager liveness probe (`connect_eager`), dedicated MTA apartment worker thread, and automatic Windows KB5004442 packet integrity security blanketing.
 - **Hierarchical Browsing**: Recursive exploration of complex server namespaces with cooperative cancellation and partial-result harvesting on timeout.
 - **Real-time Monitoring & Active Group Caching**: Live tag value updates with 1-second auto-refresh backed by active OPC group pooling (>75% lower DCOM RPC latency) and auto-recovery on group invalidations.
@@ -27,17 +110,17 @@ See **[opc-da-client architecture.md](./opc-da-client/architecture.md)** for the
 - **Search & Filter**: Substring search with `Tab`/`Shift+Tab` cycling through matches.
 - **Rich Error Hints & Lossless Diagnostics**: Human-readable explanations for cryptic Windows COM/DCOM HRESULT codes and structured tag attribution errors.
 - **Transparent COM Management**: COM initialization, MTA apartment affinity, stale proxy eviction, and deterministic thread teardown handled automatically by a dedicated background worker thread.
-- **Mockable Backend & Pure-Rust SPI**: Unit-test the TUI on any OS without a live OPC server using segregated role mocks (`MockTagReader`, etc.) or the pure-Rust Tier 2 SPI connector (`opc_da_client::connector::*`).
+- **Mockable Backend & Pure-Rust SPI**: Segregated role mocks (`MockTagReader`, etc.) and pure-Rust Tier 2 SPI connector (`opc_da_client::connector::*`) for testing on any operating system without Windows COM runtimes.
 
-## 🚀 Getting Started
+### Feature Flags
 
-### Prerequisites
+| Flag | Package | Default | Description |
+|:---|:---|:---:|:---|
+| `dev-diagnostics` | `opc-cli`, `opc-da-client` | ❌ No | Compiles verbose `TRACE`-level argument dumps into backend methods for low-level protocol debugging. |
+| `opc-da-backend` | `opc-da-client` | ✅ Yes | Compiles the native Windows COM backend (`OpcDaClient` and `ComConnector`). |
+| `test-support` | `opc-da-client` | ❌ No | Enables `mockall` role mocks (`MockOpcProvider`, `MockTagReader`, etc.) for downstream test suites. |
 
-- **Windows OS**: This application uses Windows COM/DCOM.
-- **OPC Core Components**: Must be installed on the system to resolve OPC ProgIDs.
-- **Rust 1.93+**: Edition 2024.
-
-### 🌐 Remote OPC DA (DCOM) Status & Architecture Guidance
+### Remote OPC DA (DCOM) Status & Architecture Guidance
 
 > [!WARNING]
 > **DCOM Implementation Status (0.3.0):**
@@ -58,67 +141,29 @@ See **[opc-da-client architecture.md](./opc-da-client/architecture.md)** for the
 - **Remote Enumerator Proxy Blanketing**: `BrowseOPCItemIDs` returns an `IEnumString` that currently lacks DCOM proxy blanketing, which can trigger `E_ACCESSDENIED` (`0x80070005`) on hardened Windows systems.
 - **Custom Windows Credentials**: No CLI flags or dialogs to supply alternative domain/user credentials (`COAUTHIDENTITY`) for cross-machine authentication.
 
-### Build & Run
+## Architecture
+
+The project is structured as a Cargo workspace with two core crates:
+
+- **`opc-cli`**: The interactive TUI application built with `ratatui` + `crossterm`.
+- **`opc-da-client`**: A high-performance native Windows COM/DCOM library (using `windows-rs`) featuring a fluent client API, zero-allocation tag batches, active group caching, native batch write, non-blocking subscription streams, and Windows KB5004442 packet integrity hardening. Abstracts OPC DA communication through the async `OpcProvider` trait, generic over `ServerBackend` for seamless test mocking.
+
+See **[architecture.md](architecture.md)** for workspace architecture, and **[opc-da-client architecture.md](opc-da-client/architecture.md)** for the library design, state machine, and data flow diagrams.
+
+## Contributing
+
+Contributions are welcome! Before submitting pull requests, ensure your changes pass the universal verification gate:
 
 ```powershell
-# Run the TUI
-cargo run --bin opc-cli
-
-# Run the TUI with debug logging enabled (default is info)
-cargo run --bin opc-cli -- -v
-
-# Run the TUI with verbose trace logging enabled (captures detailed argument dumps)
-cargo run --bin opc-cli -- -vv
-
-# Run the full verification gate (format → lint → test)
+# Run the full quality verification gate (format → clippy → test)
 pwsh -File scripts/verify.ps1
 ```
 
+All contributions must adhere to the project's zero-exit and strict clippy standards (`-D warnings`).
 
-## ⌨️ Controls
+## License
 
-| Key | Action | Screen |
-| :--- | :--- | :--- |
-| `Enter` | Navigate forward / Confirm input | All |
-| `Esc` | Navigate back | All |
-| `Space` | Toggle tag selection | Tag List |
-| `s` | Enter search/filter mode | Tag List |
-| `Tab` / `Shift+Tab` | Cycle through search matches | Tag List (search) |
-| `w` | Enter write mode for selected tag | Tag Values |
-| `↑` / `↓` | Navigate lists | All lists |
-| `PgUp` / `PgDn` | Page through lists (20 items) | All lists |
-| `q` / `Q` | Quit application | Home |
-
-## 📦 Packaging & Deployment
-
-The repository supports two release packaging models:
-
-### 1. Modern Release (Windows 10+ / Server 2016+)
-
-```powershell
-make package
-# OR
-pwsh -File scripts/package.ps1 package
-```
-Output: `dist/opc-cli-x64/` and `dist/opc-cli-x64.zip`
-
-### 2. Legacy Release (Windows 7 SP1 / Server 2008 R2 SP1)
-
-For deployment to offline, air-gapped industrial environments running Windows 7 / Server 2008 R2 (NT 6.1):
-
-```powershell
-make package-win7
-# OR
-pwsh -File scripts/package.ps1 package-win7
-```
-Output: `dist/opc-cli-win7-x64/` and `dist/opc-cli-win7-x64.zip`
-
-**Legacy Bundle Contents:**
-- `opc-cli.exe`: PE-patched executable linked with static CRT (`+crt-static`). Replaces missing `GetSystemTimePreciseAsFileTime` imports with native `GetSystemTimeAsFileTime`.
-- `api-ms-win-core-synch-l1-2-0.dll`: `#![no_std]` polyfill for `WaitOnAddress` and `Sleep` re-export.
-- `api-ms-win-core-winrt-error-l1-1-0.dll`: `#![no_std]` no-op stubs for WinRT error APIs.
-- `bcryptprimitives.dll`: `#![no_std]` polyfill routing `ProcessPrng` to `RtlGenRandom` (`advapi32.dll`).
-- `redist/`: Included OPC Core Components redistributable MSI (if placed in `vendor/redist/`).
+This project is licensed under the MIT License — see the [LICENSE](LICENSE) file for details.
 
 <!-- custom:start -->
 Simply copy the extracted `dist/opc-cli-win7-x64/` folder to a USB drive and run on the target machine without installing Visual C++ redistributables or Windows updates.
@@ -130,7 +175,3 @@ Simply copy the extracted `dist/opc-cli-win7-x64/` folder to a USB drive and run
 - [**windows-rs**](https://github.com/microsoft/windows-rs) by Microsoft — Windows API bindings for Rust.
 - [**ratatui**](https://github.com/ratatui/ratatui) — terminal user interface framework.
 <!-- custom:end -->
-
-## 📄 License
-
-This project is licensed under the MIT License — see the [LICENSE](LICENSE) file for details.

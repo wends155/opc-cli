@@ -1,5 +1,28 @@
 # Project Context Summary
 
+## 2026-09-18: Architecture Documentation Synchronization (`/architecture`) Completed
+> 📝 **Context Update:**
+> * **Feature:** Full architectural audit and technical source-of-truth synchronization across workspace root `architecture.md` and crate-level `opc-da-client/architecture.md` per `/architecture` and `/build` workflows.
+> * **Changes:**
+>   - **Clean Slate Deprecation Excision:**
+>     - Excised all obsolete references to `connect`, `connect_remote`, `write_tag_values`, `write`, `write_batch`, and `list_servers_on` across both architecture documents.
+>   - **API & Typestate Synchronization:**
+>     - Synchronized client constructors to `bind_new`, `bind_new_remote`, `new`, and explicit eager connection trigger `connect_eager` on `Bound`.
+>     - Synchronized inherent session methods on `Bound` to `read_tag`, `read_tags`, `read_single_typed`, `read_f64`, `read_i32`, `read_bool`, `read_string`, `read_f32`, `read_i64`, `read_u32`, `read_u64`, `write_tag`, `write_tags`, `browse`, `subscribe`.
+>     - Synchronized gateway discovery methods on `Unbound` to `list_servers` and `list_server_details`.
+>     - Synchronized segregated role traits (`ServerDiscovery`, `TagBrowser`, `TagReader`, `TagWriter`) and default methods (`list_server_details`, `read_tag_value`, `write_tag_batch`).
+>   - **Domain Model & Layout Synchronization:**
+>     - Documented `WriteBatch` 72-byte struct layout with 5 variants (`StaticSingle`, `InlineSingle` with 31-byte stack SSO, `OwnedSingle`, `Shared`, `Owned`) and streaming `WriteBatchIter`.
+>     - Documented `TagCollector` `RwLock<Vec<String>>` concurrency with zero-copy `harvest()`.
+>     - Cataloged `Clsid` 128-bit COM Class ID, `ServerIdentifier` with semantic `matches()`, and `OpcServerEndpoint` in layout and module boundaries.
+>   - **Test Suite Metrics Alignment:**
+>     - Updated Section 10 Testing Strategy to reflect verified test counts: 56 CLI unit + 1 CLI integration + 368 client unit + 47 client integration across 8 test suites + 2 polyfill = 474 compiled tests + 154 doc-tests (628 total automated tests).
+>   - **Verification:**
+>     - Universal verification pipeline (`pwsh -File scripts/verify.ps1`) exited 0 across all 9 quality gates with 0 warnings.
+> * **New Constraints:**
+>   - Both `architecture.md` and `opc-da-client/architecture.md` must strictly mirror the current production API surface, domain layouts, and verified test metrics without drift.
+> * **Pruned:** Outdated method and constructor references from pre-Cycle-2 implementations purged from architecture specifications.
+>
 ## 2026-09-18: Documentation Synchronization (`/update-doc`) Completed
 > 📝 **Context Update:**
 > * **Feature:** Comprehensive workspace documentation audit and synchronization across `opc-da-client` and `opc-cli` per `/update-doc` workflow.

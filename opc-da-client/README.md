@@ -625,15 +625,21 @@ Deprecated items will trigger compiler warnings starting in `0.3.0` and will rem
 | `OpcDaClient<C, State>` | `pub struct` | Primary client facade parameterized by state (`Unbound` gateway vs `Bound` session) with inherent session methods (`read_tag`, `read_tags`, `write_tag`, `write_tags`, `subscribe`). |
 | `Unbound` | `pub struct` | Typestate marker representing an unbound multi-server gateway. |
 | `Bound` | `pub struct` | Typestate marker representing a server-bound active session with infallible `endpoint(&self)`. |
+| `DefaultOpcDaClient` | `pub type` | Default client type alias using the default backend connector and `Unbound` state. |
 | `OpcDaClientBuilder` | `pub struct` | Fluent builder for configuring host, server, timeout, and legacy DCOM mode (`build()` for `Unbound`, `build_bound()` for `Bound`). |
 | `TagBatch` | `pub enum` | Zero-allocation polymorphic container for tag identifiers (`Static`, `StaticSingle`, `Shared`, `Owned`, `OwnedSingle`). |
 | `IntoTags` | `pub trait` | Universal conversion trait converting static string slices, arrays, single strings, and owned vectors into `TagBatch`. |
+| `TagBatchIter` | `pub struct` | Zero-allocation borrowed iterator projecting `&str` over all `TagBatch` representations. |
 | `TagValues` | `pub struct` | Collection of read tag values providing case-insensitive lookups, generic extraction (`get_as<T>`), and typed getters (`get_f64`, `get_f32`, `get_i32`, `get_i64`, `get_u32`, `get_u64`, `get_bool`, `get_str`). |
 | `TagExtractError` | `pub enum` | Domain error enum returned by `TagValues` getters (`NotRequested`, `ReadFailed`, `NoValue`, `TypeMismatch`). Preserves root COM error provenance. |
 | `ConversionError` | `pub enum` | Lossless tag value conversion errors (`TagNotRequested`, `TagNoValue`, `TypeMismatch`, `Other`) preserving tag identifiers. |
+| `Clsid` | `pub struct` | Strongly-typed 128-bit COM Class ID / Windows GUID wrapper with nil, zeroed, parsing, and bracketed formatting. |
+| `ParseClsidError` | `pub struct` | Error returned when parsing an invalid CLSID string. |
 | `ServerIdentifier` | `pub enum` | Strongly-typed server identifier (`ProgId` vs `Clsid`) with automatic GUID syntax parsing. |
+| `ParseServerIdError` | `pub struct` | Error returned when parsing an invalid `ServerIdentifier`. |
 | `OpcServerInfo` | `pub struct` | Rich catalog metadata record (`prog_id`, `clsid`, `user_type`, `host`) with `display_name()` and `endpoint()`. |
 | `OpcServerEndpoint` | `pub struct` | Endpoint binding target `host` with `identifier: ServerIdentifier`. Formats as UNC path (`\\host\server`) and implements `FromStr`. |
+| `ParseEndpointError` | `pub struct` | Error returned when parsing an invalid `OpcServerEndpoint`. |
 | `OpcServerRegistration` | `pub struct` | Detailed Windows registry diagnostics (`clsid`, `prog_id`, `binary_path`, `server_type`). |
 | `OpcServerType` | `pub enum` | Execution model classification (`LocalServer32` executable vs `InprocServer32` DLL). |
 | `inspect_local_registration` | `pub fn` | Diagnostic helper inspecting `HKCR\CLSID\{...}` across native and WOW64 registry views. |
@@ -643,12 +649,18 @@ Deprecated items will trigger compiler warnings starting in `0.3.0` and will rem
 | `OpcValueOptionExt` | `pub trait` | Extension trait providing `.display()` and `.display_or("fallback")` for `Option<OpcValue>`. |
 | `SystemTimeOptionExt` | `pub trait` | Extension trait providing `.display()` and `.display_or("fallback")` for `Option<SystemTime>`. |
 | `OpcValue` | `pub enum` | Strongly-typed OPC value representation (`Int`, `UInt`, `Float`, `Bool`, `String`, `Empty`, `Null`). |
+| `BaseVarType` | `pub enum` | Base COM `VARENUM` data types without modifier flags. |
+| `VarType` | `pub struct` | Decomposed COM `VARIANT` type indicator with array, vector, and byref flags. |
 | `OpcQuality` | `pub struct` | Zero-allocation decomposed 16-bit OPC DA quality word (`major`, `substatus`, `limit`, `raw`). |
+| `QualityMajor` | `pub enum` | Primary OPC DA quality classification (`Bad`, `Uncertain`, `Good`). |
+| `QualitySubstatus` | `pub enum` | Granular OPC DA quality substatus classification. |
+| `QualityLimit` | `pub enum` | OPC DA quality limit status (`None`, `Low`, `High`, `Constant`). |
 | `ParseQualityError` | `pub struct` | Error returned when parsing an invalid quality string via `FromStr`, with `.raw()` string accessor. |
 | `WriteResult` | `pub struct` | Tag write operation result (`tag_id`, `status: Result<(), OpcError>`, `is_success`, `is_error`, `error`). |
 | `WriteBatch` | `pub struct` | Opaque zero-allocation batch write container with 31-byte stack SSO and 5 internal variants. |
 | `IntoWriteBatch` | `pub trait` | Universal conversion trait converting single pairs, arrays, slices, and vectors into `WriteBatch` (bound by `Send`). |
 | `WriteBatchIter` | `pub struct` | Monotonic `ExactSizeIterator` yielding `(&str, &OpcValue)` for COM marshaling. |
+| `WriteBatchIntoIter` | `pub struct` | Owning iterator consuming a `WriteBatch` yielding `(String, OpcValue)`. |
 | `TagCollector` | `pub struct` | Thread-safe, bounded container with `RwLock` concurrency, lock-free length reporting, cooperative cancellation, and $O(1)$ zero-copy harvest. |
 | `ClientGroupHandle` | `pub struct` | Type-safe opaque handle wrapper for client-side group identification. |
 | `ServerGroupHandle` | `pub struct` | Type-safe opaque handle wrapper for server-side group identification. |
@@ -660,11 +672,16 @@ Deprecated items will trigger compiler warnings starting in `0.3.0` and will rem
 | `OpcError::friendly_hint` | `pub fn` | Inherent method translating Win32 COM and OPC HRESULT codes into actionable human-readable explanations. |
 | `OpcError::connection_failed` | `pub fn` | Inherent constructor producing an `OpcError::Connection` indicating CLSID resolution failure for a ProgID. |
 | `OpcError::is_connection_error` | `pub fn` | Predicate determining whether an error was caused by transport/connection failure for reconnection logic. |
+| `WorkerError` | `pub enum` | Low-level COM background worker channel and dispatch error variants. |
 | `ServerConnector` | `pub trait` | Pure Tier 2 SPI connector trait (`connect_endpoint`). In `opc_da_client::connector`. |
 | `ServerCatalogDiscovery` | `pub trait` | Pure Tier 2 SPI catalog trait (`enumerate_servers`, `enumerate_server_details`). In `opc_da_client::connector`. |
 | `ServerBackend` | `pub trait` | Composite Tier 2 SPI trait (`ServerConnector + ServerCatalogDiscovery`). In `opc_da_client::connector`. |
 | `ConnectedServer` | `pub trait` | Pure Tier 2 SPI active server trait with associated `type ItemIterator` and `ping()`. In `opc_da_client::connector`. |
 | `ConnectedGroup` | `pub trait` | Pure Tier 2 SPI active group trait (`add_items`, `read`, `write`). In `opc_da_client::connector`. |
+| `GroupGuard` | `pub struct` | RAII drop guard in `connector::guard` ensuring automatic group removal on server upon scope exit or unwind. |
+| `BrowsePositionGuard` | `pub struct` | RAII drop guard in `connector::guard` restoring browse namespace position on scope exit or unwind. |
+| `ItemWrite` | `pub struct` | Pairing of a server item handle and its target value for writing. In `connector::traits`. |
+| `GroupRemovalMode` | `pub enum` | Group removal mode (`Normal` vs `Force`). In `connector::traits`. |
 | `MockOpcProvider` | `pub struct` | Pure-Rust mock implementation of `OpcProvider` generated via `mockall` (under `feature = "test-support"`). |
 | `MockServerDiscovery` | `pub struct` | Pure-Rust mock implementation of `ServerDiscovery` generated via `mockall` (under `feature = "test-support"`). |
 | `MockTagBrowser` | `pub struct` | Pure-Rust mock implementation of `TagBrowser` generated via `mockall` (under `feature = "test-support"`). |
