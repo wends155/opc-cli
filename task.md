@@ -20,9 +20,9 @@
 ## Global Execution Order
 
 ### Phase 1: `WriteResult` Domain Ergonomics
-- [ ] **Step 1: [TEST]** `opc-da-client/src/types/write_batch.rs` — [+] `test_write_result_display_formatting`, `test_write_result_is_connection_error`
-- [ ] **Step 2: [MODIFY]** `opc-da-client/src/types/write_batch.rs` — [+] `<WriteResult as Display>::fmt`, `WriteResult::is_connection_error`
-- [ ] **🔒 CHECKPOINT 1**: Verify `WriteResult` unit tests (`cargo test -p opc-da-client --lib types::write_batch::tests`)
+- [x] **Step 1: [TEST]** `opc-da-client/src/types/write_batch.rs` — [+] `test_write_result_display_formatting`, `test_write_result_is_connection_error`
+- [x] **Step 2: [MODIFY]** `opc-da-client/src/types/write_batch.rs` — [+] `<WriteResult as Display>::fmt`, `WriteResult::is_connection_error`
+- [x] **🔒 CHECKPOINT 1**: Verify `WriteResult` unit tests (`cargo test -p opc-da-client --lib types::write_batch::tests`)
 
 ### Phase 2: Pipeline Helper Decomposition & Defense
 - [ ] **Step 3: [TEST]** `opc-da-client/src/com/worker/write.rs` — [+] `test_partition_write_inputs_clean_tags`, `test_partition_write_inputs_contaminated_tags`, `test_partition_write_inputs_all_null_tags`

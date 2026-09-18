@@ -65,6 +65,46 @@ impl WriteResult {
     pub fn error(&self) -> Option<&OpcError> {
         self.status.as_ref().err()
     }
+
+    /// Returns `true` if the write operation failed with a transport or connection-level error.
+    ///
+    /// # Details
+    ///
+    /// Checks whether the contained error (if any) represents a connection-related failure,
+    /// such as server disconnection, RPC failure, or dead connection handle. Returns `false`
+    /// if the write succeeded or failed due to an item-level, configuration, or data validation error.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use opc_da_client::{OpcError, WriteResult};
+    ///
+    /// let conn_err = WriteResult::failure("Tag1", OpcError::Connection("Lost".into()));
+    /// assert!(conn_err.is_connection_error());
+    ///
+    /// let state_err = WriteResult::failure("Tag2", OpcError::InvalidState("Bad tag".into()));
+    /// assert!(!state_err.is_connection_error());
+    ///
+    /// let ok_res = WriteResult::success("Tag3");
+    /// assert!(!ok_res.is_connection_error());
+    /// ```
+    ///
+    /// # Panics
+    ///
+    /// This function does not panic.
+    #[must_use]
+    pub fn is_connection_error(&self) -> bool {
+        self.error().is_some_and(OpcError::is_connection_error)
+    }
+}
+
+impl std::fmt::Display for WriteResult {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match &self.status {
+            Ok(()) => write!(f, "Write '{}': succeeded", self.tag_id),
+            Err(e) => write!(f, "Write '{}': failed ({e})", self.tag_id),
+        }
+    }
 }
 
 /// Represents a batch of OPC tag write requests (tag name and target value),
@@ -638,5 +678,38 @@ mod tests {
         let empty_shareable = WriteBatch::empty().into_shareable();
         assert_eq!(empty_shareable.len(), 0);
         assert!(empty_shareable.is_empty());
+    }
+
+    #[test]
+    fn test_write_result_display_formatting() {
+        let ok = WriteResult::success("Channel.Device.Tag1");
+        assert_eq!(format!("{ok}"), "Write 'Channel.Device.Tag1': succeeded");
+
+        let err = WriteResult::failure(
+            "Channel.Device.Tag2",
+            OpcError::InvalidState("Tag not found".into()),
+        );
+        assert_eq!(
+            format!("{err}"),
+            "Write 'Channel.Device.Tag2': failed (Invalid state: Tag not found)"
+        );
+    }
+
+    #[test]
+    fn test_write_result_is_connection_error() {
+        let conn_err = WriteResult::failure(
+            "Channel.Device.Tag1",
+            OpcError::Connection("Server unreachable".into()),
+        );
+        assert!(conn_err.is_connection_error());
+
+        let state_err = WriteResult::failure(
+            "Channel.Device.Tag2",
+            OpcError::InvalidState("Access denied".into()),
+        );
+        assert!(!state_err.is_connection_error());
+
+        let ok_res = WriteResult::success("Channel.Device.Tag3");
+        assert!(!ok_res.is_connection_error());
     }
 }
