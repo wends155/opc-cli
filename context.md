@@ -23,11 +23,13 @@
 >     - Expanded [`tests/batch_write_test.rs`](file:///c:/Users/WSALIGAN/code/opc-cli/opc-da-client/tests/batch_write_test.rs) with 6 new integration tests (8 total).
 >     - All 9 quality gates in `pwsh scripts/verify.ps1` passed cleanly with 0 compiler warnings, 0 clippy warnings under `-D warnings`, and 0 AST-Grep violations.
 >     - Workspace test suite increased from 570 to 591 tests (+21 net new tests, 0 regressions).
+>     - Documented 1 implementation deviation (I2.1) in [`refactor/deviations.md`](file:///c:/Users/WSALIGAN/code/opc-cli/refactor/deviations.md) with 0 violations and 100% verification fidelity.
 > * **New Constraints:**
 >   - Write batch processing must quarantine null-byte tag identifiers at entry before Win32 COM string conversions.
 >   - Ephemeral COM group allocation must be skipped if all tags in a write batch are quarantined.
 >   - Buffer slot indexing must use safe `.get()` and `.get_mut()`; unchecked slice indexing (`[]`) is prohibited.
 >   - `WriteResult` must be checked via `is_connection_error()` to distinguish transport failures from item/config rejections.
+>   - Test fixtures constructing Win32 HRESULT errors must use canonical constants from `crate::errors::hresult` rather than raw integer casts.
 > * **Pruned:** Monolithic 112-line `handle_write_batch` and clippy suppression excised. Sub-Block I2 is 100% complete. Cycle 2 Modernization (Block I) is officially complete!
 
 ## 2026-09-17: Sub-Block I1 (COM Worker Hygiene, Buffer Reuse & Dead Code Excision) Completed (`opc-da-client`)
