@@ -1,5 +1,27 @@
 # Project Context Summary
 
+## 2026-09-18: Cycle 2 Modernization Archive Consolidation & Knowledge-RAG Ingestion
+> 📝 **Context Update:**
+> * **Feature:** Cycle 2 Modernization Archive Consolidation, Lessons Learned Extraction, and Knowledge-RAG Integration
+> * **Changes:**
+>   - **Unified Cycle 2 Reference Archive:**
+>     - Consolidated all 21 review findings, 9 sub-block accomplishments (`G1`–`G3`, `H1`–`H3`, `I1`–`I4`), 26 planned-vs-actual deviations, and 25 full architectural case studies (§§3.1–3.25) from `cycle2_review.md`, `post_implementation_blockG.md`, `post_implementation_blockH.md`, `post_implementation_blockI.md`, and `deviations.md` into single master archive [`refactor/cycle2_reference.md`](file:///c:/Users/WSALIGAN/code/opc-cli/refactor/cycle2_reference.md).
+>     - Cleaned up and deleted the 5 redundant source markdown files from `refactor/`.
+>   - **Architectural Lessons Learned Catalog:**
+>     - Extracted, synthesized, and categorized 44 deep architectural lessons across 6 engineering domains into [`refactor/lessons.md`](file:///c:/Users/WSALIGAN/code/opc-cli/refactor/lessons.md) and prepared staging archive [`refactor/lessons_prep.md`](file:///c:/Users/WSALIGAN/code/opc-cli/refactor/lessons_prep.md).
+>     - Structured all 44 lessons with standardized 7-field schema: Keywords/Search Tokens (BM25/FTS5 optimized), Category, Problem Statement, Root Cause & Technical Dynamics, Anti-Pattern, Architectural Solution (with production-tested code), and Verification Invariant.
+>     - Included 44-row quick-lookup index mapping error codes (`E0119`, `E0283`, `E0658`), Clippy lints (`iter_with_drain`, `cast_possible_wrap`), Win32 HRESULTs (`0x800706BA`, `0x800706BE`, `0x80070005`, `0x80004002`), Windows DCOM hardening (`KB5004442` / `CVE-2021-26414`), and AST-Grep rules to sections.
+>   - **Knowledge-RAG Ingestion & Verification:**
+>     - Ingested and indexed [`refactor/lessons_prep.md`](file:///c:/Users/WSALIGAN/code/opc-cli/refactor/lessons_prep.md) into the global `knowledge-rag` MCP instance under canonical destination `development/opc-da-client-lessons.md`.
+>     - Executed smart reindex (`reindex_documents(force=true)`), processing 38 files and adding 390 chunks in 61.02s with 0 errors.
+>     - Verified retrieval with hybrid queries achieving score `1.0` and rank #1 on both BM25 and dense semantic search for DCOM proxy blanketing and AST-Grep multiline rules.
+>   - **Quality Assurance & Verification:**
+>     - Cleaned working tree and confirmed all 9 gates in `scripts/verify.ps1` exit 0 (629 unit, integration, and doc-tests passing with 0 warnings).
+> * **New Constraints:**
+>   - All architectural lessons and pattern discoveries from refactoring cycles must be indexed into `knowledge-rag` under `development/` using the standardized 7-field schema for optimal BM25/hybrid searchability.
+>   - Cycle reference archives must consolidate review findings, post-implementation reports, deviations matrices, and deep-dive case studies into a single authoritative `cycleX_reference.md`.
+> * **Pruned:** Deleted 5 intermediate cycle reports (`cycle2_review.md`, `deviations.md`, `post_implementation_blockG.md`, `post_implementation_blockH.md`, `post_implementation_blockI.md`). Cycle 2 Modernization is 100% completed, archived, and closed!
+>
 ## 2026-09-18: Sub-Block I4 (WriteBatch Encapsulation & Small String Optimization) Completed (`opc-da-client`)
 > 📝 **Context Update:**
 > * **Feature:** Execution of Sub-Block I4 of Cycle 2 Modernization in `opc-da-client`, encapsulating `WriteBatch` behind an opaque struct with crate-private 5-variant representation (`WriteBatchRepr`), implementing 31-byte stack Small String Optimization (SSO) and compile-time static literal storage (72 bytes total layout, 0 internal padding), resolving trait coherence (`E0119`, `E0277`) and enforcing `Send` supertrait bounds on `IntoWriteBatch`, providing semantic sequence `PartialEq` and monotonic `ExactSizeIterator`, modernizing COM worker scalar write delegation (`handle_write`), migrating mock provider call sites, and synchronizing `spec.md` with zero deprecated stubs.
