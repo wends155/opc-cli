@@ -6,7 +6,7 @@
 | **Version** | 0.3.0 |
 | **Last Updated** | 2026-09-18 |
 
-> Last verified against: a46e75e
+> Last verified against: 40dc46f
 
 ---
 
