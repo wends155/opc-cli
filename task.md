@@ -25,13 +25,13 @@
 - [x] **🔒 CHECKPOINT 1**: Verify `WriteResult` unit tests (`cargo test -p opc-da-client --lib types::write_batch::tests`)
 
 ### Phase 2: Pipeline Helper Decomposition & Defense
-- [ ] **Step 3: [TEST]** `opc-da-client/src/com/worker/write.rs` — [+] `test_partition_write_inputs_clean_tags`, `test_partition_write_inputs_contaminated_tags`, `test_partition_write_inputs_all_null_tags`
-- [ ] **Step 4: [MODIFY]** `opc-da-client/src/com/worker/write.rs` — [+] `partition_write_inputs` with CWE-626 null-byte isolation and `tracing::warn!`
-- [ ] **Step 5: [TEST]** `opc-da-client/src/com/worker/write.rs` — [+] `test_partition_item_registration_results_partial`, `test_partition_item_registration_results_count_mismatch`
-- [ ] **Step 6: [MODIFY]** `opc-da-client/src/com/worker/write.rs` — [+] `partition_item_registration_results` with buffer size check and `.zip()` pairing
-- [ ] **Step 7: [TEST]** `opc-da-client/src/com/worker/write.rs` — [+] `test_assemble_write_results_outcomes`, `test_assemble_write_results_parity_mismatch`, `test_assemble_write_results_unassigned_slots_fallback`
-- [ ] **Step 8: [MODIFY]** `opc-da-client/src/com/worker/write.rs` — [+] `assemble_write_results` with server parity check and fail-safe slot fallback
-- [ ] **🔒 CHECKPOINT 2**: Verify all write helper unit tests (`cargo test -p opc-da-client --lib com::worker::write::tests`)
+- [x] **Step 3: [TEST]** `opc-da-client/src/com/worker/write.rs` — [+] `test_partition_write_inputs_clean_tags`, `test_partition_write_inputs_contaminated_tags`, `test_partition_write_inputs_all_null_tags`
+- [x] **Step 4: [MODIFY]** `opc-da-client/src/com/worker/write.rs` — [+] `partition_write_inputs` with CWE-626 null-byte isolation and `tracing::warn!`
+- [x] **Step 5: [TEST]** `opc-da-client/src/com/worker/write.rs` — [+] `test_partition_item_registration_results_partial`, `test_partition_item_registration_results_count_mismatch`
+- [x] **Step 6: [MODIFY]** `opc-da-client/src/com/worker/write.rs` — [+] `partition_item_registration_results` with buffer size check and `.zip()` pairing
+- [x] **Step 7: [TEST]** `opc-da-client/src/com/worker/write.rs` — [+] `test_assemble_write_results_outcomes`, `test_assemble_write_results_parity_mismatch`, `test_assemble_write_results_unassigned_slots_fallback`
+- [x] **Step 8: [MODIFY]** `opc-da-client/src/com/worker/write.rs` — [+] `assemble_write_results` with server parity check and fail-safe slot fallback
+- [x] **🔒 CHECKPOINT 2**: Verify all write helper unit tests (`cargo test -p opc-da-client --lib com::worker::write::tests`)
 
 ### Phase 3: Monolithic Orchestration Refactoring
 - [ ] **Step 9a: [TEST]** `opc-da-client/src/com/worker/write.rs` — [+] Unit tests for refactored write pipeline (`test_handle_write_batch_granular_null_byte_isolation`, `test_handle_write_batch_all_null_short_circuits`, `test_handle_write_batch_all_rejected_registration_skips_write`, `test_handle_write_scalar_null_byte_returns_failure_result`)
