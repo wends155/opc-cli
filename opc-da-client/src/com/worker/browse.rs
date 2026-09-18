@@ -33,8 +33,14 @@ pub fn handle_browse<S: ConnectedServer>(
     );
     let start = std::time::Instant::now();
 
-    if collector.is_cancelled() || collector.is_full() {
-        return Ok(collector.snapshot());
+    if collector.is_cancelled() {
+        return Ok(collector.harvest());
+    }
+    if !collector.is_empty() {
+        collector.clear();
+    }
+    if collector.is_full() {
+        return Ok(Vec::new());
     }
 
     let org = opc_server.query_organization().inspect_err(|e| {
@@ -53,7 +59,7 @@ pub fn handle_browse<S: ConnectedServer>(
             browse_recursive(opc_server, collector, 0)?;
         }
     }
-    let result = collector.snapshot();
+    let result = collector.harvest();
     tracing::info!(
         count = result.len(),
         elapsed_ms = super::elapsed_ms(start),
@@ -164,6 +170,7 @@ fn try_fast_flat_browse<S: ConnectedServer>(
 }
 
 /// Recursively traverses OPC branches and accumulates leaf item IDs into the collector.
+#[allow(clippy::iter_with_drain)]
 fn browse_recursive<S: ConnectedServer>(
     server: &S,
     collector: &TagCollector,
@@ -179,7 +186,7 @@ fn browse_recursive<S: ConnectedServer>(
             log_opc_err!(e, "browse_recursive:leaves", depth = depth);
         })?;
 
-    let mut leaf_ids = Vec::new();
+    let mut chunk = Vec::with_capacity(BROWSE_CHUNK_SIZE);
     for leaf_res in leaf_iter {
         if collector.is_cancelled() || collector.is_full() {
             break;
@@ -203,14 +210,20 @@ fn browse_recursive<S: ConnectedServer>(
                 continue;
             }
         };
-        leaf_ids.push(item_id);
+        chunk.push(item_id);
+        if chunk.len() >= BROWSE_CHUNK_SIZE {
+            let _ = collector.push_batch(chunk.drain(..));
+            if collector.is_cancelled() || collector.is_full() {
+                break;
+            }
+        }
     }
 
-    if !leaf_ids.is_empty() {
-        let _ = collector.push_batch(leaf_ids);
-        if collector.is_cancelled() || collector.is_full() {
-            return Ok(());
-        }
+    if !chunk.is_empty() {
+        let _ = collector.push_batch(chunk.drain(..));
+    }
+    if collector.is_cancelled() || collector.is_full() {
+        return Ok(());
     }
 
     let branch_iter = server
@@ -375,5 +388,44 @@ mod tests {
         assert!(tags.is_empty());
         assert_eq!(collector.len(), 0);
         assert!(collector.is_cancelled());
+    }
+
+    #[test]
+    fn test_handle_browse_retry_cleans_slate() {
+        let server = MockConnectedServer::default();
+        let server_id = ServerIdentifier::try_from("Test.Server").unwrap();
+        let collector = TagCollector::new(100);
+        assert!(collector.push("Dirty.Tag.1".into()));
+        assert!(collector.push("Dirty.Tag.2".into()));
+        assert_eq!(collector.len(), 2);
+
+        let tags =
+            handle_browse(&server_id, &collector, &server).expect("browse retry should succeed");
+        assert!(!tags.contains(&"Dirty.Tag.1".to_string()));
+        assert!(!tags.contains(&"Dirty.Tag.2".to_string()));
+        assert_eq!(tags, vec!["Random.Int4", "Random.Real8", "Random.String"]);
+        assert_eq!(collector.len(), 0);
+        assert!(collector.is_empty());
+    }
+
+    #[test]
+    fn test_handle_browse_recursive_chunked_batch_push() {
+        let generated_tags: Vec<String> = (0..300).map(|i| format!("BranchTag.{i:04}")).collect();
+        let server = MockConnectedServer::default()
+            .with_tags(generated_tags.clone())
+            .with_branch_tags(Vec::new())
+            .with_organization(NamespaceType::Hierarchy);
+        server
+            .supports_flat_browse
+            .store(false, std::sync::atomic::Ordering::Relaxed);
+        let server_id = ServerIdentifier::try_from("Test.Server").unwrap();
+        let collector = TagCollector::new(500);
+
+        let tags = handle_browse(&server_id, &collector, &server)
+            .expect("recursive chunked browse should succeed");
+        assert_eq!(tags.len(), 300);
+        assert_eq!(tags, generated_tags);
+        assert_eq!(collector.len(), 0);
+        assert!(collector.is_empty());
     }
 }
