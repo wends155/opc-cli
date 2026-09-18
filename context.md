@@ -1,5 +1,36 @@
 # Project Context Summary
 
+## 2026-09-18: Sub-Block I4 (WriteBatch Encapsulation & Small String Optimization) Completed (`opc-da-client`)
+> 📝 **Context Update:**
+> * **Feature:** Execution of Sub-Block I4 of Cycle 2 Modernization in `opc-da-client`, encapsulating `WriteBatch` behind an opaque struct with crate-private 5-variant representation (`WriteBatchRepr`), implementing 31-byte stack Small String Optimization (SSO) and compile-time static literal storage (72 bytes total layout, 0 internal padding), resolving trait coherence (`E0119`, `E0277`) and enforcing `Send` supertrait bounds on `IntoWriteBatch`, providing semantic sequence `PartialEq` and monotonic `ExactSizeIterator`, modernizing COM worker scalar write delegation (`handle_write`), migrating mock provider call sites, and synchronizing `spec.md` with zero deprecated stubs.
+> * **Changes:**
+>   - **Struct Encapsulation & 72-Byte Memory Layout (Objective O1):**
+>     - Encapsulated `WriteBatch` behind `pub struct WriteBatch { pub(crate) repr: WriteBatchRepr }` with variants: `StaticSingle(&'static str, OpcValue)`, `InlineSingle([u8; 31], u8, OpcValue)`, `OwnedSingle(String, OpcValue)`, `Shared(Arc<[(String, OpcValue)]>)`, and `Owned(Vec<(String, OpcValue)>)`.
+>     - Memory layout on `x86_64` is exactly 72 bytes (align 8, 0 internal padding bytes).
+>   - **Stack Small String Optimization (SSO) & Static Literals (Objective O2):**
+>     - Implemented `WriteBatch::from_str_lenient(tag, val)` with 31-byte stack buffer (`InlineSingle`), spilling over cleanly to `OwnedSingle` without slicing or UTF-8 codepoint tearing (CWE-20/787).
+>     - Implemented `WriteBatch::from_static(tag, val)` and `From<(&'static str, V)>` for zero-allocation compile-time static literals.
+>     - Upgraded `into_shareable` to retain `StaticSingle` and `InlineSingle` on the stack (zero heap allocation, zero atomic refcount increments).
+>   - **Trait Coherence & Thread-Safety (Objective O3):**
+>     - Excised blanket `From<(S, V)>` and blanket `IntoWriteBatch for T`.
+>     - Enforced `pub trait IntoWriteBatch: Send` bound, with `V: Clone + Into<OpcValue> + Send + Sync` and `S: AsRef<str> + Sync` for borrowed slices/arrays to eliminate `E0277`.
+>   - **Semantic Sequence Equality & ExactSizeIterator (Objective O4):**
+>     - Implemented sequence `<WriteBatch as PartialEq>::eq` (`self.len() == other.len() && self.iter().eq(other.iter())`), verified across 25 pairwise cross-variant permutations.
+>     - Implemented `WriteBatchIter<'_>` and `WriteBatchIntoIter` with monotonic `ExactSizeIterator` and `FusedIterator`.
+>   - **Caller Migration, Clean Slate Governance & Spec Synchronization (Objective O5):**
+>     - Modernized worker `handle_write` to delegate through `WriteBatch::from_str_lenient(tag_id, value.clone())`, eliminating 3,000 throwaway heap string allocations per minute in 50 Hz control loops.
+>     - Migrated `provider.rs` test fixtures to `.into_write_batch()`.
+>     - Updated `spec.md` with opaque `struct WriteBatch`, 31-byte stack SSO, and pruned deprecated `write` and `write_batch` method rows.
+>   - **Verification Results:**
+>     - Universal verification pipeline (`pwsh -File scripts/verify.ps1`) exited 0 across all 9 gates.
+>     - Zero warnings under `cargo clippy --workspace --all-targets --all-features -- -D warnings`.
+>     - 100% doc-tests and unit/integration tests passing without regressions.
+> * **New Constraints:**
+>   - Single-tag write batch construction for dynamic strings must route through `WriteBatch::from_str_lenient`.
+>   - Static string literals must route through `WriteBatch::from_static` or `From<(&'static str, V)>`.
+>   - Any type implementing `IntoWriteBatch` must satisfy `Send`.
+> * **Pruned:** Legacy open `WriteBatch` enum variants and blanket conversion traits excised without deprecated aliases. Sub-Block I4 is 100% complete!
+>
 ## 2026-09-18: Block I Overarching Audit (Sub-Blocks I1, I2, I3) Completed (`opc-da-client`)
 > 📝 **Context Update:**
 > * **Feature:** Comprehensive post-implementation architectural and compliance audit covering the entirety of Block I (Sub-Blocks I1, I2, and I3) of Cycle 2 Modernization in `opc-da-client`.
