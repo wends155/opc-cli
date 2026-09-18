@@ -279,7 +279,7 @@ mod tests {
     use crate::connector::mock::MockConnectedServer;
 
     #[test]
-    fn test_handle_browse_preserves_collector() {
+    fn test_handle_browse_harvests_tags() {
         let server = MockConnectedServer::default();
         let server_id = ServerIdentifier::try_from("Test.Server").unwrap();
         let collector = TagCollector::new(100);
@@ -287,9 +287,9 @@ mod tests {
         let tags = handle_browse(&server_id, &collector, &server)
             .expect("browse operation should succeed");
         assert!(!tags.is_empty());
-        // Collector snapshot preserves accumulator contents
-        assert_eq!(collector.len(), tags.len());
-        assert_eq!(collector.snapshot(), tags);
+        assert_eq!(tags, vec!["Random.Int4", "Random.Real8", "Random.String"]);
+        assert_eq!(collector.len(), 0);
+        assert!(collector.is_empty());
     }
 
     #[test]
@@ -312,8 +312,9 @@ mod tests {
 
         let tags = handle_browse(&server_id, &collector, &server)
             .expect("browse flat operation should succeed");
-        assert_eq!(tags.len(), collector.len());
-        assert_eq!(collector.snapshot(), tags);
+        assert_eq!(tags, vec!["Random.Int4", "Random.Real8", "Random.String"]);
+        assert_eq!(collector.len(), 0);
+        assert!(collector.is_empty());
     }
 
     #[test]
@@ -329,9 +330,9 @@ mod tests {
             .expect("browse operation across chunk boundaries should succeed");
 
         assert_eq!(tags.len(), 600);
-        assert_eq!(collector.len(), 600);
         assert_eq!(tags, generated_tags);
-        assert_eq!(collector.snapshot(), generated_tags);
+        assert_eq!(collector.len(), 0);
+        assert!(collector.is_empty());
     }
 
     #[test]
@@ -349,9 +350,9 @@ mod tests {
             .expect("browse flat operation across chunk boundaries should succeed");
 
         assert_eq!(tags.len(), 600);
-        assert_eq!(collector.len(), 600);
         assert_eq!(tags, generated_tags);
-        assert_eq!(collector.snapshot(), generated_tags);
+        assert_eq!(collector.len(), 0);
+        assert!(collector.is_empty());
     }
 
     #[test]
@@ -367,9 +368,9 @@ mod tests {
             .expect("browse operation with bounded capacity should succeed");
 
         assert_eq!(tags.len(), 300);
-        assert_eq!(collector.len(), 300);
-        assert!(collector.is_full());
         assert_eq!(tags, &generated_tags[..300]);
+        assert_eq!(collector.len(), 0);
+        assert!(collector.is_empty());
     }
 
     #[test]
