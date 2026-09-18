@@ -1,5 +1,32 @@
 # Project Context Summary
 
+## 2026-09-18: Sub-Block I3 (Collector Concurrency, Zero-Copy Handoff & Traversal Parity) Completed (`opc-da-client`)
+> 📝 **Context Update:**
+> * **Feature:** Execution of Sub-Block I3 of Cycle 2 Modernization in `opc-da-client`, upgrading `TagCollector` to reader-writer lock (`RwLock<Vec<String>>`) with symmetrical poison recovery, replacing terminal `collector.snapshot()` with $O(1)$ zero-copy `collector.harvest()`, adding 3-stage clean slate retry entry guard to `handle_browse`, establishing 256-chunking parity in hierarchical `browse_recursive` via `BROWSE_CHUNK_SIZE`, hardening batch ingestion with RAII `PushBatchGuard` and clamped reservation hints, and adding `with_capacity`, `clear`, and 100% doc-test coverage.
+> * **Changes:**
+>   - **Zero-Copy Terminal Browse Handoff (Objective O1):**
+>     - Replaced terminal `collector.snapshot()` calls in `handle_browse` (early exit and completion return) with `collector.harvest()`, eliminating 10,001 heap allocations and ~860 KB of ephemeral memory churn for 10,000 tags via $O(1)$ pointer transfer (`std::mem::take`).
+>   - **Reader-Writer Concurrency Upgrade & Poison Recovery (Objective O2):**
+>     - Upgraded `TagCollectorInner.tags` to `std::sync::RwLock<Vec<String>>`, enabling concurrent lock-free progress inspection during long-running background tag browsing without blocking active workers.
+>     - Implemented symmetrical poison recovery across `clear`, `snapshot`, `harvest`, `push`, and `push_batch`, resynchronizing atomic `count` with `g.len()`.
+>     - Added RAII `PushBatchGuard` to `push_batch` ensuring atomic `count` resynchronization via `Drop` during iterator unwinds, and clamped reservation hint to `lower.min(remaining).min(1024)`.
+>   - **Hierarchical Traversal 256-Chunking Parity (Objective O3):**
+>     - Refactored `browse_recursive` to batch leaf items into `BROWSE_CHUNK_SIZE = 256` chunks using `chunk.drain(..)`, un-nesting terminal capacity and cancellation checks.
+>   - **Idempotent Retry Clean Slate Entry Guard (Objective O4):**
+>     - Added 3-stage clean-slate guard in `handle_browse` separating cooperative cancellation harvest, non-empty buffer clearance (`collector.clear()`), and capacity exhaustion checks, preventing duplicate tag contamination upon connection retry.
+>   - **API Ergonomics & 100% Doc-Tests (Objective O5):**
+>     - Added `TagCollector::with_capacity` and `TagCollector::clear` with `# Performance Warning` on `snapshot()`.
+>     - Added complete, runnable `# Examples` doc-tests for all 13 inherent methods and trait impls.
+>   - **Quality Pipeline Verification:**
+>     - Full 8-gate verification pipeline (`pwsh -File scripts/verify.ps1`) exited 0 with all 611 tests passing (+20 net new tests, 0 regressions), zero compiler/clippy warnings under `-D warnings`, zero AST-grep violations, and zero forbidden macros.
+>     - Documented 1 implementation deviation (I3.1) in [`refactor/deviations.md`](file:///c:/Users/WSALIGAN/code/opc-cli/refactor/deviations.md) with 0 violations and 100% verification fidelity.
+> * **New Constraints:**
+>   - Terminal browse consumers receive tag vectors via `collector.harvest()`; post-browse `collector` state is drained ($N=0$).
+>   - Recursive leaf enumeration must flush batches at `BROWSE_CHUNK_SIZE = 256` intervals using `chunk.drain(..)`.
+>   - `TagCollector` batch insertion must use RAII drop guards for atomic counter updates to guarantee panic safety.
+>   - Mock server tests for leaf chunking must chain `.with_branch_tags(Vec::new())` to avoid unintended simulated branch recursion.
+> * **Pruned:** Sub-Block I3 is 100% complete. Cycle 2 Modernization Block I (Sub-Blocks I1, I2, I3) is officially and fully completed!
+
 ## 2026-09-18: Sub-Block I2 (Batch Write Allocation & Defensive Hardening) Completed (`opc-da-client`)
 > 📝 **Context Update:**
 > * **Feature:** Execution of Sub-Block I2 of Cycle 2 Modernization in `opc-da-client`, eliminating dead store allocations in batch write via lazy `Option<WriteResult>` slots, establishing granular CWE-626 interior null-byte defense and telemetry, enforcing two-stage positional index mapping (`valid_orig_indices` and `valid_write_orig_indices`) with safe `.get()` / `.get_mut()` indexing, decomposing monolithic `handle_write_batch` into 3 single-responsibility helpers (`partition_write_inputs`, `partition_item_registration_results`, `assemble_write_results`), excising `#[allow(clippy::too_many_lines)]`, delegating `handle_write` to `handle_write_batch`, delivering `WriteResult::is_connection_error` and `Display`, and expanding integration test coverage to 8 comprehensive tests.
