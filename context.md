@@ -1,5 +1,35 @@
 # Project Context Summary
 
+## 2026-09-18: Sub-Block I2 (Batch Write Allocation & Defensive Hardening) Completed (`opc-da-client`)
+> 📝 **Context Update:**
+> * **Feature:** Execution of Sub-Block I2 of Cycle 2 Modernization in `opc-da-client`, eliminating dead store allocations in batch write via lazy `Option<WriteResult>` slots, establishing granular CWE-626 interior null-byte defense and telemetry, enforcing two-stage positional index mapping (`valid_orig_indices` and `valid_write_orig_indices`) with safe `.get()` / `.get_mut()` indexing, decomposing monolithic `handle_write_batch` into 3 single-responsibility helpers (`partition_write_inputs`, `partition_item_registration_results`, `assemble_write_results`), excising `#[allow(clippy::too_many_lines)]`, delegating `handle_write` to `handle_write_batch`, delivering `WriteResult::is_connection_error` and `Display`, and expanding integration test coverage to 8 comprehensive tests.
+> * **Changes:**
+>   - **Zero Dead Store Allocations & Lazy Slot Buffer (Finding #6, O1):**
+>     - Replaced eager vector pre-population of dummy failure strings with `write_results: Vec<Option<WriteResult>> = vec![None; items.len()]`, dropping happy-path allocator operations from 50,005 to 10,004 (-80.0%) for 10k item batches.
+>     - Eliminated intermediate `tag_names: Vec<&str>` vector (-160 KB heap churn on 10k batches).
+>   - **Granular CWE-626 Null-Byte Quarantine & Short-Circuit (Finding #7, O2):**
+>     - Inverted input validation: tags containing illegal interior null bytes (`\0`) are quarantined at Gate 1 in `partition_write_inputs` directly into `WriteResult::failure` with `tracing::warn!(..., tag = %tag_id.escape_debug())`, preventing batch poisoning DoS (CWE-400).
+>     - Added all-null batch short-circuit bypassing COM ephemeral group creation when 100% of input tags are invalid.
+>   - **Two-Stage Positional Index Mapping & Defensive Assembly (Finding #8, O3):**
+>     - Enforced strict 1:1 positional correspondence between input writes and output results across `valid_orig_indices` (Stage 1) and `valid_write_orig_indices` (Stage 2) using safe `.get()` / `.get_mut()` indexing and `.zip()` pairing.
+>     - Added server write results array parity verification failing fast on count mismatch (`OpcError::Internal`).
+>     - Implemented fail-safe unassigned slot fallback in `assemble_write_results`.
+>   - **Pipeline Decomposition & Clipping Removal (Finding #9, O4):**
+>     - Refactored 112-line `handle_write_batch` into 3 cohesive helper functions (`partition_write_inputs`, `partition_item_registration_results`, `assemble_write_results`), removing `#[allow(clippy::too_many_lines)]`.
+>     - Delegated single-tag `handle_write` directly to `handle_write_batch(&WriteBatch::Single(...))`.
+>   - **Domain Ergonomics & Doctests (Finding #10, O5):**
+>     - Implemented `WriteResult::is_connection_error(&self) -> bool` and `std::fmt::Display for WriteResult` with complete rustdoc specifications and runnable doctests.
+>   - **Comprehensive Integration Testing & Quality Pipeline (Finding #11, O6):**
+>     - Expanded [`tests/batch_write_test.rs`](file:///c:/Users/WSALIGAN/code/opc-cli/opc-da-client/tests/batch_write_test.rs) with 6 new integration tests (8 total).
+>     - All 9 quality gates in `pwsh scripts/verify.ps1` passed cleanly with 0 compiler warnings, 0 clippy warnings under `-D warnings`, and 0 AST-Grep violations.
+>     - Workspace test suite increased from 570 to 591 tests (+21 net new tests, 0 regressions).
+> * **New Constraints:**
+>   - Write batch processing must quarantine null-byte tag identifiers at entry before Win32 COM string conversions.
+>   - Ephemeral COM group allocation must be skipped if all tags in a write batch are quarantined.
+>   - Buffer slot indexing must use safe `.get()` and `.get_mut()`; unchecked slice indexing (`[]`) is prohibited.
+>   - `WriteResult` must be checked via `is_connection_error()` to distinguish transport failures from item/config rejections.
+> * **Pruned:** Monolithic 112-line `handle_write_batch` and clippy suppression excised. Sub-Block I2 is 100% complete. Cycle 2 Modernization (Block I) is officially complete!
+
 ## 2026-09-17: Sub-Block I1 (COM Worker Hygiene, Buffer Reuse & Dead Code Excision) Completed (`opc-da-client`)
 > 📝 **Context Update:**
 > * **Feature:** Execution of Sub-Block I1 of Cycle 2 Modernization in `opc-da-client`, eliminating browse buffer allocation churn via `chunk.drain(..)`, enforcing fail-fast tag count parity checks (CWE-682), migrating read item partition to move semantics without defensive cloning, excising actor footgun `PriorityRequestQueue::clear`, removing unused `ComWorker::start_async*` methods and singular alias `clear_active_group`, upgrading active group LRU eviction to stable `while` loop, and eliminating pre-unwind heap allocations on hot request dispatch paths.
