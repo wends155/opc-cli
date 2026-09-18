@@ -34,9 +34,9 @@
 - [x] **🔒 CHECKPOINT 2**: Verify all write helper unit tests (`cargo test -p opc-da-client --lib com::worker::write::tests`)
 
 ### Phase 3: Monolithic Orchestration Refactoring
-- [ ] **Step 9a: [TEST]** `opc-da-client/src/com/worker/write.rs` — [+] Unit tests for refactored write pipeline (`test_handle_write_batch_granular_null_byte_isolation`, `test_handle_write_batch_all_null_short_circuits`, `test_handle_write_batch_all_rejected_registration_skips_write`, `test_handle_write_scalar_null_byte_returns_failure_result`)
-- [ ] **Step 9b: [MODIFY]** `opc-da-client/src/com/worker/write.rs` — [~] Refactor `handle_write_batch` to 5-stage pipeline, remove `#[allow(clippy::too_many_lines)]`, delegate `handle_write`
-- [ ] **🔒 CHECKPOINT 3**: Verify worker write unit suite (`cargo test -p opc-da-client --lib com::worker::write::tests`)
+- [x] **Step 9a: [TEST]** `opc-da-client/src/com/worker/write.rs` — [+] Unit tests for refactored write pipeline (`test_handle_write_batch_granular_null_byte_isolation`, `test_handle_write_batch_all_null_short_circuits`, `test_handle_write_batch_all_rejected_registration_skips_write`, `test_handle_write_scalar_null_byte_returns_failure_result`)
+- [x] **Step 9b: [MODIFY]** `opc-da-client/src/com/worker/write.rs` — [~] Refactor `handle_write_batch` to 5-stage pipeline, remove `#[allow(clippy::too_many_lines)]`, delegate `handle_write`
+- [x] **🔒 CHECKPOINT 3**: Verify worker write unit suite (`cargo test -p opc-da-client --lib com::worker::write::tests`)
 
 ### Phase 4: Integration Coverage & Quality Gate Verification
 - [ ] **Step 10: [TEST+VERIFY]** `opc-da-client/tests/batch_write_test.rs` — [+] Add 6 integration tests (`test_client_batch_write_partial_rejection_preserves_order`, `test_client_batch_write_interior_null_byte_isolated`, `test_client_batch_write_empty_short_circuits`, `test_client_batch_write_all_rejected_skips_write`, `test_client_batch_write_all_null_short_circuits`, `test_write_result_display_and_connection_error`) and verify full workspace gate (`pwsh scripts/verify.ps1`)

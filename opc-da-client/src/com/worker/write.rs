@@ -8,6 +8,21 @@ use crate::types::{OpcValue, ServerIdentifier, WriteBatch, WriteResult};
 
 /// Executes synchronous batch writing across multiple tags in a single atomic COM group, returning
 /// a list of structured [`WriteResult`]s preserving the original index ordering.
+///
+/// # Parameters
+///
+/// - `server_id`: Identifier of the connected OPC DA server for contextual tracing and logging.
+/// - `writes`: Batch of tag IDs and corresponding [`OpcValue`] payloads to write.
+/// - `opc_server`: Connected OPC server instance implementing [`ConnectedServer`].
+///
+/// # Errors
+///
+/// - [`OpcError::InvalidState`]: Returned if the batch size exceeds [`MAX_TAG_BATCH_SIZE`].
+/// - [`OpcError::Internal`]: Returned if internal buffer sizes, item registration counts, or
+///   result array lengths exhibit invariant mismatches during input partitioning or result assembly.
+/// - Transport / COM errors ([`OpcError::Com`]): Returned if COM group creation via
+///   [`register_item_group`](super::register_item_group) or COM group write execution via
+///   [`ConnectedGroup::write`] fails due to communication or server interface failure.
 #[tracing::instrument(
     name = "opc.write_tag_values",
     level = "info",
@@ -15,7 +30,6 @@ use crate::types::{OpcValue, ServerIdentifier, WriteBatch, WriteResult};
     fields(write_count = writes.len()),
     err
 )]
-#[allow(clippy::too_many_lines)]
 pub fn handle_write_batch<S: ConnectedServer>(
     server_id: &ServerIdentifier,
     writes: &WriteBatch,
@@ -42,44 +56,41 @@ pub fn handle_write_batch<S: ConnectedServer>(
     let start = std::time::Instant::now();
 
     let items: Vec<(&str, &OpcValue)> = writes.iter().collect();
-    let tag_names: Vec<&str> = items.iter().map(|(t, _)| *t).collect();
-    let reg =
-        crate::com::worker::register_item_group(opc_server, server_id, "opc-write", &tag_names)?;
-    let group = reg.group;
-    let _group_guard = reg.group_guard;
-    let results = reg.item_results;
 
-    let mut write_results: Vec<WriteResult> = items
-        .iter()
-        .map(|(tag_id, _)| {
-            WriteResult::failure(
-                *tag_id,
-                OpcError::InvalidState("Item rejected during add_items".into()),
-            )
-        })
-        .collect();
+    // Stage 1 & 2: Partition inputs and isolate interior null byte tags (CWE-626 defense)
+    let (valid_tags, valid_orig_indices, mut write_results) =
+        partition_write_inputs(&items, server_id);
 
-    let mut valid_writes = Vec::with_capacity(results.len());
-    let mut valid_indices = Vec::with_capacity(results.len());
-
-    for (idx, item_res) in results.iter().enumerate() {
-        let (tag_id, val) = items[idx];
-        if let Some(ref e) = item_res.error {
-            log_opc_err!(
-                e,
-                "write_tag_values:items_rejected",
-                server = %server_id,
-                tag = %tag_id
-            );
-            write_results[idx] = WriteResult::failure(tag_id, e.clone());
-        } else {
-            valid_writes.push(ItemWrite::new(item_res.server_handle, val.clone()));
-            valid_indices.push(idx);
-        }
+    // Short-circuit if all tags were quarantined: zero COM group allocations
+    if valid_tags.is_empty() {
+        let final_results = assemble_write_results(&items, write_results, &[], None, server_id)?;
+        tracing::info!(
+            count = final_results.len(),
+            elapsed_ms = super::elapsed_ms(start),
+            "write_tag_values batch completed"
+        );
+        return Ok(final_results);
     }
 
-    if !valid_writes.is_empty() {
-        let server_write_results = group.write(&valid_writes).inspect_err(|e| {
+    // Stage 3: Register COM item group for valid tags
+    let crate::com::worker::RegisteredItemGroup {
+        group,
+        group_guard: _group_guard,
+        item_results,
+    } = crate::com::worker::register_item_group(opc_server, server_id, "opc-write", &valid_tags)?;
+
+    // Stage 4: Partition item registration results
+    let (valid_writes, valid_write_orig_indices) = partition_item_registration_results(
+        item_results,
+        &valid_orig_indices,
+        &items,
+        &mut write_results,
+        server_id,
+    )?;
+
+    // Stage 5: Execute COM write (if any items registered successfully) and assemble final results
+    let server_write_results = if !valid_writes.is_empty() {
+        let results = group.write(&valid_writes).inspect_err(|e| {
             log_opc_err!(
                 e,
                 "write_tag_values:sync",
@@ -87,49 +98,40 @@ pub fn handle_write_batch<S: ConnectedServer>(
                 handle_count = valid_writes.len()
             );
         })?;
+        Some(results)
+    } else {
+        None
+    };
 
-        if server_write_results.len() != valid_indices.len() {
-            let err = OpcError::Internal(format!(
-                "server returned mismatched write result array size: expected {}, got {}",
-                valid_indices.len(),
-                server_write_results.len()
-            ));
-            log_opc_err!(
-                &err,
-                "write_tag_values:mismatched",
-                server = %server_id,
-                expected = valid_indices.len(),
-                actual = server_write_results.len()
-            );
-            return Err(err);
-        }
-
-        for (res, &orig_idx) in server_write_results.into_iter().zip(&valid_indices) {
-            let (tag_id, _) = items[orig_idx];
-            write_results[orig_idx] = match res {
-                Ok(()) => WriteResult::success(tag_id),
-                Err(e) => {
-                    log_opc_err!(
-                        &e,
-                        "write_tag_values:server_rejected",
-                        server = %server_id,
-                        tag = %tag_id
-                    );
-                    WriteResult::failure(tag_id, e)
-                }
-            };
-        }
-    }
+    let final_results = assemble_write_results(
+        &items,
+        write_results,
+        &valid_write_orig_indices,
+        server_write_results,
+        server_id,
+    )?;
 
     tracing::info!(
-        count = write_results.len(),
+        count = final_results.len(),
         elapsed_ms = super::elapsed_ms(start),
         "write_tag_values batch completed"
     );
-    Ok(write_results)
+    Ok(final_results)
 }
 
 /// Executes synchronous single-tag writing, delegating to [`handle_write_batch`].
+///
+/// # Parameters
+///
+/// - `server_id`: Identifier of the connected OPC DA server for contextual tracing.
+/// - `tag_id`: String identifier of the target OPC tag.
+/// - `value`: [`OpcValue`] payload to write.
+/// - `opc_server`: Connected OPC server instance implementing [`ConnectedServer`].
+///
+/// # Errors
+///
+/// - [`OpcError::Internal`]: Returned if internal result assembly fails to yield a result slot.
+/// - Transport / COM errors ([`OpcError::Com`], [`OpcError::Connection`]): Returned if COM communication fails.
 #[tracing::instrument(
     name = "opc.write_tag_value",
     level = "info",
@@ -143,6 +145,13 @@ pub fn handle_write<S: ConnectedServer>(
     value: &OpcValue,
     opc_server: &S,
 ) -> OpcResult<WriteResult> {
+    #[cfg(feature = "dev-diagnostics")]
+    tracing::trace!(
+        server = %server_id,
+        tag = %tag_id,
+        value = ?value,
+        "write_tag_value: starting single write"
+    );
     let mut results = handle_write_batch(
         server_id,
         &WriteBatch::Single(tag_id.to_string(), value.clone()),
@@ -794,5 +803,176 @@ mod tests {
         assert_eq!(results[0].tag_id, "Tag1");
         assert!(results[0].is_error());
         assert!(results[0].error().unwrap().to_string().contains("was not populated"));
+    }
+
+    #[test]
+    fn test_handle_write_batch_granular_null_byte_isolation() {
+        let state = std::sync::Arc::new(crate::connector::mock::MockState::default());
+        let server = crate::connector::mock::MockConnectedServer {
+            state: state.clone(),
+            ..Default::default()
+        };
+        let server_id = ServerIdentifier::try_from("Test.Server").unwrap();
+        let writes = vec![
+            ("Clean.Tag1".to_string(), OpcValue::Int(1)),
+            ("Dirty\0.Tag2".to_string(), OpcValue::Int(2)),
+            ("Clean.Tag3".to_string(), OpcValue::Int(3)),
+        ];
+
+        let results = handle_write_batch(&server_id, &writes.into_write_batch(), &server)
+            .expect("batch write should succeed with granular isolation");
+
+        assert_eq!(results.len(), 3);
+        assert_eq!(results[0].tag_id, "Clean.Tag1");
+        assert!(results[0].is_success());
+
+        assert_eq!(results[1].tag_id, "Dirty\0.Tag2");
+        assert!(results[1].is_error());
+        assert!(
+            results[1]
+                .error()
+                .unwrap()
+                .to_string()
+                .contains("illegal interior null byte")
+        );
+
+        assert_eq!(results[2].tag_id, "Clean.Tag3");
+        assert!(results[2].is_success());
+
+        assert_eq!(
+            state
+                .add_group_count
+                .load(std::sync::atomic::Ordering::Relaxed),
+            1,
+            "Exactly 1 COM group should be registered for valid tags"
+        );
+    }
+
+    #[test]
+    fn test_handle_write_batch_all_null_short_circuits() {
+        let state = std::sync::Arc::new(crate::connector::mock::MockState::default());
+        let server = crate::connector::mock::MockConnectedServer {
+            state: state.clone(),
+            ..Default::default()
+        };
+        let server_id = ServerIdentifier::try_from("Test.Server").unwrap();
+        let writes = vec![
+            ("Bad\0Tag1".to_string(), OpcValue::Int(1)),
+            ("Bad\0Tag2".to_string(), OpcValue::Int(2)),
+        ];
+
+        let results = handle_write_batch(&server_id, &writes.into_write_batch(), &server)
+            .expect("all-null batch should short-circuit and return results");
+
+        assert_eq!(results.len(), 2);
+        assert_eq!(results[0].tag_id, "Bad\0Tag1");
+        assert!(results[0].is_error());
+        assert!(
+            results[0]
+                .error()
+                .unwrap()
+                .to_string()
+                .contains("illegal interior null byte")
+        );
+        assert_eq!(results[1].tag_id, "Bad\0Tag2");
+        assert!(results[1].is_error());
+        assert!(
+            results[1]
+                .error()
+                .unwrap()
+                .to_string()
+                .contains("illegal interior null byte")
+        );
+        assert_eq!(
+            state
+                .add_group_count
+                .load(std::sync::atomic::Ordering::Relaxed),
+            0,
+            "No COM groups should be allocated when all tags contain null bytes"
+        );
+    }
+
+    #[test]
+    fn test_handle_write_batch_all_rejected_registration_skips_write() {
+        let state = std::sync::Arc::new(crate::connector::mock::MockState::default());
+        let write_invoked = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let write_invoked_clone = write_invoked.clone();
+
+        let group = crate::connector::mock::MockConnectedGroup {
+            state: state.clone(),
+            ..Default::default()
+        }
+        .with_add_items_fn(|items| {
+            Ok(items
+                .iter()
+                .map(|_| crate::connector::GroupItemResult {
+                    server_handle: ServerItemHandle::new(0),
+                    canonical_type: VarType::EMPTY,
+                    error: Some(OpcError::InvalidState("Rejected in registration".into())),
+                })
+                .collect())
+        })
+        .with_write_fn(move |items| {
+            write_invoked_clone.store(true, std::sync::atomic::Ordering::Relaxed);
+            Ok(items.iter().map(|_| Ok(())).collect())
+        });
+
+        let server = crate::connector::mock::MockConnectedServer {
+            group: std::sync::Arc::new(group),
+            state,
+            ..Default::default()
+        };
+        let server_id = ServerIdentifier::try_from("Test.Server").unwrap();
+        let writes = vec![
+            ("Tag1".to_string(), OpcValue::Int(10)),
+            ("Tag2".to_string(), OpcValue::Int(20)),
+        ];
+
+        let results = handle_write_batch(&server_id, &writes.into_write_batch(), &server)
+            .expect("all-rejected registration must return results without error");
+
+        assert_eq!(results.len(), 2);
+        assert_eq!(results[0].tag_id, "Tag1");
+        assert!(results[0].is_error());
+        assert!(
+            results[0]
+                .error()
+                .unwrap()
+                .to_string()
+                .contains("Rejected in registration")
+        );
+        assert_eq!(results[1].tag_id, "Tag2");
+        assert!(results[1].is_error());
+        assert!(
+            results[1]
+                .error()
+                .unwrap()
+                .to_string()
+                .contains("Rejected in registration")
+        );
+        assert!(
+            !write_invoked.load(std::sync::atomic::Ordering::Relaxed),
+            "group.write() must not be called when all items are rejected during registration"
+        );
+    }
+
+    #[test]
+    fn test_handle_write_scalar_null_byte_returns_failure_result() {
+        let server = crate::connector::mock::MockConnectedServer::default();
+        let server_id = ServerIdentifier::try_from("Test.Server").unwrap();
+        let value = OpcValue::Int(42);
+
+        let result = handle_write(&server_id, "Bad\0Tag", &value, &server)
+            .expect("scalar write must return Ok(WriteResult) even on item validation error");
+
+        assert!(result.is_error());
+        assert_eq!(result.tag_id, "Bad\0Tag");
+        assert!(
+            result
+                .error()
+                .unwrap()
+                .to_string()
+                .contains("illegal interior null byte")
+        );
     }
 }
