@@ -610,10 +610,7 @@ mod tests {
         assert!(valid_tags.is_empty());
         assert!(valid_orig_indices.is_empty());
         assert_eq!(write_results.len(), 2);
-        assert_eq!(
-            write_results[0].as_ref().unwrap().tag_id,
-            "Bad\0One"
-        );
+        assert_eq!(write_results[0].as_ref().unwrap().tag_id, "Bad\0One");
         assert!(write_results[0].as_ref().unwrap().is_error());
         assert!(
             write_results[0]
@@ -624,10 +621,7 @@ mod tests {
                 .to_string()
                 .contains("illegal interior null byte")
         );
-        assert_eq!(
-            write_results[1].as_ref().unwrap().tag_id,
-            "Bad\0Two"
-        );
+        assert_eq!(write_results[1].as_ref().unwrap().tag_id, "Bad\0Two");
         assert!(write_results[1].as_ref().unwrap().is_error());
         assert!(
             write_results[1]
@@ -682,7 +676,13 @@ mod tests {
             .expect("Tag.B must have failed result");
         assert_eq!(failed.tag_id, "Tag.B");
         assert!(failed.is_error());
-        assert!(failed.error().unwrap().to_string().contains("Tag.B not found"));
+        assert!(
+            failed
+                .error()
+                .unwrap()
+                .to_string()
+                .contains("Tag.B not found")
+        );
     }
 
     #[test]
@@ -716,11 +716,7 @@ mod tests {
         let val1 = OpcValue::Int(10);
         let val2 = OpcValue::Int(20);
         let val3 = OpcValue::Int(30);
-        let items = [
-            ("Tag1", &val1),
-            ("Tag2", &val2),
-            ("Tag3", &val3),
-        ];
+        let items = [("Tag1", &val1), ("Tag2", &val2), ("Tag3", &val3)];
         let write_results = vec![
             None,
             Some(WriteResult::failure(
@@ -733,9 +729,7 @@ mod tests {
         let server_write_results = Some(vec![
             Ok(()),
             Err(OpcError::Com {
-                source: windows_core::Error::from_hresult(windows_core::HRESULT(
-                    0x8000_4005u32 as i32,
-                )),
+                source: windows_core::Error::from_hresult(crate::errors::hresult::E_FAIL),
             }),
         ]);
 
@@ -754,7 +748,13 @@ mod tests {
 
         assert_eq!(results[1].tag_id, "Tag2");
         assert!(results[1].is_error());
-        assert!(results[1].error().unwrap().to_string().contains("Failed in add_items"));
+        assert!(
+            results[1]
+                .error()
+                .unwrap()
+                .to_string()
+                .contains("Failed in add_items")
+        );
 
         assert_eq!(results[2].tag_id, "Tag3");
         assert!(results[2].is_error());
@@ -779,7 +779,9 @@ mod tests {
         )
         .expect_err("parity mismatch must error");
 
-        assert!(matches!(err, OpcError::Internal(ref msg) if msg.contains("mismatched write result array size")));
+        assert!(
+            matches!(err, OpcError::Internal(ref msg) if msg.contains("mismatched write result array size"))
+        );
     }
 
     #[test]
@@ -802,7 +804,13 @@ mod tests {
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].tag_id, "Tag1");
         assert!(results[0].is_error());
-        assert!(results[0].error().unwrap().to_string().contains("was not populated"));
+        assert!(
+            results[0]
+                .error()
+                .unwrap()
+                .to_string()
+                .contains("was not populated")
+        );
     }
 
     #[test]

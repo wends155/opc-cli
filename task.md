@@ -39,7 +39,7 @@
 - [x] **🔒 CHECKPOINT 3**: Verify worker write unit suite (`cargo test -p opc-da-client --lib com::worker::write::tests`)
 
 ### Phase 4: Integration Coverage & Quality Gate Verification
-- [ ] **Step 10: [TEST+VERIFY]** `opc-da-client/tests/batch_write_test.rs` — [+] Add 6 integration tests (`test_client_batch_write_partial_rejection_preserves_order`, `test_client_batch_write_interior_null_byte_isolated`, `test_client_batch_write_empty_short_circuits`, `test_client_batch_write_all_rejected_skips_write`, `test_client_batch_write_all_null_short_circuits`, `test_write_result_display_and_connection_error`) and verify full workspace gate (`pwsh scripts/verify.ps1`)
-- [ ] **🔒 FINAL CHECKPOINT**: Full workspace zero-exit gate
+- [x] **Step 10: [TEST+VERIFY]** `opc-da-client/tests/batch_write_test.rs` — [+] Add 6 integration tests (`test_client_batch_write_partial_rejection_preserves_order`, `test_client_batch_write_interior_null_byte_isolated`, `test_client_batch_write_empty_short_circuits`, `test_client_batch_write_all_rejected_skips_write`, `test_client_batch_write_all_null_short_circuits`, `test_write_result_display_and_connection_error`) and verify full workspace gate (`pwsh scripts/verify.ps1`)
+- [x] **🔒 FINAL CHECKPOINT**: Full workspace zero-exit gate
 
 ## Builder Notes
