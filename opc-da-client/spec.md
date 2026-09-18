@@ -152,42 +152,58 @@ Implemented for:
 
 ---
 
-##### `enum WriteBatch`
+##### `struct WriteBatch`
 
-**Purpose:** Zero-allocation polymorphic batch write representation avoiding forced string and tuple allocations across threads and channels.
+**Purpose:** Opaque zero-allocation batch write representation avoiding forced string and tuple allocations across threads and channels, with 31-byte stack Small String Optimization (SSO) and zero-allocation static literal storage.
 
-| Variant | Internal Storage | Description |
+**Memory Layout:** 72 bytes on `x86_64` (align 8, 0 internal padding bytes).
+
+| Variant (`WriteBatchRepr`) | Internal Storage | Description |
 | :--- | :--- | :--- |
-| `Single(String, OpcValue)` | Single tag identifier string and value | Single-item write representation. |
+| `StaticSingle(&'static str, OpcValue)` | Borrowed static string slice and target value | Zero-allocation compile-time static string literal representation. |
+| `InlineSingle([u8; 31], u8, OpcValue)` | Stack buffer (31 bytes), length (1 byte), target value | Stack Small String Optimization (SSO) for tag names $\le 31$ bytes without heap allocation. |
+| `OwnedSingle(String, OpcValue)` | Heap-allocated string and target value | Single-item write representation for tag names $> 31$ bytes. |
 | `Shared(Arc<[(String, OpcValue)]>)` | Atomic reference-counted slice | Shareable, multi-consumer batch write representation ($O(1)$ clone). |
-| `Owned(Vec<(String, OpcValue)>)` | Heap vector | Owning dynamic batch write representation. |
+| `Owned(Vec<(String, OpcValue)>)` | Heap vector | Owning dynamic batch write representation (move-only buffer ingestion). |
 
 **Methods:**
-* `len(&self) -> usize`: Returns number of write items in the batch.
-* `is_empty(&self) -> bool`: Returns `true` if batch contains 0 write items.
-* `iter(&self) -> WriteBatchIter<'_>`: Yields zero-allocation borrowed iterator yielding `(&str, &OpcValue)`.
+* `empty() -> Self`: `const` constructor returning an empty `WriteBatch`.
+* `from_static(tag: &'static str, val: impl Into<OpcValue>) -> Self`: Creates a batch from a compile-time static string literal with zero heap allocation.
+* `from_str_lenient(tag: &str, val: impl Into<OpcValue>) -> Self`: Creates a single write batch with 31-byte stack SSO; cleanly spills over to `OwnedSingle` without UTF-8 codepoint tearing (CWE-20/787).
+* `len(&self) -> usize`: Returns number of write items in the batch (constant `1` for all scalar variants; CWE-682 defense).
+* `is_empty(&self) -> bool`: Returns `true` if batch contains 0 write items (`self.len() == 0`).
+* `as_slice(&self) -> Option<&[(String, OpcValue)]>`: Returns `Some` if backed by contiguous heap storage (`Shared` or `Owned`), `None` for scalar variants.
+* `into_shareable(self) -> Self`: Promotes batch to shareable representation; retains `StaticSingle` and `InlineSingle` on the stack without heap or atomic allocation.
+* `into_vec(self) -> Vec<(String, OpcValue)>`: Consumes batch into an owned vector (zero-reallocation for `Owned`).
+* `iter(&self) -> WriteBatchIter<'_>`: Yields zero-allocation borrowed iterator yielding `(&str, &OpcValue)` across all 5 representations.
 * `into_iter(self) -> WriteBatchIntoIter`: Consumes batch into owning iterator yielding `(String, OpcValue)`.
 
 **Traits:**
-* `From<Vec<(String, OpcValue)>>`: Converts owned vector into `WriteBatch::Owned`.
-* `From<(String, OpcValue)>`: Converts single owned pair into `WriteBatch::Single`.
-* `From<(&str, OpcValue)>`: Converts single borrowed tag and owned value into `WriteBatch::Single`.
-* `From<Arc<[(String, OpcValue)]>>`: Converts reference-counted slice into `WriteBatch::Shared`.
-* `From<&[(String, OpcValue)]>`: Converts slice of owned pairs into `WriteBatch::Owned`.
-* `From<&[(&str, OpcValue)]>`: Converts slice of borrowed tag pairs into `WriteBatch::Owned`.
-* `From<[(String, OpcValue); N]>`: Converts fixed-size array into `WriteBatch::Owned`.
-* `From<[(&str, OpcValue); N]>`: Converts fixed-size borrowed array into `WriteBatch::Owned`.
-* `Default`: Yields `WriteBatch::Owned(Vec::new())`.
+* `PartialEq`: Manual sequence equality comparison (`self.len() == other.len() && self.iter().eq(other.iter())`).
+* `From<(&'static str, V)>`: Routes static string literals directly to `StaticSingle` (0 heap allocations).
+* `From<(String, V)>`: Routes owned strings to `OwnedSingle`.
+* `From<Vec<(String, OpcValue)>>`: Zero-reallocation buffer move into `WriteBatchRepr::Owned`.
+* `From<Arc<[(String, OpcValue)]>>`: Ingests reference-counted slice into `WriteBatchRepr::Shared`.
+* `From<&Self>`: Clones the batch.
+* `FromIterator<(S, V)>`: Collects tag-value pairs into `WriteBatchRepr::Owned`.
+* `Default`: Yields `WriteBatch::empty()`.
 
-**Derives:** `Debug`, `Clone`, `PartialEq`.
+**Derives:** `Debug`, `Clone`.
 
 ---
 
-##### `trait IntoWriteBatch`
+##### `trait IntoWriteBatch: Send`
 
-**Purpose:** Conversion trait providing ergonomics for callers passing single or multiple writes into `OpcDaClient::write_batch` and `TagWriter::write_tag_batch`.
+**Purpose:** Conversion trait providing ergonomics for callers passing single or multiple writes into `OpcDaClient::write_tags` and `TagWriter::write_tag_batch`. Bound by `Send` for multi-threaded dispatch safety.
 
-Implemented for any type `T: Into<WriteBatch>`.
+Implemented for:
+* `WriteBatch` & `&WriteBatch`
+* `Arc<[(String, OpcValue)]>`
+* `(&'a str, V)` (delegating to `WriteBatch::from_str_lenient`)
+* `(String, V)`
+* `[(S, V); N]` & `&'a [(S, V); N]`
+* `&'a [(S, V)]` (requiring `V: Clone + Into<OpcValue> + Send + Sync`, `S: AsRef<str> + Sync`)
+* `Vec<(S, V)>`
 
 ---
 
@@ -642,8 +658,6 @@ Structured error enum returned when converting or extracting tag values from col
 | `read_string(&self, tag: &str)` | `pub async fn read_string(&self, tag: &str) -> OpcResult<String>` | Reads a single tag as a `String`. |
 | `write_tag(&self, tag: &str, value: impl Into<OpcValue>) -> OpcResult<WriteResult>` | `pub async fn write_tag(&self, tag: &str, value: impl Into<OpcValue>) -> OpcResult<WriteResult>` | Writes a single typed value to a tag. |
 | `write_tags(&self, writes: impl IntoWriteBatch) -> OpcResult<Vec<WriteResult>>` | `pub async fn write_tags(&self, writes: impl IntoWriteBatch) -> OpcResult<Vec<WriteResult>>` | Writes multiple tags in a single native DCOM batch operation. |
-| `write(&self, tag: &str, value: impl Into<OpcValue>) -> OpcResult<WriteResult>` | `pub async fn write(&self, tag: &str, value: impl Into<OpcValue>) -> OpcResult<WriteResult>` | *(Deprecated since 0.3.0, prefer `write_tag`)* Writes a single value to a tag. |
-| `write_batch(&self, writes: impl IntoWriteBatch) -> OpcResult<Vec<WriteResult>>` | `pub async fn write_batch(&self, writes: impl IntoWriteBatch) -> OpcResult<Vec<WriteResult>>` | *(Deprecated since 0.3.0, prefer `write_tags`)* Writes multiple tags in a single native DCOM batch operation. |
 | `browse(&self, collector: TagCollector) -> OpcResult<Vec<String>>` | `pub async fn browse(&self, collector: TagCollector) -> OpcResult<Vec<String>>` | Recursively browses the address space of the bound server, streaming discovered tags to the collector. |
 | `subscribe(&self, tags: impl IntoTags, interval: Duration)` | `pub fn subscribe(&self, tags: impl IntoTags, interval: Duration) -> tokio::sync::mpsc::Receiver<TagValues>` | Starts a Layer 2 non-blocking polling stream yielding `TagValues` periodically. Terminates on channel close or connection error. |
 

@@ -426,7 +426,7 @@ pub use mock::{
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::OpcQuality;
+    use crate::types::{IntoWriteBatch, OpcQuality};
 
     #[tokio::test]
     async fn test_provider_default_list_server_details() {
@@ -514,10 +514,7 @@ mod tests {
         let batch_direct = p
             .write_tag_batch(
                 "Server.A",
-                crate::types::WriteBatch::Owned(vec![
-                    ("Tag.1".into(), OpcValue::Int(10)),
-                    ("Tag.2".into(), OpcValue::Int(20)),
-                ]),
+                vec![("Tag.1", OpcValue::Int(10)), ("Tag.2", OpcValue::Int(20))].into_write_batch(),
             )
             .await
             .unwrap();
@@ -563,10 +560,11 @@ mod tests {
         let results = p
             .write_tag_batch(
                 "Server.A",
-                crate::types::WriteBatch::Owned(vec![
-                    ("Tag.Fail".into(), OpcValue::Int(1)),
-                    ("Tag.Pass".into(), OpcValue::Int(2)),
-                ]),
+                vec![
+                    ("Tag.Fail", OpcValue::Int(1)),
+                    ("Tag.Pass", OpcValue::Int(2)),
+                ]
+                .into_write_batch(),
             )
             .await
             .unwrap();

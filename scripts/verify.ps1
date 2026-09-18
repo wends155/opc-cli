@@ -72,7 +72,7 @@ Invoke-Gate -GateName "Unit & Integration Tests" -Command { cargo test --workspa
 Invoke-Gate -GateName "Feature Independence Check (opc-da-client --no-default-features)" -Command { cargo check -p opc-da-client --no-default-features }
 
 # Gate 5: Polyfill Compilation & Unit Test Gate
-$compatDir = Join-Path $PSScriptRoot ".." "compat"
+$compatDir = Join-Path $PSScriptRoot "..\compat"
 if (Test-Path $compatDir) {
     $polyfillManifests = @(Get-ChildItem -Path $compatDir -Filter "Cargo.toml" -Recurse -Depth 1)
     foreach ($manifest in $polyfillManifests) {
@@ -89,7 +89,7 @@ if (Test-Path $compatDir) {
 # Gate 6: AST-Grep Scan & Rule Tests (Conditional)
 Write-Host "`n>>> AST-Grep Scan & Rule Tests" -ForegroundColor Yellow
 $hasSg = [bool](Get-Command sg -ErrorAction SilentlyContinue)
-$hasSgConfig = Test-Path (Join-Path $PSScriptRoot ".." "sgconfig.yml")
+$hasSgConfig = Test-Path (Join-Path $PSScriptRoot "..\sgconfig.yml")
 
 if (-not $hasSg) {
     Write-Host "[SKIP] AST-grep ('sg') CLI is not installed in PATH. Skipping AST-grep scan." -ForegroundColor DarkYellow
@@ -106,8 +106,8 @@ if (-not (Get-Command rg -ErrorAction SilentlyContinue)) {
     Write-Host "[SKIP] ripgrep ('rg') CLI is not installed in PATH. Skipping forbidden pattern scan." -ForegroundColor DarkYellow
 } else {
     $targetPaths = @(
-        (Join-Path $PSScriptRoot ".." "opc-da-client" "src"),
-        (Join-Path $PSScriptRoot ".." "opc-cli" "src")
+        (Join-Path $PSScriptRoot "..\opc-da-client\src"),
+        (Join-Path $PSScriptRoot "..\opc-cli\src")
     )
     foreach ($targetPath in $targetPaths) {
         if (-not (Test-Path $targetPath)) {
@@ -144,7 +144,7 @@ if (-not (Get-Command rg -ErrorAction SilentlyContinue)) {
 
     # Gate 7b: Library anyhow Guard (opc-da-client must not depend on anyhow at source level)
     Write-Host "`n>>> Library anyhow Guard" -ForegroundColor Yellow
-    $libSrcPath = Join-Path $PSScriptRoot ".." "opc-da-client" "src"
+    $libSrcPath = Join-Path $PSScriptRoot "..\opc-da-client\src"
     if (Test-Path $libSrcPath) {
         $anyhowMatches = rg --color=never -n -g "*.rs" "\banyhow\b" $libSrcPath 2>&1
         $anyhowExit = $LASTEXITCODE
@@ -167,7 +167,7 @@ if (-not (Get-Command rg -ErrorAction SilentlyContinue)) {
 
     # Gate 7c: Library Box<dyn Error> Guard (opc-da-client examples and src must use OpcResult, not Box<dyn Error>)
     Write-Host "`n>>> Library Box<dyn Error> Guard" -ForegroundColor Yellow
-    $libReadmePath = Join-Path $PSScriptRoot ".." "opc-da-client" "README.md"
+    $libReadmePath = Join-Path $PSScriptRoot "..\opc-da-client\README.md"
     $libTargets = @($libSrcPath, $libReadmePath)
     $boxErrorMatches = rg --color=never -n "Box\s*<\s*dyn\s+(?:std::error::)?Error\s*>" $libTargets 2>&1
     $boxErrorExit = $LASTEXITCODE

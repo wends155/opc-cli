@@ -152,11 +152,8 @@ pub fn handle_write<S: ConnectedServer>(
         value = ?value,
         "write_tag_value: starting single write"
     );
-    let mut results = handle_write_batch(
-        server_id,
-        &WriteBatch::Single(tag_id.to_string(), value.clone()),
-        opc_server,
-    )?;
+    let batch = WriteBatch::from_str_lenient(tag_id, value.clone());
+    let mut results = handle_write_batch(server_id, &batch, opc_server)?;
     results
         .pop()
         .ok_or_else(|| OpcError::Internal("No write result returned".into()))
