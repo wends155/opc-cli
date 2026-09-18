@@ -1,5 +1,25 @@
 # Project Context Summary
 
+## 2026-09-18: Block I Overarching Audit (Sub-Blocks I1, I2, I3) Completed (`opc-da-client`)
+> 📝 **Context Update:**
+> * **Feature:** Comprehensive post-implementation architectural and compliance audit covering the entirety of Block I (Sub-Blocks I1, I2, and I3) of Cycle 2 Modernization in `opc-da-client`.
+> * **Changes:**
+>   - **Scope & Delivery Verified:**
+>     - Sub-Block I1: Buffer reuse via `chunk.drain(..)`, 3-way tag count parity check (`CWE-682`), read error move semantics, zero-allocation borrowed endpoint dispatch, and clean slate dead code excision.
+>     - Sub-Block I2: Lazy `Option<WriteResult>` slot mapping (-80% allocator calls on 10k batch), granular `\0` quarantine (`CWE-626`) with short-circuit, two-stage positional index mapping, pipeline decomposition into 3 helpers, and `WriteResult::is_connection_error` / `Display`.
+>     - Sub-Block I3: `TagCollector` `RwLock<Vec<String>>` concurrency with symmetrical poison recovery, $O(1)$ zero-copy `collector.harvest()` terminal handoff, hierarchical 256-chunking parity, RAII `PushBatchGuard` with clamped reservation hints, and 3-stage clean slate retry entry guard.
+>   - **Fidelity Matrix & Deviations Audit:**
+>     - Audited all 6 Block I deviations (I1.1–I1.4, I2.1, I3.1). All 6 are fully documented in [`refactor/deviations.md`](file:///c:/Users/WSALIGAN/code/opc-cli/refactor/deviations.md), justified by compiler/lint dynamics or test fixture precision, and verified with 0 contract violations.
+>   - **Quality Pipeline & Static Analysis:**
+>     - Full 8-gate verification pipeline (`pwsh -File scripts/verify.ps1`) exited 0 with all 611 tests passing (+49 net new tests across Block I, 0 regressions).
+>     - Zero compiler warnings, zero clippy warnings under `-D warnings`, zero AST-grep violations, and zero forbidden macros.
+>     - Security scans (Narsil `check_cwe_top25` and `scan_security`) clean across active crate code.
+>   - **Audit Artifacts:**
+>     - Published consolidated audit reports to [`audit_report_blockI.md`](file:///C:/Users/WSALIGAN/.gemini/antigravity/brain/dc550faa-f1f7-4b21-96d4-a6b3fbc03d78/audit_report_blockI.md) and [`audit_report.md`](file:///C:/Users/WSALIGAN/.gemini/antigravity/brain/dc550faa-f1f7-4b21-96d4-a6b3fbc03d78/audit_report.md).
+> * **New Constraints:**
+>   - All Block I performance, concurrency, safety, and hygiene invariants are locked in tree and protected by 611 automated tests.
+> * **Pruned:** Block I of Cycle 2 Modernization is formally audited, verified, and concluded with verdict `✅ Pass`.
+
 ## 2026-09-18: Sub-Block I3 (Collector Concurrency, Zero-Copy Handoff & Traversal Parity) Completed (`opc-da-client`)
 > 📝 **Context Update:**
 > * **Feature:** Execution of Sub-Block I3 of Cycle 2 Modernization in `opc-da-client`, upgrading `TagCollector` to reader-writer lock (`RwLock<Vec<String>>`) with symmetrical poison recovery, replacing terminal `collector.snapshot()` with $O(1)$ zero-copy `collector.harvest()`, adding 3-stage clean slate retry entry guard to `handle_browse`, establishing 256-chunking parity in hierarchical `browse_recursive` via `BROWSE_CHUNK_SIZE`, hardening batch ingestion with RAII `PushBatchGuard` and clamped reservation hints, and adding `with_capacity`, `clear`, and 100% doc-test coverage.
