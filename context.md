@@ -1,5 +1,28 @@
 # Project Context Summary
 
+## 2026-09-18: Workspace README Documentation Synchronization (`/update-doc all readme`) Completed
+> 📝 **Context Update:**
+> * **Feature:** Documentation sync for workspace `README.md` and `opc-da-client/README.md` per `/update-doc` workflow and `doc-rules.md §7`.
+> * **Changes:**
+>   - **Root `README.md` Template Alignment:**
+>     - Restructured the workspace `README.md` to conform strictly to `doc-rules.md §7` template structure.
+>     - Added mandatory `## Overview` section expanding on the `Cargo.toml [workspace.package].description` summary with full industrial automation, COM/DCOM background thread isolation, and Rust 2024 architecture context.
+>     - Reorganized sections into canonical sequence: Overview, Installation (Prerequisites, Source build, Modern & Win7 Legacy releases), Usage / Quick Start (run commands, verbosity flags, full keyboard navigation controls table), Features / Feature Flags (matrix and Remote DCOM guidance), Architecture (workspace crate decomposition), Contributing (universal verification gate), and License.
+>     - Preserved top badge lines (`[![`) and `<!-- custom:start -->` ... `<!-- custom:end -->` sentinel block verbatim.
+>   - **`opc-da-client/README.md` API Surface Completion:**
+>     - Added 16 missing public types, error variants, DTOs, and RAII guards to the `## API Surface` reference table: `DefaultOpcDaClient`, `TagBatchIter`, `WriteBatchIntoIter`, `Clsid`, `ParseClsidError`, `ParseServerIdError`, `ParseEndpointError`, `BaseVarType`, `VarType`, `QualityMajor`, `QualitySubstatus`, `QualityLimit`, `WorkerError`, `GroupGuard`, `BrowsePositionGuard`, `ItemWrite`, and `GroupRemovalMode`.
+>     - Preserved `<!-- custom:start -->` ... `<!-- custom:end -->` sentinel block verbatim.
+>   - **Behavioral Specification Hash Tracking:**
+>     - Synchronized `opc-da-client/spec.md` verification metadata hash to `60c7834` (0 drift commits in `src/`).
+>   - **Verification:**
+>     - All 9 quality gates in `scripts/verify.ps1` passed with exit code 0.
+>     - All 154 doc-tests passed cleanly without warnings (152 passed, 2 ignored, 2 compile-fail passed).
+>     - `cargo doc --no-deps --workspace` generated documentation with 0 warnings.
+> * **New Constraints:**
+>   - All package and workspace README files must strictly adhere to the section ordering in `doc-rules.md §7`.
+>   - Any additions to root re-exports in `lib.rs` must immediately be mirrored in the `## API Surface` table of the corresponding crate's `README.md`.
+> * **Pruned:** Intermediate doc scanning and analysis artifacts discarded.
+
 ## 2026-09-18: Architecture Documentation Synchronization (`/architecture`) Completed
 > 📝 **Context Update:**
 > * **Feature:** Full architectural audit and technical source-of-truth synchronization across workspace root `architecture.md` and crate-level `opc-da-client/architecture.md` per `/architecture` and `/build` workflows.
