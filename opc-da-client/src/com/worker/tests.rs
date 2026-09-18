@@ -559,7 +559,8 @@ async fn test_worker_browse_tags_success() {
 
     assert_eq!(result.len(), 3);
     assert_eq!(result, vec!["Random.Int4", "Random.Real8", "Random.String"]);
-    assert_eq!(collector.len(), 3);
+    assert_eq!(collector.len(), 0);
+    assert!(collector.is_empty());
 }
 
 #[tokio::test]
@@ -603,7 +604,8 @@ async fn test_worker_browse_tags_capacity_cap() {
 
     assert_eq!(result.len(), 2);
     assert_eq!(result, vec!["Random.Int4", "Random.Real8"]);
-    assert_eq!(collector.len(), 2);
+    assert_eq!(collector.len(), 0);
+    assert!(collector.is_empty());
 }
 
 #[tokio::test]
